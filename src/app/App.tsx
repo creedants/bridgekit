@@ -304,7 +304,8 @@ export function App() {
           </table>
           <p className="hint">
             Column names do not matter; you map them in the next step. A date column works in place of a period, and
-            gross sales is optional. See the <a href="/guide.html">guide</a>.
+            gross sales and cost are optional. See the <a href="/guide.html">guide</a>, or{" "}
+            <a href="/sample-sales.csv" download>download a small sample file</a>.
           </p>
         </main>
       ) : (

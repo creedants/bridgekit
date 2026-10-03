@@ -3,3 +3,4 @@ dist
 *.duckdb
 *.csv
 *.parquet
+!public/*.csv
