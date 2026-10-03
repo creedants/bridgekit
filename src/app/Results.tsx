@@ -4,6 +4,8 @@ import {
   cumulativeColumns,
   drill,
   priceDistribution,
+  priceGaps,
+  priceRealization,
   sensitivity,
   trend,
   unmatched,
@@ -13,6 +15,8 @@ import {
   type Alternative,
   type DrillFilter,
   type PriceBucket,
+  type PriceGap,
+  type Realization,
   type TrendStep,
   type Query,
 } from "../engine.ts";
@@ -33,7 +37,7 @@ export interface Run {
   ms: number;
 }
 
-type Tab = "bridge" | "movers" | "price" | "trend" | "unmatched" | "setup" | "check";
+type Tab = "bridge" | "movers" | "price" | "gaps" | "trend" | "unmatched" | "setup" | "check";
 
 const display = (value: unknown) => (value === null || value === undefined ? "(blank)" : String(value));
 
@@ -57,6 +61,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
     { id: "bridge", label: "Bridge" },
     { id: "movers", label: "Movers" },
     { id: "price", label: "Price changes" },
+    { id: "gaps", label: "Price gaps" },
     { id: "trend", label: "Trend" },
     { id: "unmatched", label: "Unmatched" },
     { id: "setup", label: "Setup check" },
@@ -131,6 +136,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
           </div>
         </div>
       )}
+      {tab === "gaps" && <PriceGaps run={run} query={props.query} />}
       {tab === "trend" && <Trend run={run} query={props.query} />}
       {tab === "setup" && <SetupCheck run={run} query={props.query} />}
       {tab === "price" && <PriceChanges run={run} query={props.query} />}
@@ -365,6 +371,163 @@ function PriceChanges(props: { run: Run; query: () => Promise<Query> }) {
       <p className="hint">
         Each exactly matched configuration is placed by how much its average price moved between the two periods.
         This shows how widely a price change landed, which the single price number in the bridge cannot.
+      </p>
+      <RealizationTable run={props.run} query={props.query} overall={data.averageChange} />
+    </div>
+  );
+}
+
+function RealizationTable(props: { run: Run; query: () => Promise<Query>; overall: number }) {
+  const levels = props.run.config.levels;
+  const [groupBy, setGroupBy] = useState(0);
+  const [target, setTarget] = useState("");
+  const [data, setData] = useState<{ groupBy: number; rows: Realization[] }>({ groupBy: 0, rows: [] });
+  useEffect(() => {
+    let stale = false;
+    props
+      .query()
+      .then((query) => priceRealization(query, props.run.config, levels[groupBy].columns))
+      .then((rows) => !stale && setData({ groupBy, rows }));
+    return () => {
+      stale = true;
+    };
+  }, [props.run, groupBy]);
+  const columns = levels[data.groupBy].columns;
+  const planned = Number(target) / 100;
+  const hasTarget = target.trim() !== "" && Number.isFinite(planned) && planned !== 0;
+  const againstPlan = (row: Realization) => (row.change - planned) * (row.matchedSales - row.priceEffect);
+  const header = [...columns, "Matched sales", "Price effect", "Realized change", ...(hasTarget ? ["Realization", "Against plan"] : [])];
+  const cells = (row: Realization) => [
+    ...columns.map((c) => display(row.keys[c])),
+    row.matchedSales,
+    row.priceEffect,
+    row.change,
+    ...(hasTarget ? [row.change / planned, againstPlan(row)] : []),
+  ];
+  return (
+    <div style={{ marginTop: 20 }}>
+      <h3>Did the increase stick?</h3>
+      <div className="toolbar">
+        <label>
+          Planned increase %
+          <input
+            style={{ width: 70 }}
+            inputMode="decimal"
+            placeholder="e.g. 4"
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+          />
+        </label>
+        <label>
+          By
+          <select value={groupBy} onChange={(e) => setGroupBy(Number(e.target.value))}>
+            {levels.map((level, i) => <option key={level.name} value={i}>{level.name}</option>)}
+          </select>
+        </label>
+        {hasTarget && (
+          <span className="hint" style={{ flex: "none", minWidth: 0 }}>
+            Overall: {signedPercent(props.overall)} realized against {signedPercent(planned)} planned, or{" "}
+            {percent(props.overall / planned)} of plan.
+          </span>
+        )}
+        <TableActions name="price-realization.csv" header={header} rows={() => data.rows.map(cells)} />
+      </div>
+      <div className="scroll">
+        <table className="dense">
+          <thead>
+            <tr>{header.map((h, i) => <th key={h} className={i >= columns.length ? "num" : ""}>{h}</th>)}</tr>
+          </thead>
+          <tbody>
+            {data.rows.map((row) => (
+              <tr key={columns.map((c) => display(row.keys[c])).join("|")}>
+                {columns.map((c) => <td key={c}>{display(row.keys[c])}</td>)}
+                <td className="num">{whole(row.matchedSales)}</td>
+                <td className="num">{signedWhole(row.priceEffect)}</td>
+                <td className="num">{signedPercent(row.change)}</td>
+                {hasTarget && <td className="num">{percent(row.change / planned)}</td>}
+                {hasTarget && <td className="num">{signedWhole(againstPlan(row))}</td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="hint">
+        Realized change is the like-for-like price effect over what this period’s volume would have cost at prior
+        prices. {hasTarget && "Against plan is the sales above or below what the planned increase would have delivered. "}
+        Largest 200 groups by matched sales.
+      </p>
+    </div>
+  );
+}
+
+function PriceGaps(props: { run: Run; query: () => Promise<Query> }) {
+  const { config } = props.run;
+  const k = config.levels.length;
+  const [data, setData] = useState<Awaited<ReturnType<typeof priceGaps>> | null>(null);
+  useEffect(() => {
+    let stale = false;
+    props
+      .query()
+      .then((query) => priceGaps(query, config))
+      .then((result) => !stale && setData(result));
+    return () => {
+      stale = true;
+    };
+  }, [props.run]);
+  if (k < 2) {
+    return <p className="hint">Price gaps need two or more attributes. Put the one to compare, usually customer, last.</p>;
+  }
+  if (!data) return null;
+  const last = config.levels[k - 1].name;
+  const peers = config.levels.slice(0, k - 1).map((l) => l.name).join(" + ");
+  const keys = cumulativeColumns(config.levels, k);
+  const header = [...keys, "Units", "Sales", "Price", "Peer price", "Gap", "If at peer price"];
+  const cells = (row: PriceGap) => [
+    ...keys.map((c) => display(row.keys[c])),
+    row.units,
+    row.sales,
+    row.price,
+    row.peerPrice,
+    row.price / row.peerPrice - 1,
+    row.opportunity,
+  ];
+  return (
+    <div>
+      <div className="kpis" style={{ marginBottom: 12 }}>
+        <Kpi label="Sales compared" value={whole(data.comparedSales)} note={`${config.current}, groups with 2+ ${last} values`} />
+        <Kpi label="Priced below peers" value={whole(data.belowPeerSales)} note={percent(data.belowPeerSales / data.comparedSales) + " of sales compared"} />
+        <Kpi label="If raised to peer average" value={signedWhole(data.totalOpportunity)} note="upper bound, not a forecast" />
+      </div>
+      <div className="toolbar">
+        <span className="hint">
+          Each {last} is compared with the average price for the same {peers} in {String(config.current)}. Largest gaps
+          first.
+        </span>
+        <TableActions name="price-gaps.csv" header={header} rows={() => data.rows.map(cells)} />
+      </div>
+      <div className="scroll">
+        <table className="dense">
+          <thead>
+            <tr>{header.map((h, i) => <th key={h} className={i >= keys.length ? "num" : ""}>{h}</th>)}</tr>
+          </thead>
+          <tbody>
+            {data.rows.map((row) => (
+              <tr key={keys.map((c) => display(row.keys[c])).join("|")}>
+                {keys.map((c) => <td key={c}>{display(row.keys[c])}</td>)}
+                <td className="num">{whole(row.units)}</td>
+                <td className="num">{whole(row.sales)}</td>
+                <td className="num">{price(row.price)}</td>
+                <td className="num">{price(row.peerPrice)}</td>
+                <td className="num">{signedPercent(row.price / row.peerPrice - 1)}</td>
+                <td className="num strong">{signedWhole(row.opportunity)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="hint">
+        A gap can have good reasons, such as volume tiers or contract terms. Treat the list as places to look, and the
+        total as a ceiling.
       </p>
     </div>
   );

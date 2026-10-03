@@ -593,3 +593,108 @@ export async function trend(
   }
   return steps;
 }
+
+export interface Realization {
+  keys: Record<string, unknown>;
+  /** Current sales of exactly matched configurations in the group. */
+  matchedSales: number;
+  priceEffect: number;
+  /** Price effect over what current volume would have cost at prior prices. */
+  change: number;
+}
+
+/** Like-for-like price change for each group, to compare with a planned increase. */
+export async function priceRealization(
+  query: Query,
+  config: BridgeConfig,
+  columns: string[],
+  limit = 200,
+): Promise<Realization[]> {
+  const known = levelColumns(config);
+  for (const column of columns) {
+    if (!known.has(column)) throw new Error(`"${column}" is not a level column`);
+  }
+  const keys = columns.map(ident).join(", ");
+  const rows = await query(
+    `SELECT ${keys}, sum(s1) AS matched_sales, sum(price) AS price_effect
+     FROM ${ident(config.cellsTable ?? DEFAULT_CELLS_TABLE)}
+     WHERE match_level = ${config.levels.length} AND q0 > 0 AND q1 > 0 AND s0 > 0
+     GROUP BY ${keys}
+     ORDER BY sum(s1) DESC
+     LIMIT ${Math.floor(limit)}`,
+  );
+  return rows.map((row) => {
+    const matchedSales = Number(row.matched_sales);
+    const priceEffect = Number(row.price_effect);
+    const base = matchedSales - priceEffect;
+    return {
+      keys: Object.fromEntries(columns.map((c) => [c, row[c]])),
+      matchedSales,
+      priceEffect,
+      change: base === 0 ? 0 : priceEffect / base,
+    };
+  });
+}
+
+export interface PriceGap {
+  keys: Record<string, unknown>;
+  units: number;
+  sales: number;
+  price: number;
+  peerPrice: number;
+  /** Extra sales if this row were priced at its peer average. */
+  opportunity: number;
+}
+
+/**
+ * Compares the current price of each configuration with the average for its
+ * peers: the other configurations that share every attribute but the last.
+ * With customer as the last attribute this shows who pays less than others
+ * for the same product.
+ */
+export async function priceGaps(
+  query: Query,
+  config: BridgeConfig,
+  limit = 200,
+): Promise<{ rows: PriceGap[]; totalOpportunity: number; belowPeerSales: number; comparedSales: number }> {
+  const k = config.levels.length;
+  if (k < 2) return { rows: [], totalOpportunity: 0, belowPeerSales: 0, comparedSales: 0 };
+  const all = cumulativeColumns(config.levels, k);
+  const peers = cumulativeColumns(config.levels, k - 1).map(ident).join(", ");
+  const compared = `
+    SELECT *, peer_sales / peer_units AS peer_price, s1 / q1 AS own_price
+    FROM (
+      SELECT ${all.map(ident).join(", ")}, q1, s1,
+        sum(s1) OVER (PARTITION BY ${peers}) AS peer_sales,
+        sum(q1) OVER (PARTITION BY ${peers}) AS peer_units,
+        count(*) OVER (PARTITION BY ${peers}) AS peer_count
+      FROM ${ident(config.cellsTable ?? DEFAULT_CELLS_TABLE)}
+      WHERE q1 > 0 AND s1 > 0
+    )
+    WHERE peer_count > 1 AND peer_units > 0`;
+  const below = "own_price < peer_price";
+  const [totals] = await query(
+    `SELECT coalesce(sum((peer_price - own_price) * q1) FILTER (WHERE ${below}), 0) AS opportunity,
+       coalesce(sum(s1) FILTER (WHERE ${below}), 0) AS below_sales,
+       coalesce(sum(s1), 0) AS compared_sales
+     FROM (${compared})`,
+  );
+  const rows = await query(
+    `SELECT ${all.map(ident).join(", ")}, q1, s1, own_price, peer_price, (peer_price - own_price) * q1 AS opportunity
+     FROM (${compared}) WHERE ${below}
+     ORDER BY opportunity DESC LIMIT ${Math.floor(limit)}`,
+  );
+  return {
+    rows: rows.map((row) => ({
+      keys: Object.fromEntries(all.map((c) => [c, row[c]])),
+      units: Number(row.q1),
+      sales: Number(row.s1),
+      price: Number(row.own_price),
+      peerPrice: Number(row.peer_price),
+      opportunity: Number(row.opportunity),
+    })),
+    totalOpportunity: Number(totals.opportunity),
+    belowPeerSales: Number(totals.below_sales),
+    comparedSales: Number(totals.compared_sales),
+  };
+}

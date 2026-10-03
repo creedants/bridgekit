@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDatabase } from "../src/duckdb.ts";
-import { runBridge, drill, unmatched, dataCheck, priceDistribution, sensitivity, trend, type BridgeConfig, type BridgeResult } from "../src/engine.ts";
+import { runBridge, drill, unmatched, dataCheck, priceDistribution, sensitivity, trend, priceRealization, priceGaps, type BridgeConfig, type BridgeResult } from "../src/engine.ts";
 import { createSyntheticSales } from "../src/synth.ts";
 
 function effect(result: BridgeResult, key: string): number {
@@ -282,6 +282,35 @@ test("trend bridges each pair of consecutive periods", async () => {
   near(steps[1].volume, 110);
   near(steps[1].price, 20);
   for (const s of steps) near(s.volume + s.mix + s.price + s.newAndDiscontinued + s.noUnits, s.currentSales - s.priorSales);
+});
+
+test("price realization by group and price gaps against peers", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t AS SELECT * FROM (VALUES
+    ('p0', 'A', 'c1', 10, 100.0), ('p0', 'A', 'c2', 10, 100.0), ('p0', 'B', 'c1', 10, 200.0),
+    ('p1', 'A', 'c1', 10, 110.0), ('p1', 'A', 'c2', 10, 90.0), ('p1', 'B', 'c1', 10, 200.0)
+  ) v(period, product, customer, units, sales)`);
+  const config: BridgeConfig = {
+    table: "t", periodColumn: "period", prior: "p0", current: "p1",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }, { name: "Customer", columns: ["customer"] }],
+  };
+  await runBridge(query, config);
+
+  const byCustomer = await priceRealization(query, config, ["customer"]);
+  const c1 = byCustomer.find((r) => r.keys.customer === "c1")!;
+  near(c1.priceEffect, 10);
+  near(c1.change, 10 / 300);
+  const c2 = byCustomer.find((r) => r.keys.customer === "c2")!;
+  near(c2.change, -0.1);
+
+  // Product A sells at 11 to c1 and 9 to c2: the peer average is 10. B has one buyer, so no peers.
+  const gaps = await priceGaps(query, config);
+  assert.equal(gaps.rows.length, 1);
+  assert.equal(gaps.rows[0].keys.customer, "c2");
+  near(gaps.rows[0].peerPrice, 10);
+  near(gaps.totalOpportunity, 10);
+  near(gaps.comparedSales, 200);
 });
 
 test("rejects a missing prior period and duplicate columns", async () => {
