@@ -89,18 +89,24 @@ async function convertFormattedNumbers(query: Query, table: string): Promise<voi
   if (columns.length === 0) return;
   const cleaned = (c: string) =>
     `try_cast(regexp_replace(regexp_replace(trim(${c}), '[,$\\s]', '', 'g'), '^\\((.*)\\)$', '-\\1') AS DOUBLE)`;
-  const [counts] = await query(
-    `SELECT ${columns
-      .map(
-        (c, i) =>
-          `count(${c})::DOUBLE AS n${i}, count(${cleaned(c)})::DOUBLE AS ok${i}, count(*) FILTER (WHERE regexp_matches(${c}, '[,$()]'))::DOUBLE AS f${i}`,
-      )
-      .join(", ")} FROM "${table}"`,
-  );
-  for (const [i, c] of columns.entries()) {
-    const n = Number(counts[`n${i}`]);
-    if (n > 0 && n === Number(counts[`ok${i}`]) && Number(counts[`f${i}`]) > 0) {
-      await query(`ALTER TABLE "${table}" ALTER ${c} TYPE DOUBLE USING ${cleaned(c)}`);
-    }
+  const check = async (candidates: string[], source: string) => {
+    const [counts] = await query(
+      `SELECT ${candidates
+        .map(
+          (c, i) =>
+            `count(${c})::DOUBLE AS n${i}, count(${cleaned(c)})::DOUBLE AS ok${i}, count(*) FILTER (WHERE regexp_matches(${c}, '[,$()]'))::DOUBLE AS f${i}`,
+        )
+        .join(", ")} FROM ${source}`,
+    );
+    return candidates.filter((_, i) => {
+      const n = Number(counts[`n${i}`]);
+      return n > 0 && n === Number(counts[`ok${i}`]) && Number(counts[`f${i}`]) > 0;
+    });
+  };
+  // A small sample rules out almost every column cheaply; only survivors get the full scan.
+  const likely = await check(columns, `(SELECT * FROM "${table}" LIMIT 2000)`);
+  if (likely.length === 0) return;
+  for (const c of await check(likely, `"${table}"`)) {
+    await query(`ALTER TABLE "${table}" ALTER ${c} TYPE DOUBLE USING ${cleaned(c)}`);
   }
 }
