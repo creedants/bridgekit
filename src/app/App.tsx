@@ -56,6 +56,7 @@ function describeSetup(setup: Setup, prior: string, current: string, source: str
     `Units column: ${setup.unitsColumn}`,
     `Sales column: ${setup.salesColumn}`,
     ...(setup.grossColumn ? [`Gross sales column: ${setup.grossColumn}`] : []),
+    ...(setup.costColumn ? [`Cost column: ${setup.costColumn} (bridge is on margin)`] : []),
     ...setup.levels.map((level, i) => `Attribute ${i + 1}: ${level.name} (${level.columns.join(" + ")})`),
     `New and discontinued: ${setup.newAndDiscontinued === "full" ? "full sales, outside volume and mix" : "price difference only, units in volume"}`,
     ...setup.filters
@@ -176,6 +177,7 @@ export function App() {
         unitsColumn: setup.unitsColumn,
         salesColumn: setup.salesColumn,
         grossColumn: setup.grossColumn || undefined,
+        costColumn: setup.costColumn || undefined,
         levels: setup.levels,
         newAndDiscontinued: setup.newAndDiscontinued ?? "difference",
       };

@@ -23,6 +23,7 @@ export function SetupPanel(props: {
     setup.unitsColumn,
     setup.salesColumn,
     setup.grossColumn,
+    setup.costColumn,
     ...setup.levels.flatMap((l) => l.columns),
   ]);
   const free = columns.filter((c) => !used.has(c.name));
@@ -103,7 +104,19 @@ export function SetupPanel(props: {
             {numeric.filter((c) => c.name !== setup.salesColumn).map((c) => <option key={c.name}>{c.name}</option>)}
           </select>
         </label>
-        {setup.grossColumn && <p className="hint">Price is split into list price and discounts.</p>}
+        {setup.grossColumn && !setup.costColumn && <p className="hint">Price is split into list price and discounts.</p>}
+        <label>
+          Cost (optional)
+          <select value={setup.costColumn ?? ""} onChange={(e) => onChange({ costColumn: e.target.value || undefined })}>
+            <option value="">None</option>
+            {numeric
+              .filter((c) => c.name !== setup.salesColumn && c.name !== setup.unitsColumn)
+              .map((c) => <option key={c.name}>{c.name}</option>)}
+          </select>
+        </label>
+        {setup.costColumn && (
+          <p className="hint">The bridge is on margin: sales minus cost. The rate effect is split into price and unit cost.</p>
+        )}
       </fieldset>
 
       <fieldset>

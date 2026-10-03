@@ -3,6 +3,7 @@ import {
   coverageLabel,
   cumulativeColumns,
   drill,
+  measureName,
   priceDistribution,
   priceGaps,
   priceRealization,
@@ -74,8 +75,8 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
   return (
     <>
       <div className="kpis">
-        <Kpi label={`Sales ${config.prior}`} value={whole(result.priorSales)} />
-        <Kpi label={`Sales ${config.current}`} value={whole(result.currentSales)} />
+        <Kpi label={`${measureName(config)} ${config.prior}`} value={whole(result.priorSales)} />
+        <Kpi label={`${measureName(config)} ${config.current}`} value={whole(result.currentSales)} />
         <Kpi label="Change" value={signedWhole(change)} note={signedPercent(change / result.priorSales)} />
         <Kpi label="Like-for-like price" value={signedWhole(priceEffect)} note={signedPercent(priceEffect / result.priorSales)} />
         <Kpi label="Matched exactly" value={percent(exact)} note="of current sales with units" />
@@ -115,7 +116,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
                 <tr><th>Bridge</th><th className="num">Amount</th><th className="num">% of prior</th></tr>
               </thead>
               <tbody>
-                <tr className="total"><td>Sales {config.prior}</td><td className="num">{whole(result.priorSales)}</td><td /></tr>
+                <tr className="total"><td>{measureName(config)} {config.prior}</td><td className="num">{whole(result.priorSales)}</td><td /></tr>
                 {result.effects.map((e) => (
                   <tr key={e.key}>
                     <td>{e.label}</td>
@@ -123,7 +124,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
                     <td className="num">{signedPercent(e.value / result.priorSales)}</td>
                   </tr>
                 ))}
-                <tr className="total"><td>Sales {config.current}</td><td className="num">{whole(result.currentSales)}</td><td /></tr>
+                <tr className="total"><td>{measureName(config)} {config.current}</td><td className="num">{whole(result.currentSales)}</td><td /></tr>
               </tbody>
             </table>
             <h3>How current sales were matched</h3>
@@ -621,7 +622,7 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
 
   const mixOf = (row: Record<string, unknown>) =>
     levels.reduce((sum, _, i) => sum + Number(row[`mix_${i + 1}`] ?? 0), 0);
-  const header = [...group.columns, "Prior sales", "Current sales", "Change", "Volume", "Mix", "Price", "New config.", "Discontinued", "No units", "Prior price", "Current price", "Price change"];
+  const header = [...group.columns, `Prior ${measureName(config).toLowerCase()}`, `Current ${measureName(config).toLowerCase()}`, "Change", "Volume", "Mix", "Price", "New config.", "Discontinued", "No units", "Prior price", "Current price", "Price change"];
   const values = (row: Record<string, unknown>) => {
     const p0 = Number(row.s0) / Number(row.q0);
     const p1 = Number(row.s1) / Number(row.q1);

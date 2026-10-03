@@ -26,6 +26,8 @@ export interface Setup {
   salesColumn: string;
   /** Optional sales before discounts; splits the price effect into list price and discounts. */
   grossColumn?: string;
+  /** Optional cost; when set the bridge is on margin. */
+  costColumn?: string;
   levels: Level[];
   filters: Filter[];
   /** See BridgeConfig.newAndDiscontinued. Absent in setups saved before the option existed. */
@@ -103,6 +105,7 @@ export function isValidSetup(value: unknown, columns: Column[]): value is Setup 
     known(setup.unitsColumn) &&
     known(setup.salesColumn) &&
     (setup.grossColumn === undefined || known(setup.grossColumn)) &&
+    (setup.costColumn === undefined || known(setup.costColumn)) &&
     ["value", "year", "ytd", "quarter", "month"].includes(setup.grain as string) &&
     Array.isArray(setup.levels) &&
     setup.levels.every(

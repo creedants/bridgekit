@@ -39,6 +39,7 @@ mix between attributes does.
 - Reads a CSV, Excel (.xlsx) or Parquet file in the browser tab. Nothing is uploaded.
 - Bridge: waterfall, bridge table, match coverage and a written summary.
 - Optional gross sales column splits price into list price and discounts.
+- Optional cost column turns it into a margin bridge with price and unit cost.
 - Rows with sales and no units (rebates, credits) are bridged on their own line.
 - New and discontinued configurations: shown as a price difference (default)
   or at full sales, outside volume and mix.

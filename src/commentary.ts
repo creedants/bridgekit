@@ -1,4 +1,4 @@
-import type { BridgeConfig, BridgeResult } from "./engine.ts";
+import { measureName, type BridgeConfig, type BridgeResult } from "./engine.ts";
 
 const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
 const money = (n: number) => compact.format(n);
@@ -16,15 +16,15 @@ export function commentary(result: BridgeResult, config: BridgeConfig): string[]
 
   paragraphs.push(
     change === 0
-      ? `Sales were unchanged at ${money(result.currentSales)} between ${config.prior} and ${config.current}.`
-      : `Sales ${change > 0 ? "rose" : "fell"} ${ofPrior(change)}, from ${money(result.priorSales)} in ${config.prior} to ${money(result.currentSales)} in ${config.current} (${signed(change)}).`,
+      ? `${measureName(config)} was unchanged at ${money(result.currentSales)} between ${config.prior} and ${config.current}.`
+      : `${measureName(config)} ${change > 0 ? "rose" : "fell"} ${ofPrior(change)}, from ${money(result.priorSales)} in ${config.prior} to ${money(result.currentSales)} in ${config.current} (${signed(change)}).`,
   );
 
   const drivers = result.effects
     .filter((e) => Math.abs(e.value) >= Math.abs(result.priorSales) * 0.0005)
     .toSorted((a, b) => Math.abs(b.value) - Math.abs(a.value));
   if (drivers.length > 0) {
-    const describe = (e: (typeof drivers)[number]) => `${e.label.toLowerCase()} (${signed(e.value)}, ${ofPrior(e.value)} of prior sales)`;
+    const describe = (e: (typeof drivers)[number]) => `${e.label.toLowerCase()} (${signed(e.value)}, ${ofPrior(e.value)} of prior ${measureName(config).toLowerCase()})`;
     const [first, ...rest] = drivers;
     const next = rest.slice(0, 3);
     const others = rest.slice(3).reduce((sum, e) => sum + e.value, 0);

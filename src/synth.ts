@@ -5,7 +5,8 @@ import type { Query } from "./engine.ts";
  * job, add-ons folded into the line price, no stable SKU. 2026 differs from
  * 2025 by a price increase on the top designs, five new designs, one retired
  * coating and a shift toward photochromic lenses. gross_sales is the price
- * before customer discounts, which deepen slightly for half the customers.
+ * before customer discounts, which deepen slightly for half the customers, and
+ * cost rises 3% in 2026.
  *
  * Values come from hashing the row number, so the same row count always
  * produces the same data in Node and in the browser.
@@ -45,6 +46,7 @@ FROM (
 SELECT
   cust_i,
   year,
+  round(jobs * (18 + design_i * 1.1) * (1 + mat_i * 0.05) * (1 + coat_i * 0.03) * (CASE WHEN year = 2026 THEN 1.03 ELSE 1 END), 2) AS cost,
   make_date(year, 1 + (hash(i * 16 + 11) % 12)::INT, 1 + (hash(i * 16 + 12) % 28)::INT) AS order_date,
   'C' || lpad(cust_i::VARCHAR, 4, '0') AS customer,
   'D' || lpad(design_i::VARCHAR, 2, '0') AS design,

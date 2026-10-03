@@ -315,6 +315,29 @@ test("price realization by group and price gaps against peers", async () => {
   near(gaps.comparedSales, 200);
 });
 
+test("a cost column bridges margin and splits the rate effect into price and unit cost", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t AS SELECT * FROM (VALUES
+    ('p0', 'A', 10, 100.0, 60.0), ('p0', 'B', 10, 200.0, 150.0),
+    ('p1', 'A', 10, 110.0, 65.0), ('p1', 'B', 20, 400.0, 300.0)
+  ) v(period, product, units, sales, cost)`);
+  const config: BridgeConfig = {
+    table: "t", periodColumn: "period", prior: "p0", current: "p1",
+    unitsColumn: "units", salesColumn: "sales", costColumn: "cost",
+    levels: [{ name: "Product", columns: ["product"] }],
+  };
+  const result = await runBridge(query, config);
+
+  // Margin 90 -> 145. Unit margins: A 4 -> 4.5, B 5 -> 5; prior average 4.5.
+  assert.equal(result.priorSales, 90);
+  assert.equal(result.currentSales, 145);
+  near(effect(result, "volume"), 10 * 4.5);
+  near(effect(result, "mix_1"), 10 * (5 - 4.5));
+  near(effect(result, "price_sales"), 10);
+  near(effect(result, "cost_rate"), -5);
+  near(total(result), 55);
+});
+
 test("rejects a missing prior period and duplicate columns", async () => {
   const query = await openDatabase();
   await query(`CREATE TABLE t AS SELECT 'p1' AS period, 'A' AS product, 1 AS units, 1.0 AS sales`);

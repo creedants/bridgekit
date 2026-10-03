@@ -1,5 +1,5 @@
 import { commentary } from "../commentary.ts";
-import type { BridgeConfig, BridgeResult } from "../engine.ts";
+import { measureName, type BridgeConfig, type BridgeResult } from "../engine.ts";
 import { percent, signedPercent, signedWhole, whole } from "./format.ts";
 
 const escape = (value: unknown) =>
@@ -20,9 +20,9 @@ export function buildReport(input: {
   const row = (cells: string[], tag = "td") =>
     `<tr>${cells.map((c, i) => `<${tag}${i > 0 ? ' class="n"' : ""}>${c}</${tag}>`).join("")}</tr>`;
   const bridge = [
-    row([`Sales ${escape(config.prior)}`, whole(result.priorSales), ""]),
+    row([`${measureName(config)} ${escape(config.prior)}`, whole(result.priorSales), ""]),
     ...result.effects.map((e) => row([escape(e.label), signedWhole(e.value), signedPercent(e.value / result.priorSales)])),
-    row([`Sales ${escape(config.current)}`, whole(result.currentSales), ""]),
+    row([`${measureName(config)} ${escape(config.current)}`, whole(result.currentSales), ""]),
   ];
   const mixOf = (r: Record<string, unknown>) =>
     config.levels.reduce((sum, _, i) => sum + Number(r[`mix_${i + 1}`] ?? 0), 0);

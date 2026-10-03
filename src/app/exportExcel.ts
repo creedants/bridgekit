@@ -4,6 +4,7 @@ import {
   priceDistribution,
   sensitivity,
   effectColumns,
+  measureName,
   type BridgeConfig,
   type BridgeResult,
   type DataCheck,
@@ -47,12 +48,17 @@ export async function exportExcel(
   const detail = [
     ...keys.map((key) => ({ header: key, field: key })),
     { header: "Prior units", field: "q0" },
-    { header: "Prior sales with units", field: "s0" },
+    { header: config.costColumn ? "Prior margin with units" : "Prior sales with units", field: "s0" },
     { header: "Current units", field: "q1" },
-    { header: "Current sales with units", field: "s1" },
+    { header: config.costColumn ? "Current margin with units" : "Current sales with units", field: "s1" },
     { header: "Prior sales, no units", field: "z0" },
     { header: "Current sales, no units", field: "z1" },
-    ...(config.grossColumn
+    ...(config.costColumn
+      ? [
+          { header: "Prior sales with units", field: "rs0" },
+          { header: "Current sales with units", field: "rs1" },
+        ]
+      : config.grossColumn
       ? [
           { header: "Prior gross sales", field: "g0" },
           { header: "Current gross sales", field: "g1" },
@@ -69,7 +75,7 @@ export async function exportExcel(
 
   const bridge = workbook.addWorksheet("Bridge");
   bridge.columns = [{ width: 34 }, { width: 18 }, { width: 16 }];
-  bridge.addRow([`Sales bridge: ${config.prior} to ${config.current}`]).font = bold;
+  bridge.addRow([`${measureName(config)} bridge: ${config.prior} to ${config.current}`]).font = bold;
   bridge.addRow([]);
   bridge.addRow(["", "Amount", "% of prior sales"]).font = bold;
   const lastDetailRow = detailRows + 1;
@@ -79,14 +85,14 @@ export async function exportExcel(
     withDetail
       ? { formula: `SUM(Detail!${letter(a)}2:${letter(a)}${lastDetailRow})+SUM(Detail!${letter(b)}2:${letter(b)}${lastDetailRow})`, result: value }
       : value;
-  bridge.addRow(["Prior sales", sales("s0", "z0", result.priorSales)]).font = bold;
+  bridge.addRow([`Prior ${measureName(config).toLowerCase()}`, sales("s0", "z0", result.priorSales)]).font = bold;
   for (const effect of effects) {
     const value = result.effects.find((e) => e.key === effect.key)!.value;
     const row = bridge.addRow([effect.label, total(effect.key, value)]);
     row.getCell(3).value = { formula: `B${row.number}/B4`, result: value / result.priorSales };
     row.getCell(3).numFmt = "0.0%";
   }
-  bridge.addRow(["Current sales", sales("s1", "z1", result.currentSales)]).font = bold;
+  bridge.addRow([`Current ${measureName(config).toLowerCase()}`, sales("s1", "z1", result.currentSales)]).font = bold;
   const checkRow = bridge.addRow([
     "Check: prior + effects - current",
     { formula: `SUM(B4:B${4 + effects.length})-B${5 + effects.length}`, result: 0 },
@@ -169,7 +175,11 @@ export async function exportExcel(
           new_config: `IF(${letter("match_level")}#<${k},${rest},0)`,
           discontinued: `${delta}*(${letter(`ref_${k}`)}#-CHOOSE(${letter("surviving_level")}#+1,${Array.from({ length: k + 1 }, (_, j) => `${letter(`ref_${j}`)}#`).join(",")}))`,
         };
-    if (config.grossColumn) {
+    if (config.costColumn) {
+      const [q0, q1, rs0, rs1] = ["q0", "q1", "rs0", "rs1"].map((f) => `${letter(f)}#`);
+      formulas.price_sales = `IF(AND((${formulas.price})<>0,${q0}>0),${rs1}-${q1}*${rs0}/${q0},0)`;
+      formulas.cost_rate = `(${formulas.price})-${letter("price_sales")}#`;
+    } else if (config.grossColumn) {
       const [q0, q1, s0, g0, g1] = ["q0", "q1", "s0", "g0", "g1"].map((f) => `${letter(f)}#`);
       formulas.price_list = `IF(AND((${formulas.price})<>0,${g0}<>0,${q0}>0,${q1}<>0),(${g1}-${q1}*${g0}/${q0})*(${s0}/${g0}),0)`;
       formulas.price_discount = `(${formulas.price})-${letter("price_list")}#`;

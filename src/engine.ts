@@ -35,6 +35,10 @@
  *   list price = q1 * (g1 - g0) * d0
  *   discounts  = q1 * g1 * (d1 - d0)
  *
+ * With a cost column the bridged measure is margin, so "price" above is the
+ * change in unit margin on matched cells. It is split into the part from the
+ * selling price, q1 * (p1 - p0), and the rest, which is unit cost.
+ *
  * Rows with zero or blank units (rebates, credits, fees) have no price or
  * volume, so their sales z are kept out of q and s and bridged on their own
  * line. Prior and current totals include them.
@@ -67,6 +71,11 @@ export interface BridgeConfig {
    * a list-price part and a discount part.
    */
   grossColumn?: string;
+  /**
+   * Optional cost. When set, the bridge is on margin (sales minus cost) and the
+   * rate effect is split into price and unit cost. Takes precedence over grossColumn.
+   */
+  costColumn?: string;
   levels: Level[];
   /**
    * How new and discontinued configurations are shown.
@@ -146,7 +155,9 @@ export function cellsSql(config: BridgeConfig): string {
   const units = ident(config.unitsColumn);
   const sales = ident(config.salesColumn);
   const hasUnits = `(${units} IS NOT NULL AND ${units} <> 0)`;
-  const gross = config.grossColumn ? ident(config.grossColumn) : null;
+  const cost = config.costColumn ? ident(config.costColumn) : null;
+  const gross = !cost && config.grossColumn ? ident(config.grossColumn) : null;
+  const measure = cost ? `(${sales} - coalesce(${cost}, 0))` : sales;
   const full = config.newAndDiscontinued === "full";
   // In "full" mode reference prices come from continuing configurations only.
   const continuing = "(q0 > 0 AND q1 <> 0)";
@@ -209,16 +220,20 @@ export function cellsSql(config: BridgeConfig): string {
 WITH cells AS (
   SELECT ${allColumns.join(", ")},
     coalesce(sum(${units}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE AS q0,
-    coalesce(sum(${sales}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE AS s0,
+    coalesce(sum(${measure}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE AS s0,
     coalesce(sum(${units}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE AS q1,
-    coalesce(sum(${sales}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE AS s1,
-    coalesce(sum(${sales}) FILTER (WHERE ${period} = ${prior} AND NOT ${hasUnits}), 0)::DOUBLE AS z0,
-    coalesce(sum(${sales}) FILTER (WHERE ${period} = ${current} AND NOT ${hasUnits}), 0)::DOUBLE AS z1${
+    coalesce(sum(${measure}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE AS s1,
+    coalesce(sum(${measure}) FILTER (WHERE ${period} = ${prior} AND NOT ${hasUnits}), 0)::DOUBLE AS z0,
+    coalesce(sum(${measure}) FILTER (WHERE ${period} = ${current} AND NOT ${hasUnits}), 0)::DOUBLE AS z1${
       gross
         ? `,
     coalesce(sum(${gross}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE AS g0,
     coalesce(sum(${gross}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE AS g1`
-        : ""
+        : cost
+          ? `,
+    coalesce(sum(${sales}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE AS rs0,
+    coalesce(sum(${sales}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE AS rs1`
+          : ""
     }
   FROM ${ident(config.table)}
   WHERE ${period} IN (${prior}, ${current})
@@ -243,7 +258,7 @@ referenced AS (
   FROM priced
 ),
 priced_effects AS (
-SELECT ${allColumns.join(", ")}, q0, s0, q1, s1, z0, z1,${gross ? " g0, g1," : ""} match_level, surviving_level,
+SELECT ${allColumns.join(", ")}, q0, s0, q1, s1, z0, z1,${gross ? " g0, g1," : ""}${cost ? " rs0, rs1," : ""} match_level, surviving_level,
   ${Array.from({ length: k + 1 }, (_, j) => `ref_${j}`).join(", ")},
   CASE WHEN q0 <= 0 THEN 'new' WHEN q1 = 0 THEN 'discontinued' ELSE 'continuing' END AS status,
   ${effects},
@@ -255,16 +270,30 @@ SELECT *${
       ? `,
   CASE WHEN price <> 0 AND g0 <> 0 AND q0 > 0 AND q1 <> 0 THEN (g1 - q1 * g0 / q0) * (s0 / g0) ELSE 0 END AS price_list,
   price - CASE WHEN price <> 0 AND g0 <> 0 AND q0 > 0 AND q1 <> 0 THEN (g1 - q1 * g0 / q0) * (s0 / g0) ELSE 0 END AS price_discount`
-      : ""
+      : cost
+        ? `,
+  CASE WHEN price <> 0 AND q0 > 0 THEN rs1 - q1 * rs0 / q0 ELSE 0 END AS price_sales,
+  price - CASE WHEN price <> 0 AND q0 > 0 THEN rs1 - q1 * rs0 / q0 ELSE 0 END AS cost_rate`
+        : ""
   }
 FROM priced_effects`;
+}
+
+/** What the bridge measures, for labels. */
+export function measureName(config: BridgeConfig): "Sales" | "Margin" {
+  return config.costColumn ? "Margin" : "Sales";
 }
 
 export function effectColumns(config: BridgeConfig): { key: string; label: string }[] {
   return [
     { key: "volume", label: "Volume" },
     ...config.levels.map((level, i) => ({ key: `mix_${i + 1}`, label: `Mix: ${level.name}` })),
-    ...(config.grossColumn
+    ...(config.costColumn
+      ? [
+          { key: "price_sales", label: "Price" },
+          { key: "cost_rate", label: "Unit cost" },
+        ]
+      : config.grossColumn
       ? [
           { key: "price_list", label: "List price" },
           { key: "price_discount", label: "Discounts" },
