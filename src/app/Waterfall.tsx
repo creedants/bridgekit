@@ -79,6 +79,8 @@ export function Waterfall(props: {
     chartRef.current = chart;
     const colors = { total: token("--total"), up: token("--up"), down: token("--down") };
     const ink = token("--text");
+    // On a narrow chart the category labels are angled and value labels that would collide are dropped.
+    const narrow = element.current.clientWidth < 560;
 
     chart.setOption({
       animation: false,
@@ -100,10 +102,10 @@ export function Waterfall(props: {
       },
       xAxis: {
         type: "category",
-        data: bars.map((b) => b.label.replace(" (like-for-like)", "").replace("New configurations", "New\nconfigs").replace("Discontinued configurations", "Discont.\nconfigs").replace("Sales with no units", "No\nunits").replace(": ", ":\n")),
+        data: bars.map((b) => (narrow ? b.label.replace(": ", " ") : b.label).replace(" (like-for-like)", "").replace("New configurations", "New\nconfigs").replace("Discontinued configurations", "Discont.\nconfigs").replace("Sales with no units", "No\nunits").replace(": ", ":\n")),
         axisTick: { show: false },
         axisLine: { lineStyle: { color: token("--line-strong") } },
-        axisLabel: { color: token("--text-2"), fontSize: 11, interval: 0, lineHeight: 14 },
+        axisLabel: { color: token("--text-2"), fontSize: narrow ? 10 : 11, interval: 0, lineHeight: 14, rotate: narrow ? 50 : 0 },
       },
       yAxis: {
         type: "value",
@@ -123,6 +125,7 @@ export function Waterfall(props: {
           type: "bar",
           stack: "bridge",
           barMaxWidth: 52,
+          labelLayout: { hideOverlap: true },
           cursor: "pointer",
           label: {
             show: true,
