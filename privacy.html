@@ -28,7 +28,7 @@
     <article>
       <div class="wrap narrow">
         <h1>Privacy</h1>
-        <p class="sub">The short version: your sales file never leaves your computer.</p>
+        <p class="sub">The short version: your sales file never leaves your computer, and the tool keeps nothing once the tab is closed.</p>
 
         <h2>Your files</h2>
         <ul>
@@ -39,8 +39,9 @@
 
         <h2>What is stored, and where</h2>
         <ul>
-          <li>Your setup (which columns you mapped, attribute order, filters and options) is saved in your browser’s local storage, so the next file with the same columns is set up for you. Filter values you selected are part of that setup.</li>
-          <li>Nothing else is stored. Clearing your browser’s site data removes it.</li>
+          <li>By default, nothing. The data lives in the tab’s memory and is gone when you close or reload the tab, or choose <b>Clear data</b>.</li>
+          <li>If you tick <b>Remember this setup in this browser</b>, your column choices, attribute order and options are saved in your browser’s local storage. Filter selections are not saved, because they are values from your data. Unticking the box deletes what was saved.</li>
+          <li>The tool does not use IndexedDB, browser caches, a private file system or a service worker.</li>
           <li>The site sets no cookies and has no accounts.</li>
         </ul>
 
@@ -51,7 +52,7 @@
         </ul>
 
         <h2>Checking this yourself</h2>
-        <p>Open your browser’s developer tools, go to the network panel, and load a file. No request carries your data. The source code is published so anyone can confirm what the page does.</p>
+        <p>Open your browser’s developer tools, go to the network panel, and load a file. No request carries your data. The pages also carry a content security policy that only allows connections to this site, so the browser itself blocks anything else. The source code is published so anyone can confirm what the page does, and its automated test checks that nothing is stored or sent.</p>
 
         <h2>If this changes</h2>
         <p>Planned paid features such as saved workspaces across devices would store your setup on a server. This page will be updated before any such feature is released, and uploading data will never be required to use the free tool.</p>

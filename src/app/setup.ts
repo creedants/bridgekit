@@ -90,10 +90,37 @@ export function viewSql(setup: Setup): string {
     ${conditions.length ? "WHERE " + conditions.join(" AND ") : ""}`;
 }
 
-// A setup is remembered per set of column names, so next month's export of the
-// same report picks it up without any mapping.
+// Zero data retention: by default nothing is written to the browser. Only if
+// the user turns on "Remember this setup" is the column mapping stored, keyed
+// by the set of column names, and filter selections are never stored because
+// they are values from the data.
+const PREFIX = "bridgekit:";
+const REMEMBER_KEY = PREFIX + "remember";
 const storageKey = (columns: Column[]) =>
-  "bridgekit:setup:" + columns.map((c) => c.name).sort().join("|");
+  PREFIX + "setup:" + columns.map((c) => c.name).sort().join("|");
+
+export function isRemembering(): boolean {
+  try {
+    return localStorage.getItem(REMEMBER_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Turning this off deletes everything the tool has stored. */
+export function setRemembering(on: boolean): void {
+  try {
+    if (on) {
+      localStorage.setItem(REMEMBER_KEY, "1");
+      return;
+    }
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith(PREFIX)) localStorage.removeItem(key);
+    }
+  } catch {
+    // Storage can be blocked; then nothing is stored, which is the safe outcome.
+  }
+}
 
 export function isValidSetup(value: unknown, columns: Column[]): value is Setup {
   if (typeof value !== "object" || value === null) return false;
@@ -123,7 +150,12 @@ export function isValidSetup(value: unknown, columns: Column[]): value is Setup 
   );
 }
 
+// Earlier versions saved the setup without asking. Unless the user has opted
+// in, anything left from them is deleted when the tool starts.
+if (typeof localStorage !== "undefined" && !isRemembering()) setRemembering(false);
+
 export function loadSavedSetup(columns: Column[]): Setup | null {
+  if (!isRemembering()) return null;
   try {
     const saved: unknown = JSON.parse(localStorage.getItem(storageKey(columns)) ?? "null");
     return isValidSetup(saved, columns) ? saved : null;
@@ -133,8 +165,9 @@ export function loadSavedSetup(columns: Column[]): Setup | null {
 }
 
 export function saveSetup(columns: Column[], setup: Setup): void {
+  if (!isRemembering()) return;
   try {
-    localStorage.setItem(storageKey(columns), JSON.stringify(setup));
+    localStorage.setItem(storageKey(columns), JSON.stringify({ ...setup, filters: [] }));
   } catch {
     // Storage can be full or blocked; the setup still works for this session.
   }

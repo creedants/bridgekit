@@ -57,9 +57,25 @@ mix between attributes does.
 - Data check: counts of returns, blank values and ignored rows.
 - Filters, year-to-date comparison, roll-up detection, data preview.
 - Exports: Excel with live formulas, chart PNG, one-file HTML report.
-- The setup is remembered per set of column names, and can be saved to a file.
+- The setup can be saved to a file, or remembered in the browser if the user opts in.
 - `/app/?sample` opens the tool with the sample data already calculated;
   `/app/?sample=3000000` sets the row count.
+
+## Zero data retention
+
+The tool keeps and sends nothing:
+
+- Files are read in the tab and held in memory only. Closing or reloading the
+  tab, or choosing Clear data, removes them.
+- No cookies, IndexedDB, caches, private file system or service worker.
+- localStorage is used only if the user ticks "Remember this setup in this
+  browser". It then holds the column mapping, never filter selections or data,
+  and unticking deletes it.
+- No analytics and no third-party requests. Built pages carry a content
+  security policy limited to their own origin; `public/_headers` sends the same
+  policy as a response header on hosts that support it, which is what covers
+  the database worker.
+- `npm run smoke` asserts all of the above against a running server.
 
 ## Run it
 

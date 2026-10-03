@@ -9,11 +9,13 @@ import { distinctCounts, findRollups } from "./profile.ts";
 import { Results, type Run } from "./Results.tsx";
 import {
   guessSetup,
+  isRemembering,
   isValidSetup,
   loadSavedSetup,
   PERIOD,
   quote,
   saveSetup,
+  setRemembering,
   TABLE,
   VIEW,
   viewSql,
@@ -77,6 +79,7 @@ export function App() {
   const [periods, setPeriods] = useState<string[]>([]);
   const [prior, setPrior] = useState("");
   const [current, setCurrent] = useState("");
+  const [remember, setRemember] = useState(isRemembering);
   const [preview, setPreview] = useState<Record<string, unknown>[]>([]);
   const [rollups, setRollups] = useState<string[][]>([]);
   const [run, setRun] = useState<(Run & { id: number; signature: string }) | null>(null);
@@ -286,6 +289,14 @@ export function App() {
         <nav>
           {filePicker}
           <button disabled={!run || !!busy} onClick={exportWorkbook}>Export Excel</button>
+          {setup && (
+            <button
+              title="Remove the loaded data from this tab"
+              onClick={() => location.replace(location.pathname)}
+            >
+              Clear data
+            </button>
+          )}
           <a href="/guide.html" target="_blank" rel="noreferrer">Guide</a>
           <a href="/method.html" target="_blank" rel="noreferrer">Method</a>
         </nav>
@@ -348,6 +359,23 @@ export function App() {
                     : "Choose periods, units, sales and at least one attribute."}
                 </p>
               )}
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={remember}
+                  onChange={(e) => {
+                    setRemembering(e.target.checked);
+                    setRemember(e.target.checked);
+                    if (e.target.checked && setup) saveSetup(columns, setup);
+                  }}
+                />
+                Remember this setup in this browser
+              </label>
+              <p className="hint">
+                {remember
+                  ? "Column choices and attribute order are stored in this browser. Filter selections and your data are not. Untick to delete what is stored."
+                  : "Off: nothing is stored. Closing or reloading the tab removes everything."}
+              </p>
               <p className="row">
                 <button
                   className="quiet"
