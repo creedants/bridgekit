@@ -55,7 +55,8 @@ mix between attributes does.
 - Filters, year-to-date comparison, roll-up detection, data preview.
 - Exports: Excel with live formulas, chart PNG, one-file HTML report.
 - The setup is remembered per set of column names, and can be saved to a file.
-- `/app/?sample` opens the tool with the sample data already calculated.
+- `/app/?sample` opens the tool with the sample data already calculated;
+  `/app/?sample=3000000` sets the row count.
 
 ## Run it
 
@@ -64,6 +65,7 @@ npm install
 npm run dev      # the site at /, the tool at /app/
 npm test         # engine tests
 npm run demo     # 3 million made-up rows on the command line
+npm run smoke    # drives the tool in headless Chromium; needs `npm run dev` running
 ```
 
 The app reads CSV and Parquet files. "Load sample data" generates made-up

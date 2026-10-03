@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test": "node --test test/*.test.ts",
     "demo": "node scripts/demo.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@duckdb/duckdb-wasm": "^1.33.1-dev57.0",

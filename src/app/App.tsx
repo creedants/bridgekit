@@ -23,6 +23,13 @@ import {
 import { SetupPanel } from "./SetupPanel.tsx";
 
 const SAMPLE_ROWS = 1_000_000;
+const MAX_SAMPLE_ROWS = 5_000_000;
+
+/** `?sample` uses the default size; `?sample=3000000` asks for a specific row count. */
+function sampleRows(): number {
+  const requested = Number(new URLSearchParams(location.search).get("sample"));
+  return requested >= 1000 ? Math.min(Math.floor(requested), MAX_SAMPLE_ROWS) : SAMPLE_ROWS;
+}
 
 const SAMPLE_SETUP: Setup = {
   periodColumn: "year",
@@ -117,7 +124,7 @@ export function App() {
 
   const loadSample = () =>
     task("Generating sample data…", async () => {
-      await createSyntheticSales(await query(), SAMPLE_ROWS, TABLE);
+      await createSyntheticSales(await query(), sampleRows(), TABLE);
       await afterLoad("Sample data (made-up lens sales)", SAMPLE_SETUP);
     });
 
