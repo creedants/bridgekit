@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   coverageLabel,
+  accountBridge,
   cumulativeColumns,
   drill,
   measureName,
@@ -13,6 +14,7 @@ import {
   type BridgeConfig,
   type BridgeResult,
   type DataCheck,
+  type AccountGroup,
   type Alternative,
   type DrillFilter,
   type PriceBucket,
@@ -28,6 +30,8 @@ import { buildReport } from "./report.ts";
 import { Waterfall } from "./Waterfall.tsx";
 
 export interface Run {
+  /** Text columns of the loaded file, for views that group by any column. */
+  textColumns: string[];
   /** Every period in the data, oldest first, for the trend view. */
   periods: string[];
   /** Human-readable lines describing the setup, for exports. */
@@ -38,7 +42,7 @@ export interface Run {
   ms: number;
 }
 
-type Tab = "bridge" | "movers" | "price" | "gaps" | "trend" | "unmatched" | "setup" | "check";
+type Tab = "bridge" | "movers" | "accounts" | "price" | "gaps" | "trend" | "unmatched" | "setup" | "check";
 
 const display = (value: unknown) => (value === null || value === undefined ? "(blank)" : String(value));
 
@@ -64,6 +68,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
   const tabs: { id: Tab; label: string }[] = [
     { id: "bridge", label: "Bridge" },
     { id: "movers", label: "Movers" },
+    { id: "accounts", label: "Accounts" },
     { id: "price", label: "Price changes" },
     { id: "gaps", label: "Price gaps" },
     { id: "trend", label: "Trend" },
@@ -148,6 +153,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
           </div>
         </div>
       )}
+      {tab === "accounts" && <Accounts run={run} query={props.query} />}
       {tab === "gaps" && <PriceGaps run={run} query={props.query} />}
       {tab === "trend" && <Trend run={run} query={props.query} />}
       {tab === "setup" && <SetupCheck run={run} query={props.query} />}
@@ -195,6 +201,93 @@ function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<
       </div>
       {paragraphs.map((p) => <p key={p}>{p}</p>)}
       <p className="hint">Written from fixed sentence patterns, so the same bridge always gives the same text.</p>
+    </div>
+  );
+}
+
+const ACCOUNT_LABELS: Record<AccountGroup["status"], string> = {
+  new: "New",
+  lost: "Lost",
+  growing: "Growing",
+  shrinking: "Shrinking",
+};
+
+function Accounts(props: { run: Run; query: () => Promise<Query> }) {
+  const { config, textColumns } = props.run;
+  const guess =
+    textColumns.find((c) => /customer|account|client|parent|sold.?to|buyer/i.test(c)) ?? textColumns[0] ?? "";
+  const [column, setColumn] = useState(guess);
+  const [groups, setGroups] = useState<AccountGroup[] | null>(null);
+  useEffect(() => {
+    if (!column) return;
+    let stale = false;
+    props
+      .query()
+      .then((query) => accountBridge(query, config, column))
+      .then((result) => !stale && setGroups(result));
+    return () => {
+      stale = true;
+    };
+  }, [props.run, column]);
+  if (!column) return <p className="hint">This view needs a text column such as customer.</p>;
+  if (!groups) return null;
+  const by = Object.fromEntries(groups.map((g) => [g.status, g])) as Record<AccountGroup["status"], AccountGroup>;
+  const existingPrior = by.lost.prior + by.growing.prior + by.shrinking.prior;
+  const measure = measureName(config).toLowerCase();
+  return (
+    <div>
+      <div className="toolbar">
+        <label>
+          Account column
+          <select value={column} onChange={(e) => setColumn(e.target.value)}>
+            {textColumns.map((c) => <option key={c}>{c}</option>)}
+          </select>
+        </label>
+        <span className="hint">
+          Any column works: customer, region, sales rep. It does not have to be an attribute of the bridge.
+        </span>
+      </div>
+      <div className="kpis" style={{ marginBottom: 12 }}>
+        {groups.map((g) => (
+          <Kpi key={g.status} label={ACCOUNT_LABELS[g.status]} value={signedWhole(g.change)} note={`${whole(g.count)} ${column} values`} />
+        ))}
+        <Kpi
+          label="Net retention"
+          value={percent((by.growing.current + by.shrinking.current) / existingPrior)}
+          note={`current ${measure} from prior accounts`}
+        />
+        <Kpi
+          label="Gross retention"
+          value={percent((existingPrior - by.lost.prior + by.shrinking.change) / existingPrior)}
+          note="before growth and new accounts"
+        />
+      </div>
+      <div className="account-grid">
+        {groups.map((g) => (
+          <div key={g.status}>
+            <h3>{ACCOUNT_LABELS[g.status]}: largest {g.top.length}</h3>
+            <table className="dense">
+              <thead>
+                <tr><th>{column}</th><th className="num">Prior</th><th className="num">Current</th><th className="num">Change</th></tr>
+              </thead>
+              <tbody>
+                {g.top.map((a) => (
+                  <tr key={a.name ?? "(blank)"}>
+                    <td>{display(a.name)}</td>
+                    <td className="num">{whole(a.prior)}</td>
+                    <td className="num">{whole(a.current)}</td>
+                    <td className="num strong">{signedWhole(a.change)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))}
+      </div>
+      <p className="hint">
+        New means no {measure} in {String(config.prior)}; lost means none in {String(config.current)}. The four groups
+        add up to the total change, including rows with no units.
+      </p>
     </div>
   );
 }

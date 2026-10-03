@@ -45,6 +45,8 @@ mix between attributes does.
   or at full sales, outside volume and mix.
 - Movers: effects by any attribute, sortable, with click-through to the next
   attribute. Copy to clipboard or download as CSV.
+- Accounts: the change split into new, lost, growing and shrinking, by any
+  column, with net and gross retention.
 - Price changes: share of matched sales by band of price change, and realized
   change against a planned increase.
 - Price gaps: each value of the last attribute against its peer average.

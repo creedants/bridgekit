@@ -30,7 +30,7 @@ const residual = prior + rest.reduce((a, b) => a + b, 0) - current;
 if (Math.abs(residual) > rest.length) fail(`bridge does not add up (off by ${residual})`);
 console.log(`bridge adds up: ${prior} + effects = ${current}`);
 
-const tabs = ["Movers", "Price changes", "Price gaps", "Trend", "Unmatched", "Setup check", "Data check", "Bridge"];
+const tabs = ["Movers", "Accounts", "Price changes", "Price gaps", "Trend", "Unmatched", "Setup check", "Data check", "Bridge"];
 for (const tab of tabs) {
   await browser.evalJs(`T.tab(${JSON.stringify(tab)})`);
   await browser.sleep(1500);

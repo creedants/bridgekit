@@ -191,6 +191,7 @@ export function App() {
         check,
         ms,
         periods,
+        textColumns: columns.filter((c) => !/INT|DOUBLE|DECIMAL|FLOAT|REAL|DATE|TIMESTAMP/i.test(c.type)).map((c) => c.name),
         description: describeSetup(setup, prior, current, source),
         id: Date.now(),
         signature,

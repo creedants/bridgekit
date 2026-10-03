@@ -729,3 +729,75 @@ export async function priceGaps(
     comparedSales: Number(totals.compared_sales),
   };
 }
+
+export type AccountStatus = "new" | "lost" | "growing" | "shrinking";
+
+export interface AccountGroup {
+  status: AccountStatus;
+  count: number;
+  prior: number;
+  current: number;
+  change: number;
+  /** Largest accounts in the group by size of change. */
+  top: { name: string | null; prior: number; current: number; change: number }[];
+}
+
+/**
+ * Splits the change by account: new, lost, growing and shrinking. The column
+ * can be any column of the source table (customer, region, sales rep), not
+ * only an attribute of the bridge.
+ */
+export async function accountBridge(
+  query: Query,
+  config: BridgeConfig,
+  column: string,
+  top = 15,
+): Promise<AccountGroup[]> {
+  const period = ident(config.periodColumn);
+  const measure = config.costColumn
+    ? `(${ident(config.salesColumn)} - coalesce(${ident(config.costColumn)}, 0))`
+    : ident(config.salesColumn);
+  const accounts = `
+    SELECT *, CASE
+        WHEN s0 = 0 AND s1 <> 0 THEN 'new'
+        WHEN s1 = 0 AND s0 <> 0 THEN 'lost'
+        WHEN s1 >= s0 THEN 'growing'
+        ELSE 'shrinking' END AS status
+    FROM (
+      SELECT CAST(${ident(column)} AS VARCHAR) AS name,
+        coalesce(sum(${measure}) FILTER (WHERE ${period} = ${literal(config.prior)}), 0)::DOUBLE AS s0,
+        coalesce(sum(${measure}) FILTER (WHERE ${period} = ${literal(config.current)}), 0)::DOUBLE AS s1
+      FROM ${ident(config.table)}
+      WHERE ${period} IN (${literal(config.prior)}, ${literal(config.current)})
+      GROUP BY 1
+    )
+    WHERE s0 <> 0 OR s1 <> 0`;
+  const totals = await query(
+    `SELECT status, count(*)::DOUBLE AS n, sum(s0) AS s0, sum(s1) AS s1 FROM (${accounts}) GROUP BY status`,
+  );
+  const leaders = await query(
+    `SELECT status, name, s0, s1 FROM (
+       SELECT *, row_number() OVER (PARTITION BY status ORDER BY abs(s1 - s0) DESC) AS position FROM (${accounts})
+     ) WHERE position <= ${Math.floor(top)} ORDER BY status, position`,
+  );
+  return (["new", "lost", "growing", "shrinking"] as const).map((status) => {
+    const row = totals.find((t) => t.status === status);
+    const prior = Number(row?.s0 ?? 0);
+    const current = Number(row?.s1 ?? 0);
+    return {
+      status,
+      count: Number(row?.n ?? 0),
+      prior,
+      current,
+      change: current - prior,
+      top: leaders
+        .filter((l) => l.status === status)
+        .map((l) => ({
+          name: l.name === null ? null : String(l.name),
+          prior: Number(l.s0),
+          current: Number(l.s1),
+          change: Number(l.s1) - Number(l.s0),
+        })),
+    };
+  });
+}

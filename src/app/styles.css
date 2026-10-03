@@ -141,3 +141,5 @@ table.narrow-wide { max-width: 900px; }
 .empty p.hint { font-size: 12px; }
 .check { display: inline-flex; gap: 5px; align-items: center; color: var(--text-2); font-size: 12px; }
 .legend { align-items: center; }
+.account-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 8px 24px; }
+.account-grid td:first-child { white-space: normal; }

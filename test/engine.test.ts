@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDatabase } from "../src/duckdb.ts";
-import { runBridge, drill, unmatched, dataCheck, priceDistribution, sensitivity, trend, priceRealization, priceGaps, type BridgeConfig, type BridgeResult } from "../src/engine.ts";
+import { runBridge, drill, unmatched, dataCheck, priceDistribution, sensitivity, trend, priceRealization, priceGaps, accountBridge, type BridgeConfig, type BridgeResult } from "../src/engine.ts";
 import { createSyntheticSales } from "../src/synth.ts";
 
 function effect(result: BridgeResult, key: string): number {
@@ -336,6 +336,27 @@ test("a cost column bridges margin and splits the rate effect into price and uni
   near(effect(result, "price_sales"), 10);
   near(effect(result, "cost_rate"), -5);
   near(total(result), 55);
+});
+
+test("account bridge splits the change into new, lost, growing and shrinking", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t AS SELECT * FROM (VALUES
+    ('p0', 'keep', 'A', 10, 100.0), ('p0', 'gone', 'A', 5, 50.0), ('p0', 'down', 'A', 10, 100.0),
+    ('p1', 'keep', 'A', 12, 130.0), ('p1', 'fresh', 'A', 4, 40.0), ('p1', 'down', 'A', 6, 60.0)
+  ) v(period, customer, product, units, sales)`);
+  const groups = await accountBridge(query, {
+    table: "t", periodColumn: "period", prior: "p0", current: "p1",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+  }, "customer");
+  const by = Object.fromEntries(groups.map((g) => [g.status, g]));
+  assert.deepEqual([by.new.count, by.lost.count, by.growing.count, by.shrinking.count], [1, 1, 1, 1]);
+  near(by.new.change, 40);
+  near(by.lost.change, -50);
+  near(by.growing.change, 30);
+  near(by.shrinking.change, -40);
+  assert.equal(by.lost.top[0].name, "gone");
+  near(groups.reduce((sum, g) => sum + g.change, 0), 230 - 250);
 });
 
 test("rejects a missing prior period and duplicate columns", async () => {
