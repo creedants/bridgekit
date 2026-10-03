@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDatabase } from "../src/duckdb.ts";
-import { runBridge, drill, unmatched, dataCheck, priceDistribution, type BridgeConfig, type BridgeResult } from "../src/engine.ts";
+import { runBridge, drill, unmatched, dataCheck, priceDistribution, sensitivity, type BridgeConfig, type BridgeResult } from "../src/engine.ts";
 import { createSyntheticSales } from "../src/synth.ts";
 
 function effect(result: BridgeResult, key: string): number {
@@ -132,6 +132,13 @@ test("synthetic lens data reconciles, and level order does not move volume or pr
   assert.ok(Math.abs(total(reversed) - delta) < 1e-6 * Math.abs(delta));
   assert.ok(Math.abs(effect(forward, "volume") - effect(reversed, "volume")) < 1e-3);
   assert.ok(Math.abs(effect(forward, "price") - effect(reversed, "price")) < 1e-3);
+
+  // Leaving out the color attribute lets the photochromic shift leak into price.
+  const alternatives = await sensitivity(query, { ...base, levels });
+  assert.deepEqual(alternatives.map((a) => a.label), ["Your setup", "Without Design", "Without Coating", "Without Color", "Without Material"]);
+  near(alternatives[0].price, effect(forward, "price"));
+  assert.ok(alternatives[3].price > alternatives[0].price * 1.5);
+  assert.ok(alternatives[3].exactShare > alternatives[0].exactShare);
 
   const shares = forward.coverage.reduce((sum, c) => sum + c.share, 0);
   near(shares, 1);

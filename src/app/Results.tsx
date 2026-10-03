@@ -4,10 +4,12 @@ import {
   cumulativeColumns,
   drill,
   priceDistribution,
+  sensitivity,
   unmatched,
   type BridgeConfig,
   type BridgeResult,
   type DataCheck,
+  type Alternative,
   type DrillFilter,
   type PriceBucket,
   type Query,
@@ -24,7 +26,7 @@ export interface Run {
   ms: number;
 }
 
-type Tab = "bridge" | "movers" | "price" | "unmatched" | "check";
+type Tab = "bridge" | "movers" | "price" | "unmatched" | "setup" | "check";
 
 const display = (value: unknown) => (value === null || value === undefined ? "(blank)" : String(value));
 
@@ -49,6 +51,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
     { id: "movers", label: "Movers" },
     { id: "price", label: "Price changes" },
     { id: "unmatched", label: "Unmatched" },
+    { id: "setup", label: "Setup check" },
     { id: "check", label: warnings.length ? `Data check (${warnings.length})` : "Data check" },
   ];
 
@@ -120,6 +123,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
           </div>
         </div>
       )}
+      {tab === "setup" && <SetupCheck run={run} query={props.query} />}
       {tab === "price" && <PriceChanges run={run} query={props.query} />}
       {tab === "movers" && <Movers run={run} query={props.query} sortBy={sortBy} onSortBy={setSortBy} />}
       {tab === "unmatched" && <Unmatched run={run} query={props.query} />}
@@ -149,6 +153,57 @@ function Summary(props: { run: Run; result: Run["result"] }) {
       </div>
       {paragraphs.map((p) => <p key={p}>{p}</p>)}
       <p className="hint">Written from fixed sentence patterns, so the same bridge always gives the same text.</p>
+    </div>
+  );
+}
+
+function SetupCheck(props: { run: Run; query: () => Promise<Query> }) {
+  const [rows, setRows] = useState<Alternative[] | null>(null);
+  useEffect(() => {
+    let stale = false;
+    props
+      .query()
+      .then((query) => sensitivity(query, props.run.config))
+      .then((result) => !stale && setRows(result));
+    return () => {
+      stale = true;
+    };
+  }, [props.run]);
+  if (!rows) return <p className="hint">Recalculating with each attribute left out…</p>;
+  const prices = rows.map((r) => r.price);
+  return (
+    <div>
+      <table className="dense narrow-wide">
+        <thead>
+          <tr>
+            <th>Attributes used</th>
+            <th className="num">Price</th>
+            <th className="num">vs your setup</th>
+            <th className="num">Mix</th>
+            <th className="num">New and discontinued</th>
+            <th className="num">Matched exactly</th>
+            <th className="num">Configurations</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={row.label} className={i === 0 ? "total" : ""}>
+              <td title={row.levels.map((l) => l.name).join(" › ")}>{row.label}</td>
+              <td className="num">{signedWhole(row.price)}</td>
+              <td className="num">{i === 0 ? "" : signedWhole(row.price - rows[0].price)}</td>
+              <td className="num">{signedWhole(row.mix)}</td>
+              <td className="num">{signedWhole(row.newAndDiscontinued)}</td>
+              <td className="num">{percent(row.exactShare)}</td>
+              <td className="num">{whole(row.cells)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="hint">
+        {rows.length === 1
+          ? "With one attribute there is nothing to leave out."
+          : `Across these setups the price effect ranges from ${signedWhole(Math.min(...prices))} to ${signedWhole(Math.max(...prices))}. An attribute whose removal moves price a lot is one that carries real mix: keep it. One that barely moves price and lowers the match rate can be dropped.`}
+      </p>
     </div>
   );
 }

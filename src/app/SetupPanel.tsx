@@ -54,6 +54,7 @@ export function SetupPanel(props: {
             Compare by
             <select value={setup.grain} onChange={(e) => onChange({ grain: e.target.value as Grain })}>
               <option value="year">Year</option>
+              <option value="ytd">Year to date</option>
               <option value="quarter">Quarter</option>
               <option value="month">Month</option>
             </select>

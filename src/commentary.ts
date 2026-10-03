@@ -26,9 +26,12 @@ export function commentary(result: BridgeResult, config: BridgeConfig): string[]
   if (drivers.length > 0) {
     const describe = (e: (typeof drivers)[number]) => `${e.label.toLowerCase()} (${signed(e.value)}, ${ofPrior(e.value)} of prior sales)`;
     const [first, ...rest] = drivers;
+    const next = rest.slice(0, 3);
+    const others = rest.slice(3).reduce((sum, e) => sum + e.value, 0);
     paragraphs.push(
       `The largest driver was ${describe(first)}` +
-        (rest.length ? `, followed by ${rest.map(describe).join(", ")}.` : "."),
+        (next.length ? `, followed by ${next.map(describe).join(", ")}.` : ".") +
+        (rest.length > 3 ? ` The other ${rest.length - 3} lines net to ${signed(others)}.` : ""),
     );
   }
 

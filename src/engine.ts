@@ -509,3 +509,44 @@ export async function priceDistribution(
     averageChange: totalSales === 0 ? 0 : Number(totals.price_effect) / (totalSales - Number(totals.price_effect)),
   };
 }
+
+export interface Alternative {
+  label: string;
+  levels: Level[];
+  price: number;
+  mix: number;
+  newAndDiscontinued: number;
+  exactShare: number;
+  cells: number;
+}
+
+/**
+ * The same bridge with each attribute left out in turn, to show how much the
+ * price number depends on the choice of attributes.
+ */
+export async function sensitivity(query: Query, config: BridgeConfig): Promise<Alternative[]> {
+  const candidates = [
+    { label: "Your setup", levels: config.levels },
+    ...(config.levels.length > 1
+      ? config.levels.map((level, i) => ({
+          label: `Without ${level.name}`,
+          levels: config.levels.toSpliced(i, 1),
+        }))
+      : []),
+  ];
+  const alternatives: Alternative[] = [];
+  for (const candidate of candidates) {
+    const result = await runBridge(query, { ...config, levels: candidate.levels, cellsTable: "bridge_alternative" });
+    const sum = (match: (key: string) => boolean) =>
+      result.effects.filter((e) => match(e.key)).reduce((total, e) => total + e.value, 0);
+    alternatives.push({
+      ...candidate,
+      price: sum((key) => key.startsWith("price")),
+      mix: sum((key) => key.startsWith("mix_")),
+      newAndDiscontinued: sum((key) => key === "new_config" || key === "discontinued"),
+      exactShare: result.coverage.find((c) => c.level === candidate.levels.length)?.share ?? 0,
+      cells: result.coverage.reduce((total, c) => total + c.cells, 0),
+    });
+  }
+  return alternatives;
+}

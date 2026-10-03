@@ -131,3 +131,4 @@ tr.clickable:hover td { background: var(--accent-soft); }
   .scroll { max-height: none; overflow: visible; border: 0; }
   main { padding: 0; }
 }
+table.narrow-wide { max-width: 900px; }

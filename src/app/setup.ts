@@ -9,7 +9,7 @@ export interface Column {
   type: string;
 }
 
-export type Grain = "value" | "year" | "quarter" | "month";
+export type Grain = "value" | "year" | "ytd" | "quarter" | "month";
 
 export interface Filter {
   column: string;
@@ -57,6 +57,9 @@ function periodExpression(column: string, grain: Grain): string {
   switch (grain) {
     case "year":
       return `strftime(${c}, '%Y')`;
+    case "ytd":
+      // Each year up to the latest month in the data, so a part-year compares like with like.
+      return `CASE WHEN month(${c}) <= (SELECT month(max(${c})) FROM ${quote(TABLE)}) THEN strftime(${c}, '%Y') || ' YTD' END`;
     case "quarter":
       return `strftime(${c}, '%Y') || '-Q' || quarter(${c})`;
     case "month":
@@ -98,7 +101,7 @@ export function isValidSetup(value: unknown, columns: Column[]): value is Setup 
     known(setup.unitsColumn) &&
     known(setup.salesColumn) &&
     (setup.grossColumn === undefined || known(setup.grossColumn)) &&
-    ["value", "year", "quarter", "month"].includes(setup.grain as string) &&
+    ["value", "year", "ytd", "quarter", "month"].includes(setup.grain as string) &&
     Array.isArray(setup.levels) &&
     setup.levels.every(
       (l) => typeof l?.name === "string" && Array.isArray(l.columns) && l.columns.length > 0 && l.columns.every(known),
