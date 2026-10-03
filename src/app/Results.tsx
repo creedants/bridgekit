@@ -171,7 +171,9 @@ function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<
   const downloadReport = async () => {
     const { config } = props.run;
     const first = config.levels[0];
-    const rows = await drill(await props.query(), config, { columns: first.columns, limit: 15 });
+    const query = await props.query();
+    const rows = await drill(query, config, { columns: first.columns, limit: 15 });
+    const accountColumn = props.run.textColumns.find((c) => /customer|account|client|parent|sold.?to|buyer/i.test(c));
     const canvas = document.querySelector<HTMLCanvasElement>(".waterfall canvas");
     const html = buildReport({
       config,
@@ -179,6 +181,10 @@ function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<
       chartUrl: canvas?.toDataURL("image/png"),
       description: props.run.description,
       movers: { label: first.name, rows, columns: first.columns },
+      priceBands: (await priceDistribution(query, config)).buckets,
+      accounts: accountColumn
+        ? { column: accountColumn, groups: await accountBridge(query, config, accountColumn) }
+        : undefined,
     });
     download(`bridge-${config.prior}-to-${config.current}.html`, html, "text/html");
   };

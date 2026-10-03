@@ -1,5 +1,5 @@
 import { commentary } from "../commentary.ts";
-import { measureName, type BridgeConfig, type BridgeResult } from "../engine.ts";
+import { measureName, type AccountGroup, type BridgeConfig, type BridgeResult, type PriceBucket } from "../engine.ts";
 import { percent, signedPercent, signedWhole, whole } from "./format.ts";
 
 const escape = (value: unknown) =>
@@ -15,6 +15,8 @@ export function buildReport(input: {
   chartUrl?: string;
   description: string[];
   movers: { label: string; rows: Record<string, unknown>[]; columns: string[] };
+  priceBands: PriceBucket[];
+  accounts?: { column: string; groups: AccountGroup[] };
 }): string {
   const { config, result } = input;
   const row = (cells: string[], tag = "td") =>
@@ -59,6 +61,18 @@ ${input.chartUrl ? `<img alt="Waterfall chart of the bridge" src="${input.chartU
     .join("")}</table>
 <h2>Largest movers by ${escape(input.movers.label)}</h2>
 <table class="plain">${row([escape(input.movers.label), "Change", "Volume", "Mix", "Price"], "th")}${movers.join("")}</table>
+<h2>How widely price moved</h2>
+<table class="plain">${row(["Change in average price", "Share of matched sales", "Price effect"], "th")}${input.priceBands
+    .map((b) => row([escape(b.label), percent(b.share), signedWhole(b.priceEffect)]))
+    .join("")}</table>
+${
+  input.accounts
+    ? `<h2>Change by ${escape(input.accounts.column)}</h2>
+<table class="plain">${row(["Group", "Count", "Change"], "th")}${input.accounts.groups
+        .map((g) => row([g.status[0].toUpperCase() + g.status.slice(1), whole(g.count), signedWhole(g.change)]))
+        .join("")}</table>`
+    : ""
+}
 <h2>Setup</h2>
 <table class="plain">${input.description.map((line) => row(line.split(": ", 2).map(escape))).join("")}</table>
 </body></html>`;
