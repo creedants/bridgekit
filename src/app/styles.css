@@ -121,7 +121,7 @@ tr.clickable:hover td { background: var(--accent-soft); }
 .summary { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 4px; max-width: 760px; }
 .summary h3 { margin: 8px 0; }
 .summary p { font-size: 13px; }
-.distribution { max-width: 900px; }
+.distribution { max-width: 1000px; }
 .bar-cell { width: 34%; }
 .bar { display: block; height: 12px; border-radius: 2px; min-width: 1px; }
 

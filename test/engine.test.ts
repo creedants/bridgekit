@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDatabase } from "../src/duckdb.ts";
-import { runBridge, drill, unmatched, dataCheck, priceDistribution, sensitivity, type BridgeConfig, type BridgeResult } from "../src/engine.ts";
+import { runBridge, drill, unmatched, dataCheck, priceDistribution, sensitivity, trend, type BridgeConfig, type BridgeResult } from "../src/engine.ts";
 import { createSyntheticSales } from "../src/synth.ts";
 
 function effect(result: BridgeResult, key: string): number {
@@ -263,6 +263,25 @@ test("a gross column splits price into list price and discounts", async () => {
   assert.equal(up?.cells, 1);
   near(up!.share, 935 / 1435);
   near(distribution.averageChange, 35 / 1400);
+});
+
+test("trend bridges each pair of consecutive periods", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t AS SELECT * FROM (VALUES
+    ('q1', 'A', 10, 100.0), ('q2', 'A', 10, 110.0), ('q3', 'A', 20, 240.0)
+  ) v(period, product, units, sales)`);
+  const steps = await trend(
+    query,
+    { table: "t", periodColumn: "period", prior: "q1", current: "q2", unitsColumn: "units", salesColumn: "sales",
+      levels: [{ name: "Product", columns: ["product"] }] },
+    ["q1", "q2", "q3"],
+  );
+  assert.deepEqual(steps.map((s) => [s.prior, s.current]), [["q1", "q2"], ["q2", "q3"]]);
+  near(steps[0].price, 10);
+  near(steps[0].volume, 0);
+  near(steps[1].volume, 110);
+  near(steps[1].price, 20);
+  for (const s of steps) near(s.volume + s.mix + s.price + s.newAndDiscontinued + s.noUnits, s.currentSales - s.priorSales);
 });
 
 test("rejects a missing prior period and duplicate columns", async () => {

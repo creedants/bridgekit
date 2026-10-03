@@ -163,7 +163,16 @@ export function App() {
       const result = await runBridge(q, config);
       const ms = performance.now() - start;
       const check = await dataCheck(q, config);
-      setRun({ config, result, check, ms, id: Date.now(), signature });
+      setRun({
+        config,
+        result,
+        check,
+        ms,
+        periods,
+        description: describeSetup(setup, prior, current, source),
+        id: Date.now(),
+        signature,
+      });
       saveSetup(columns, setup);
       setNotice("");
     });

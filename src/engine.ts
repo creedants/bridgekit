@@ -550,3 +550,46 @@ export async function sensitivity(query: Query, config: BridgeConfig): Promise<A
   }
   return alternatives;
 }
+
+export interface TrendStep {
+  prior: string;
+  current: string;
+  priorSales: number;
+  currentSales: number;
+  volume: number;
+  mix: number;
+  price: number;
+  newAndDiscontinued: number;
+  noUnits: number;
+}
+
+/** One bridge per pair of consecutive periods, oldest first. */
+export async function trend(
+  query: Query,
+  config: BridgeConfig,
+  periods: (string | number)[],
+): Promise<TrendStep[]> {
+  const steps: TrendStep[] = [];
+  for (let i = 1; i < periods.length; i++) {
+    const result = await runBridge(query, {
+      ...config,
+      prior: periods[i - 1],
+      current: periods[i],
+      cellsTable: "bridge_trend",
+    });
+    const sum = (match: (key: string) => boolean) =>
+      result.effects.filter((e) => match(e.key)).reduce((total, e) => total + e.value, 0);
+    steps.push({
+      prior: String(periods[i - 1]),
+      current: String(periods[i]),
+      priorSales: result.priorSales,
+      currentSales: result.currentSales,
+      volume: sum((key) => key === "volume"),
+      mix: sum((key) => key.startsWith("mix_")),
+      price: sum((key) => key.startsWith("price")),
+      newAndDiscontinued: sum((key) => key === "new_config" || key === "discontinued"),
+      noUnits: sum((key) => key === "no_units"),
+    });
+  }
+  return steps;
+}

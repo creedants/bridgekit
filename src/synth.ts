@@ -15,6 +15,7 @@ export async function createSyntheticSales(query: Query, rows: number, table = "
 CREATE OR REPLACE TABLE "${table}" AS
 WITH raw AS (
   SELECT
+    i,
     CASE WHEN ((hash(i * 16 + 1) % 1000000) / 1000000.0) < 0.48 THEN 2025 ELSE 2026 END AS year,
     floor(pow(((hash(i * 16 + 2) % 1000000) / 1000000.0), 2.5) * 400)::INT AS cust_i,
     floor(pow(((hash(i * 16 + 3) % 1000000) / 1000000.0), 2.2) * 60)::INT AS design_r,
@@ -25,7 +26,7 @@ WITH raw AS (
   FROM range(${Math.floor(rows)}) t(i)
 ),
 shaped AS (
-  SELECT year, cust_i, mat_i, noise,
+  SELECT i, year, cust_i, mat_i, noise,
     CASE WHEN year = 2025 THEN design_r % 55 ELSE design_r END AS design_i,
     CASE WHEN year = 2026 AND coat_r = 11 THEN 10 ELSE coat_r END AS coat_i,
     CASE
@@ -44,6 +45,7 @@ FROM (
 SELECT
   cust_i,
   year,
+  make_date(year, 1 + (hash(i * 16 + 11) % 12)::INT, 1 + (hash(i * 16 + 12) % 28)::INT) AS order_date,
   'C' || lpad(cust_i::VARCHAR, 4, '0') AS customer,
   'D' || lpad(design_i::VARCHAR, 2, '0') AS design,
   'CT' || lpad(coat_i::VARCHAR, 2, '0') AS coating,

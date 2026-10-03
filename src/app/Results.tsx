@@ -5,6 +5,7 @@ import {
   drill,
   priceDistribution,
   sensitivity,
+  trend,
   unmatched,
   type BridgeConfig,
   type BridgeResult,
@@ -12,21 +13,27 @@ import {
   type Alternative,
   type DrillFilter,
   type PriceBucket,
+  type TrendStep,
   type Query,
 } from "../engine.ts";
 import { commentary } from "../commentary.ts";
 import { download, toCsv, toTsv } from "./files.ts";
 import { percent, price, signedPercent, signedWhole, whole } from "./format.ts";
+import { buildReport } from "./report.ts";
 import { Waterfall } from "./Waterfall.tsx";
 
 export interface Run {
+  /** Every period in the data, oldest first, for the trend view. */
+  periods: string[];
+  /** Human-readable lines describing the setup, for exports. */
+  description: string[];
   config: BridgeConfig;
   result: BridgeResult;
   check: DataCheck;
   ms: number;
 }
 
-type Tab = "bridge" | "movers" | "price" | "unmatched" | "setup" | "check";
+type Tab = "bridge" | "movers" | "price" | "trend" | "unmatched" | "setup" | "check";
 
 const display = (value: unknown) => (value === null || value === undefined ? "(blank)" : String(value));
 
@@ -50,6 +57,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
     { id: "bridge", label: "Bridge" },
     { id: "movers", label: "Movers" },
     { id: "price", label: "Price changes" },
+    { id: "trend", label: "Trend" },
     { id: "unmatched", label: "Unmatched" },
     { id: "setup", label: "Setup check" },
     { id: "check", label: warnings.length ? `Data check (${warnings.length})` : "Data check" },
@@ -79,7 +87,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
             result={result}
             priorLabel={String(config.prior)}
             currentLabel={String(config.current)}
-            footer={<Summary run={run} result={result} />}
+            footer={<Summary run={run} result={result} query={props.query} />}
             onSelect={(key) => {
               setSortBy(key.startsWith("mix_") ? "mix" : key.startsWith("price") ? "price" : key);
               setTab("movers");
@@ -123,6 +131,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
           </div>
         </div>
       )}
+      {tab === "trend" && <Trend run={run} query={props.query} />}
       {tab === "setup" && <SetupCheck run={run} query={props.query} />}
       {tab === "price" && <PriceChanges run={run} query={props.query} />}
       {tab === "movers" && <Movers run={run} query={props.query} sortBy={sortBy} onSortBy={setSortBy} />}
@@ -132,9 +141,23 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
   );
 }
 
-function Summary(props: { run: Run; result: Run["result"] }) {
+function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<Query> }) {
   const paragraphs = commentary(props.result, props.run.config);
   const [copied, setCopied] = useState(false);
+  const downloadReport = async () => {
+    const { config } = props.run;
+    const first = config.levels[0];
+    const rows = await drill(await props.query(), config, { columns: first.columns, limit: 15 });
+    const canvas = document.querySelector<HTMLCanvasElement>(".waterfall canvas");
+    const html = buildReport({
+      config,
+      result: props.result,
+      chartUrl: canvas?.toDataURL("image/png"),
+      description: props.run.description,
+      movers: { label: first.name, rows, columns: first.columns },
+    });
+    download(`bridge-${config.prior}-to-${config.current}.html`, html, "text/html");
+  };
   return (
     <div className="summary">
       <div className="toolbar">
@@ -149,10 +172,86 @@ function Summary(props: { run: Run; result: Run["result"] }) {
           >
             {copied ? "Copied" : "Copy"}
           </button>
+          <button onClick={downloadReport}>Download report</button>
         </span>
       </div>
       {paragraphs.map((p) => <p key={p}>{p}</p>)}
       <p className="hint">Written from fixed sentence patterns, so the same bridge always gives the same text.</p>
+    </div>
+  );
+}
+
+const MAX_TREND_PERIODS = 13;
+
+function Trend(props: { run: Run; query: () => Promise<Query> }) {
+  const periods = props.run.periods.slice(-MAX_TREND_PERIODS);
+  const [steps, setSteps] = useState<TrendStep[] | null>(null);
+  useEffect(() => {
+    if (periods.length < 3) return;
+    let stale = false;
+    props
+      .query()
+      .then((query) => trend(query, props.run.config, periods))
+      .then((result) => !stale && setSteps(result));
+    return () => {
+      stale = true;
+    };
+  }, [props.run]);
+  if (periods.length < 3) {
+    return (
+      <p className="hint">
+        The trend needs three or more periods. With a date column, compare by quarter or month to see one bridge per
+        period.
+      </p>
+    );
+  }
+  if (!steps) return <p className="hint">Calculating a bridge for each pair of periods…</p>;
+  const widest = Math.max(...steps.map((s) => Math.abs(s.price / s.priorSales)), 0.0001);
+  return (
+    <div>
+      <table className="dense distribution">
+        <thead>
+          <tr>
+            <th>Periods</th>
+            <th className="num">Change</th>
+            <th className="num">Volume</th>
+            <th className="num">Mix</th>
+            <th className="num">Price</th>
+            <th className="num">Price, % of prior</th>
+            <th>Price effect</th>
+            <th className="num">New and discontinued</th>
+            <th className="num">No units</th>
+          </tr>
+        </thead>
+        <tbody>
+          {steps.map((s) => (
+            <tr key={s.current}>
+              <td>{s.prior} to {s.current}</td>
+              <td className="num strong">{signedWhole(s.currentSales - s.priorSales)}</td>
+              <td className="num">{signedWhole(s.volume)}</td>
+              <td className="num">{signedWhole(s.mix)}</td>
+              <td className="num">{signedWhole(s.price)}</td>
+              <td className="num">{signedPercent(s.price / s.priorSales)}</td>
+              <td className="bar-cell" style={{ width: "18%" }}>
+                <span
+                  className="bar"
+                  style={{
+                    width: `${(Math.abs(s.price / s.priorSales) / widest) * 100}%`,
+                    background: s.price >= 0 ? "var(--up)" : "var(--down)",
+                  }}
+                />
+              </td>
+              <td className="num">{signedWhole(s.newAndDiscontinued)}</td>
+              <td className="num">{signedWhole(s.noUnits)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="hint">
+        One bridge for each pair of consecutive periods, using the same setup
+        {props.run.periods.length > MAX_TREND_PERIODS ? `; the latest ${MAX_TREND_PERIODS} periods are shown` : ""}.
+        Consecutive periods can carry seasonality, which shows up as volume and mix.
+      </p>
     </div>
   );
 }
