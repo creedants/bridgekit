@@ -49,13 +49,13 @@
           <li>Drop the file on the tool, or use <b>Choose file</b>.</li>
           <li>Under <b>Periods</b>, pick the period column and the two periods to compare.</li>
           <li>Under <b>Measures</b>, pick units and sales. The tool guesses these from the column names; check them.</li>
-          <li>Under <b>Attributes</b>, add the columns that define the product, most important first. To treat two columns as one attribute, use <b>+ combine</b>.</li>
+          <li>Under <b>Attributes</b>, add the columns that define the product, most important first. To treat two columns as one attribute, use <b>+ combine</b>. If the tool finds columns that roll up into each other, such as product, family and category, it offers to add them in order.</li>
           <li>Choose <b>Calculate bridge</b>.</li>
         </ol>
         <p>The setup is remembered for the next file that has the same columns.</p>
 
         <h2>3. Read the bridge</h2>
-        <figure class="shot" style="margin-top: 16px"><img src="/img/app-bridge.png" alt="The bridge tab: a waterfall chart, the bridge table, a match coverage table and a written summary" style="width: 100%; display: block" /></figure>
+        <figure class="shot" style="margin-top: 16px"><img src="/img/g-bridge.png" alt="The bridge tab: a waterfall chart, the bridge table, a match coverage table and a written summary" style="width: 100%; display: block" /></figure>
         <ul style="margin-top: 16px">
           <li><b>Volume:</b> the change in units at last period’s overall average price.</li>
           <li><b>Mix, one line per attribute:</b> the effect of selling a different blend.</li>
@@ -69,21 +69,25 @@
         <p>Click any bar to open <b>Movers</b>, sorted by that effect. Click a row to break it down by the next attribute. Each row’s effects add up to that row’s own change in sales, so any subtotal can be checked by hand.</p>
 
         <h2>5. See how widely price moved</h2>
-        <figure class="shot" style="margin-top: 16px"><img src="/img/app-price.png" alt="The price changes tab: share of matched sales in each band of price change" style="width: 100%; display: block" /></figure>
+        <figure class="shot" style="margin-top: 16px"><img src="/img/g-price.png" alt="The price changes tab: share of matched sales in each band of price change" style="width: 100%; display: block" /></figure>
         <p style="margin-top: 16px"><b>Price changes</b> groups matched sales by how much their average price moved. Use it to answer “how much of the book actually got the increase?”</p>
 
         <h2>6. Test your choice of attributes</h2>
-        <figure class="shot" style="margin-top: 16px"><img src="/img/app-setup.png" alt="The setup check tab: the bridge recalculated with each attribute left out" style="width: 100%; display: block" /></figure>
+        <figure class="shot" style="margin-top: 16px"><img src="/img/g-setup.png" alt="The setup check tab: the bridge recalculated with each attribute left out" style="width: 100%; display: block" /></figure>
         <p style="margin-top: 16px"><b>Setup check</b> reruns the bridge with each attribute left out.</p>
         <ul>
           <li>If leaving an attribute out moves price a lot, that attribute carries real mix. Keep it.</li>
           <li>If it barely moves price and raises the match rate, the attribute is adding noise. Consider dropping it.</li>
         </ul>
 
-        <h2>7. Take it with you</h2>
+        <h2>7. Look across more than two periods</h2>
+        <p>With a date column, compare by quarter or month and open <b>Trend</b>. It runs one bridge for each pair of consecutive periods, so you can see when a price change landed.</p>
+
+        <h2>8. Take it with you</h2>
         <ul>
           <li><b>Export Excel</b> writes the bridge, coverage, movers and a detail sheet with live formulas.</li>
           <li><b>Download PNG</b> saves the chart for a slide.</li>
+          <li><b>Download report</b> saves one HTML file with the chart, bridge, summary and top movers. It contains totals only, so it is safe to email.</li>
           <li><b>Copy</b> on the summary and on each table puts it on the clipboard, ready to paste.</li>
           <li>Your browser’s print command gives a clean page of whichever tab is open.</li>
         </ul>

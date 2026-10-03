@@ -36,17 +36,22 @@ mix between attributes does.
 
 ## What the tool does
 
-- Reads a CSV or Parquet file in the browser tab. Nothing is uploaded.
-- Bridge: waterfall, bridge table and match coverage.
+- Reads a CSV, Excel (.xlsx) or Parquet file in the browser tab. Nothing is uploaded.
+- Bridge: waterfall, bridge table, match coverage and a written summary.
+- Optional gross sales column splits price into list price and discounts.
+- Rows with sales and no units (rebates, credits) are bridged on their own line.
+- New and discontinued configurations: shown as a price difference (default)
+  or at full sales, outside volume and mix.
 - Movers: effects by any attribute, sortable, with click-through to the next
   attribute. Copy to clipboard or download as CSV.
+- Price changes: share of matched sales by band of price change.
+- Trend: one bridge per pair of consecutive periods.
+- Setup check: the bridge rerun with each attribute left out.
 - Unmatched: configurations with no exact prior match and the reference price
   used for each.
 - Data check: counts of returns, blank values and ignored rows.
-- Filters: include or exclude values before calculating.
-- Option: show new and discontinued configurations as a price difference
-  (default) or at full sales, outside volume and mix.
-- Excel export: bridge, coverage, movers and a detail sheet with live formulas.
+- Filters, year-to-date comparison, roll-up detection, data preview.
+- Exports: Excel with live formulas, chart PNG, one-file HTML report.
 - The setup is remembered per set of column names, and can be saved to a file.
 - `/app/?sample` opens the tool with the sample data already calculated.
 
@@ -62,12 +67,20 @@ npm run demo     # 3 million made-up rows on the command line
 The app reads CSV and Parquet files. "Load sample data" generates made-up
 prescription lens sales so you can try it without a file.
 
+## Deploying
+
+`npm run build` writes a static site to `dist/`. Any static host works. Check
+the host's per-file size limit first: the DuckDB WebAssembly files are 36 MB
+and 41 MB, which is over the limit on some hosts.
+
 ## Layout
 
 - `src/engine.ts`: the calculation. It generates SQL and takes a query
   function, so the same code runs on DuckDB in Node and in the browser.
 - `src/app/`: the tool, a React app using DuckDB-WASM and ECharts.
-- `index.html`, `method.html`, `src/site/`: the landing page and method page.
+- `index.html`, `guide.html`, `method.html`, `price-volume-mix-analysis.html`,
+  `src/site/`: the site pages.
+- `src/commentary.ts`: the written summary.
 - `src/tokens.css`: colors and type shared by the site and the tool.
 - `src/synth.ts`: the sample data generator.
 

@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Price-volume-mix analysis: formulas, a worked example and six common mistakes</title>
+    <meta name="description" content="What price-volume-mix (PVM) analysis is, the formulas for each effect, a worked example you can check by hand, and the mistakes that make a bridge misleading." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/src/site/site.css" />
+  </head>
+  <body>
+    <div class="nav">
+      <div class="wrap">
+        <a class="wordmark" href="/"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="6" fill="var(--accent)"/><rect x="6" y="17" width="5" height="9" fill="#fff"/><rect x="13.5" y="12" width="5" height="5" fill="#fff" opacity=".75"/><rect x="21" y="6" width="5" height="20" fill="#fff"/></svg>Bridgekit</a>
+        <nav>
+          <a class="optional" href="/#how">How it works</a>
+          <a class="optional" href="/guide.html">Guide</a>
+          <a class="optional" href="/method.html">Method</a>
+          <a class="optional" href="/#pricing">Pricing</a>
+          <a class="button" href="/app/">Open the tool</a>
+        </nav>
+      </div>
+    </div>
+
+    <article>
+      <div class="wrap narrow">
+        <h1>Price-volume-mix analysis: formulas, a worked example and six common mistakes</h1>
+        <p class="sub">Price-volume-mix analysis, or PVM, explains why sales changed between two periods. It splits the change into how much you sold, what you sold, and what you charged for it.</p>
+
+        <h2>The question it answers</h2>
+        <p>Sales went from 300 to 660. Was that because you sold more units, because customers moved to dearer products, or because you raised prices? Each answer leads to a different decision, and the total alone cannot tell them apart.</p>
+
+        <h2>The three effects</h2>
+        <p>For each product, take units <code>q</code> and price <code>p</code> in the prior period (0) and the current period (1). <code>P0</code> is the prior average price across all products.</p>
+        <div class="boxed">
+          <table>
+            <thead><tr><th>Effect</th><th>Formula</th><th>In words</th></tr></thead>
+            <tbody>
+              <tr><td>Volume</td><td><code>(Q1 − Q0) × P0</code></td><td>The change in total units, valued at last period’s average price.</td></tr>
+              <tr><td>Mix</td><td>sum of <code>(q1 − q0) × (p0 − P0)</code></td><td>Units moving toward products that are dearer or cheaper than average.</td></tr>
+              <tr><td>Price</td><td>sum of <code>q1 × (p1 − p0)</code></td><td>The price change on each product, on this period’s units.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The three add up to the change in sales for every product that sold in both periods. Other conventions exist, such as valuing price on prior units or defining mix through share of units. They give somewhat different splits and the same total. Whichever you use, state it and keep it the same every period.</p>
+
+        <h2>A worked example</h2>
+        <div class="boxed">
+          <table>
+            <thead><tr><th>Product</th><th class="num">Prior units</th><th class="num">Prior price</th><th class="num">Current units</th><th class="num">Current price</th></tr></thead>
+            <tbody>
+              <tr><td>A</td><td class="num">10</td><td class="num">10</td><td class="num">10</td><td class="num">11</td></tr>
+              <tr><td>B</td><td class="num">10</td><td class="num">20</td><td class="num">20</td><td class="num">20</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Prior sales are 300 on 20 units, so <code>P0</code> is 15. Current sales are 510 on 30 units.</p>
+        <ul>
+          <li><b>Volume:</b> (30 − 20) × 15 = +150.</li>
+          <li><b>Mix:</b> A is (10 − 10) × (10 − 15) = 0. B is (20 − 10) × (20 − 15) = +50.</li>
+          <li><b>Price:</b> A is 10 × (11 − 10) = +10. B is 0.</li>
+          <li><b>Total:</b> 150 + 50 + 10 = 210, which is 510 − 300.</li>
+        </ul>
+        <p>Without the split, the average price rose from 15 to 17, which looks like a 13% price increase. The real price increase was 10 on sales of 300, about 3%. The rest was customers buying more of product B.</p>
+
+        <h2>Six common mistakes</h2>
+        <ol>
+          <li><b>Reading average price as price.</b> Average price moves with mix. The example above shows a 13% rise in average price from a 3% price increase.</li>
+          <li><b>Grouping at the wrong level.</b> Group by product family and a shift to premium items inside a family shows up as price. Group by full configuration and most items have no prior-period match. Products built from options need more than one level; see <a href="/method.html">how Bridgekit handles this</a>.</li>
+          <li><b>Losing new and discontinued products.</b> They have no price in one of the periods, so the price formula does not apply. Give them their own lines and say how you valued them.</li>
+          <li><b>Leaving rebates and credits in.</b> A credit line with sales and no units has no price. Left in, it distorts price or volume. Show it as its own line.</li>
+          <li><b>Not reconciling.</b> The effects must add up to the change in sales, in total and for any product. If they do not, there is an error in the workbook.</li>
+          <li><b>Changing the method between periods.</b> If March uses one formula and April another, the two bridges cannot be compared.</li>
+        </ol>
+
+        <h2>Doing it in a spreadsheet</h2>
+        <p>For a few dozen products, a spreadsheet works well: one row per product, columns for units and sales in each period, and the three formulas above. It gets hard when the file has hundreds of thousands of rows, when products are combinations of attributes, or when the analysis is rebuilt by hand every month.</p>
+        <p>Bridgekit does the same arithmetic in your browser, across several attributes at once, and exports a workbook with the formulas in it so the result can still be checked in a spreadsheet.</p>
+
+        <p style="margin-top: 32px"><a class="button" href="/app/?sample">Try it with sample data</a></p>
+      </div>
+    </article>
+
+    <footer>
+      <div class="wrap">
+        <span>Bridgekit. MIT license.</span>
+        <a href="/">Home</a>
+        <a href="/app/">Tool</a>
+        <a href="/guide.html">Guide</a>
+        <a href="https://github.com/creedants/bridgekit">GitHub</a>
+      </div>
+    </footer>
+  </body>
+</html>

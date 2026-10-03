@@ -102,6 +102,22 @@
           <li>The match coverage table shows this revenue as “fell back to Design”.</li>
         </ul>
 
+        <h2>List price and discounts</h2>
+        <p>
+          If the file has gross sales as well as net sales, the price effect of each matched configuration is split in
+          two. Write <code>g</code> for the gross price per unit and <code>d</code> for net sales divided by gross sales.
+        </p>
+        <div class="boxed">
+          <table>
+            <thead><tr><th>Effect</th><th>Formula per configuration</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td>List price</td><td><code>q1 × (g1 − g0) × d0</code></td><td>The change in gross price, at last period’s discount rate.</td></tr>
+              <tr><td>Discounts</td><td><code>q1 × g1 × (d1 − d0)</code></td><td>The change in the share of gross price kept, at this period’s gross price.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The two add up to the price effect. Example: 10 units, gross price 100 then 110, net rate 90% then 85%. List price is 10 × 10 × 0.9 = +90, discounts are 10 × 110 × −0.05 = −55, and price is +35.</p>
+
         <h2>New and discontinued</h2>
         <p>The two lines mirror each other. In both cases the units count in volume, and the line shows only how much dearer or cheaper the configuration was than its nearest comparable group.</p>
         <ul>
