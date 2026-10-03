@@ -20,6 +20,7 @@ export function SetupPanel(props: {
     setup.periodColumn,
     setup.unitsColumn,
     setup.salesColumn,
+    setup.grossColumn,
     ...setup.levels.flatMap((l) => l.columns),
   ]);
   const free = columns.filter((c) => !used.has(c.name));
@@ -92,6 +93,14 @@ export function SetupPanel(props: {
             </select>
           </label>
         </div>
+        <label>
+          Gross sales (optional)
+          <select value={setup.grossColumn ?? ""} onChange={(e) => onChange({ grossColumn: e.target.value || undefined })}>
+            <option value="">None</option>
+            {numeric.filter((c) => c.name !== setup.salesColumn).map((c) => <option key={c.name}>{c.name}</option>)}
+          </select>
+        </label>
+        {setup.grossColumn && <p className="hint">Price is split into list price and discounts.</p>}
       </fieldset>
 
       <fieldset>

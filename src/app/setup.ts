@@ -22,6 +22,8 @@ export interface Setup {
   grain: Grain;
   unitsColumn: string;
   salesColumn: string;
+  /** Optional sales before discounts; splits the price effect into list price and discounts. */
+  grossColumn?: string;
   levels: Level[];
   filters: Filter[];
   /** See BridgeConfig.newAndDiscontinued. Absent in setups saved before the option existed. */
@@ -37,11 +39,14 @@ export function guessSetup(columns: Column[]): Setup {
   const find = (pattern: RegExp, among: Column[]) => among.find((c) => pattern.test(c.name))?.name ?? "";
   const numeric = columns.filter((c) => isNumeric(c.type));
   const date = columns.find((c) => isDate(c.type));
+  const salesColumn = find(/net/i, numeric) || find(/sales|revenue|amount|value/i, numeric);
+  const grossColumn = find(/gross|list/i, numeric);
   return {
     periodColumn: date?.name ?? find(/year|period|month|quarter|date/i, columns),
     grain: date ? "year" : "value",
     unitsColumn: find(/unit|qty|quant|jobs|volume|pieces/i, numeric),
-    salesColumn: find(/net/i, numeric) || find(/sales|revenue|amount|value/i, numeric),
+    salesColumn,
+    grossColumn: grossColumn && grossColumn !== salesColumn ? grossColumn : undefined,
     levels: [],
     filters: [],
   };
@@ -92,6 +97,7 @@ export function isValidSetup(value: unknown, columns: Column[]): value is Setup 
     known(setup.periodColumn) &&
     known(setup.unitsColumn) &&
     known(setup.salesColumn) &&
+    (setup.grossColumn === undefined || known(setup.grossColumn)) &&
     ["value", "year", "quarter", "month"].includes(setup.grain as string) &&
     Array.isArray(setup.levels) &&
     setup.levels.every(

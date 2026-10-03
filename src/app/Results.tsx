@@ -3,13 +3,16 @@ import {
   coverageLabel,
   cumulativeColumns,
   drill,
+  priceDistribution,
   unmatched,
   type BridgeConfig,
   type BridgeResult,
   type DataCheck,
   type DrillFilter,
+  type PriceBucket,
   type Query,
 } from "../engine.ts";
+import { commentary } from "../commentary.ts";
 import { download, toCsv, toTsv } from "./files.ts";
 import { percent, price, signedPercent, signedWhole, whole } from "./format.ts";
 import { Waterfall } from "./Waterfall.tsx";
@@ -21,7 +24,7 @@ export interface Run {
   ms: number;
 }
 
-type Tab = "bridge" | "movers" | "unmatched" | "check";
+type Tab = "bridge" | "movers" | "price" | "unmatched" | "check";
 
 const display = (value: unknown) => (value === null || value === undefined ? "(blank)" : String(value));
 
@@ -37,13 +40,14 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
   const [sortBy, setSortBy] = useState("change");
 
   const change = result.currentSales - result.priorSales;
-  const priceEffect = result.effects.find((e) => e.key === "price")?.value ?? 0;
+  const priceEffect = result.effects.filter((e) => e.key.startsWith("price")).reduce((sum, e) => sum + e.value, 0);
   const exact = result.coverage.find((c) => c.level === config.levels.length)?.share ?? 0;
   const warnings = checkWarnings(run);
 
   const tabs: { id: Tab; label: string }[] = [
     { id: "bridge", label: "Bridge" },
     { id: "movers", label: "Movers" },
+    { id: "price", label: "Price changes" },
     { id: "unmatched", label: "Unmatched" },
     { id: "check", label: warnings.length ? `Data check (${warnings.length})` : "Data check" },
   ];
@@ -72,8 +76,9 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
             result={result}
             priorLabel={String(config.prior)}
             currentLabel={String(config.current)}
+            footer={<Summary run={run} result={result} />}
             onSelect={(key) => {
-              setSortBy(key.startsWith("mix_") ? "mix" : key);
+              setSortBy(key.startsWith("mix_") ? "mix" : key.startsWith("price") ? "price" : key);
               setTab("movers");
             }}
           />
@@ -115,10 +120,99 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
           </div>
         </div>
       )}
+      {tab === "price" && <PriceChanges run={run} query={props.query} />}
       {tab === "movers" && <Movers run={run} query={props.query} sortBy={sortBy} onSortBy={setSortBy} />}
       {tab === "unmatched" && <Unmatched run={run} query={props.query} />}
       {tab === "check" && <Check run={run} warnings={warnings} />}
     </>
+  );
+}
+
+function Summary(props: { run: Run; result: Run["result"] }) {
+  const paragraphs = commentary(props.result, props.run.config);
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="summary">
+      <div className="toolbar">
+        <h3>Summary</h3>
+        <span className="actions">
+          <button
+            onClick={async () => {
+              await navigator.clipboard.writeText(paragraphs.join("\n\n"));
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            }}
+          >
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </span>
+      </div>
+      {paragraphs.map((p) => <p key={p}>{p}</p>)}
+      <p className="hint">Written from fixed sentence patterns, so the same bridge always gives the same text.</p>
+    </div>
+  );
+}
+
+function PriceChanges(props: { run: Run; query: () => Promise<Query> }) {
+  const [data, setData] = useState<{ buckets: PriceBucket[]; averageChange: number } | null>(null);
+  useEffect(() => {
+    let stale = false;
+    props
+      .query()
+      .then((query) => priceDistribution(query, props.run.config))
+      .then((result) => !stale && setData(result));
+    return () => {
+      stale = true;
+    };
+  }, [props.run]);
+  if (!data) return null;
+  const widest = Math.max(...data.buckets.map((b) => b.share), 0.0001);
+  const moved = (from: number, to: number) => data.buckets.slice(from, to).reduce((sum, b) => sum + b.share, 0);
+  return (
+    <div>
+      <div className="kpis" style={{ marginBottom: 12 }}>
+        <Kpi label="Average price change" value={signedPercent(data.averageChange)} note="exactly matched configurations" />
+        <Kpi label="Sales with a price increase" value={percent(moved(5, 9))} note="up more than 0.5%" />
+        <Kpi label="Sales with no change" value={percent(moved(4, 5))} note="within 0.5%" />
+        <Kpi label="Sales with a price decrease" value={percent(moved(0, 4))} note="down more than 0.5%" />
+      </div>
+      <table className="dense distribution">
+        <thead>
+          <tr>
+            <th>Change in average price</th>
+            <th>Share of matched sales</th>
+            <th className="num">Share</th>
+            <th className="num">Current sales</th>
+            <th className="num">Price effect</th>
+            <th className="num">Configurations</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.buckets.map((b, i) => (
+            <tr key={b.label}>
+              <td>{b.label}</td>
+              <td className="bar-cell">
+                <span
+                  className="bar"
+                  style={{
+                    width: `${(b.share / widest) * 100}%`,
+                    background: i < 4 ? "var(--down)" : i === 4 ? "var(--total)" : "var(--up)",
+                  }}
+                />
+              </td>
+              <td className="num">{percent(b.share)}</td>
+              <td className="num">{whole(b.sales)}</td>
+              <td className="num">{signedWhole(b.priceEffect)}</td>
+              <td className="num">{whole(b.cells)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="hint">
+        Each exactly matched configuration is placed by how much its average price moved between the two periods.
+        This shows how widely a price change landed, which the single price number in the bridge cannot.
+      </p>
+    </div>
   );
 }
 

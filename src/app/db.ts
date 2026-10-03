@@ -4,10 +4,11 @@ import mvpWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url
 import ehWasm from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
 import mvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import type { Query } from "../engine.ts";
+import { toCsv } from "./files.ts";
 
 export interface BrowserDatabase {
   query: Query;
-  /** Loads a CSV or Parquet file into `table` without it leaving the browser. */
+  /** Loads a CSV, Excel or Parquet file into `table` without it leaving the browser. */
   loadFile(file: File, table: string): Promise<void>;
 }
 
@@ -32,13 +33,44 @@ export async function openBrowserDatabase(): Promise<BrowserDatabase> {
     query,
     async loadFile(file, table) {
       const isParquet = /\.parquet$/i.test(file.name);
-      if (!isParquet && !/\.(csv|tsv|txt)$/i.test(file.name)) {
-        throw new Error("Use a CSV or Parquet file");
+      const isExcel = /\.xlsx$/i.test(file.name);
+      if (!isParquet && !isExcel && !/\.(csv|tsv|txt)$/i.test(file.name)) {
+        throw new Error("Use a CSV, Excel (.xlsx) or Parquet file");
       }
       const registered = isParquet ? "upload.parquet" : "upload.csv";
-      await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+      if (isExcel) {
+        await db.registerFileText(registered, await firstSheetAsCsv(file));
+      } else {
+        await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+      }
       const reader = isParquet ? `read_parquet('${registered}')` : `read_csv('${registered}')`;
       await query(`CREATE OR REPLACE TABLE "${table}" AS SELECT * FROM ${reader}`);
     },
   };
+}
+
+/** Reads the first worksheet of an .xlsx file, taking formula results and formatting dates as ISO. */
+async function firstSheetAsCsv(file: File): Promise<string> {
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await file.arrayBuffer());
+  const sheet = workbook.worksheets[0];
+  if (!sheet || sheet.rowCount < 2) throw new Error("The first sheet of that workbook has no data rows.");
+  const plain = (value: unknown): unknown => {
+    if (value instanceof Date) return value.toISOString().slice(0, 10);
+    if (typeof value === "object" && value !== null) {
+      const cell = value as { result?: unknown; text?: unknown; richText?: { text: string }[] };
+      if (cell.richText) return cell.richText.map((part) => part.text).join("");
+      if ("result" in cell) return plain(cell.result);
+      if ("text" in cell) return cell.text;
+      return "";
+    }
+    return value;
+  };
+  const rows: unknown[][] = [];
+  sheet.eachRow((row) => {
+    const values = (row.values as unknown[]).slice(1);
+    rows.push(Array.from({ length: sheet.columnCount }, (_, i) => plain(values[i])));
+  });
+  return toCsv(rows[0].map(String), rows.slice(1));
 }

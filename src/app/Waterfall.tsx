@@ -4,6 +4,7 @@ import * as echarts from "echarts/core";
 import { LegacyGridContainLabel } from "echarts/features";
 import { CanvasRenderer } from "echarts/renderers";
 import { useEffect, useRef } from "react";
+import type React from "react";
 import type { BridgeResult } from "../engine.ts";
 import { compact, signedCompact } from "./format.ts";
 
@@ -61,8 +62,10 @@ export function Waterfall(props: {
   currentLabel: string;
   /** Called with an effect key when its bar is clicked. */
   onSelect: (effectKey: string) => void;
+  footer?: React.ReactNode;
 }) {
   const element = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<echarts.ECharts>(null);
   const onSelect = useRef(props.onSelect);
   onSelect.current = props.onSelect;
   const bars = steps(props.result, props.priorLabel, props.currentLabel);
@@ -71,6 +74,7 @@ export function Waterfall(props: {
   useEffect(() => {
     if (!element.current) return;
     const chart = echarts.init(element.current);
+    chartRef.current = chart;
     const colors = { total: token("--total"), up: token("--up"), down: token("--down") };
     const ink = token("--text");
 
@@ -155,6 +159,20 @@ export function Waterfall(props: {
         <span><i style={{ background: "var(--up)" }} /> Increase</span>
         <span><i style={{ background: "var(--down)" }} /> Decrease</span>
         <span><i style={{ background: "var(--total)" }} /> Period total</span>
+        <button
+          className="quiet"
+          style={{ marginLeft: "auto" }}
+          onClick={() => {
+            const url = chartRef.current?.getDataURL({ type: "png", pixelRatio: 2, backgroundColor: "#ffffff" });
+            if (!url) return;
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = `bridge-${props.priorLabel}-to-${props.currentLabel}.png`;
+            link.click();
+          }}
+        >
+          Download PNG
+        </button>
       </div>
       <div
         ref={element}
@@ -163,6 +181,7 @@ export function Waterfall(props: {
         aria-label="Waterfall chart of the sales bridge. The same numbers are in the table beside it."
       />
       {floor > 0 && <figcaption>Value axis starts at {compact(floor)}, not zero, so the steps are visible.</figcaption>}
+      {props.footer}
     </figure>
   );
 }

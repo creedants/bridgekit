@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDatabase } from "../src/duckdb.ts";
-import { runBridge, drill, unmatched, dataCheck, type BridgeConfig, type BridgeResult } from "../src/engine.ts";
+import { runBridge, drill, unmatched, dataCheck, priceDistribution, type BridgeConfig, type BridgeResult } from "../src/engine.ts";
 import { createSyntheticSales } from "../src/synth.ts";
 
 function effect(result: BridgeResult, key: string): number {
@@ -227,6 +227,35 @@ test("full mode shows new and discontinued at full sales, outside volume and mix
       .reduce((s, key) => s + Number(row[key]), 0);
     near(own, Number(row.s1) - Number(row.s0), `product ${row.product}`);
   }
+});
+
+test("a gross column splits price into list price and discounts", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t AS SELECT * FROM (VALUES
+    ('p0', 'A', 10, 1000.0, 900.0), ('p0', 'B', 10, 500.0, 500.0),
+    ('p1', 'A', 10, 1100.0, 935.0), ('p1', 'B', 10, 500.0, 500.0)
+  ) v(period, product, units, gross, net)`);
+  const config: BridgeConfig = {
+    table: "t", periodColumn: "period", prior: "p0", current: "p1",
+    unitsColumn: "units", salesColumn: "net", grossColumn: "gross",
+    levels: [{ name: "Product", columns: ["product"] }],
+  };
+  const result = await runBridge(query, config);
+
+  // A: list price 100 -> 110 at the prior 90% net rate, then the rate falls to 85%.
+  near(effect(result, "price_list"), 10 * (110 - 100) * 0.9);
+  near(effect(result, "price_discount"), 10 * 110 * (0.85 - 0.9));
+  near(total(result), 35);
+  assert.equal(result.effects.some((e) => e.key === "price"), false);
+
+  const [row] = await drill(query, config, { columns: ["product"], sortBy: "price" });
+  near(Number(row.price), 35);
+
+  const distribution = await priceDistribution(query, config);
+  const up = distribution.buckets.find((b) => b.label === "Up 2% to 5%");
+  assert.equal(up?.cells, 1);
+  near(up!.share, 935 / 1435);
+  near(distribution.averageChange, 35 / 1400);
 });
 
 test("rejects a missing prior period and duplicate columns", async () => {

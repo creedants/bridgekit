@@ -117,3 +117,17 @@ tr.clickable:hover td { background: var(--accent-soft); }
 
 .warnings { margin: 0 0 12px; padding: 8px 10px 8px 26px; border: 1px solid var(--warn-line); background: var(--warn-bg); border-radius: var(--radius); }
 .ok { color: var(--text-2); }
+
+.summary { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 4px; max-width: 760px; }
+.summary h3 { margin: 8px 0; }
+.summary p { font-size: 13px; }
+.distribution { max-width: 900px; }
+.bar-cell { width: 34%; }
+.bar { display: block; height: 12px; border-radius: 2px; min-width: 1px; }
+
+@media print {
+  .topbar nav, aside, .tabs, .actions, .waterfall button, .notice { display: none !important; }
+  .workspace { display: block; }
+  .scroll { max-height: none; overflow: visible; border: 0; }
+  main { padding: 0; }
+}

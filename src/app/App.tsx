@@ -47,6 +47,7 @@ function describeSetup(setup: Setup, prior: string, current: string, source: str
     `Periods: ${prior} to ${current} (${setup.periodColumn}${setup.grain === "value" ? "" : ", by " + setup.grain})`,
     `Units column: ${setup.unitsColumn}`,
     `Sales column: ${setup.salesColumn}`,
+    ...(setup.grossColumn ? [`Gross sales column: ${setup.grossColumn}`] : []),
     ...setup.levels.map((level, i) => `Attribute ${i + 1}: ${level.name} (${level.columns.join(" + ")})`),
     `New and discontinued: ${setup.newAndDiscontinued === "full" ? "full sales, outside volume and mix" : "price difference only, units in volume"}`,
     ...setup.filters
@@ -154,6 +155,7 @@ export function App() {
         current,
         unitsColumn: setup.unitsColumn,
         salesColumn: setup.salesColumn,
+        grossColumn: setup.grossColumn || undefined,
         levels: setup.levels,
         newAndDiscontinued: setup.newAndDiscontinued ?? "difference",
       };
@@ -198,7 +200,7 @@ export function App() {
       Choose file
       <input
         type="file"
-        accept=".csv,.tsv,.txt,.parquet"
+        accept=".csv,.tsv,.txt,.parquet,.xlsx"
         hidden
         onChange={(e) => {
           if (e.target.files?.[0]) loadFile(e.target.files[0]);
@@ -237,7 +239,7 @@ export function App() {
         <main className="empty">
           <h1>Load a sales file</h1>
           <p>
-            Drop a CSV or Parquet file anywhere on this page, one row per sales line. It needs a period or date
+            Drop a CSV, Excel or Parquet file anywhere on this page, one row per sales line. It needs a period or date
             column, units, sales, and the product attributes you want in the bridge.
           </p>
           <p className="row">

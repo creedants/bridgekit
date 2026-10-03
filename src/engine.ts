@@ -29,6 +29,12 @@
  * shown at their full sales change and left out of volume, mix and price,
  * and reference prices are taken from continuing cells only.
  *
+ * With a gross sales column, the price effect of a matched cell is split, with
+ * g = gross price and d = net / gross:
+ *
+ *   list price = q1 * (g1 - g0) * d0
+ *   discounts  = q1 * g1 * (d1 - d0)
+ *
  * Rows with zero or blank units (rebates, credits, fees) have no price or
  * volume, so their sales z are kept out of q and s and bridged on their own
  * line. Prior and current totals include them.
@@ -56,6 +62,11 @@ export interface BridgeConfig {
   current: string | number;
   unitsColumn: string;
   salesColumn: string;
+  /**
+   * Optional sales before discounts. When set, the price effect is split into
+   * a list-price part and a discount part.
+   */
+  grossColumn?: string;
   levels: Level[];
   /**
    * How new and discontinued configurations are shown.
@@ -135,6 +146,7 @@ export function cellsSql(config: BridgeConfig): string {
   const units = ident(config.unitsColumn);
   const sales = ident(config.salesColumn);
   const hasUnits = `(${units} IS NOT NULL AND ${units} <> 0)`;
+  const gross = config.grossColumn ? ident(config.grossColumn) : null;
   const full = config.newAndDiscontinued === "full";
   // In "full" mode reference prices come from continuing configurations only.
   const continuing = "(q0 > 0 AND q1 <> 0)";
@@ -201,7 +213,13 @@ WITH cells AS (
     coalesce(sum(${units}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE AS q1,
     coalesce(sum(${sales}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE AS s1,
     coalesce(sum(${sales}) FILTER (WHERE ${period} = ${prior} AND NOT ${hasUnits}), 0)::DOUBLE AS z0,
-    coalesce(sum(${sales}) FILTER (WHERE ${period} = ${current} AND NOT ${hasUnits}), 0)::DOUBLE AS z1
+    coalesce(sum(${sales}) FILTER (WHERE ${period} = ${current} AND NOT ${hasUnits}), 0)::DOUBLE AS z1${
+      gross
+        ? `,
+    coalesce(sum(${gross}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE AS g0,
+    coalesce(sum(${gross}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE AS g1`
+        : ""
+    }
   FROM ${ident(config.table)}
   WHERE ${period} IN (${prior}, ${current})
   GROUP BY ${allColumns.join(", ")}
@@ -223,20 +241,35 @@ referenced AS (
     ${survivingLevel} AS surviving_level,
     ${refs.join(",\n    ")}
   FROM priced
-)
-SELECT ${allColumns.join(", ")}, q0, s0, q1, s1, z0, z1, match_level, surviving_level,
+),
+priced_effects AS (
+SELECT ${allColumns.join(", ")}, q0, s0, q1, s1, z0, z1,${gross ? " g0, g1," : ""} match_level, surviving_level,
   ${Array.from({ length: k + 1 }, (_, j) => `ref_${j}`).join(", ")},
   CASE WHEN q0 <= 0 THEN 'new' WHEN q1 = 0 THEN 'discontinued' ELSE 'continuing' END AS status,
   ${effects},
   z1 - z0 AS no_units
-FROM referenced`;
+FROM referenced
+)
+SELECT *${
+    gross
+      ? `,
+  CASE WHEN price <> 0 AND g0 <> 0 AND q0 > 0 AND q1 <> 0 THEN (g1 - q1 * g0 / q0) * (s0 / g0) ELSE 0 END AS price_list,
+  price - CASE WHEN price <> 0 AND g0 <> 0 AND q0 > 0 AND q1 <> 0 THEN (g1 - q1 * g0 / q0) * (s0 / g0) ELSE 0 END AS price_discount`
+      : ""
+  }
+FROM priced_effects`;
 }
 
 export function effectColumns(config: BridgeConfig): { key: string; label: string }[] {
   return [
     { key: "volume", label: "Volume" },
     ...config.levels.map((level, i) => ({ key: `mix_${i + 1}`, label: `Mix: ${level.name}` })),
-    { key: "price", label: "Price (like-for-like)" },
+    ...(config.grossColumn
+      ? [
+          { key: "price_list", label: "List price" },
+          { key: "price_discount", label: "Discounts" },
+        ]
+      : [{ key: "price", label: "Price (like-for-like)" }]),
     { key: "new_config", label: "New configurations" },
     { key: "discontinued", label: "Discontinued configurations" },
     { key: "no_units", label: "Sales with no units" },
@@ -337,7 +370,7 @@ export async function drill(
   const sortExpression =
     sortBy === "change" ? "sum(s1 + z1) - sum(s0 + z0)"
     : sortBy === "mix" ? `sum(${mixes.join(" + ")})`
-    : effects.includes(sortBy) ? `sum(${sortBy})`
+    : effects.includes(sortBy) || sortBy === "price" ? `sum(${sortBy})`
     : null;
   if (!sortExpression) throw new Error(`Cannot sort by "${sortBy}"`);
 
@@ -353,7 +386,7 @@ export async function drill(
         .join(" AND ")
     : "";
   return query(
-    `SELECT ${keys}, sum(q0) AS q0, sum(q1) AS q1, sum(s0) AS s0, sum(s1) AS s1, sum(z0) AS z0, sum(z1) AS z1, ${effects
+    `SELECT ${keys}, sum(q0) AS q0, sum(q1) AS q1, sum(s0) AS s0, sum(s1) AS s1, sum(z0) AS z0, sum(z1) AS z1,${effects.includes("price") ? "" : " sum(price) AS price,"} ${effects
       .map((e) => `sum(${e}) AS ${e}`)
       .join(", ")}
      FROM ${ident(config.cellsTable ?? DEFAULT_CELLS_TABLE)}
@@ -413,4 +446,66 @@ export async function dataCheck(query: Query, config: BridgeConfig): Promise<Dat
      FROM ${ident(config.table)}`,
   );
   return Object.fromEntries(Object.entries(row).map(([key, value]) => [key, Number(value)])) as unknown as DataCheck;
+}
+
+export interface PriceBucket {
+  label: string;
+  cells: number;
+  sales: number;
+  share: number;
+  priceEffect: number;
+}
+
+const PRICE_BUCKETS: [number, string][] = [
+  [-0.1, "Down more than 10%"],
+  [-0.05, "Down 5% to 10%"],
+  [-0.02, "Down 2% to 5%"],
+  [-0.005, "Down 0.5% to 2%"],
+  [0.005, "No change (within 0.5%)"],
+  [0.02, "Up 0.5% to 2%"],
+  [0.05, "Up 2% to 5%"],
+  [0.1, "Up 5% to 10%"],
+  [Infinity, "Up more than 10%"],
+];
+
+/**
+ * Current sales of exactly matched configurations, grouped by how much their
+ * average price moved. Answers "how much of the book actually got the increase".
+ */
+export async function priceDistribution(
+  query: Query,
+  config: BridgeConfig,
+): Promise<{ buckets: PriceBucket[]; averageChange: number }> {
+  const k = config.levels.length;
+  const change = "(s1 / q1) / (s0 / q0) - 1";
+  const bucket =
+    "CASE " +
+    PRICE_BUCKETS.slice(0, -1)
+      .map(([limit], i) => `WHEN ${change} < ${limit} THEN ${i}`)
+      .join(" ") +
+    ` ELSE ${PRICE_BUCKETS.length - 1} END`;
+  const matched = `FROM ${ident(config.cellsTable ?? DEFAULT_CELLS_TABLE)}
+     WHERE match_level = ${k} AND q0 > 0 AND q1 > 0 AND s0 > 0`;
+  const rows = await query(
+    `SELECT ${bucket} AS bucket, count(*)::DOUBLE AS cells, sum(s1) AS sales, sum(price) AS price_effect
+     ${matched} GROUP BY 1`,
+  );
+  const [totals] = await query(`SELECT sum(s1) AS sales, sum(price) AS price_effect ${matched}`);
+  const totalSales = Number(totals.sales ?? 0);
+  const byIndex = new Map(rows.map((row) => [Number(row.bucket), row]));
+  return {
+    buckets: PRICE_BUCKETS.map(([, label], i) => {
+      const row = byIndex.get(i);
+      const sales = Number(row?.sales ?? 0);
+      return {
+        label,
+        cells: Number(row?.cells ?? 0),
+        sales,
+        share: totalSales === 0 ? 0 : sales / totalSales,
+        priceEffect: Number(row?.price_effect ?? 0),
+      };
+    }),
+    // Price effect over what current volume would have cost at prior prices.
+    averageChange: totalSales === 0 ? 0 : Number(totals.price_effect) / (totalSales - Number(totals.price_effect)),
+  };
 }

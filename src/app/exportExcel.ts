@@ -50,6 +50,12 @@ export async function exportExcel(
     { header: "Current sales with units", field: "s1" },
     { header: "Prior sales, no units", field: "z0" },
     { header: "Current sales, no units", field: "z1" },
+    ...(config.grossColumn
+      ? [
+          { header: "Prior gross sales", field: "g0" },
+          { header: "Current gross sales", field: "g1" },
+        ]
+      : []),
     { header: "Match level", field: "match_level" },
     { header: "Surviving level", field: "surviving_level" },
     { header: "Status", field: "status" },
@@ -142,6 +148,11 @@ export async function exportExcel(
           new_config: `IF(${letter("match_level")}#<${k},${rest},0)`,
           discontinued: `${delta}*(${letter(`ref_${k}`)}#-CHOOSE(${letter("surviving_level")}#+1,${Array.from({ length: k + 1 }, (_, j) => `${letter(`ref_${j}`)}#`).join(",")}))`,
         };
+    if (config.grossColumn) {
+      const [q0, q1, s0, g0, g1] = ["q0", "q1", "s0", "g0", "g1"].map((f) => `${letter(f)}#`);
+      formulas.price_list = `IF(AND((${formulas.price})<>0,${g0}<>0,${q0}>0,${q1}<>0),(${g1}-${q1}*${g0}/${q0})*(${s0}/${g0}),0)`;
+      formulas.price_discount = `(${formulas.price})-${letter("price_list")}#`;
+    }
     formulas.no_units = `${letter("z1")}#-${letter("z0")}#`;
     for (let j = 1; j <= k; j++) {
       const mix = `${delta}*(${letter(`ref_${j}`)}#-${letter(`ref_${j - 1}`)}#)`;

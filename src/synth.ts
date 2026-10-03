@@ -4,7 +4,8 @@ import type { Query } from "./engine.ts";
  * Made-up prescription-lens sales in the shape of a real export: one row per
  * job, add-ons folded into the line price, no stable SKU. 2026 differs from
  * 2025 by a price increase on the top designs, five new designs, one retired
- * coating and a shift toward photochromic lenses.
+ * coating and a shift toward photochromic lenses. gross_sales is the price
+ * before customer discounts, which deepen slightly for half the customers.
  *
  * Values come from hashing the row number, so the same row count always
  * produces the same data in Node and in the browser.
@@ -37,7 +38,11 @@ shaped AS (
     CASE WHEN units_r < 0.1 THEN 2 ELSE 1 END AS jobs
   FROM raw
 )
+SELECT * EXCLUDE (cust_i),
+  round(sales / (1 - (cust_i % 7) * 0.03 - CASE WHEN year = 2026 AND cust_i % 2 = 0 THEN 0.01 ELSE 0 END), 2) AS gross_sales
+FROM (
 SELECT
+  cust_i,
   year,
   'C' || lpad(cust_i::VARCHAR, 4, '0') AS customer,
   'D' || lpad(design_i::VARCHAR, 2, '0') AS design,
@@ -60,5 +65,6 @@ SELECT
     * (CASE WHEN year = 2026 AND design_i < 20 THEN 1.04 ELSE 1 END),
     2
   ) AS sales
-FROM shaped`);
+FROM shaped
+)`);
 }
