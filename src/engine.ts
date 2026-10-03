@@ -116,7 +116,7 @@ export interface BridgeResult {
 
 const DEFAULT_CELLS_TABLE = "bridge_cells";
 
-function ident(name: string): string {
+export function ident(name: string): string {
   return `"${name.replaceAll('"', '""')}"`;
 }
 
@@ -130,11 +130,15 @@ function literal(value: string | number): string {
 
 function validate(config: BridgeConfig): void {
   if (config.levels.length === 0) throw new Error("At least one level is required");
+  const reserved = /^(q0|s0|q1|s1|z0|z1|g0|g1|rs0|rs1|r0|match_level|surviving_level|status|ref_price|volume|price|new_config|discontinued|no_units|price_list|price_discount|price_sales|cost_rate|(ref|mix)_\d+|[qsp][01]_l\d+)$/i;
   const seen = new Set<string>();
   for (const level of config.levels) {
     if (level.columns.length === 0) throw new Error(`Level "${level.name}" has no columns`);
     for (const column of level.columns) {
       if (seen.has(column)) throw new Error(`Column "${column}" is used in more than one level`);
+      if (reserved.test(column)) {
+        throw new Error(`Column "${column}" has a name the calculation uses internally. Rename it in your file and load it again.`);
+      }
       seen.add(column);
     }
   }
@@ -157,7 +161,7 @@ export function cellsSql(config: BridgeConfig): string {
   const hasUnits = `(${units} IS NOT NULL AND ${units} <> 0)`;
   const cost = config.costColumn ? ident(config.costColumn) : null;
   const gross = !cost && config.grossColumn ? ident(config.grossColumn) : null;
-  const measure = cost ? `(${sales} - coalesce(${cost}, 0))` : sales;
+  const measure = cost ? `(coalesce(${sales}, 0) - coalesce(${cost}, 0))` : sales;
   const full = config.newAndDiscontinued === "full";
   // In "full" mode reference prices come from continuing configurations only.
   const continuing = "(q0 > 0 AND q1 <> 0)";
@@ -202,13 +206,15 @@ export function cellsSql(config: BridgeConfig): string {
       `CASE WHEN ${full ? continuing : `surviving_level >= ${i + 1}`} THEN (q1 - q0) * (ref_${i + 1} - ref_${i}) ELSE 0 END AS mix_${i + 1}`,
   );
   const rest = `s1 - s0 - (q1 - q0) * ref_${k}`;
+  // Cells whose rate effect is like-for-like, so it can be split further.
+  const rated = full ? continuing : `match_level = ${k}`;
   const effects = full
     ? `CASE WHEN ${continuing} THEN ref_${k} END AS ref_price,
   CASE WHEN ${continuing} THEN (q1 - q0) * ref_0 ELSE 0 END AS volume,
   ${mixes.join(",\n  ")},
   CASE WHEN ${continuing} THEN ${rest} ELSE 0 END AS price,
-  CASE WHEN q0 <= 0 THEN s1 - s0 ELSE 0 END AS new_config,
-  CASE WHEN q0 > 0 AND q1 = 0 THEN s1 - s0 ELSE 0 END AS discontinued`
+  CASE WHEN q0 <= 0 AND NOT (q1 = 0 AND q0 <> 0) THEN s1 - s0 ELSE 0 END AS new_config,
+  CASE WHEN q1 = 0 AND q0 <> 0 THEN s1 - s0 ELSE 0 END AS discontinued`
     : `ref_${k} AS ref_price,
   (q1 - q0) * ref_0 AS volume,
   ${mixes.join(",\n  ")},
@@ -219,9 +225,9 @@ export function cellsSql(config: BridgeConfig): string {
   return `
 WITH cells AS (
   SELECT ${allColumns.join(", ")},
-    coalesce(sum(${units}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE AS q0,
+    round(coalesce(sum(${units}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE, 6) AS q0,
     coalesce(sum(${measure}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE AS s0,
-    coalesce(sum(${units}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE AS q1,
+    round(coalesce(sum(${units}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE, 6) AS q1,
     coalesce(sum(${measure}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE AS s1,
     coalesce(sum(${measure}) FILTER (WHERE ${period} = ${prior} AND NOT ${hasUnits}), 0)::DOUBLE AS z0,
     coalesce(sum(${measure}) FILTER (WHERE ${period} = ${current} AND NOT ${hasUnits}), 0)::DOUBLE AS z1${
@@ -260,7 +266,7 @@ referenced AS (
 priced_effects AS (
 SELECT ${allColumns.join(", ")}, q0, s0, q1, s1, z0, z1,${gross ? " g0, g1," : ""}${cost ? " rs0, rs1," : ""} match_level, surviving_level,
   ${Array.from({ length: k + 1 }, (_, j) => `ref_${j}`).join(", ")},
-  CASE WHEN q0 <= 0 THEN 'new' WHEN q1 = 0 THEN 'discontinued' ELSE 'continuing' END AS status,
+  CASE WHEN q1 = 0 AND q0 <> 0 THEN 'discontinued' WHEN q0 <= 0 THEN 'new' ELSE 'continuing' END AS status,
   ${effects},
   z1 - z0 AS no_units
 FROM referenced
@@ -268,12 +274,12 @@ FROM referenced
 SELECT *${
     gross
       ? `,
-  CASE WHEN price <> 0 AND g0 <> 0 AND q0 > 0 AND q1 <> 0 THEN (g1 - q1 * g0 / q0) * (s0 / g0) ELSE 0 END AS price_list,
-  price - CASE WHEN price <> 0 AND g0 <> 0 AND q0 > 0 AND q1 <> 0 THEN (g1 - q1 * g0 / q0) * (s0 / g0) ELSE 0 END AS price_discount`
+  CASE WHEN ${rated} AND g0 <> 0 AND q0 > 0 AND q1 <> 0 THEN (g1 - q1 * g0 / q0) * (s0 / g0) ELSE 0 END AS price_list,
+  price - CASE WHEN ${rated} AND g0 <> 0 AND q0 > 0 AND q1 <> 0 THEN (g1 - q1 * g0 / q0) * (s0 / g0) ELSE 0 END AS price_discount`
       : cost
         ? `,
-  CASE WHEN price <> 0 AND q0 > 0 THEN rs1 - q1 * rs0 / q0 ELSE 0 END AS price_sales,
-  price - CASE WHEN price <> 0 AND q0 > 0 THEN rs1 - q1 * rs0 / q0 ELSE 0 END AS cost_rate`
+  CASE WHEN ${rated} AND q0 > 0 THEN rs1 - q1 * rs0 / q0 ELSE 0 END AS price_sales,
+  price - CASE WHEN ${rated} AND q0 > 0 THEN rs1 - q1 * rs0 / q0 ELSE 0 END AS cost_rate`
         : ""
   }
 FROM priced_effects`;
@@ -572,7 +578,7 @@ export async function sensitivity(query: Query, config: BridgeConfig): Promise<A
       result.effects.filter((e) => match(e.key)).reduce((total, e) => total + e.value, 0);
     alternatives.push({
       ...candidate,
-      price: sum((key) => key.startsWith("price")),
+      price: sum((key) => key.startsWith("price") || key === "cost_rate"),
       mix: sum((key) => key.startsWith("mix_")),
       newAndDiscontinued: sum((key) => key === "new_config" || key === "discontinued"),
       exactShare: result.coverage.find((c) => c.level === candidate.levels.length)?.share ?? 0,
@@ -602,12 +608,18 @@ export async function trend(
 ): Promise<TrendStep[]> {
   const steps: TrendStep[] = [];
   for (let i = 1; i < periods.length; i++) {
-    const result = await runBridge(query, {
-      ...config,
-      prior: periods[i - 1],
-      current: periods[i],
-      cellsTable: "bridge_trend",
-    });
+    let result: BridgeResult;
+    try {
+      result = await runBridge(query, {
+        ...config,
+        prior: periods[i - 1],
+        current: periods[i],
+        cellsTable: "bridge_trend",
+      });
+    } catch {
+      // A period with no units has nothing to bridge from; leave that step out.
+      continue;
+    }
     const sum = (match: (key: string) => boolean) =>
       result.effects.filter((e) => match(e.key)).reduce((total, e) => total + e.value, 0);
     steps.push({
@@ -617,7 +629,7 @@ export async function trend(
       currentSales: result.currentSales,
       volume: sum((key) => key === "volume"),
       mix: sum((key) => key.startsWith("mix_")),
-      price: sum((key) => key.startsWith("price")),
+      price: sum((key) => key.startsWith("price") || key === "cost_rate"),
       newAndDiscontinued: sum((key) => key === "new_config" || key === "discontinued"),
       noUnits: sum((key) => key === "no_units"),
     });

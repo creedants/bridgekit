@@ -11,20 +11,23 @@ const percent = (n: number) => (Math.abs(n) * 100).toFixed(1) + "%";
  */
 export function commentary(result: BridgeResult, config: BridgeConfig): string[] {
   const change = result.currentSales - result.priorSales;
+  // A percentage of a zero or negative base misleads, so it is left out.
+  const hasBase = result.priorSales > 0;
   const ofPrior = (n: number) => percent(n / result.priorSales);
+  const measure = measureName(config).toLowerCase();
   const paragraphs: string[] = [];
 
   paragraphs.push(
     change === 0
       ? `${measureName(config)} was unchanged at ${money(result.currentSales)} between ${config.prior} and ${config.current}.`
-      : `${measureName(config)} ${change > 0 ? "rose" : "fell"} ${ofPrior(change)}, from ${money(result.priorSales)} in ${config.prior} to ${money(result.currentSales)} in ${config.current} (${signed(change)}).`,
+      : `${measureName(config)} ${change > 0 ? "rose" : "fell"}${hasBase ? " " + ofPrior(change) + "," : ""} from ${money(result.priorSales)} in ${config.prior} to ${money(result.currentSales)} in ${config.current} (${signed(change)}).`,
   );
 
   const drivers = result.effects
     .filter((e) => Math.abs(e.value) >= Math.abs(result.priorSales) * 0.0005)
     .toSorted((a, b) => Math.abs(b.value) - Math.abs(a.value));
   if (drivers.length > 0) {
-    const describe = (e: (typeof drivers)[number]) => `${e.label.toLowerCase()} (${signed(e.value)}, ${ofPrior(e.value)} of prior ${measureName(config).toLowerCase()})`;
+    const describe = (e: (typeof drivers)[number]) => `${e.label.toLowerCase()} (${signed(e.value)}${hasBase ? `, ${ofPrior(e.value)} of prior ${measure}` : ""})`;
     const [first, ...rest] = drivers;
     const next = rest.slice(0, 3);
     const others = rest.slice(3).reduce((sum, e) => sum + e.value, 0);
@@ -40,7 +43,7 @@ export function commentary(result: BridgeResult, config: BridgeConfig): string[]
   const list = result.effects.find((e) => e.key === "price_list");
   const discount = result.effects.find((e) => e.key === "price_discount");
   paragraphs.push(
-    `Like-for-like price ${priceEffect >= 0 ? "added" : "took away"} ${money(Math.abs(priceEffect))}, ${ofPrior(priceEffect)} of prior sales. ` +
+    `Like-for-like price ${priceEffect >= 0 ? "added" : "took away"} ${money(Math.abs(priceEffect))}${hasBase ? `, ${ofPrior(priceEffect)} of prior ${measure}` : ""}. ` +
       (list && discount
         ? `Of that, list price changes were ${signed(list.value)} and discount changes were ${signed(discount.value)}. `
         : "") +

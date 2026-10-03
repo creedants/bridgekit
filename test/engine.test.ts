@@ -359,6 +359,40 @@ test("account bridge splits the change into new, lost, growing and shrinking", a
   near(groups.reduce((sum, g) => sum + g.change, 0), 230 - 250);
 });
 
+test("review findings: float units that net to zero, offsetting splits, null sales with cost, reserved names", async () => {
+  const query = await openDatabase();
+  const base = { periodColumn: "period", prior: "p0", current: "p1", unitsColumn: "units", salesColumn: "sales" };
+  const levels = [{ name: "Product", columns: ["product"] }];
+
+  await query(`CREATE TABLE f AS SELECT * FROM (VALUES
+    ('p0', 'A', 0.1::DOUBLE, 10.0), ('p0', 'A', 0.2::DOUBLE, 20.0), ('p0', 'A', -0.3::DOUBLE, -29.0),
+    ('p0', 'B', 10::DOUBLE, 100.0), ('p1', 'A', 2::DOUBLE, 110.0), ('p1', 'B', 10::DOUBLE, 100.0)
+  ) v(period, product, units, sales)`);
+  const floats = await runBridge(query, { ...base, table: "f", levels });
+  near(total(floats), floats.currentSales - floats.priorSales);
+  assert.ok(floats.effects.every((e) => Math.abs(e.value) < 1e6));
+
+  await query(`CREATE TABLE c AS SELECT * FROM (VALUES
+    ('p0', 'A', 10, 100.0, 60.0), ('p1', 'A', 10, 150.0, 110.0),
+    ('p0', 'B', 5, 50.0, 30.0), ('p1', 'B', 5, NULL, 20.0)
+  ) v(period, product, units, sales, cost)`);
+  const marginConfig = { ...base, table: "c", costColumn: "cost", levels };
+  const margin = await runBridge(query, marginConfig);
+  // A: price +50 and unit cost -50 offset exactly, and both are still reported.
+  const [a] = (await drill(query, marginConfig, { columns: ["product"] })).filter((row) => row.product === "A");
+  near(Number(a.price_sales), 50);
+  near(Number(a.cost_rate), -50);
+  // B: sales are blank this period but its cost of 20 still counts.
+  assert.equal(margin.currentSales, 40 - 20);
+  near(total(margin), 20 - 60);
+
+  await query(`CREATE TABLE r AS SELECT 'p0' AS period, 'x' AS status, 1 AS units, 1.0 AS sales`);
+  await assert.rejects(
+    runBridge(query, { ...base, table: "r", levels: [{ name: "Status", columns: ["status"] }] }),
+    /uses internally/,
+  );
+});
+
 test("rejects a missing prior period and duplicate columns", async () => {
   const query = await openDatabase();
   await query(`CREATE TABLE t AS SELECT 'p1' AS period, 'A' AS product, 1 AS units, 1.0 AS sales`);

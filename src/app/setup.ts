@@ -62,8 +62,8 @@ function periodExpression(column: string, grain: Grain): string {
     case "year":
       return `strftime(${c}, '%Y')`;
     case "ytd":
-      // Each year up to the latest month in the data, so a part-year compares like with like.
-      return `CASE WHEN month(${c}) <= (SELECT month(max(${c})) FROM ${quote(TABLE)}) THEN strftime(${c}, '%Y') || ' YTD' END`;
+      // Each year up to the month and day of the latest date in the data, so a part-year compares like with like.
+      return `CASE WHEN strftime(${c}, '%m%d') <= (SELECT strftime(max(${c}), '%m%d') FROM ${quote(TABLE)}) THEN strftime(${c}, '%Y') || ' YTD' END`;
     case "quarter":
       return `strftime(${c}, '%Y') || '-Q' || quarter(${c})`;
     case "month":

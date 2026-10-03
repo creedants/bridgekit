@@ -4,6 +4,7 @@ import {
   priceDistribution,
   sensitivity,
   effectColumns,
+  ident,
   measureName,
   type BridgeConfig,
   type BridgeResult,
@@ -40,7 +41,7 @@ export async function exportExcel(
   const bold = { bold: true };
   const numberFormat = "#,##0;-#,##0";
 
-  const [{ n }] = await query(`SELECT count(*)::DOUBLE AS n FROM "${result.cellsTable}"`);
+  const [{ n }] = await query(`SELECT count(*)::DOUBLE AS n FROM ${ident(result.cellsTable)}`);
   const detailRows = Number(n);
   const withDetail = detailRows <= MAX_DETAIL_ROWS;
 
@@ -155,7 +156,7 @@ export async function exportExcel(
     const sheet = workbook.addWorksheet("Detail");
     sheet.addRow(detail.map((d) => d.header)).font = bold;
     const rows = await query(
-      `SELECT * FROM "${result.cellsTable}" ORDER BY abs(s1 + z1 - s0 - z0) DESC`,
+      `SELECT * FROM ${ident(result.cellsTable)} ORDER BY abs(s1 + z1 - s0 - z0) DESC`,
     );
     const delta = `(${letter("q1")}#-${letter("q0")}#)`;
     const rest = `${letter("s1")}#-${letter("s0")}#-${delta}*${letter(`ref_${k}`)}#`;
@@ -175,13 +176,14 @@ export async function exportExcel(
           new_config: `IF(${letter("match_level")}#<${k},${rest},0)`,
           discontinued: `${delta}*(${letter(`ref_${k}`)}#-CHOOSE(${letter("surviving_level")}#+1,${Array.from({ length: k + 1 }, (_, j) => `${letter(`ref_${j}`)}#`).join(",")}))`,
         };
+    const rated = full ? status("continuing") : `${letter("match_level")}#=${k}`;
     if (config.costColumn) {
       const [q0, q1, rs0, rs1] = ["q0", "q1", "rs0", "rs1"].map((f) => `${letter(f)}#`);
-      formulas.price_sales = `IF(AND((${formulas.price})<>0,${q0}>0),${rs1}-${q1}*${rs0}/${q0},0)`;
+      formulas.price_sales = `IF(AND(${rated},${q0}>0),${rs1}-${q1}*${rs0}/${q0},0)`;
       formulas.cost_rate = `(${formulas.price})-${letter("price_sales")}#`;
     } else if (config.grossColumn) {
       const [q0, q1, s0, g0, g1] = ["q0", "q1", "s0", "g0", "g1"].map((f) => `${letter(f)}#`);
-      formulas.price_list = `IF(AND((${formulas.price})<>0,${g0}<>0,${q0}>0,${q1}<>0),(${g1}-${q1}*${g0}/${q0})*(${s0}/${g0}),0)`;
+      formulas.price_list = `IF(AND(${rated},${g0}<>0,${q0}>0,${q1}<>0),(${g1}-${q1}*${g0}/${q0})*(${s0}/${g0}),0)`;
       formulas.price_discount = `(${formulas.price})-${letter("price_list")}#`;
     }
     formulas.no_units = `${letter("z1")}#-${letter("z0")}#`;
