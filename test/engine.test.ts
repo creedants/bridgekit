@@ -1,0 +1,154 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { openDatabase } from "../src/duckdb.ts";
+import { runBridge, drill, type BridgeConfig, type BridgeResult } from "../src/engine.ts";
+import { createSyntheticSales } from "../src/synth.ts";
+
+function effect(result: BridgeResult, key: string): number {
+  const found = result.effects.find((e) => e.key === key);
+  assert.ok(found, `missing effect ${key}`);
+  return found.value;
+}
+
+function total(result: BridgeResult): number {
+  return result.effects.reduce((sum, e) => sum + e.value, 0);
+}
+
+function near(actual: number, expected: number, message?: string): void {
+  assert.ok(Math.abs(actual - expected) < 1e-6, `${message ?? ""} expected ${expected}, got ${actual}`);
+}
+
+test("single attribute matches the hand-worked classic bridge", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t AS SELECT * FROM (VALUES
+    ('p0', 'A', 10, 100.0), ('p0', 'B', 10, 200.0),
+    ('p1', 'A', 10, 110.0), ('p1', 'B', 20, 400.0), ('p1', 'C', 5, 150.0)
+  ) v(period, product, units, sales)`);
+  const result = await runBridge(query, {
+    table: "t", periodColumn: "period", prior: "p0", current: "p1",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+  });
+
+  // Prior average price 15. Volume (35-20)*15. Mix A (10-10)*(10-15) + B (20-10)*(20-15).
+  // Price A 110-100. New C 150 - 5*15.
+  near(effect(result, "volume"), 225);
+  near(effect(result, "mix_1"), 50);
+  near(effect(result, "price"), 10);
+  near(effect(result, "new_config"), 75);
+  near(total(result), result.currentSales - result.priorSales);
+  assert.equal(result.priorSales, 300);
+  assert.equal(result.currentSales, 660);
+});
+
+test("an unmatched configuration falls back to its parent group's prior price", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t AS SELECT * FROM (VALUES
+    ('p0', 'D1', 'basic', 10, 100.0), ('p0', 'D1', 'premium', 10, 300.0),
+    ('p0', 'D2', 'basic', 20, 400.0),
+    ('p1', 'D1', 'basic', 10, 100.0), ('p1', 'D1', 'premium', 10, 300.0),
+    ('p1', 'D2', 'basic', 20, 400.0), ('p1', 'D2', 'premium', 4, 200.0)
+  ) v(period, design, coating, units, sales)`);
+  const config: BridgeConfig = {
+    table: "t", periodColumn: "period", prior: "p0", current: "p1",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Design", columns: ["design"] }, { name: "Coating", columns: ["coating"] }],
+  };
+  const result = await runBridge(query, config);
+
+  // D2/premium is new; D2 sold at 20 last year, so it is valued at 4*20 = 80
+  // and the remaining 120 is the new-configuration effect. Nothing repriced.
+  near(effect(result, "price"), 0);
+  near(effect(result, "new_config"), 120);
+  near(total(result), 200);
+
+  const [row] = await query(
+    `SELECT match_level, ref_price FROM ${result.cellsTable} WHERE design = 'D2' AND coating = 'premium'`,
+  );
+  assert.equal(Number(row.match_level), 1);
+  near(Number(row.ref_price), 20);
+
+  const fallback = result.coverage.find((c) => c.level === 1);
+  assert.ok(fallback);
+  near(fallback.share, 200 / 1000);
+  assert.equal(fallback.label, "Fell back to Design");
+});
+
+test("multi-column levels and null attribute values reconcile", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t AS SELECT * FROM (VALUES
+    ('p0', 'D1', 'grey', true, 5, 500.0), ('p0', 'D1', NULL, false, 10, 600.0),
+    ('p1', 'D1', 'grey', true, 6, 660.0), ('p1', 'D1', NULL, false, 8, 520.0),
+    ('p1', 'D1', 'grey', false, 2, 150.0)
+  ) v(period, design, photochromic, polar, units, sales)`);
+  const result = await runBridge(query, {
+    table: "t", periodColumn: "period", prior: "p0", current: "p1",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [
+      { name: "Design", columns: ["design"] },
+      { name: "Color", columns: ["photochromic", "polar"] },
+    ],
+  });
+
+  near(total(result), 1330 - 1100);
+  // grey/polar 660 - 6*100, null/non-polar 520 - 8*60: the null group matched itself.
+  near(effect(result, "price"), 60 + 40);
+  assert.equal(result.coverage.find((c) => c.level === 2)?.cells, 2);
+});
+
+test("synthetic lens data reconciles, and level order does not move volume or price", async () => {
+  const query = await openDatabase();
+  await createSyntheticSales(query, 200_000);
+  const base = {
+    table: "sales", periodColumn: "year", prior: 2025, current: 2026,
+    unitsColumn: "jobs", salesColumn: "sales",
+  };
+  const levels = [
+    { name: "Design", columns: ["design"] },
+    { name: "Coating", columns: ["coating"] },
+    { name: "Color", columns: ["photochromic", "polar"] },
+    { name: "Material", columns: ["material"] },
+  ];
+  const forward = await runBridge(query, { ...base, levels });
+  const reversed = await runBridge(query, { ...base, levels: levels.toReversed(), cellsTable: "reversed" });
+
+  const delta = forward.currentSales - forward.priorSales;
+  assert.ok(Math.abs(total(forward) - delta) < 1e-6 * Math.abs(delta));
+  assert.ok(Math.abs(total(reversed) - delta) < 1e-6 * Math.abs(delta));
+  assert.ok(Math.abs(effect(forward, "volume") - effect(reversed, "volume")) < 1e-3);
+  assert.ok(Math.abs(effect(forward, "price") - effect(reversed, "price")) < 1e-3);
+
+  const shares = forward.coverage.reduce((sum, c) => sum + c.share, 0);
+  near(shares, 1);
+
+  const byDesign = await drill(query, { ...base, levels }, ["design"], 1000);
+  const drilled = byDesign.reduce(
+    (sum, row) =>
+      sum + ["volume", "mix_1", "mix_2", "mix_3", "mix_4", "price", "new_config"]
+        .reduce((s, key) => s + Number(row[key]), 0),
+    0,
+  );
+  assert.ok(Math.abs(drilled - delta) < 1e-6 * Math.abs(delta));
+
+  // Each group's effects equal that group's own sales change.
+  for (const row of byDesign) {
+    const own = ["volume", "mix_1", "mix_2", "mix_3", "mix_4", "price", "new_config"]
+      .reduce((s, key) => s + Number(row[key]), 0);
+    assert.ok(Math.abs(own - (Number(row.s1) - Number(row.s0))) < 1e-3, `design ${row.design}`);
+  }
+});
+
+test("rejects a missing prior period and duplicate columns", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t AS SELECT 'p1' AS period, 'A' AS product, 1 AS units, 1.0 AS sales`);
+  const config: BridgeConfig = {
+    table: "t", periodColumn: "period", prior: "p0", current: "p1",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+  };
+  await assert.rejects(runBridge(query, config), /No units found for prior period/);
+  await assert.rejects(
+    runBridge(query, { ...config, prior: "p1", levels: [...config.levels, ...config.levels] }),
+    /more than one level/,
+  );
+});
