@@ -51,6 +51,9 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
   };
   const [tab, setTab] = useState<Tab>("bridge");
   const [sortBy, setSortBy] = useState("change");
+  const mixCount = run.result.effects.filter((e) => e.key.startsWith("mix_")).length;
+  // With many attributes the chart gets crowded, so mix starts combined.
+  const [combineMix, setCombineMix] = useState(mixCount > 4);
 
   const change = result.currentSales - result.priorSales;
   const priceEffect = result.effects.filter((e) => e.key.startsWith("price")).reduce((sum, e) => sum + e.value, 0);
@@ -89,7 +92,15 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
       {tab === "bridge" && (
         <div className="bridge">
           <Waterfall
-            result={result}
+            result={combineMix ? withCombinedMix(result) : result}
+            controls={
+              mixCount > 1 && (
+                <label className="check">
+                  <input type="checkbox" checked={combineMix} onChange={(e) => setCombineMix(e.target.checked)} />
+                  Combine mix
+                </label>
+              )
+            }
             priorLabel={String(config.prior)}
             currentLabel={String(config.current)}
             footer={<Summary run={run} result={result} query={props.query} />}
@@ -531,6 +542,18 @@ function PriceGaps(props: { run: Run; query: () => Promise<Query> }) {
       </p>
     </div>
   );
+}
+
+/** The same bridge with the per-attribute mix lines added into one. */
+function withCombinedMix(result: Run["result"]): Run["result"] {
+  const mixes = result.effects.filter((e) => e.key.startsWith("mix_"));
+  if (mixes.length < 2) return result;
+  const combined = { key: "mix_all", label: "Mix", value: mixes.reduce((sum, e) => sum + e.value, 0) };
+  const first = result.effects.indexOf(mixes[0]);
+  return {
+    ...result,
+    effects: [...result.effects.slice(0, first), combined, ...result.effects.slice(first).filter((e) => !e.key.startsWith("mix_"))],
+  };
 }
 
 function Kpi(props: { label: string; value: string; note?: string }) {

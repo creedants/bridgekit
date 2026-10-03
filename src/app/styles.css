@@ -139,3 +139,5 @@ table.narrow-wide { max-width: 900px; }
 .example td { color: var(--text-2); }
 .empty h3 { margin-top: 28px; }
 .empty p.hint { font-size: 12px; }
+.check { display: inline-flex; gap: 5px; align-items: center; color: var(--text-2); font-size: 12px; }
+.legend { align-items: center; }

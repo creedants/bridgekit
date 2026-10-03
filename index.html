@@ -300,6 +300,8 @@
           <dd>Negative rows are netted against sales of the same configuration. The data check tab counts them so you can decide whether to filter them out.</dd>
           <dt>What about Excel files?</dt>
           <dd>An .xlsx file works: the first sheet is read, with the header in the first row. For more than a few hundred thousand rows, CSV or Parquet is faster.</dd>
+          <dt>Can I bridge budget to actual?</dt>
+          <dd>Yes. Put both in one file with a column that says which is which, and choose that column as the period. Budget becomes the prior period and actual the current one. The same works for forecast against actual, or one region against another.</dd>
           <dt>Is it a margin bridge?</dt>
           <dd>Not yet. It bridges sales. A margin bridge with a cost effect is planned.</dd>
         </dl>

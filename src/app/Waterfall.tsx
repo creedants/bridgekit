@@ -63,6 +63,8 @@ export function Waterfall(props: {
   /** Called with an effect key when its bar is clicked. */
   onSelect: (effectKey: string) => void;
   footer?: React.ReactNode;
+  /** Extra controls shown beside the legend. */
+  controls?: React.ReactNode;
 }) {
   const element = useRef<HTMLDivElement>(null);
   const chartRef = useRef<echarts.ECharts>(null);
@@ -159,9 +161,9 @@ export function Waterfall(props: {
         <span><i style={{ background: "var(--up)" }} /> Increase</span>
         <span><i style={{ background: "var(--down)" }} /> Decrease</span>
         <span><i style={{ background: "var(--total)" }} /> Period total</span>
+        <span style={{ marginLeft: "auto" }}>{props.controls}</span>
         <button
           className="quiet"
-          style={{ marginLeft: "auto" }}
           onClick={() => {
             const url = chartRef.current?.getDataURL({ type: "png", pixelRatio: 2, backgroundColor: "#ffffff" });
             if (!url) return;

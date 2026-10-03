@@ -1,6 +1,8 @@
 import {
   cumulativeColumns,
   drill,
+  priceDistribution,
+  sensitivity,
   effectColumns,
   type BridgeConfig,
   type BridgeResult,
@@ -123,6 +125,25 @@ export async function exportExcel(
       if (index >= level.columns.length) column.numFmt = numberFormat;
     });
   }
+
+  const bands = await priceDistribution(query, config);
+  const bandSheet = workbook.addWorksheet("Price bands");
+  bandSheet.columns = [{ width: 30 }, { width: 12 }, { width: 18 }, { width: 16 }, { width: 16 }];
+  bandSheet.addRow(["Change in average price", "Share", "Current sales", "Price effect", "Configurations"]).font = bold;
+  for (const b of bands.buckets) bandSheet.addRow([b.label, b.share, b.sales, b.priceEffect, b.cells]);
+  bandSheet.addRow([]);
+  bandSheet.addRow(["Average change, matched configurations", bands.averageChange]);
+  bandSheet.getColumn(2).numFmt = "0.0%";
+  bandSheet.getColumn(3).numFmt = numberFormat;
+  bandSheet.getColumn(4).numFmt = numberFormat;
+
+  const alternatives = await sensitivity(query, config);
+  const checkSheet = workbook.addWorksheet("Setup check");
+  checkSheet.columns = [{ width: 30 }, { width: 16 }, { width: 16 }, { width: 22 }, { width: 16 }, { width: 16 }];
+  checkSheet.addRow(["Attributes used", "Price", "Mix", "New and discontinued", "Matched exactly", "Configurations"]).font = bold;
+  for (const a of alternatives) checkSheet.addRow([a.label, a.price, a.mix, a.newAndDiscontinued, a.exactShare, a.cells]);
+  for (const column of [2, 3, 4]) checkSheet.getColumn(column).numFmt = numberFormat;
+  checkSheet.getColumn(5).numFmt = "0.0%";
 
   if (withDetail) {
     const sheet = workbook.addWorksheet("Detail");
