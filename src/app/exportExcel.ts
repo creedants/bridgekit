@@ -90,7 +90,7 @@ export async function exportExcel(
   for (const effect of effects) {
     const value = result.effects.find((e) => e.key === effect.key)!.value;
     const row = bridge.addRow([effect.label, total(effect.key, value)]);
-    row.getCell(3).value = { formula: `B${row.number}/B4`, result: value / result.priorSales };
+    row.getCell(3).value = { formula: `IF(B4=0,"",B${row.number}/B4)`, result: value / result.priorSales };
     row.getCell(3).numFmt = "0.0%";
   }
   bridge.addRow([`Current ${measureName(config).toLowerCase()}`, sales("s1", "z1", result.currentSales)]).font = bold;
@@ -116,7 +116,11 @@ export async function exportExcel(
 
   for (const level of config.levels) {
     const rows = await drill(query, config, { columns: level.columns, limit: 5000 });
-    const sheet = workbook.addWorksheet(`By ${level.name}`.replace(/[\\/*?:[\]]/g, " ").slice(0, 31));
+    // Sheet names are capped at 31 characters and must be unique.
+    const baseName = `By ${level.name}`.replace(/[\\/*?:[\]]/g, " ").slice(0, 28);
+    let sheetName = baseName;
+    for (let n = 2; workbook.getWorksheet(sheetName); n++) sheetName = `${baseName} ${n}`;
+    const sheet = workbook.addWorksheet(sheetName);
     sheet.addRow([...level.columns, "Prior sales", "Current sales", "Change", ...effects.map((e) => e.label)]).font = bold;
     for (const row of rows) {
       sheet.addRow([

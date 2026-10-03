@@ -114,7 +114,11 @@ export function isValidSetup(value: unknown, columns: Column[]): value is Setup 
     [undefined, "difference", "full"].includes(setup.newAndDiscontinued) &&
     Array.isArray(setup.filters) &&
     setup.filters.every(
-      (f) => known(f?.column) && (f.mode === "include" || f.mode === "exclude") && Array.isArray(f.values),
+      (f) =>
+        known(f?.column) &&
+        (f.mode === "include" || f.mode === "exclude") &&
+        Array.isArray(f.values) &&
+        f.values.every((v) => typeof v === "string"),
     )
   );
 }
