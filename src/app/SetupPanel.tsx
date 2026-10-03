@@ -9,6 +9,8 @@ export function SetupPanel(props: {
   prior: string;
   current: string;
   query: () => Promise<Query>;
+  /** Columns that roll up into one another, broadest first. */
+  rollups: string[][];
   onChange: (patch: Partial<Setup>) => void;
   onPrior: (value: string) => void;
   onCurrent: (value: string) => void;
@@ -161,9 +163,36 @@ export function SetupPanel(props: {
             onChange={(e) => setLevels([...setup.levels, { name: e.target.value, columns: [e.target.value] }])}
           >
             <option value="">Add attribute…</option>
-            {free.map((c) => <option key={c.name}>{c.name}</option>)}
+            {free
+              .filter((c) => !isNumeric(c.type))
+              .map((c) => (
+                <option key={c.name} value={c.name}>
+                  {c.name}
+                  {c.distinct === undefined ? "" : ` (${c.distinct.toLocaleString("en-US")} values)`}
+                </option>
+              ))}
           </select>
         )}
+        {props.rollups
+          .filter((chain) => chain.some((column) => !used.has(column)))
+          .map((chain) => (
+            <div className="rollup" key={chain.join(">")}>
+              <span className="hint">
+                Roll-up found: {chain.join(" › ")}. Using every level splits mix by level.
+              </span>
+              <button
+                className="quiet"
+                onClick={() =>
+                  setLevels([
+                    ...setup.levels,
+                    ...chain.filter((column) => !used.has(column)).map((column) => ({ name: column, columns: [column] })),
+                  ])
+                }
+              >
+                Add these
+              </button>
+            </div>
+          ))}
       </fieldset>
 
       <fieldset>

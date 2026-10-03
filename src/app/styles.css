@@ -132,3 +132,6 @@ tr.clickable:hover td { background: var(--accent-soft); }
   main { padding: 0; }
 }
 table.narrow-wide { max-width: 900px; }
+.rollup { display: flex; gap: 6px; align-items: flex-start; }
+.rollup .hint { flex: 1; margin: 0; }
+.rollup button { color: var(--accent); }

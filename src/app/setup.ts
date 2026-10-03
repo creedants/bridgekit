@@ -7,6 +7,8 @@ export const PERIOD = "__period";
 export interface Column {
   name: string;
   type: string;
+  /** Number of distinct values, once profiled. */
+  distinct?: number;
 }
 
 export type Grain = "value" | "year" | "ytd" | "quarter" | "month";

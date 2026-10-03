@@ -5,6 +5,7 @@ import { openBrowserDatabase, type BrowserDatabase } from "./db.ts";
 import { exportExcel } from "./exportExcel.ts";
 import { download } from "./files.ts";
 import { whole } from "./format.ts";
+import { distinctCounts, findRollups } from "./profile.ts";
 import { Results, type Run } from "./Results.tsx";
 import {
   guessSetup,
@@ -68,6 +69,8 @@ export function App() {
   const [periods, setPeriods] = useState<string[]>([]);
   const [prior, setPrior] = useState("");
   const [current, setCurrent] = useState("");
+  const [preview, setPreview] = useState<Record<string, unknown>[]>([]);
+  const [rollups, setRollups] = useState<string[][]>([]);
   const [run, setRun] = useState<(Run & { id: number; signature: string }) | null>(null);
 
   function db(): Promise<BrowserDatabase> {
@@ -100,6 +103,16 @@ export function App() {
     setRun(null);
     setSetup(preset ?? saved ?? guessSetup(found));
     setNotice(saved ? "Restored the setup you last used with these columns." : "");
+    setPreview(await q(`SELECT * FROM ${quote(TABLE)} LIMIT 8`));
+    setRollups([]);
+    // Profiling is a convenience; the tool works without it.
+    distinctCounts(q, found)
+      .then((distinct) => {
+        setColumns(found.map((c) => ({ ...c, distinct: distinct.get(c.name) })));
+        return findRollups(q, found, distinct);
+      })
+      .then(setRollups)
+      .catch(() => {});
   }
 
   const loadSample = () =>
@@ -189,6 +202,14 @@ export function App() {
     }
   }, [ready, busy]);
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && ready && !busy) calculate();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   const exportWorkbook = () =>
     task("Building Excel file…", async () => {
       if (!run || !setup) return;
@@ -271,6 +292,7 @@ export function App() {
               prior={prior}
               current={current}
               query={query}
+              rollups={rollups}
               onChange={(patch) => setSetup((s) => (s ? { ...s, ...patch } : s))}
               onPrior={setPrior}
               onCurrent={setCurrent}
@@ -316,7 +338,29 @@ export function App() {
             {run ? (
               <Results key={run.id} run={run} query={query} />
             ) : (
-              <p className="hint placeholder">Set up the bridge on the left, then choose Calculate bridge.</p>
+              <div>
+                <p className="hint">
+                  First rows of the file. Set up the bridge on the left, then choose Calculate bridge (Ctrl+Enter).
+                </p>
+                <div className="scroll">
+                  <table className="dense">
+                    <thead>
+                      <tr>{columns.map((c) => <th key={c.name}>{c.name}</th>)}</tr>
+                    </thead>
+                    <tbody>
+                      {preview.map((row, i) => (
+                        <tr key={i}>
+                          {columns.map((c) => (
+                            <td key={c.name} className={/INT|DOUBLE|DECIMAL|FLOAT|REAL/i.test(c.type) ? "num" : ""}>
+                              {row[c.name] === null ? "" : String(row[c.name])}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             )}
           </main>
         </div>
