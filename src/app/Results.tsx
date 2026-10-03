@@ -798,6 +798,10 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
                   key={group.columns.map((c) => display(row[c])).join("|")}
                   className={canDrill ? "clickable" : ""}
                   title={canDrill ? `Show ${levels[data.groupBy + 1].name} within this row` : undefined}
+                  tabIndex={canDrill ? 0 : undefined}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") e.currentTarget.click();
+                  }}
                   onClick={() => {
                     if (!canDrill) return;
                     const added = group.columns.map((column) => ({
