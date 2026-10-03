@@ -94,3 +94,5 @@ article ol { padding-left: 22px; }
 .gallery img { width: 100%; display: block; border: 1px solid var(--line); border-radius: 6px; }
 .gallery figcaption { font-size: 14px; color: var(--text-2); margin-top: 8px; }
 @media (max-width: 480px) { .gallery { grid-template-columns: 1fr; } }
+.plan { background: var(--panel); }
+#pricing .plan { border-color: var(--line); }

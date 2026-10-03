@@ -76,6 +76,8 @@ test("an unmatched configuration falls back to its parent group's prior price", 
     columns: ["coating"], filters: [{ column: "design", value: "D2" }], sortBy: "new_config",
   });
   assert.deepEqual(filtered.map((row) => row.coating), ["premium", "basic"]);
+  const searched = await drill(query, config, { columns: ["design", "coating"], search: "PREM" });
+  assert.deepEqual(searched.map((row) => `${row.design}/${row.coating}`).sort(), ["D1/premium", "D2/premium"]);
 
   const check = await dataCheck(query, config);
   assert.equal(check.rows, 7);

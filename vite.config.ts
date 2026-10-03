@@ -11,6 +11,7 @@ export default defineConfig({
         home: resolve(import.meta.dirname, "index.html"),
         method: resolve(import.meta.dirname, "method.html"),
         guide: resolve(import.meta.dirname, "guide.html"),
+        privacy: resolve(import.meta.dirname, "privacy.html"),
         article: resolve(import.meta.dirname, "price-volume-mix-analysis.html"),
         app: resolve(import.meta.dirname, "app/index.html"),
       },

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Privacy | Bridgekit</title>
+    <meta name="description" content="What Bridgekit does and does not do with your data: files are read in your browser and are not uploaded." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/src/site/site.css" />
+  </head>
+  <body>
+    <div class="nav">
+      <div class="wrap">
+        <a class="wordmark" href="/"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="6" fill="var(--accent)"/><rect x="6" y="17" width="5" height="9" fill="#fff"/><rect x="13.5" y="12" width="5" height="5" fill="#fff" opacity=".75"/><rect x="21" y="6" width="5" height="20" fill="#fff"/></svg>Bridgekit</a>
+        <nav>
+          <a class="optional" href="/#how">How it works</a>
+          <a class="optional" href="/guide.html">Guide</a>
+          <a class="optional" href="/method.html">Method</a>
+          <a class="optional" href="/#pricing">Pricing</a>
+          <a class="button" href="/app/">Open the tool</a>
+        </nav>
+      </div>
+    </div>
+
+    <article>
+      <div class="wrap narrow">
+        <h1>Privacy</h1>
+        <p class="sub">The short version: your sales file never leaves your computer.</p>
+
+        <h2>Your files</h2>
+        <ul>
+          <li>The tool reads your file inside the browser tab. It is not uploaded to us or to anyone else.</li>
+          <li>The calculation runs in your browser, using a database engine that is downloaded as part of the page.</li>
+          <li>Exports (Excel, CSV, PNG and the HTML report) are created in your browser and saved by your browser.</li>
+        </ul>
+
+        <h2>What is stored, and where</h2>
+        <ul>
+          <li>Your setup (which columns you mapped, attribute order, filters and options) is saved in your browser’s local storage, so the next file with the same columns is set up for you. Filter values you selected are part of that setup.</li>
+          <li>Nothing else is stored. Clearing your browser’s site data removes it.</li>
+          <li>The site sets no cookies and has no accounts.</li>
+        </ul>
+
+        <h2>What we can see</h2>
+        <ul>
+          <li>The site has no analytics or tracking scripts and loads nothing from third parties.</li>
+          <li>The company hosting the site can see ordinary web server logs, such as the pages requested and IP addresses. It cannot see your files.</li>
+        </ul>
+
+        <h2>Checking this yourself</h2>
+        <p>Open your browser’s developer tools, go to the network panel, and load a file. No request carries your data. The source code is published so anyone can confirm what the page does.</p>
+
+        <h2>If this changes</h2>
+        <p>Planned paid features such as saved workspaces across devices would store your setup on a server. This page will be updated before any such feature is released, and uploading data will never be required to use the free tool.</p>
+      </div>
+    </article>
+
+    <footer>
+      <div class="wrap">
+        <span>Bridgekit. MIT license.</span>
+        <a href="/">Home</a>
+        <a href="/app/">Tool</a>
+        <a href="/guide.html">Guide</a>
+        <a href="/privacy.html">Privacy</a>
+        <a href="https://github.com/creedants/bridgekit">GitHub</a>
+      </div>
+    </footer>
+  </body>
+</html>

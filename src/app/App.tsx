@@ -288,6 +288,21 @@ export function App() {
             <button onClick={loadSample} disabled={!!busy}>Use sample data</button>
           </p>
           <p className="hint">The file is read inside this browser tab. It is not uploaded.</p>
+          <h3>What the file should look like</h3>
+          <table className="example">
+            <thead>
+              <tr><th>period</th><th>customer</th><th>design</th><th>material</th><th>coating</th><th className="num">units</th><th className="num">gross_sales</th><th className="num">net_sales</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>2025</td><td>Acme</td><td>D12</td><td>Poly</td><td>AR</td><td className="num">40</td><td className="num">4,400</td><td className="num">3,960</td></tr>
+              <tr><td>2026</td><td>Acme</td><td>D12</td><td>Poly</td><td>AR</td><td className="num">52</td><td className="num">5,980</td><td className="num">5,262</td></tr>
+              <tr><td>2026</td><td>Borel</td><td>D12</td><td>Hi-index</td><td>None</td><td className="num">8</td><td className="num">1,120</td><td className="num">1,120</td></tr>
+            </tbody>
+          </table>
+          <p className="hint">
+            Column names do not matter; you map them in the next step. A date column works in place of a period, and
+            gross sales is optional. See the <a href="/guide.html">guide</a>.
+          </p>
         </main>
       ) : (
         <div className="workspace">

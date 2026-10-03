@@ -570,6 +570,7 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
   ];
   const [groupBy, setGroupBy] = useState(0);
   const [filters, setFilters] = useState<DrillFilter[]>([]);
+  const [search, setSearch] = useState("");
   // Rows are kept with the grouping they were fetched for, so the table never
   // renders one grouping's rows under another grouping's columns.
   const [data, setData] = useState<{ groupBy: number; rows: Record<string, unknown>[] }>({ groupBy: 0, rows: [] });
@@ -581,12 +582,19 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
     let stale = false;
     props
       .query()
-      .then((query) => drill(query, config, { columns: options[groupBy].columns, filters, sortBy: props.sortBy, limit: 200 }))
+      .then((query) => drill(query, config, { columns: options[groupBy].columns, filters, sortBy: props.sortBy, search, limit: 200 }))
       .then((result) => !stale && setData({ groupBy, rows: result }));
     return () => {
       stale = true;
     };
-  }, [props.run, groupBy, filters, props.sortBy]);
+  }, [props.run, groupBy, filters, props.sortBy, search]);
+
+  const downloadAll = async () => {
+    const all = await drill(await props.query(), config, {
+      columns: group.columns, filters, sortBy: props.sortBy, search, limit: 500_000,
+    });
+    download("movers.csv", toCsv(header, all.map(exportRow)), "text/csv");
+  };
 
   const mixOf = (row: Record<string, unknown>) =>
     levels.reduce((sum, _, i) => sum + Number(row[`mix_${i + 1}`] ?? 0), 0);
@@ -608,6 +616,11 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
       p1,
       priceChange: p1 / p0 - 1,
     };
+  };
+
+  const exportRow = (row: Record<string, unknown>) => {
+    const v = values(row);
+    return [...group.columns.map((c) => display(row[c])), v.s0, v.s1, v.change, v.volume, v.mix, v.price, v.newConfig, v.discontinued, v.noUnits, v.p0, v.p1, v.priceChange];
   };
 
   return (
@@ -642,16 +655,16 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
             </button>
           </span>
         ))}
-        <TableActions
-          name="movers.csv"
-          header={header}
-          rows={() =>
-            rows.map((row) => {
-              const v = values(row);
-              return [...group.columns.map((c) => display(row[c])), v.s0, v.s1, v.change, v.volume, v.mix, v.price, v.newConfig, v.discontinued, v.noUnits, v.p0, v.p1, v.priceChange];
-            })
-          }
+        <input
+          type="search"
+          placeholder={`Find ${group.label.toLowerCase()}`}
+          aria-label="Find rows"
+          style={{ width: 160 }}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
         />
+        <TableActions name="movers.csv" header={header} rows={() => rows.map(exportRow)} />
+        <button onClick={downloadAll} title="Every row that matches, not only the 200 shown">All rows</button>
       </div>
       <div className="scroll">
         <table className="dense">

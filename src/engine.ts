@@ -346,6 +346,8 @@ export interface DrillOptions {
   filters?: DrillFilter[];
   /** "change", "mix", or an effect key such as "price". Largest absolute value first. */
   sortBy?: string;
+  /** Keeps groups where any grouping column contains this text, ignoring case. */
+  search?: string;
   limit?: number;
 }
 
@@ -375,16 +377,16 @@ export async function drill(
   if (!sortExpression) throw new Error(`Cannot sort by "${sortBy}"`);
 
   const keys = options.columns.map(ident).join(", ");
-  const where = filters.length
-    ? "WHERE " +
-      filters
-        .map((f) =>
-          f.value === null
-            ? `${ident(f.column)} IS NULL`
-            : `CAST(${ident(f.column)} AS VARCHAR) = ${literal(f.value)}`,
-        )
-        .join(" AND ")
-    : "";
+  const conditions = filters.map((f) =>
+    f.value === null ? `${ident(f.column)} IS NULL` : `CAST(${ident(f.column)} AS VARCHAR) = ${literal(f.value)}`,
+  );
+  const search = options.search?.trim();
+  if (search) {
+    conditions.push(
+      "(" + options.columns.map((c) => `contains(lower(CAST(${ident(c)} AS VARCHAR)), ${literal(search.toLowerCase())})`).join(" OR ") + ")",
+    );
+  }
+  const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
   return query(
     `SELECT ${keys}, sum(q0) AS q0, sum(q1) AS q1, sum(s0) AS s0, sum(s1) AS s1, sum(z0) AS z0, sum(z1) AS z1,${effects.includes("price") ? "" : " sum(price) AS price,"} ${effects
       .map((e) => `sum(${e}) AS ${e}`)
