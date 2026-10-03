@@ -176,9 +176,7 @@ export function SetupPanel(props: {
             onChange={(e) => setLevels([...setup.levels, { name: e.target.value, columns: [e.target.value] }])}
           >
             <option value="">Add attribute…</option>
-            {free
-              .filter((c) => !isNumeric(c.type))
-              .map((c) => (
+            {free.map((c) => (
                 <option key={c.name} value={c.name}>
                   {c.name}
                   {c.distinct === undefined ? "" : ` (${c.distinct.toLocaleString("en-US")} values)`}

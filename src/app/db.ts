@@ -45,6 +45,7 @@ export async function openBrowserDatabase(): Promise<BrowserDatabase> {
       }
       const reader = isParquet ? `read_parquet('${registered}')` : `read_csv('${registered}')`;
       await query(`CREATE OR REPLACE TABLE "${table}" AS SELECT * FROM ${reader}`);
+      await convertFormattedNumbers(query, table);
     },
   };
 }
@@ -73,4 +74,33 @@ async function firstSheetAsCsv(file: File): Promise<string> {
     rows.push(Array.from({ length: sheet.columnCount }, (_, i) => plain(values[i])));
   });
   return toCsv(rows[0].map(String), rows.slice(1));
+}
+
+/**
+ * Spreadsheets often export numbers as text: "1,260", "$90.00", "(45)".
+ * A text column is converted when every value parses as a number once that
+ * formatting is removed and at least one value carries such formatting, so
+ * plain codes such as "10023" are left alone.
+ */
+async function convertFormattedNumbers(query: Query, table: string): Promise<void> {
+  const columns = (await query(`DESCRIBE "${table}"`))
+    .filter((row) => String(row.column_type) === "VARCHAR")
+    .map((row) => `"${String(row.column_name).replaceAll('"', '""')}"`);
+  if (columns.length === 0) return;
+  const cleaned = (c: string) =>
+    `try_cast(regexp_replace(regexp_replace(trim(${c}), '[,$\\s]', '', 'g'), '^\\((.*)\\)$', '-\\1') AS DOUBLE)`;
+  const [counts] = await query(
+    `SELECT ${columns
+      .map(
+        (c, i) =>
+          `count(${c})::DOUBLE AS n${i}, count(${cleaned(c)})::DOUBLE AS ok${i}, count(*) FILTER (WHERE regexp_matches(${c}, '[,$()]'))::DOUBLE AS f${i}`,
+      )
+      .join(", ")} FROM "${table}"`,
+  );
+  for (const [i, c] of columns.entries()) {
+    const n = Number(counts[`n${i}`]);
+    if (n > 0 && n === Number(counts[`ok${i}`]) && Number(counts[`f${i}`]) > 0) {
+      await query(`ALTER TABLE "${table}" ALTER ${c} TYPE DOUBLE USING ${cleaned(c)}`);
+    }
+  }
 }

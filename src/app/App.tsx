@@ -220,6 +220,20 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  // Cells copied from a spreadsheet arrive as tab-separated text; load them like a file.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select")) return;
+      const text = e.clipboardData?.getData("text/plain") ?? "";
+      if (text.split("\n").length < 2 || !text.includes("\t")) return;
+      e.preventDefault();
+      loadFile(new File([text], "Pasted cells.tsv", { type: "text/tab-separated-values" }));
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  });
+
   const exportWorkbook = () =>
     task("Building Excel file…", async () => {
       if (!run || !setup) return;
@@ -283,7 +297,7 @@ export function App() {
         <main className="empty">
           <h1>Load a sales file</h1>
           <p>
-            Drop a CSV, Excel or Parquet file anywhere on this page, one row per sales line. It needs a period or date
+            Drop a CSV, Excel or Parquet file anywhere on this page, or paste cells copied from a spreadsheet (Ctrl+V), one row per sales line. It needs a period or date
             column, units, sales, and the product attributes you want in the bridge.
           </p>
           <p className="row">
