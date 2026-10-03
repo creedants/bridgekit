@@ -1,0 +1,25 @@
+/* Shared by the site and the tool. Light only, neutral grays, one accent. */
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --panel: #f5f6f8;
+  --line: #dde1e6;
+  --line-strong: #c4cad3;
+  --text: #14181f;
+  --text-2: #4a5360;
+  --text-3: #6b7480;
+  --accent: #1f4b99;
+  --accent-hover: #183b7a;
+  --accent-soft: #eaf0fa;
+  --up: #2a78d6;
+  --down: #e34948;
+  --total: #6b7480;
+  --grid: #e6e9ed;
+  --warn-bg: #fff6e0;
+  --warn-line: #e6c366;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius: 4px;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); }

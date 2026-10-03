@@ -49,7 +49,7 @@ start = performance.now();
 print("Design only", await runBridge(query, single), performance.now() - start);
 
 console.log("\nTop designs by total effect (full bridge):");
-for (const row of await drill(query, full, ["design"], 5)) {
+for (const row of await drill(query, full, { columns: ["design"], limit: 5 })) {
   console.log(
     `  ${String(row.design).padEnd(6)} price ${signed(Number(row.price)).padStart(12)}` +
       `  volume ${signed(Number(row.volume)).padStart(12)}  new ${signed(Number(row.new_config)).padStart(12)}`,

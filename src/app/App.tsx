@@ -1,31 +1,29 @@
 import { useEffect, useRef, useState } from "react";
-import { drill, runBridge, type BridgeConfig, type BridgeResult, type Level } from "../engine.ts";
+import { dataCheck, runBridge, type BridgeConfig } from "../engine.ts";
 import { createSyntheticSales } from "../synth.ts";
 import { openBrowserDatabase, type BrowserDatabase } from "./db.ts";
-import { percent, signedWhole, whole } from "./format.ts";
-import { Waterfall } from "./Waterfall.tsx";
+import { exportExcel } from "./exportExcel.ts";
+import { download } from "./files.ts";
+import { whole } from "./format.ts";
+import { Results, type Run } from "./Results.tsx";
+import {
+  guessSetup,
+  isValidSetup,
+  loadSavedSetup,
+  PERIOD,
+  quote,
+  saveSetup,
+  TABLE,
+  VIEW,
+  viewSql,
+  type Column,
+  type Setup,
+} from "./setup.ts";
+import { SetupPanel } from "./SetupPanel.tsx";
 
-const TABLE = "data";
-const VIEW = "data_with_period";
-const PERIOD = "__period";
 const SAMPLE_ROWS = 1_000_000;
 
-interface Column {
-  name: string;
-  type: string;
-}
-
-type Grain = "value" | "year" | "quarter" | "month";
-
-interface Mapping {
-  periodColumn: string;
-  grain: Grain;
-  unitsColumn: string;
-  salesColumn: string;
-  levels: Level[];
-}
-
-const SAMPLE_MAPPING: Mapping = {
+const SAMPLE_SETUP: Setup = {
   periodColumn: "year",
   grain: "value",
   unitsColumn: "jobs",
@@ -36,62 +34,46 @@ const SAMPLE_MAPPING: Mapping = {
     { name: "Color", columns: ["photochromic", "polar"] },
     { name: "Material", columns: ["material"] },
   ],
+  filters: [],
 };
-
-const isDate = (type: string) => /DATE|TIMESTAMP/i.test(type);
-const isNumeric = (type: string) => /INT|DOUBLE|DECIMAL|FLOAT|REAL/i.test(type);
-const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
-
-function guessMapping(columns: Column[]): Mapping {
-  const find = (pattern: RegExp, among: Column[]) => among.find((c) => pattern.test(c.name))?.name ?? "";
-  const numeric = columns.filter((c) => isNumeric(c.type));
-  const date = columns.find((c) => isDate(c.type));
-  return {
-    periodColumn: date?.name ?? find(/year|period|month|quarter|date/i, columns),
-    grain: date ? "year" : "value",
-    unitsColumn: find(/unit|qty|quant|jobs|volume|pieces/i, numeric),
-    salesColumn: find(/sales|revenue|amount|net|value/i, numeric),
-    levels: [],
-  };
-}
-
-function periodExpression(column: string, grain: Grain): string {
-  const c = quote(column);
-  switch (grain) {
-    case "year":
-      return `strftime(${c}, '%Y')`;
-    case "quarter":
-      return `strftime(${c}, '%Y') || '-Q' || quarter(${c})`;
-    case "month":
-      return `strftime(${c}, '%Y-%m')`;
-    case "value":
-      return `CAST(${c} AS VARCHAR)`;
-  }
-}
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function describeSetup(setup: Setup, prior: string, current: string, source: string): string[] {
+  return [
+    `Source: ${source}`,
+    `Periods: ${prior} to ${current} (${setup.periodColumn}${setup.grain === "value" ? "" : ", by " + setup.grain})`,
+    `Units column: ${setup.unitsColumn}`,
+    `Sales column: ${setup.salesColumn}`,
+    ...setup.levels.map((level, i) => `Attribute ${i + 1}: ${level.name} (${level.columns.join(" + ")})`),
+    `New and discontinued: ${setup.newAndDiscontinued === "full" ? "full sales, outside volume and mix" : "price difference only, units in volume"}`,
+    ...setup.filters
+      .filter((f) => f.values.length > 0)
+      .map((f) => `Filter: ${f.column} ${f.mode === "include" ? "is one of" : "is not"} ${f.values.join(", ")}`),
+  ];
 }
 
 export function App() {
   const database = useRef<Promise<BrowserDatabase>>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [source, setSource] = useState("");
   const [rowCount, setRowCount] = useState(0);
   const [columns, setColumns] = useState<Column[]>([]);
-  const [mapping, setMapping] = useState<Mapping | null>(null);
+  const [setup, setSetup] = useState<Setup | null>(null);
   const [periods, setPeriods] = useState<string[]>([]);
   const [prior, setPrior] = useState("");
   const [current, setCurrent] = useState("");
-  const [run, setRun] = useState<{ config: BridgeConfig; result: BridgeResult; ms: number } | null>(null);
-  const [drillBy, setDrillBy] = useState(0);
-  const [drillRows, setDrillRows] = useState<Record<string, unknown>[]>([]);
+  const [run, setRun] = useState<(Run & { id: number; signature: string }) | null>(null);
 
   function db(): Promise<BrowserDatabase> {
     database.current ??= openBrowserDatabase();
     return database.current;
   }
+  const query = () => db().then((d) => d.query);
 
   async function task(label: string, work: () => Promise<void>) {
     setBusy(label);
@@ -105,366 +87,225 @@ export function App() {
     }
   }
 
-  async function afterLoad(name: string, preset?: Mapping) {
-    const { query } = await db();
-    const described = await query(`DESCRIBE ${quote(TABLE)}`);
+  async function afterLoad(name: string, preset?: Setup) {
+    const q = await query();
+    const described = await q(`DESCRIBE ${quote(TABLE)}`);
     const found = described.map((row) => ({ name: String(row.column_name), type: String(row.column_type) }));
-    const [count] = await query(`SELECT count(*)::DOUBLE AS n FROM ${quote(TABLE)}`);
+    const [count] = await q(`SELECT count(*)::DOUBLE AS n FROM ${quote(TABLE)}`);
+    const saved = preset ? null : loadSavedSetup(found);
     setColumns(found);
     setRowCount(Number(count.n));
     setSource(name);
     setRun(null);
-    setMapping(preset ?? guessMapping(found));
+    setSetup(preset ?? saved ?? guessSetup(found));
+    setNotice(saved ? "Restored the setup you last used with these columns." : "");
   }
 
   const loadSample = () =>
     task("Generating sample data…", async () => {
-      const { query } = await db();
-      await createSyntheticSales(query, SAMPLE_ROWS, TABLE);
-      await afterLoad("Sample: made-up prescription lens sales", SAMPLE_MAPPING);
+      await createSyntheticSales(await query(), SAMPLE_ROWS, TABLE);
+      await afterLoad("Sample data (made-up lens sales)", SAMPLE_SETUP);
     });
 
   const loadFile = (file: File) =>
     task(`Reading ${file.name}…`, async () => {
-      const { loadFile: load } = await db();
-      await load(file, TABLE);
+      await (await db()).loadFile(file, TABLE);
       await afterLoad(file.name);
     });
 
-  // Rebuild the period view and its value list whenever the period mapping changes.
-  const periodColumn = mapping?.periodColumn ?? "";
-  const grain = mapping?.grain ?? "value";
+  // Rebuild the filtered view and the period list whenever they could change.
+  const viewKey = setup ? JSON.stringify([setup.periodColumn, setup.grain, setup.filters, source]) : "";
   useEffect(() => {
-    if (!periodColumn) {
+    if (!setup?.periodColumn) {
       setPeriods([]);
       return;
     }
     let stale = false;
     task("Reading periods…", async () => {
-      const { query } = await db();
-      await query(
-        `CREATE OR REPLACE VIEW ${quote(VIEW)} AS
-         SELECT *, ${periodExpression(periodColumn, grain)} AS ${quote(PERIOD)} FROM ${quote(TABLE)}`,
-      );
-      const rows = await query(
+      const q = await query();
+      await q(viewSql(setup));
+      const rows = await q(
         `SELECT DISTINCT ${quote(PERIOD)} AS p FROM ${quote(VIEW)}
          WHERE ${quote(PERIOD)} IS NOT NULL ORDER BY 1 DESC LIMIT 200`,
       );
       if (stale) return;
       const values = rows.map((row) => String(row.p)).reverse();
       setPeriods(values);
-      setCurrent(values.at(-1) ?? "");
-      setPrior(values.at(-2) ?? "");
+      setCurrent((value) => (values.includes(value) ? value : (values.at(-1) ?? "")));
+      setPrior((value) => (values.includes(value) ? value : (values.at(-2) ?? "")));
     });
     return () => {
       stale = true;
     };
-  }, [periodColumn, grain, source]);
+  }, [viewKey]);
+
+  const signature = JSON.stringify([setup, prior, current, source]);
+  const ready =
+    setup && setup.unitsColumn && setup.salesColumn && setup.levels.length > 0 && prior && current && prior !== current;
 
   const calculate = () =>
     task("Calculating…", async () => {
-      if (!mapping) return;
-      const { query } = await db();
+      if (!setup) return;
+      const q = await query();
       const config: BridgeConfig = {
         table: VIEW,
         periodColumn: PERIOD,
         prior,
         current,
-        unitsColumn: mapping.unitsColumn,
-        salesColumn: mapping.salesColumn,
-        levels: mapping.levels,
+        unitsColumn: setup.unitsColumn,
+        salesColumn: setup.salesColumn,
+        levels: setup.levels,
+        newAndDiscontinued: setup.newAndDiscontinued ?? "difference",
       };
       const start = performance.now();
-      const result = await runBridge(query, config);
-      setDrillBy(0);
-      setRun({ config, result, ms: performance.now() - start });
+      const result = await runBridge(q, config);
+      const ms = performance.now() - start;
+      const check = await dataCheck(q, config);
+      setRun({ config, result, check, ms, id: Date.now(), signature });
+      saveSetup(columns, setup);
+      setNotice("");
     });
 
-  const drillOptions = run
-    ? [
-        ...run.config.levels.map((level) => ({ label: level.name, columns: level.columns })),
-        ...(run.config.levels.length > 1
-          ? [{ label: "Full configuration", columns: run.config.levels.flatMap((l) => l.columns) }]
-          : []),
-      ]
-    : [];
-  const drillColumns = drillOptions[drillBy]?.columns ?? [];
-
+  // A link to /app/?sample opens the tool with the sample already calculated.
+  const autoRun = useRef(new URLSearchParams(location.search).has("sample"));
   useEffect(() => {
-    if (!run || drillColumns.length === 0) return;
-    let stale = false;
-    db()
-      .then(({ query }) => drill(query, run.config, drillColumns, 50))
-      .then((rows) => !stale && setDrillRows(rows))
-      .catch((e) => setError(describeError(e)));
-    return () => {
-      stale = true;
-    };
-  }, [run, drillBy]);
+    if (autoRun.current && !setup && !busy) loadSample();
+  }, []);
+  useEffect(() => {
+    if (autoRun.current && ready && !busy) {
+      autoRun.current = false;
+      calculate();
+    }
+  }, [ready, busy]);
 
-  const update = (patch: Partial<Mapping>) => setMapping((m) => (m ? { ...m, ...patch } : m));
-  const setLevels = (levels: Level[]) => update({ levels });
+  const exportWorkbook = () =>
+    task("Building Excel file…", async () => {
+      if (!run || !setup) return;
+      await exportExcel(await query(), run.config, run.result, run.check, describeSetup(setup, prior, current, source));
+    });
 
-  const used = new Set([
-    mapping?.periodColumn,
-    mapping?.unitsColumn,
-    mapping?.salesColumn,
-    ...(mapping?.levels.flatMap((l) => l.columns) ?? []),
-  ]);
-  const free = columns.filter((c) => !used.has(c.name));
-  const ready =
-    mapping && mapping.unitsColumn && mapping.salesColumn && mapping.levels.length > 0 && prior && current && prior !== current;
+  const importSetup = (file: File) =>
+    task("Reading setup…", async () => {
+      const parsed: unknown = JSON.parse(await file.text());
+      if (!isValidSetup(parsed, columns)) {
+        throw new Error("That setup file does not match the columns in this data.");
+      }
+      setSetup(parsed);
+    });
+
+  const filePicker = (
+    <label className="button">
+      Choose file
+      <input
+        type="file"
+        accept=".csv,.tsv,.txt,.parquet"
+        hidden
+        onChange={(e) => {
+          if (e.target.files?.[0]) loadFile(e.target.files[0]);
+          e.target.value = "";
+        }}
+      />
+    </label>
+  );
 
   return (
-    <main>
-      <header>
-        <h1>Bridgekit</h1>
-        <p>Price-volume-mix bridge for one attribute or many. Your file is read in this browser tab and is not uploaded.</p>
+    <div
+      className="shell"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => {
+        e.preventDefault();
+        const file = e.dataTransfer.files[0];
+        if (file) loadFile(file);
+      }}
+    >
+      <header className="topbar">
+        <a className="wordmark" href="/">Bridgekit</a>
+        <span className="source">
+          {source ? `${source} · ${whole(rowCount)} rows · ${columns.length} columns` : "No data loaded"}
+        </span>
+        <span className="status" aria-live="polite">{busy}</span>
+        <nav>
+          {filePicker}
+          <button disabled={!run || !!busy} onClick={exportWorkbook}>Export Excel</button>
+          <a href="/method.html" target="_blank" rel="noreferrer">Method</a>
+        </nav>
       </header>
 
-      <section>
-        <h2>1. Data</h2>
-        <div
-          className="drop"
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => {
-            e.preventDefault();
-            const file = e.dataTransfer.files[0];
-            if (file) loadFile(file);
-          }}
-        >
-          <p>Drop a CSV or Parquet file here, one row per sales line.</p>
-          <div className="row">
-            <label className="button">
-              Choose file
-              <input
-                type="file"
-                accept=".csv,.tsv,.txt,.parquet"
-                hidden
-                onChange={(e) => e.target.files?.[0] && loadFile(e.target.files[0])}
-              />
-            </label>
-            <button onClick={loadSample}>Load sample data</button>
-          </div>
-        </div>
-        {source && (
-          <p className="muted">
-            {source}: {whole(rowCount)} rows, {columns.length} columns.
-          </p>
-        )}
-      </section>
+      {error && <p className="error" role="alert">{error}</p>}
 
-      {busy && <p className="status">{busy}</p>}
-      {error && <p className="error">{error}</p>}
-
-      {mapping && (
-        <section>
-          <h2>2. Setup</h2>
-          <div className="fields">
-            <label>
-              Period column
-              <select value={mapping.periodColumn} onChange={(e) => {
-                const column = columns.find((c) => c.name === e.target.value);
-                update({ periodColumn: e.target.value, grain: column && isDate(column.type) ? "year" : "value" });
-              }}>
-                <option value="">Choose…</option>
-                {columns.map((c) => <option key={c.name}>{c.name}</option>)}
-              </select>
-            </label>
-            {isDate(columns.find((c) => c.name === mapping.periodColumn)?.type ?? "") && (
-              <label>
-                Compare by
-                <select value={mapping.grain} onChange={(e) => update({ grain: e.target.value as Grain })}>
-                  <option value="year">Year</option>
-                  <option value="quarter">Quarter</option>
-                  <option value="month">Month</option>
-                </select>
-              </label>
-            )}
-            <label>
-              Prior period
-              <select value={prior} onChange={(e) => setPrior(e.target.value)}>
-                {periods.map((p) => <option key={p}>{p}</option>)}
-              </select>
-            </label>
-            <label>
-              Current period
-              <select value={current} onChange={(e) => setCurrent(e.target.value)}>
-                {periods.map((p) => <option key={p}>{p}</option>)}
-              </select>
-            </label>
-            <label>
-              Units column
-              <select value={mapping.unitsColumn} onChange={(e) => update({ unitsColumn: e.target.value })}>
-                <option value="">Choose…</option>
-                {columns.filter((c) => isNumeric(c.type)).map((c) => <option key={c.name}>{c.name}</option>)}
-              </select>
-            </label>
-            <label>
-              Sales column
-              <select value={mapping.salesColumn} onChange={(e) => update({ salesColumn: e.target.value })}>
-                <option value="">Choose…</option>
-                {columns.filter((c) => isNumeric(c.type)).map((c) => <option key={c.name}>{c.name}</option>)}
-              </select>
-            </label>
-          </div>
-
-          <h3>Attributes, most important first</h3>
-          <p className="muted">
-            Use one attribute for a classic bridge. With several, a configuration that has no exact match in the prior
-            period is compared to the nearest group above it in this order.
-          </p>
-          <ol className="levels">
-            {mapping.levels.map((level, i) => (
-              <li key={level.columns.join("|")}>
-                <input
-                  aria-label="Attribute name"
-                  value={level.name}
-                  onChange={(e) => setLevels(mapping.levels.with(i, { ...level, name: e.target.value }))}
-                />
-                <span className="chips">
-                  {level.columns.map((column) => (
-                    <span className="chip" key={column}>
-                      {column}
-                      {level.columns.length > 1 && (
-                        <button
-                          aria-label={`Remove ${column}`}
-                          onClick={() =>
-                            setLevels(mapping.levels.with(i, { ...level, columns: level.columns.filter((c) => c !== column) }))
-                          }
-                        >
-                          ×
-                        </button>
-                      )}
-                    </span>
-                  ))}
-                  {free.length > 0 && (
-                    <select
-                      aria-label="Combine another column into this attribute"
-                      value=""
-                      onChange={(e) =>
-                        setLevels(mapping.levels.with(i, { ...level, columns: [...level.columns, e.target.value] }))
-                      }
-                    >
-                      <option value="">+ column</option>
-                      {free.map((c) => <option key={c.name}>{c.name}</option>)}
-                    </select>
-                  )}
-                </span>
-                <span className="row">
-                  <button aria-label="Move up" disabled={i === 0} onClick={() => {
-                    const next = [...mapping.levels];
-                    [next[i - 1], next[i]] = [next[i], next[i - 1]];
-                    setLevels(next);
-                  }}>↑</button>
-                  <button aria-label="Move down" disabled={i === mapping.levels.length - 1} onClick={() => {
-                    const next = [...mapping.levels];
-                    [next[i + 1], next[i]] = [next[i], next[i + 1]];
-                    setLevels(next);
-                  }}>↓</button>
-                  <button aria-label="Remove attribute" onClick={() => setLevels(mapping.levels.toSpliced(i, 1))}>✕</button>
-                </span>
-              </li>
-            ))}
-          </ol>
-          {free.length > 0 && (
-            <select
-              value=""
-              onChange={(e) => setLevels([...mapping.levels, { name: e.target.value, columns: [e.target.value] }])}
-            >
-              <option value="">Add attribute…</option>
-              {free.map((c) => <option key={c.name}>{c.name}</option>)}
-            </select>
-          )}
-
+      {!setup ? (
+        <main className="empty">
+          <h1>Load a sales file</h1>
           <p>
-            <button className="primary" disabled={!ready || !!busy} onClick={calculate}>
-              Calculate bridge
-            </button>
+            Drop a CSV or Parquet file anywhere on this page, one row per sales line. It needs a period or date
+            column, units, sales, and the product attributes you want in the bridge.
           </p>
-        </section>
-      )}
-
-      {run && (
-        <section>
-          <h2>3. Bridge: {run.config.prior} to {run.config.current}</h2>
-          <p className="muted">
-            Sales changed by {signedWhole(run.result.currentSales - run.result.priorSales)} (
-            {percent(run.result.currentSales / run.result.priorSales - 1)}). Calculated in {run.ms.toFixed(0)} ms.
+          <p className="row">
+            {filePicker}
+            <button onClick={loadSample} disabled={!!busy}>Use sample data</button>
           </p>
-          <Waterfall result={run.result} priorLabel={String(run.config.prior)} currentLabel={String(run.config.current)} />
-
-          <div className="split">
-            <div>
-              <h3>Bridge</h3>
-              <table>
-                <tbody>
-                  <tr className="total"><td>Prior sales</td><td className="num">{whole(run.result.priorSales)}</td></tr>
-                  {run.result.effects.map((e) => (
-                    <tr key={e.key}><td>{e.label}</td><td className="num">{signedWhole(e.value)}</td></tr>
-                  ))}
-                  <tr className="total"><td>Current sales</td><td className="num">{whole(run.result.currentSales)}</td></tr>
-                </tbody>
-              </table>
+          <p className="hint">The file is read inside this browser tab. It is not uploaded.</p>
+        </main>
+      ) : (
+        <div className="workspace">
+          <aside>
+            <SetupPanel
+              columns={columns}
+              setup={setup}
+              periods={periods}
+              prior={prior}
+              current={current}
+              query={query}
+              onChange={(patch) => setSetup((s) => (s ? { ...s, ...patch } : s))}
+              onPrior={setPrior}
+              onCurrent={setCurrent}
+            />
+            <div className="run">
+              <button className="primary" disabled={!ready || !!busy} onClick={calculate}>
+                Calculate bridge
+              </button>
+              {!ready && (
+                <p className="hint">
+                  {prior && prior === current
+                    ? "Prior and current must be different periods."
+                    : "Choose periods, units, sales and at least one attribute."}
+                </p>
+              )}
+              <p className="row">
+                <button
+                  className="quiet"
+                  onClick={() => download("bridgekit-setup.json", JSON.stringify(setup, null, 2), "application/json")}
+                >
+                  Save setup to file
+                </button>
+                <label className="button quiet">
+                  Load setup
+                  <input
+                    type="file"
+                    accept=".json"
+                    hidden
+                    onChange={(e) => {
+                      if (e.target.files?.[0]) importSetup(e.target.files[0]);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+              </p>
             </div>
-            <div>
-              <h3>How current sales were matched</h3>
-              <table>
-                <thead><tr><th>Compared against</th><th className="num">Share</th><th className="num">Configurations</th></tr></thead>
-                <tbody>
-                  {run.result.coverage.map((c) => (
-                    <tr key={c.level}>
-                      <td>{c.label}</td>
-                      <td className="num">{percent(c.share)}</td>
-                      <td className="num">{whole(c.cells)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <p className="muted">Only exact matches count as price. Everything else lands in “New configurations”.</p>
-            </div>
-          </div>
-
-          <h3>
-            Biggest movers by{" "}
-            <select value={drillBy} onChange={(e) => setDrillBy(Number(e.target.value))}>
-              {drillOptions.map((option, i) => <option key={option.label} value={i}>{option.label}</option>)}
-            </select>
-          </h3>
-          <div className="scroll">
-            <table>
-              <thead>
-                <tr>
-                  {drillColumns.map((c) => <th key={c}>{c}</th>)}
-                  <th className="num">Prior</th>
-                  <th className="num">Current</th>
-                  <th className="num">Volume</th>
-                  <th className="num">Mix</th>
-                  <th className="num">Price</th>
-                  <th className="num">New config.</th>
-                </tr>
-              </thead>
-              <tbody>
-                {drillRows.map((row) => {
-                  const mix = run.config.levels.reduce((sum, _, i) => sum + Number(row[`mix_${i + 1}`] ?? 0), 0);
-                  return (
-                    <tr key={drillColumns.map((c) => String(row[c])).join("|")}>
-                      {drillColumns.map((c) => <td key={c}>{row[c] === null ? "(blank)" : String(row[c])}</td>)}
-                      <td className="num">{whole(Number(row.s0))}</td>
-                      <td className="num">{whole(Number(row.s1))}</td>
-                      <td className="num">{signedWhole(Number(row.volume))}</td>
-                      <td className="num">{signedWhole(mix)}</td>
-                      <td className="num">{signedWhole(Number(row.price))}</td>
-                      <td className="num">{signedWhole(Number(row.new_config))}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <p className="muted">Top 50 by size of total effect. Each row’s effects add up to its own sales change.</p>
-        </section>
+          </aside>
+          <main>
+            {notice && <p className="notice">{notice}</p>}
+            {run && run.signature !== signature && (
+              <p className="notice">The setup changed since this bridge was calculated. Calculate again to update it.</p>
+            )}
+            {run ? (
+              <Results key={run.id} run={run} query={query} />
+            ) : (
+              <p className="hint placeholder">Set up the bridge on the left, then choose Calculate bridge.</p>
+            )}
+          </main>
+        </div>
       )}
-    </main>
+    </div>
   );
 }

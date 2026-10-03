@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>The method: price-volume-mix with several attributes | Bridgekit</title>
+    <meta name="description" content="How Bridgekit calculates volume, mix, price and new-configuration effects, with formulas and a worked example." />
+    <link rel="stylesheet" href="/src/site/site.css" />
+  </head>
+  <body>
+    <div class="nav">
+      <div class="wrap">
+        <a class="wordmark" href="/">Bridgekit</a>
+        <nav>
+          <a class="optional" href="/#how">How it works</a>
+          <a class="optional" href="/method.html">Method</a>
+          <a class="optional" href="/#pricing">Pricing</a>
+          <a class="button" href="/app/">Open the tool</a>
+        </nav>
+      </div>
+    </div>
+
+    <article>
+      <div class="wrap narrow">
+        <h1>The method</h1>
+        <p class="sub">How Bridgekit turns two periods of sales lines into a bridge, and what each number means.</p>
+
+        <h2>Terms</h2>
+        <ul>
+          <li><b>Attribute:</b> a product characteristic, made of one or more columns. You rank attributes from most to least important.</li>
+          <li><b>Configuration:</b> one full combination of every attribute.</li>
+          <li><b>Group at level j:</b> all configurations that share the first j attributes.</li>
+          <li><code>q0</code>, <code>s0</code>: units and sales of a configuration in the prior period. <code>q1</code>, <code>s1</code>: the same in the current period.</li>
+        </ul>
+
+        <h2>Reference prices</h2>
+        <p>
+          Each configuration gets a chain of reference prices, all from the prior period. <code>R0</code> is the
+          overall average price. <code>R1</code> is the average price of its group on the first attribute,
+          <code>R2</code> on the first two, and so on up to <code>Rk</code>, the price of the exact configuration.
+        </p>
+        <p>
+          If a group had no prior volume, its reference price is taken from the level above. A configuration that is
+          new this period therefore inherits the price of the nearest group that did exist.
+        </p>
+
+        <h2>The effects</h2>
+        <div class="boxed">
+          <table>
+            <thead><tr><th>Effect</th><th>Formula per configuration</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td>Volume</td><td><code>(q1 − q0) × R0</code></td><td>Change in units at the overall prior average price.</td></tr>
+              <tr><td>Mix, one per attribute</td><td><code>(q1 − q0) × (Rj − Rj−1)</code></td><td>Change in units valued at how much dearer or cheaper the group is than the group above it.</td></tr>
+              <tr><td>Price (like-for-like)</td><td><code>s1 − Rk × q1</code></td><td>Only where the exact configuration sold in the prior period.</td></tr>
+              <tr><td>New configurations</td><td><code>s1 − Rk × q1</code></td><td>The same difference where there was no exact match, so <code>Rk</code> is a fallback price.</td></tr>
+              <tr><td>Discontinued configurations</td><td><code>(q1 − q0) × (Rk − Rm)</code></td><td>For a configuration that stopped selling, its price premium over the nearest group that still sells, level <code>m</code>. Its mix is counted only down to level <code>m</code>.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          For every configuration the effects add up to <code>s1 − s0</code>. That means the bridge reconciles in
+          total and for any subtotal: by design, by customer segment, or for a single row in the movers table.
+        </p>
+
+        <h2>Worked example, one attribute</h2>
+        <div class="boxed">
+          <table>
+            <thead><tr><th>Product</th><th class="num">Prior units</th><th class="num">Prior sales</th><th class="num">Current units</th><th class="num">Current sales</th></tr></thead>
+            <tbody>
+              <tr><td>A</td><td class="num">10</td><td class="num">100</td><td class="num">10</td><td class="num">110</td></tr>
+              <tr><td>B</td><td class="num">10</td><td class="num">200</td><td class="num">20</td><td class="num">400</td></tr>
+              <tr><td>C (new)</td><td class="num">0</td><td class="num">0</td><td class="num">5</td><td class="num">150</td></tr>
+              <tr class="total"><td>Total</td><td class="num">20</td><td class="num">300</td><td class="num">35</td><td class="num">660</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The overall prior average price is 300 ÷ 20 = 15.</p>
+        <div class="boxed">
+          <table>
+            <thead><tr><th>Effect</th><th>Working</th><th class="num">Amount</th></tr></thead>
+            <tbody>
+              <tr><td>Volume</td><td>(35 − 20) × 15</td><td class="num">+225</td></tr>
+              <tr><td>Mix</td><td>A: (10 − 10) × (10 − 15) = 0. B: (20 − 10) × (20 − 15) = 50</td><td class="num">+50</td></tr>
+              <tr><td>Price</td><td>A: 110 − 10 × 10 = 10. B: 400 − 20 × 20 = 0</td><td class="num">+10</td></tr>
+              <tr><td>New configurations</td><td>C: 150 − 5 × 15, valued at the overall average</td><td class="num">+75</td></tr>
+              <tr class="total"><td>Total</td><td>660 − 300</td><td class="num">+360</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2>Worked example, fallback</h2>
+        <p>
+          Attributes are design, then coating. Design D2 sold only with the basic coating last year, at an average
+          price of 20. This year it also sells 4 units with a premium coating for 200.
+        </p>
+        <ul>
+          <li>D2 with premium has no exact prior match, so its reference price falls back to the D2 average of 20.</li>
+          <li>Its 4 units add 4 × 20 = 80 to volume.</li>
+          <li>The remaining 200 − 80 = 120 is reported as new configurations, not as price.</li>
+          <li>The match coverage table shows this revenue as “fell back to Design”.</li>
+        </ul>
+
+        <h2>New and discontinued</h2>
+        <p>The two lines mirror each other. In both cases the units count in volume, and the line shows only how much dearer or cheaper the configuration was than its nearest comparable group.</p>
+        <ul>
+          <li><b>New:</b> a configuration that sells now and did not before. It is compared with the nearest group that existed in the prior period.</li>
+          <li><b>Discontinued:</b> a configuration that sold before and does not now. If its design still sells, the loss down to the design level is mix, and the rest is discontinued. If the whole design is gone, everything beyond volume is discontinued.</li>
+        </ul>
+
+        <p>
+          The tool has an option to show these two lines at <b>full sales</b> instead. New configurations then show
+          everything they sold, discontinued ones show everything they used to sell, and volume, mix and price are
+          calculated on continuing configurations only. This is simpler to explain, and it makes the two lines larger
+          as you add attributes.
+        </p>
+
+        <h2>Things to know</h2>
+        <ul>
+          <li><b>Order matters for mix.</b> Volume and like-for-like price are the same in any attribute order. The split of mix between attributes, and the fallback price of new configurations, depend on the order.</li>
+          <li><b>More attributes means purer price, lower coverage.</b> Each added attribute removes mix from the price number and also leaves fewer exact matches. The coverage table shows the trade-off.</li>
+          <li><b>Anything not in the attribute list sits in price.</b> If customer is not an attribute, a shift toward customers with deeper discounts appears as a price decrease.</li>
+          <li><b>Returns.</b> Negative units are netted within a configuration. A group whose prior units net to zero or less is treated as having no prior price.</li>
+          <li><b>Sales with zero units.</b> Rows with sales and no units, such as rebates, credits and fees, have no price or volume. They are left out of the calculation above and bridged on their own line, “Sales with no units”.</li>
+        </ul>
+
+        <p style="margin-top: 32px"><a class="button" href="/app/">Open the tool</a></p>
+      </div>
+    </article>
+
+    <footer>
+      <div class="wrap">
+        <span>Bridgekit. MIT license.</span>
+        <a href="/">Home</a>
+        <a href="/app/">Tool</a>
+        <a href="https://github.com/creedants/bridgekit">GitHub</a>
+      </div>
+    </footer>
+  </body>
+</html>

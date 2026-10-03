@@ -5,21 +5,23 @@ import type { Query } from "./engine.ts";
  * job, add-ons folded into the line price, no stable SKU. 2026 differs from
  * 2025 by a price increase on the top designs, five new designs, one retired
  * coating and a shift toward photochromic lenses.
+ *
+ * Values come from hashing the row number, so the same row count always
+ * produces the same data in Node and in the browser.
  */
 export async function createSyntheticSales(query: Query, rows: number, table = "sales"): Promise<void> {
-  await query("SELECT setseed(0.42)");
   await query(`
 CREATE OR REPLACE TABLE "${table}" AS
 WITH raw AS (
   SELECT
-    CASE WHEN random() < 0.48 THEN 2025 ELSE 2026 END AS year,
-    floor(pow(random(), 2.5) * 400)::INT AS cust_i,
-    floor(pow(random(), 2.2) * 60)::INT AS design_r,
-    floor(pow(random(), 2.0) * 12)::INT AS coat_r,
-    floor(pow(random(), 1.8) * 8)::INT AS mat_i,
-    random() AS photo_r, random() AS polar_r, random() AS finish_r,
-    random() AS noise, random() AS units_r
-  FROM range(${Math.floor(rows)})
+    CASE WHEN ((hash(i * 16 + 1) % 1000000) / 1000000.0) < 0.48 THEN 2025 ELSE 2026 END AS year,
+    floor(pow(((hash(i * 16 + 2) % 1000000) / 1000000.0), 2.5) * 400)::INT AS cust_i,
+    floor(pow(((hash(i * 16 + 3) % 1000000) / 1000000.0), 2.2) * 60)::INT AS design_r,
+    floor(pow(((hash(i * 16 + 4) % 1000000) / 1000000.0), 2.0) * 12)::INT AS coat_r,
+    floor(pow(((hash(i * 16 + 5) % 1000000) / 1000000.0), 1.8) * 8)::INT AS mat_i,
+    ((hash(i * 16 + 6) % 1000000) / 1000000.0) AS photo_r, ((hash(i * 16 + 7) % 1000000) / 1000000.0) AS polar_r, ((hash(i * 16 + 8) % 1000000) / 1000000.0) AS finish_r,
+    ((hash(i * 16 + 9) % 1000000) / 1000000.0) AS noise, ((hash(i * 16 + 10) % 1000000) / 1000000.0) AS units_r
+  FROM range(${Math.floor(rows)}) t(i)
 ),
 shaped AS (
   SELECT year, cust_i, mat_i, noise,

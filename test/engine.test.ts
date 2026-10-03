@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDatabase } from "../src/duckdb.ts";
-import { runBridge, drill, type BridgeConfig, type BridgeResult } from "../src/engine.ts";
+import { runBridge, drill, unmatched, dataCheck, type BridgeConfig, type BridgeResult } from "../src/engine.ts";
 import { createSyntheticSales } from "../src/synth.ts";
 
 function effect(result: BridgeResult, key: string): number {
@@ -68,6 +68,21 @@ test("an unmatched configuration falls back to its parent group's prior price", 
   assert.equal(Number(row.match_level), 1);
   near(Number(row.ref_price), 20);
 
+  const [missing] = await unmatched(query, config);
+  assert.equal(missing.coating, "premium");
+  near(Number(missing.new_config), 120);
+
+  const filtered = await drill(query, config, {
+    columns: ["coating"], filters: [{ column: "design", value: "D2" }], sortBy: "new_config",
+  });
+  assert.deepEqual(filtered.map((row) => row.coating), ["premium", "basic"]);
+
+  const check = await dataCheck(query, config);
+  assert.equal(check.rows, 7);
+  assert.equal(check.priorRows, 3);
+  assert.equal(check.currentRows, 4);
+  assert.equal(check.negativeUnitRows, 0);
+
   const fallback = result.coverage.find((c) => c.level === 1);
   assert.ok(fallback);
   near(fallback.share, 200 / 1000);
@@ -121,10 +136,10 @@ test("synthetic lens data reconciles, and level order does not move volume or pr
   const shares = forward.coverage.reduce((sum, c) => sum + c.share, 0);
   near(shares, 1);
 
-  const byDesign = await drill(query, { ...base, levels }, ["design"], 1000);
+  const byDesign = await drill(query, { ...base, levels }, { columns: ["design"], limit: 1000 });
   const drilled = byDesign.reduce(
     (sum, row) =>
-      sum + ["volume", "mix_1", "mix_2", "mix_3", "mix_4", "price", "new_config"]
+      sum + ["volume", "mix_1", "mix_2", "mix_3", "mix_4", "price", "new_config", "discontinued"]
         .reduce((s, key) => s + Number(row[key]), 0),
     0,
   );
@@ -132,9 +147,85 @@ test("synthetic lens data reconciles, and level order does not move volume or pr
 
   // Each group's effects equal that group's own sales change.
   for (const row of byDesign) {
-    const own = ["volume", "mix_1", "mix_2", "mix_3", "mix_4", "price", "new_config"]
+    const own = ["volume", "mix_1", "mix_2", "mix_3", "mix_4", "price", "new_config", "discontinued"]
       .reduce((s, key) => s + Number(row[key]), 0);
     assert.ok(Math.abs(own - (Number(row.s1) - Number(row.s0))) < 1e-3, `design ${row.design}`);
+  }
+});
+
+test("returns that net prior units below zero still reconcile per configuration", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t AS SELECT * FROM (VALUES
+    ('p0', 'A', 10, 100.0), ('p0', 'B', -2, -50.0), ('p0', 'C', 0, -30.0),
+    ('p1', 'A', 12, 132.0), ('p1', 'B', 3, 90.0), ('p1', 'C', 1, 20.0)
+  ) v(period, product, units, sales)`);
+  const config: BridgeConfig = {
+    table: "t", periodColumn: "period", prior: "p0", current: "p1",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+  };
+  const result = await runBridge(query, config);
+  near(total(result), 242 - 20);
+  // C's prior credit of -30 has no units, so it is bridged on its own line.
+  near(effect(result, "no_units"), 30);
+  assert.equal(result.priorSales, 20);
+  for (const row of await drill(query, config, { columns: ["product"] })) {
+    const own = Number(row.volume) + Number(row.mix_1) + Number(row.price) + Number(row.new_config) + Number(row.discontinued) + Number(row.no_units);
+    near(own, Number(row.s1) + Number(row.z1) - Number(row.s0) - Number(row.z0), `product ${row.product}`);
+  }
+});
+
+test("discontinued configurations mirror new ones", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t AS SELECT * FROM (VALUES
+    ('p0', 'D1', 'basic', 10, 100.0), ('p0', 'D1', 'premium', 10, 300.0),
+    ('p0', 'D2', 'basic', 20, 400.0), ('p0', 'D3', 'basic', 10, 400.0),
+    ('p1', 'D1', 'basic', 10, 100.0), ('p1', 'D2', 'basic', 20, 400.0)
+  ) v(period, design, coating, units, sales)`);
+  const config: BridgeConfig = {
+    table: "t", periodColumn: "period", prior: "p0", current: "p1",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Design", columns: ["design"] }, { name: "Coating", columns: ["coating"] }],
+  };
+  const result = await runBridge(query, config);
+
+  // Prior average price 1200 / 50 = 24. Volume (30 - 50) * 24.
+  near(effect(result, "volume"), -480);
+  // D1/premium: D1 survives, so design mix is -10 * (20 - 24) and the premium
+  // over D1, -10 * (30 - 20), is discontinued. D3 is gone entirely, so all of
+  // -10 * (40 - 24) is discontinued.
+  near(effect(result, "mix_1"), 40);
+  near(effect(result, "mix_2"), 0);
+  near(effect(result, "discontinued"), -100 - 160);
+  near(effect(result, "price"), 0);
+  near(total(result), 500 - 1200);
+});
+
+test("full mode shows new and discontinued at full sales, outside volume and mix", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t AS SELECT * FROM (VALUES
+    ('p0', 'A', 10, 100.0), ('p0', 'B', 10, 200.0), ('p0', 'D', 5, 400.0),
+    ('p1', 'A', 10, 110.0), ('p1', 'B', 20, 400.0), ('p1', 'C', 5, 150.0)
+  ) v(period, product, units, sales)`);
+  const config: BridgeConfig = {
+    table: "t", periodColumn: "period", prior: "p0", current: "p1",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+    newAndDiscontinued: "full",
+  };
+  const result = await runBridge(query, config);
+
+  // Continuing A and B: prior average 300 / 20 = 15.
+  near(effect(result, "volume"), (30 - 20) * 15);
+  near(effect(result, "mix_1"), 10 * (20 - 15));
+  near(effect(result, "price"), 10);
+  near(effect(result, "new_config"), 150);
+  near(effect(result, "discontinued"), -400);
+  near(total(result), 660 - 700);
+  for (const row of await drill(query, config, { columns: ["product"] })) {
+    const own = ["volume", "mix_1", "price", "new_config", "discontinued", "no_units"]
+      .reduce((s, key) => s + Number(row[key]), 0);
+    near(own, Number(row.s1) - Number(row.s0), `product ${row.product}`);
   }
 });
 
