@@ -10,6 +10,7 @@ export default defineConfig({
       input: {
         home: resolve(import.meta.dirname, "index.html"),
         method: resolve(import.meta.dirname, "method.html"),
+        guide: resolve(import.meta.dirname, "guide.html"),
         app: resolve(import.meta.dirname, "app/index.html"),
       },
     },

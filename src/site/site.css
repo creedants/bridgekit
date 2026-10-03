@@ -88,3 +88,5 @@ article h1 { font-size: 32px; letter-spacing: -0.01em; line-height: 1.2; margin:
 article h2 { font-size: 21px; margin: 40px 0 10px; }
 article .boxed { margin: 16px 0 20px; }
 article li { margin-bottom: 6px; }
+article ol { padding-left: 22px; }
+.shot img { border: 0; }

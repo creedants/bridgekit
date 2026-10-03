@@ -8,14 +8,16 @@
       name="description"
       content="A price-volume-mix bridge that works across several product attributes at once. Runs in your browser, so your sales file is never uploaded. Free and open source."
     />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/src/site/site.css" />
   </head>
   <body>
     <div class="nav">
       <div class="wrap">
-        <a class="wordmark" href="/">Bridgekit</a>
+        <a class="wordmark" href="/"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="6" fill="var(--accent)"/><rect x="6" y="17" width="5" height="9" fill="#fff"/><rect x="13.5" y="12" width="5" height="5" fill="#fff" opacity=".75"/><rect x="21" y="6" width="5" height="20" fill="#fff"/></svg>Bridgekit</a>
         <nav>
           <a class="optional" href="#how">How it works</a>
+          <a class="optional" href="/guide.html">Guide</a>
           <a class="optional" href="/method.html">Method</a>
           <a class="optional" href="#pricing">Pricing</a>
           <a class="optional" href="https://github.com/creedants/bridgekit">GitHub</a>
@@ -35,7 +37,7 @@
           <a class="button" href="/app/">Open the tool</a>
           <a class="button secondary" href="/app/?sample">Try it with sample data</a>
         </div>
-        <p class="fine">Free and open source. No account. Works with CSV and Parquet files.</p>
+        <p class="fine">Free and open source. No account. Works with CSV, Excel and Parquet files.</p>
 
         <figure class="shot">
           <div class="shot-bar"><b>Sales bridge</b><span>2025 to 2026</span><span>Design › Coating › Color › Material</span></div>
@@ -157,7 +159,7 @@
           <div>
             <div class="step">1. Load</div>
             <h3>Drop in a sales export</h3>
-            <p>A CSV or Parquet file with one row per sales line: a date or period, units, sales and your product attributes.</p>
+            <p>A CSV, Excel or Parquet file with one row per sales line: a date or period, units, sales and your product attributes.</p>
           </div>
           <div>
             <div class="step">2. Set up</div>
@@ -179,13 +181,17 @@
         <p class="sub">Built for the person who has to defend the numbers in a review.</p>
         <div class="features">
           <div><h3>Mix split by attribute</h3><p>A separate mix line for each attribute, so you can say how much came from coating and how much from material.</p></div>
-          <div><h3>Match coverage</h3><p>The share of current sales compared against an exact prior configuration, and the share that fell back to a broader group.</p></div>
+          <div><h3>List price and discounts</h3><p>Add a gross sales column and the price effect splits into list price changes and discount changes.</p></div>
+          <div><h3>Rebates and credits kept apart</h3><p>Rows with sales and no units get their own line, so a rebate accrual never shows up as a price cut.</p></div>
+          <div><h3>New and discontinued, your way</h3><p>Show them as a price difference with units in volume, or at full sales outside volume and mix.</p></div>
+          <div><h3>Price changes across the book</h3><p>How much of matched sales went up 2% to 5%, stayed flat or went down, with the effect of each band.</p></div>
           <div><h3>Movers and drill-down</h3><p>Click a bar to see what is behind it. Click a row to break it down by the next attribute. Every row adds up to its own sales change.</p></div>
-          <div><h3>Unmatched list</h3><p>Each new configuration, what it was compared against and the reference price used.</p></div>
-          <div><h3>Excel export with formulas</h3><p>The bridge, coverage, movers and a detail sheet where every effect is a live formula. It includes a check row that should read zero.</p></div>
+          <div><h3>Setup check</h3><p>The bridge is rerun with each attribute left out, so you can see how far the price number depends on your choices.</p></div>
+          <div><h3>Match coverage and unmatched list</h3><p>The share of sales compared against an exact prior configuration, and every new configuration with the reference price used.</p></div>
+          <div><h3>Written summary</h3><p>A plain-language paragraph of the bridge to paste into commentary. It is built from fixed patterns, so it never changes between runs.</p></div>
+          <div><h3>Excel export with formulas</h3><p>The bridge, coverage, movers and a detail sheet where every effect is a live formula, with a check row that should read zero.</p></div>
           <div><h3>Filters and data checks</h3><p>Include or exclude values before calculating. A check tab counts returns, blank values and rows that were ignored.</p></div>
           <div><h3>Remembered setup</h3><p>Your column mapping and attribute order are saved in the browser and applied to the next file with the same columns.</p></div>
-          <div><h3>Works at real size</h3><p>The one-million-row sample calculates in under a second on a laptop. Larger files depend on your machine’s memory.</p></div>
         </div>
       </div>
     </section>
@@ -218,6 +224,7 @@
               <li>The full bridge, any number of attributes</li>
               <li>Movers, drill-down and unmatched list</li>
               <li>Excel and CSV export</li>
+              <li>List price and discount split, price-change bands</li>
               <li>Filters, data checks, remembered setup</li>
               <li>No account and no row limit</li>
             </ul>
@@ -253,7 +260,7 @@
           <dt>How are returns and credits handled?</dt>
           <dd>Negative rows are netted against sales of the same configuration. The data check tab counts them so you can decide whether to filter them out.</dd>
           <dt>What about Excel files?</dt>
-          <dd>Save the sheet as CSV first. Reading .xlsx directly is not supported yet.</dd>
+          <dd>An .xlsx file works: the first sheet is read, with the header in the first row. For more than a few hundred thousand rows, CSV or Parquet is faster.</dd>
           <dt>Is it a margin bridge?</dt>
           <dd>Not yet. It bridges sales. A margin bridge with a cost effect is planned.</dd>
         </dl>
@@ -264,6 +271,7 @@
       <div class="wrap">
         <span>Bridgekit. MIT license.</span>
         <a href="/app/">Tool</a>
+        <a href="/guide.html">Guide</a>
         <a href="/method.html">Method</a>
         <a href="https://github.com/creedants/bridgekit">GitHub</a>
       </div>

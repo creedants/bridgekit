@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Guide: run your first price-volume-mix bridge | Bridgekit</title>
+    <meta name="description" content="Step by step: what your sales file needs, how to set up attributes, and how to read the bridge, movers, price changes and setup check." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/src/site/site.css" />
+  </head>
+  <body>
+    <div class="nav">
+      <div class="wrap">
+        <a class="wordmark" href="/"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="6" fill="var(--accent)"/><rect x="6" y="17" width="5" height="9" fill="#fff"/><rect x="13.5" y="12" width="5" height="5" fill="#fff" opacity=".75"/><rect x="21" y="6" width="5" height="20" fill="#fff"/></svg>Bridgekit</a>
+        <nav>
+          <a class="optional" href="/#how">How it works</a>
+          <a class="optional" href="/guide.html">Guide</a>
+          <a class="optional" href="/method.html">Method</a>
+          <a class="optional" href="/#pricing">Pricing</a>
+          <a class="button" href="/app/">Open the tool</a>
+        </nav>
+      </div>
+    </div>
+
+    <article>
+      <div class="wrap narrow">
+        <h1>Run your first bridge</h1>
+        <p class="sub">From a sales export to a bridge you can defend, in about five minutes. To follow along without a file, <a href="/app/?sample">open the tool with sample data</a>.</p>
+
+        <h2>1. Check your file</h2>
+        <p>Use one row per sales line, or per group of lines. A summarized export works as well as invoice detail, as long as it has these columns:</p>
+        <div class="boxed">
+          <table>
+            <thead><tr><th>Column</th><th>Needed</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td>Period or date</td><td>Yes</td><td>A label such as <code>2026</code> or <code>YTD Aug 2026</code>, or a date. With a date you can compare by year, year to date, quarter or month.</td></tr>
+              <tr><td>Units</td><td>Yes</td><td>Pieces, jobs, cases or any count that a price can be divided by.</td></tr>
+              <tr><td>Sales</td><td>Yes</td><td>Net sales is the usual choice.</td></tr>
+              <tr><td>Gross sales</td><td>No</td><td>Sales before discounts. Adding it splits price into list price and discounts.</td></tr>
+              <tr><td>Product attributes</td><td>At least one</td><td>Product, or the parts that make up a product: design, material, coating and so on.</td></tr>
+              <tr><td>Customer, region, channel</td><td>No</td><td>Use them as attributes or as filters.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>CSV, Excel (.xlsx, first sheet) and Parquet files are accepted. The file is read in your browser and is not uploaded.</p>
+
+        <h2>2. Load and set up</h2>
+        <ol>
+          <li>Drop the file on the tool, or use <b>Choose file</b>.</li>
+          <li>Under <b>Periods</b>, pick the period column and the two periods to compare.</li>
+          <li>Under <b>Measures</b>, pick units and sales. The tool guesses these from the column names; check them.</li>
+          <li>Under <b>Attributes</b>, add the columns that define the product, most important first. To treat two columns as one attribute, use <b>+ combine</b>.</li>
+          <li>Choose <b>Calculate bridge</b>.</li>
+        </ol>
+        <p>The setup is remembered for the next file that has the same columns.</p>
+
+        <h2>3. Read the bridge</h2>
+        <figure class="shot" style="margin-top: 16px"><img src="/img/app-bridge.png" alt="The bridge tab: a waterfall chart, the bridge table, a match coverage table and a written summary" style="width: 100%; display: block" /></figure>
+        <ul style="margin-top: 16px">
+          <li><b>Volume:</b> the change in units at last period’s overall average price.</li>
+          <li><b>Mix, one line per attribute:</b> the effect of selling a different blend.</li>
+          <li><b>Price, or list price and discounts:</b> measured only on configurations that sold in both periods.</li>
+          <li><b>New and discontinued configurations:</b> see the <a href="/method.html">method page</a> for the two ways to show them.</li>
+          <li><b>Sales with no units:</b> rebates, credits and fees. This line appears only if your file has such rows.</li>
+        </ul>
+        <p>Below the chart, the <b>match table</b> shows how much of current sales was compared against an exact prior configuration. That share is how much evidence the price number rests on.</p>
+
+        <h2>4. Find what is behind a bar</h2>
+        <p>Click any bar to open <b>Movers</b>, sorted by that effect. Click a row to break it down by the next attribute. Each row’s effects add up to that row’s own change in sales, so any subtotal can be checked by hand.</p>
+
+        <h2>5. See how widely price moved</h2>
+        <figure class="shot" style="margin-top: 16px"><img src="/img/app-price.png" alt="The price changes tab: share of matched sales in each band of price change" style="width: 100%; display: block" /></figure>
+        <p style="margin-top: 16px"><b>Price changes</b> groups matched sales by how much their average price moved. Use it to answer “how much of the book actually got the increase?”</p>
+
+        <h2>6. Test your choice of attributes</h2>
+        <figure class="shot" style="margin-top: 16px"><img src="/img/app-setup.png" alt="The setup check tab: the bridge recalculated with each attribute left out" style="width: 100%; display: block" /></figure>
+        <p style="margin-top: 16px"><b>Setup check</b> reruns the bridge with each attribute left out.</p>
+        <ul>
+          <li>If leaving an attribute out moves price a lot, that attribute carries real mix. Keep it.</li>
+          <li>If it barely moves price and raises the match rate, the attribute is adding noise. Consider dropping it.</li>
+        </ul>
+
+        <h2>7. Take it with you</h2>
+        <ul>
+          <li><b>Export Excel</b> writes the bridge, coverage, movers and a detail sheet with live formulas.</li>
+          <li><b>Download PNG</b> saves the chart for a slide.</li>
+          <li><b>Copy</b> on the summary and on each table puts it on the clipboard, ready to paste.</li>
+          <li>Your browser’s print command gives a clean page of whichever tab is open.</li>
+        </ul>
+
+        <h2>Common questions when setting up</h2>
+        <dl>
+          <dt>What order should the attributes go in?</dt>
+          <dd>Put the attribute that most defines the product first. Customer usually goes last, so product mix is read before customer mix.</dd>
+          <dt>The match rate is low. What now?</dt>
+          <dd>Open <b>Unmatched</b> to see which configurations are new, then use <b>Setup check</b> to find the attribute that costs the most matches.</dd>
+          <dt>Should returns be in the file?</dt>
+          <dd>They can be. Rows with units are netted within their configuration. Rows with no units are shown on their own line. The <b>Data check</b> tab counts both.</dd>
+        </dl>
+
+        <p style="margin-top: 32px"><a class="button" href="/app/">Open the tool</a></p>
+      </div>
+    </article>
+
+    <footer>
+      <div class="wrap">
+        <span>Bridgekit. MIT license.</span>
+        <a href="/">Home</a>
+        <a href="/app/">Tool</a>
+        <a href="/guide.html">Guide</a>
+        <a href="https://github.com/creedants/bridgekit">GitHub</a>
+      </div>
+    </footer>
+  </body>
+</html>

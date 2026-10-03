@@ -23,3 +23,5 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); }
+.wordmark { display: inline-flex; align-items: center; gap: 8px; }
+.mark { width: 20px; height: 20px; flex: none; }
