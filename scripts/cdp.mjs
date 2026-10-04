@@ -1,9 +1,17 @@
 import { spawn } from "node:child_process";
 import { rmSync, writeFileSync } from "node:fs";
 export async function open(port = 9340) {
+  // A browser already on this port would be reused with whatever it stored, so refuse instead.
+  const taken = await fetch(`http://127.0.0.1:${port}/json/version`).then(() => true, () => false);
+  if (taken) throw new Error(`Port ${port} is already in use, probably by a browser left from an earlier run. Stop it and try again.`);
   // A fresh profile each run, so nothing a previous run stored affects this one.
   rmSync(`/tmp/bridgekit-smoke-profile-${port}`, { recursive: true, force: true });
-  const chrome = spawn("chromium", ["--headless=new", "--disable-gpu", "--hide-scrollbars", `--remote-debugging-port=${port}`, "--window-size=1360,900", `--user-data-dir=/tmp/bridgekit-smoke-profile-${port}`, "about:blank"], { stdio: "ignore" });
+  // Its own process group, so close() stops the browser and not just the launcher.
+  const chrome = spawn("chromium", ["--headless=new", "--disable-gpu", "--hide-scrollbars", `--remote-debugging-port=${port}`, "--window-size=1360,900", `--user-data-dir=/tmp/bridgekit-smoke-profile-${port}`, "about:blank"], { stdio: "ignore", detached: true });
+  // Stop it even when a script throws before calling close().
+  const stop = () => { try { process.kill(-chrome.pid, "SIGTERM"); } catch {} };
+  process.on("exit", stop);
+  for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { stop(); process.exit(1); });
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let target;
   for (let i = 0; i < 40 && !target; i++) { await sleep(250); try { target = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t) => t.type === "page"); } catch {} }
@@ -22,6 +30,6 @@ export async function open(port = 9340) {
     size: (width, height) => send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: width < 600 }),
     goto: async (url) => { await send("Page.navigate", { url }); await sleep(600); await waitFor("document.readyState === 'complete'"); await evalJs(helpers); },
     shot: async (name, full = false) => writeFileSync(name, Buffer.from((await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: full })).data, "base64")),
-    close: () => { ws.close(); chrome.kill(); },
+    close: () => { ws.close(); try { process.kill(-chrome.pid, "SIGTERM"); } catch {} },
   };
 }
