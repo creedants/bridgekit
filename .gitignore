@@ -4,3 +4,5 @@ dist
 *.csv
 *.parquet
 !public/*.csv
+.env*
+!.env.example

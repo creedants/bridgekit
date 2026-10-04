@@ -78,6 +78,21 @@ The tool sends nothing and keeps none of the data:
   the database worker.
 - `npm run smoke` asserts all of the above against a running server.
 
+## Optional AI commentary
+
+Off unless the site is built with `VITE_AI_COMMENTARY=1`. It then shows a
+button under the summary that sends the bridge totals (`src/summary.ts`:
+totals and names, never rows or values from text columns) to `/api/commentary`
+on the same site. `server/commentary.ts` checks that the request is exactly a
+summary, adds the Anthropic API key and asks Claude for a commentary. The
+handler uses web-standard `Request` and `Response`, so any host with functions
+can mount it. To try it locally, copy `.env.example` to `.env.local`, add a key
+and run `npm run dev`.
+
+Wording that only applies when a feature is on sits between
+`<!-- feature:ai -->` and `<!-- /feature:ai -->` in the pages and is removed
+from builds without it.
+
 ## Run it
 
 ```sh
@@ -105,6 +120,8 @@ and 41 MB, which is over the limit on some hosts.
 - `index.html`, `guide.html`, `method.html`, `price-volume-mix-analysis.html`,
   `src/site/`: the site pages.
 - `src/commentary.ts`: the written summary.
+- `src/summary.ts`: the bridge reduced to totals, the only thing an opt-in feature may send.
+- `server/`: server code for opt-in features, not part of the static site.
 - `src/tokens.css`: colors and type shared by the site and the tool.
 - `src/synth.ts`: the sample data generator.
 

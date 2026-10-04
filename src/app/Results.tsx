@@ -24,6 +24,7 @@ import {
   type Query,
 } from "../engine.ts";
 import { commentary } from "../commentary.ts";
+import { summarize, type BridgeSummary } from "../summary.ts";
 import { download, toCsv, toTsv } from "./files.ts";
 import { percent, price, signedPercent, signedWhole, whole } from "./format.ts";
 import { buildReport } from "./report.ts";
@@ -207,6 +208,79 @@ function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<
       </div>
       {paragraphs.map((p) => <p key={p}>{p}</p>)}
       <p className="hint">Written from fixed sentence patterns, so the same bridge always gives the same text.</p>
+      {import.meta.env.VITE_AI_COMMENTARY === "1" && (
+        <AiCommentary key={JSON.stringify(summarize(props.result, props.run.config))} summary={summarize(props.result, props.run.config)} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Opt-in: nothing is sent until the user presses the button, and what is sent
+ * is the summary shown in the panel, which holds totals and names only.
+ */
+function AiCommentary(props: { summary: BridgeSummary }) {
+  const [state, setState] = useState<
+    { status: "idle" } | { status: "busy" } | { status: "done"; paragraphs: string[] } | { status: "error"; message: string }
+  >({ status: "idle" });
+  const [copied, setCopied] = useState(false);
+  const write = async () => {
+    setState({ status: "busy" });
+    try {
+      const response = await fetch("/api/commentary", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ summary: props.summary }),
+      });
+      const body = (await response.json().catch(() => ({}))) as { paragraphs?: string[]; error?: string };
+      if (!response.ok || !body.paragraphs) throw new Error(body.error ?? `The server returned ${response.status}.`);
+      setState({ status: "done", paragraphs: body.paragraphs });
+    } catch (e) {
+      setState({ status: "error", message: e instanceof Error ? e.message : String(e) });
+    }
+  };
+  return (
+    <div className="ai">
+      <div className="toolbar">
+        <h3>AI commentary (optional)</h3>
+        {state.status === "done" && (
+          <span className="actions">
+            <button
+              onClick={async () => {
+                await navigator.clipboard.writeText(state.paragraphs.join("\n\n"));
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              }}
+            >
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </span>
+        )}
+      </div>
+      {state.status === "done" ? (
+        <>
+          {state.paragraphs.map((p) => <p key={p}>{p}</p>)}
+          <p className="hint">Written by an AI model (Anthropic’s Claude). Check each figure against the bridge before you use it.</p>
+        </>
+      ) : (
+        <>
+          <p className="hint">
+            A longer commentary written by Anthropic’s Claude. Pressing the button sends the bridge totals below to
+            Bridgekit’s server, which passes them to Anthropic. No rows are sent, and no values from your data such as
+            customer or product names. Nothing is sent until you press it.
+          </p>
+          <details>
+            <summary>Show exactly what is sent</summary>
+            <pre>{JSON.stringify(props.summary, null, 2)}</pre>
+          </details>
+          <p className="row">
+            <button onClick={write} disabled={state.status === "busy"}>
+              {state.status === "busy" ? "Writing…" : "Send totals and write commentary"}
+            </button>
+          </p>
+          {state.status === "error" && <p className="error">{state.message}</p>}
+        </>
+      )}
     </div>
   );
 }

@@ -122,6 +122,11 @@ tr.clickable:hover td { background: var(--accent-soft); }
 .summary { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 4px; max-width: 760px; }
 .summary h3 { margin: 8px 0; }
 .summary p { font-size: 13px; }
+.ai { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 4px; }
+.ai details { margin: 6px 0; font-size: 12px; }
+.ai summary { cursor: pointer; color: var(--accent); }
+.ai pre { max-height: 240px; overflow: auto; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); font-size: 11px; }
+.ai .error { margin: 6px 0 0; }
 .distribution { max-width: 1000px; }
 .bar-cell { width: 34%; }
 .bar { display: block; height: 12px; border-radius: 2px; min-width: 1px; }
