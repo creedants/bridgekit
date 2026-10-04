@@ -34,11 +34,10 @@ function openFresh(): Promise<BrowserDatabase> {
 }
 
 const IDLE_CAP_MS = 2000;
-const READY_WAIT_MS = 10_000;
 
 /**
- * Opens the shared database after the load event, once the empty tool is on
- * screen, on an idle callback. Save-Data leaves it closed until a file is chosen.
+ * Opens the shared database after the load event, on an idle callback.
+ * Save-Data leaves it closed until a file is chosen.
  * A failure is ignored. The next openBrowserDatabase call tries again.
  */
 export function warmBrowserDatabase(): void {
@@ -53,52 +52,28 @@ export function warmBrowserDatabase(): void {
     }
     window.setTimeout(kick, IDLE_CAP_MS);
   };
-  const whenReady = () => {
-    const deadline = performance.now() + READY_WAIT_MS;
-    const tick = () => {
-      if (!emptyToolIsReady()) {
-        if (performance.now() < deadline) window.setTimeout(tick, 16);
-        return;
-      }
-      whenIdle();
-    };
-    tick();
-  };
-  if (document.readyState === "complete") whenReady();
-  else window.addEventListener("load", whenReady, { once: true });
+  if (document.readyState === "complete") whenIdle();
+  else window.addEventListener("load", whenIdle, { once: true });
 }
 
-function emptyToolIsReady(): boolean {
-  const input = document.querySelector('input[type="file"][accept*="csv"]');
-  const heading = document.querySelector("h1");
-  return (
-    input instanceof HTMLInputElement &&
-    !input.disabled &&
-    heading !== null &&
-    heading.textContent.trim() === "Load a sales file"
-  );
-}
-
+// The DOM lib in this toolchain does not declare Network Information.
+// Read the live property and accept only a boolean true.
 function networkSaveData(): boolean {
-  const value = readNavigator("connection");
-  if (typeof value !== "object" || value === null || !("saveData" in value)) return false;
-  return value.saveData === true;
-}
-
-function readNavigator(key: string): unknown {
-  const own = Object.getOwnPropertyDescriptor(navigator, key);
-  const inherited = Object.getOwnPropertyDescriptor(Navigator.prototype, key);
-  const descriptor = own ?? inherited;
-  if (!descriptor) return undefined;
-  if (descriptor.get) return descriptor.get.call(navigator);
-  return descriptor.value;
+  const host: unknown = navigator;
+  if (typeof host !== "object" || host === null || !("connection" in host)) return false;
+  const connection = host.connection;
+  if (typeof connection !== "object" || connection === null || !("saveData" in connection)) return false;
+  return connection.saveData === true;
 }
 
 // The wasm and worker files are bundled with the app so nothing is fetched
 // from a third-party host.
-// DuckDB's wasm fetch can reject inside the worker without answering the page,
-// which leaves the open promise pending. This posts the error DuckDB already
-// maps to a rejected instantiate, so the next open can start again.
+// A wasm fetch can reject inside the worker and never answer the page, so the
+// bootstrap posts the ERROR that instantiate already rejects on. It records
+// only the INSTANTIATE id and removes itself once that request is answered.
+// A worker script that fails to load throws on the worker. DuckDB's error
+// handler drops the pending request without rejecting it, so the page also
+// races instantiate against the worker error event.
 // The blob has no page URL, so the worker script and wasm address are absolute.
 function pageUrl(url: string): string {
   return new URL(url, location.href).href;
@@ -106,27 +81,59 @@ function pageUrl(url: string): string {
 
 function databaseWorker(scriptUrl: string): { worker: Worker; release: () => void } {
   const absolute = pageUrl(scriptUrl);
-  const source = `self.addEventListener("message", (event) => {
-  const id = event.data && event.data.messageId;
-  if (typeof id === "number") self.__duckdbRequestId = id;
-});
-self.addEventListener("unhandledrejection", (event) => {
+  const source = `const duckdbPost = self.postMessage.bind(self);
+let instantiateId;
+let startup = true;
+function stopStartup() {
+  if (!startup) return;
+  startup = false;
+  self.postMessage = duckdbPost;
+  self.removeEventListener("message", onPageMessage);
+  self.removeEventListener("unhandledrejection", onUnhandledRejection);
+}
+function onPageMessage(event) {
+  const data = event.data;
+  if (!startup || !data || data.type !== "INSTANTIATE" || typeof data.messageId !== "number") return;
+  instantiateId = data.messageId;
+}
+function onUnhandledRejection(event) {
+  if (!startup) return;
   event.preventDefault();
   const reason = event.reason;
   const message = reason instanceof Error ? reason.message : String(reason);
   const name = reason instanceof Error ? reason.name : "Error";
   const stack = reason instanceof Error ? reason.stack : undefined;
-  self.postMessage({
+  duckdbPost({
     messageId: 0,
-    requestId: self.__duckdbRequestId,
+    requestId: instantiateId,
     type: "ERROR",
     data: { name, message, stack },
   });
-});
+  stopStartup();
+}
+self.addEventListener("message", onPageMessage);
+self.addEventListener("unhandledrejection", onUnhandledRejection);
+self.postMessage = function (message, transfer) {
+  if (
+    startup &&
+    message &&
+    typeof instantiateId === "number" &&
+    message.requestId === instantiateId &&
+    (message.type === "OK" || message.type === "ERROR")
+  ) {
+    stopStartup();
+  }
+  return duckdbPost(message, transfer);
+};
 importScripts(${JSON.stringify(absolute)});
 `;
   const objectUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-  return { worker: new Worker(objectUrl), release: () => URL.revokeObjectURL(objectUrl) };
+  try {
+    return { worker: new Worker(objectUrl), release: () => URL.revokeObjectURL(objectUrl) };
+  } catch (error) {
+    URL.revokeObjectURL(objectUrl);
+    throw error;
+  }
 }
 
 async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
@@ -139,7 +146,16 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
   try {
     const db = new duckdb.AsyncDuckDB(new duckdb.VoidLogger(), script.worker);
     const pthread = bundle.pthreadWorker == null ? null : pageUrl(bundle.pthreadWorker);
-    await db.instantiate(pageUrl(bundle.mainModule), pthread);
+    const startFailed = new Promise<never>((_, reject) => {
+      script.worker.addEventListener(
+        "error",
+        (event) => reject(new Error(event.message || "The database worker did not start")),
+        { once: true },
+      );
+    });
+    // If instantiate settles first, a later worker error must not reject unhandled.
+    startFailed.catch(() => {});
+    await Promise.race([db.instantiate(pageUrl(bundle.mainModule), pthread), startFailed]);
     const connection = await db.connect();
     const query: Query = async (sql) => {
       const result = await connection.query(sql);
