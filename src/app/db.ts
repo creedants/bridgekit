@@ -12,42 +12,164 @@ export interface BrowserDatabase {
   loadFile(file: File, table: string): Promise<void>;
 }
 
+// One open per page. A rejection clears it so the next call can try again.
+// A stale attempt must not clear a newer one.
+let opening: Promise<BrowserDatabase> | undefined;
+
+/** Returns the page's database, starting it on the first call. */
+export function openBrowserDatabase(): Promise<BrowserDatabase> {
+  opening ??= openFresh();
+  return opening;
+}
+
+function openFresh(): Promise<BrowserDatabase> {
+  const attempt = instantiateBrowserDatabase().then(
+    (database) => database,
+    (error: unknown) => {
+      if (opening === attempt) opening = undefined;
+      throw error;
+    },
+  );
+  return attempt;
+}
+
+const IDLE_CAP_MS = 2000;
+const READY_WAIT_MS = 10_000;
+
+/**
+ * Opens the shared database after the load event, once the empty tool is on
+ * screen, on an idle callback. Save-Data leaves it closed until a file is chosen.
+ * A failure is ignored. The next openBrowserDatabase call tries again.
+ */
+export function warmBrowserDatabase(): void {
+  if (networkSaveData()) return;
+  const kick = () => {
+    void openBrowserDatabase().catch(() => {});
+  };
+  const whenIdle = () => {
+    if (typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(kick, { timeout: IDLE_CAP_MS });
+      return;
+    }
+    window.setTimeout(kick, IDLE_CAP_MS);
+  };
+  const whenReady = () => {
+    const deadline = performance.now() + READY_WAIT_MS;
+    const tick = () => {
+      if (!emptyToolIsReady()) {
+        if (performance.now() < deadline) window.setTimeout(tick, 16);
+        return;
+      }
+      whenIdle();
+    };
+    tick();
+  };
+  if (document.readyState === "complete") whenReady();
+  else window.addEventListener("load", whenReady, { once: true });
+}
+
+function emptyToolIsReady(): boolean {
+  const input = document.querySelector('input[type="file"][accept*="csv"]');
+  const heading = document.querySelector("h1");
+  return (
+    input instanceof HTMLInputElement &&
+    !input.disabled &&
+    heading !== null &&
+    heading.textContent.trim() === "Load a sales file"
+  );
+}
+
+function networkSaveData(): boolean {
+  const value = readNavigator("connection");
+  if (typeof value !== "object" || value === null || !("saveData" in value)) return false;
+  return value.saveData === true;
+}
+
+function readNavigator(key: string): unknown {
+  const own = Object.getOwnPropertyDescriptor(navigator, key);
+  const inherited = Object.getOwnPropertyDescriptor(Navigator.prototype, key);
+  const descriptor = own ?? inherited;
+  if (!descriptor) return undefined;
+  if (descriptor.get) return descriptor.get.call(navigator);
+  return descriptor.value;
+}
+
 // The wasm and worker files are bundled with the app so nothing is fetched
 // from a third-party host.
-export async function openBrowserDatabase(): Promise<BrowserDatabase> {
+// DuckDB's wasm fetch can reject inside the worker without answering the page,
+// which leaves the open promise pending. This posts the error DuckDB already
+// maps to a rejected instantiate, so the next open can start again.
+// The blob has no page URL, so the worker script and wasm address are absolute.
+function pageUrl(url: string): string {
+  return new URL(url, location.href).href;
+}
+
+function databaseWorker(scriptUrl: string): { worker: Worker; release: () => void } {
+  const absolute = pageUrl(scriptUrl);
+  const source = `self.addEventListener("message", (event) => {
+  const id = event.data && event.data.messageId;
+  if (typeof id === "number") self.__duckdbRequestId = id;
+});
+self.addEventListener("unhandledrejection", (event) => {
+  event.preventDefault();
+  const reason = event.reason;
+  const message = reason instanceof Error ? reason.message : String(reason);
+  const name = reason instanceof Error ? reason.name : "Error";
+  const stack = reason instanceof Error ? reason.stack : undefined;
+  self.postMessage({
+    messageId: 0,
+    requestId: self.__duckdbRequestId,
+    type: "ERROR",
+    data: { name, message, stack },
+  });
+});
+importScripts(${JSON.stringify(absolute)});
+`;
+  const objectUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+  return { worker: new Worker(objectUrl), release: () => URL.revokeObjectURL(objectUrl) };
+}
+
+async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
   const bundle = await duckdb.selectBundle({
     mvp: { mainModule: mvpWasm, mainWorker: mvpWorker },
     eh: { mainModule: ehWasm, mainWorker: ehWorker },
   });
-  const worker = new Worker(bundle.mainWorker!);
-  const db = new duckdb.AsyncDuckDB(new duckdb.VoidLogger(), worker);
-  await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-  const connection = await db.connect();
-
-  const query: Query = async (sql) => {
-    const result = await connection.query(sql);
-    return result.toArray().map((row) => row.toJSON() as Record<string, unknown>);
-  };
-
-  return {
-    query,
-    async loadFile(file, table) {
-      const isParquet = /\.parquet$/i.test(file.name);
-      const isExcel = /\.xlsx$/i.test(file.name);
-      if (!isParquet && !isExcel && !/\.(csv|tsv|txt)$/i.test(file.name)) {
-        throw new Error("Use a CSV, Excel (.xlsx) or Parquet file");
-      }
-      const registered = isParquet ? "upload.parquet" : "upload.csv";
-      if (isExcel) {
-        await db.registerFileText(registered, await firstSheetAsCsv(file));
-      } else {
-        await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
-      }
-      const reader = isParquet ? `read_parquet('${registered}')` : `read_csv('${registered}')`;
-      await query(`CREATE OR REPLACE TABLE "${table}" AS SELECT * FROM ${reader}`);
-      await convertFormattedNumbers(query, table);
-    },
-  };
+  if (bundle.mainWorker == null) throw new Error("DuckDB bundle is missing its worker");
+  const script = databaseWorker(bundle.mainWorker);
+  try {
+    const db = new duckdb.AsyncDuckDB(new duckdb.VoidLogger(), script.worker);
+    const pthread = bundle.pthreadWorker == null ? null : pageUrl(bundle.pthreadWorker);
+    await db.instantiate(pageUrl(bundle.mainModule), pthread);
+    const connection = await db.connect();
+    const query: Query = async (sql) => {
+      const result = await connection.query(sql);
+      return result.toArray().map((row) => row.toJSON() as Record<string, unknown>);
+    };
+    return {
+      query,
+      async loadFile(file, table) {
+        const isParquet = /\.parquet$/i.test(file.name);
+        const isExcel = /\.xlsx$/i.test(file.name);
+        if (!isParquet && !isExcel && !/\.(csv|tsv|txt)$/i.test(file.name)) {
+          throw new Error("Use a CSV, Excel (.xlsx) or Parquet file");
+        }
+        const registered = isParquet ? "upload.parquet" : "upload.csv";
+        if (isExcel) {
+          await db.registerFileText(registered, await firstSheetAsCsv(file));
+        } else {
+          await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+        }
+        const reader = isParquet ? `read_parquet('${registered}')` : `read_csv('${registered}')`;
+        await query(`CREATE OR REPLACE TABLE "${table}" AS SELECT * FROM ${reader}`);
+        await convertFormattedNumbers(query, table);
+      },
+    };
+  } catch (error) {
+    script.worker.terminate();
+    throw error;
+  } finally {
+    script.release();
+  }
 }
 
 /** Reads the first worksheet of an .xlsx file, taking formula results and formatting dates as ISO. */

@@ -1,6 +1,7 @@
 import { Component, StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
+import { warmBrowserDatabase } from "./db.ts";
 import "./styles.css";
 
 /** Shows a readable message instead of a blank page if rendering fails. */
@@ -28,3 +29,5 @@ createRoot(document.getElementById("root")!).render(
     </ErrorBoundary>
   </StrictMode>,
 );
+
+warmBrowserDatabase();
