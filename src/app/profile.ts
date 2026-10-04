@@ -5,6 +5,46 @@ const SAMPLE_ROWS = 200_000;
 const MAX_CANDIDATES = 14;
 const MAX_DISTINCT = 5_000;
 
+/**
+ * Same numbers as count(DISTINCT col) and as count(DISTINCT (a, b)) filtered
+ * to rows where both are non-null. Grouping the sample once is cheaper than
+ * a distinct aggregate for every pair.
+ */
+function sampleCountSql(candidates: string[], pairs: [string, string][]): string {
+  const sets = [
+    ...candidates.map((column) => `(${quote(column)})`),
+    ...pairs.map(([a, b]) => `(${quote(a)}, ${quote(b)})`),
+  ];
+  const grouped = (want: ReadonlySet<string>) =>
+    candidates.map((column) => `grouping(${quote(column)}) = ${want.has(column) ? 0 : 1}`).join(" AND ");
+  const arms = [
+    ...candidates.map((column, i) => ({
+      key: `d${i}`,
+      when: grouped(new Set([column])),
+      keep: `${quote(column)} IS NOT NULL`,
+    })),
+    ...pairs.map(([a, b], i) => ({
+      key: `p${i}`,
+      when: grouped(new Set([a, b])),
+      keep: `${quote(a)} IS NOT NULL AND ${quote(b)} IS NOT NULL`,
+    })),
+  ];
+  const listed = candidates.map(quote).join(", ");
+  const choice = arms.map((arm) => `WHEN ${arm.when} THEN '${arm.key}'`).join(" ");
+  const keep = arms.map((arm) => `WHEN ${arm.when} THEN ${arm.keep}`).join(" ");
+  return `WITH s AS MATERIALIZED (
+      SELECT ${listed} FROM ${quote(TABLE)} USING SAMPLE ${SAMPLE_ROWS} ROWS
+    )
+    SELECT key, count(*)::DOUBLE AS n
+    FROM (
+      SELECT CASE ${choice} END AS key
+      FROM s
+      GROUP BY GROUPING SETS (${sets.join(", ")})
+      HAVING CASE ${keep} ELSE FALSE END
+    )
+    GROUP BY key`;
+}
+
 /** Exact distinct count per column, used to label the attribute pickers. */
 export async function distinctCounts(query: Query, columns: Column[]): Promise<Map<string, number>> {
   const [row] = await query(
@@ -36,16 +76,13 @@ export async function findRollups(
 
   const pairs: [string, string][] = [];
   for (const a of candidates) for (const b of candidates) if (a < b) pairs.push([a, b]);
-  const [row] = await query(
-    `SELECT ${candidates.map((c, i) => `count(DISTINCT ${quote(c)})::DOUBLE AS d${i}`).join(", ")},
-       ${pairs.map(([a, b], i) => `count(DISTINCT (${quote(a)}, ${quote(b)})) FILTER (WHERE ${quote(a)} IS NOT NULL AND ${quote(b)} IS NOT NULL)::DOUBLE AS p${i}`).join(", ")}
-     FROM (SELECT * FROM ${quote(TABLE)} USING SAMPLE ${SAMPLE_ROWS} ROWS)`,
-  );
-  const count = new Map(candidates.map((c, i) => [c, Number(row[`d${i}`])]));
+  const rows = await query(sampleCountSql(candidates, pairs));
+  const byKey = new Map(rows.map((row) => [String(row.key), Number(row.n)]));
+  const count = new Map(candidates.map((c, i) => [c, byKey.get(`d${i}`) ?? 0]));
   // finer -> the broader columns it sits under
   const parents = new Map<string, Set<string>>(candidates.map((c) => [c, new Set()]));
   pairs.forEach(([a, b], i) => {
-    const together = Number(row[`p${i}`]);
+    const together = byKey.get(`p${i}`) ?? 0;
     const [finer, broader] = count.get(a)! > count.get(b)! ? [a, b] : [b, a];
     if (count.get(finer)! > count.get(broader)! && together === count.get(finer)) parents.get(finer)!.add(broader);
   });
