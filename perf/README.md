@@ -23,12 +23,12 @@ Page load, from a fresh Chromium profile, served from `dist/` with `Cache-Contro
 
 - `browser.coldLoad.dclMs` is `domContentLoadedEventEnd` on the navigation entry.
 - `browser.coldLoad.loadMs` is `loadEventEnd`.
-- `browser.coldLoad.interactiveMs` is the time until the page shows the heading "Load a sales file" and an enabled file input that accepts csv. DuckDB starts when a file is chosen, so this mark does not include it. Cold load samples come from every measured file size, so with two sizes and five runs the count is 10.
+- `browser.coldLoad.interactiveMs` is the time until the page shows the heading "Load a sales file" and an enabled file input that accepts csv. The page opens DuckDB after the load event, on an idle callback, unless Save-Data is on. This mark does not wait for that open. Cold load samples come from every measured file size, so with two sizes and five runs the count is 10.
 
 File to a finished bridge:
 
 - `browser.files[].totalMs` is the wall time from just before the file input is set until the bridge table and the KPI row are on screen.
-- `parseMs` ends when the setup panel is visible and the status text is empty. It includes DuckDB startup and the CSV read.
+- `parseMs` ends when the setup panel is visible and the status text is empty. It includes the CSV read and any DuckDB startup still unfinished. The harness sets the file as soon as it sees the interactive mark. The idle open has not finished, so this time includes the wasm download.
 - `configureMs` is the script setting year, jobs, sales, and the four attributes, then waiting until Calculate bridge is enabled.
 - `calculateMs` runs from that click until the bridge table is on screen.
 
@@ -47,9 +47,9 @@ Bytes:
 
 - `build.totals` sums every file under `dist/`. `gzipBytes` is zlib gzip at the default level. `brotliBytes` is brotli quality 5.
 - `build.toolPage` sums the files the local server saw by the time the harness observed the interactive mark, including the HTML document. The page sets the mark. The harness polls until it reads that mark, so a request in the gap, such as the favicon, is included.
-- `build.duckdbOnFirstFile` sums the DuckDB wasm and worker files requested while the first file was loading.
+- `build.duckdbOnFirstFile` sums the DuckDB wasm and worker files requested while the first file was loading. The idle open can request the worker before the harness sees the interactive mark. That worker is then counted in `toolPage`, and the wasm file stays here.
 
-The local server sends bytes with no content encoding. `npm run build:cloudflare` is a different bundle. It turns on page counts, workspaces, and AI commentary, and it replaces each wasm file with a gzip copy. This script does not run that build.
+The local server sends bytes with no content encoding. `npm run build:cloudflare` is a different bundle. It turns on page counts, workspaces, and AI commentary, then stores a Brotli copy and a gzip copy of each wasm file and deletes the original. This script does not run that build.
 
 ## Compare two runs
 
