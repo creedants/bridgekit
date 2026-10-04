@@ -11,23 +11,35 @@
     "test": "node --test test/*.test.ts",
     "demo": "node scripts/demo.ts",
     "typecheck": "tsc --noEmit",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "build:cloudflare": "VITE_PAGE_COUNTS=1 VITE_WORKSPACES=1 vite build && node scripts/compress-wasm.mjs",
+    "cf:dev": "wrangler d1 migrations apply bridgekit --local && wrangler dev",
+    "cf:deploy": "wrangler d1 migrations apply bridgekit --remote && wrangler deploy",
+    "stats": "wrangler d1 execute bridgekit --remote --command \"SELECT day, path, referrer, views FROM page_views ORDER BY day DESC, views DESC LIMIT 100\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",
     "@duckdb/duckdb-wasm": "^1.33.1-dev57.0",
     "@duckdb/node-api": "^1.5.6-r.1",
+    "better-auth": "^1.7.7",
     "echarts": "^6.1.0",
     "exceljs": "^4.4.0",
+    "hono": "^4.13.12",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261003.1",
     "@types/node": "^26.6.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
     "typescript": "^7.0.2",
-    "vite": "^8.3.2"
+    "vite": "^8.3.2",
+    "wrangler": "^4.147.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20261001.1": true
   }
 }

@@ -1,0 +1,36 @@
+// Cloudflare deployment: the static site in dist/ plus the Worker in server/
+// for opt-in features. Build with `npm run build:cloudflare` first.
+// `npm run cf:dev` runs all of it on this machine with a local database.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bridgekit",
+  "main": "server/worker.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    // Pages go through the Worker so page loads can be counted; the engine
+    // files go through it because they are stored compressed (see server/assets.ts).
+    "run_worker_first": ["/api/*", "/", "/*.html", "/app/*", "/assets/*.wasm"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "bridgekit",
+      // Replaced with the real id after `wrangler d1 create bridgekit`.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "dev": { "port": 8790, "ip": "127.0.0.1" },
+  "vars": {
+    // Replaced with the real address in production.
+    "BETTER_AUTH_URL": "http://localhost:8790"
+  }
+  // Secrets, set with `wrangler secret put NAME` (or .dev.vars locally):
+  // BETTER_AUTH_SECRET, ANTHROPIC_API_KEY, RESEND_API_KEY, EMAIL_FROM,
+  // MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, GOOGLE_CLIENT_ID,
+  // GOOGLE_CLIENT_SECRET, PADDLE_API_KEY, PADDLE_WEBHOOK_SECRET, PADDLE_PRICE_ID
+}

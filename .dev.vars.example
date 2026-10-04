@@ -1,0 +1,14 @@
+# Copy to .dev.vars (not committed) for `npm run cf:dev`. Without RESEND_API_KEY,
+# sign-in links are printed in the terminal instead of emailed.
+BETTER_AUTH_SECRET=change-me-to-a-long-random-string-at-least-32-chars
+ANTHROPIC_API_KEY=
+RESEND_API_KEY=
+EMAIL_FROM=
+MICROSOFT_CLIENT_ID=
+MICROSOFT_CLIENT_SECRET=
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+PADDLE_ENVIRONMENT=sandbox
+PADDLE_API_KEY=
+PADDLE_WEBHOOK_SECRET=
+PADDLE_PRICE_ID=

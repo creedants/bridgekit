@@ -97,8 +97,9 @@ export function viewSql(setup: Setup): string {
 // preference, so the choice survives a reload.
 const PREFIX = "bridgekit:";
 const REMEMBER_KEY = PREFIX + "remember";
-const storageKey = (columns: Column[]) =>
-  PREFIX + "setup:" + columns.map((c) => c.name).sort().join("|");
+/** Identifies a file layout by its column names, so a setup is offered again for files with the same columns. */
+export const columnsKey = (names: string[]) => names.toSorted().join("|");
+const storageKey = (columns: Column[]) => PREFIX + "setup:" + columnsKey(columns.map((c) => c.name));
 
 export function isRemembering(): boolean {
   try {
