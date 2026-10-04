@@ -1,0 +1,2203 @@
+{
+  "ok": true,
+  "capturedAt": "2026-10-04T14:42:46.148Z",
+  "definitions": {
+    "interactiveMs": "Time until the tool page shows the heading Load a sales file and an enabled file input that accepts csv. DuckDB starts later, when a file is chosen.",
+    "fileToBridgeMs": "Wall time from just before the file input is set until the bridge table and the KPI row are on screen. Includes DuckDB startup, the CSV read, attribute setup, and the calculation.",
+    "parseMs": "From the file mark until the setup panel is on screen and the status text is empty. Includes DuckDB startup and the CSV read.",
+    "configureMs": "From parse until Calculate bridge is enabled. The script sets year, jobs, sales, and the four attributes used by the Node bridge.",
+    "calculateMs": "From the Calculate bridge click until the bridge table is on screen.",
+    "generateMs": "createSyntheticSales on one DuckDB connection, after one discarded warm-up. This is the in-app sample-data path, not a user CSV.",
+    "bridgeMs": "runBridge for Design, Coating, Color (photochromic and polar), and Material. Sales, not margin. No gross column.",
+    "dataCheckMs": "dataCheck after runBridge. The tool awaits this scan before it draws the bridge. It is not included in bridgeMs.",
+    "identity": "Money rounded to 2 decimals and coverage shares rounded to 5 decimals. Raw float sums are not bit-stable.",
+    "gzipBytes": "zlib gzip at the default level.",
+    "brotliBytes": "zlib brotli quality 5.",
+    "toolPage": "Dist files the cold tool page requested before the interactive mark.",
+    "duckdbOnFirstFile": "DuckDB wasm and worker files requested after the interactive mark, during the first file.",
+    "cloudflareBuild": "npm run build:cloudflare is a different bundle. It sets VITE_PAGE_COUNTS, VITE_WORKSPACES, and VITE_AI_COMMENTARY, then replaces each wasm file with a gzip copy. This script does not run it."
+  },
+  "git": {
+    "sha": "8dd1c6587980f7a360ad4b40583ecae4c3f02903",
+    "branch": "perf/baseline",
+    "porcelain": "M package.json\n?? perf/\n?? scripts/perf/"
+  },
+  "machine": {
+    "cpuModel": "AMD Ryzen 7 7735HS with Radeon Graphics",
+    "cores": 16,
+    "arch": "x64",
+    "platform": "linux",
+    "osRelease": "7.2.5-3-omarchy",
+    "node": "v26.7.0",
+    "loadAvg": [
+      2.81,
+      3.6,
+      3.54
+    ],
+    "topProcesses": [
+      "%CPU %MEM COMMAND",
+      " 127  0.4 node-MainThread",
+      "99.0  0.6 python3",
+      "42.8  0.2 npm run perf",
+      " 9.3  0.0 python3",
+      " 8.3  0.5 Hyprland"
+    ],
+    "chromium": "Chrome/152.0.7977.82",
+    "loadAvgAtEnd": [
+      3.91,
+      3.78,
+      3.61
+    ]
+  },
+  "sampleCount": 5,
+  "warmupDiscarded": 1,
+  "build": {
+    "command": "npm run build",
+    "assets": [
+      {
+        "path": "assets/duckdb-mvp-DQDXaYzB.wasm",
+        "kind": "wasm",
+        "bytes": 41325187,
+        "gzipBytes": 9265593,
+        "brotliBytes": 7401388
+      },
+      {
+        "path": "assets/duckdb-eh-CfdE9-rk.wasm",
+        "kind": "wasm",
+        "bytes": 35913747,
+        "gzipBytes": 8128896,
+        "brotliBytes": 6506817
+      },
+      {
+        "path": "assets/app-CdSUE4Ly.js",
+        "kind": "js",
+        "bytes": 993408,
+        "gzipBytes": 303155,
+        "brotliBytes": 286578
+      },
+      {
+        "path": "assets/exceljs.min-CCXGk9SI.js",
+        "kind": "js",
+        "bytes": 929556,
+        "gzipBytes": 255556,
+        "brotliBytes": 226536
+      },
+      {
+        "path": "assets/duckdb-browser-mvp.worker-BEKIasyR.js",
+        "kind": "js",
+        "bytes": 839642,
+        "gzipBytes": 194573,
+        "brotliBytes": 180900
+      },
+      {
+        "path": "assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+        "kind": "js",
+        "bytes": 773223,
+        "gzipBytes": 189256,
+        "brotliBytes": 175699
+      },
+      {
+        "path": "sample-sales.csv",
+        "kind": "other",
+        "bytes": 334784,
+        "gzipBytes": 84947,
+        "brotliBytes": 85126
+      },
+      {
+        "path": "img/g-gaps.png",
+        "kind": "other",
+        "bytes": 203041,
+        "gzipBytes": 193363,
+        "brotliBytes": 196849
+      },
+      {
+        "path": "img/g-bridge.png",
+        "kind": "other",
+        "bytes": 196444,
+        "gzipBytes": 191118,
+        "brotliBytes": 193055
+      },
+      {
+        "path": "img/g-price.png",
+        "kind": "other",
+        "bytes": 167636,
+        "gzipBytes": 161785,
+        "brotliBytes": 163711
+      },
+      {
+        "path": "img/g-movers.png",
+        "kind": "other",
+        "bytes": 159013,
+        "gzipBytes": 152351,
+        "brotliBytes": 154325
+      },
+      {
+        "path": "img/g-setup.png",
+        "kind": "other",
+        "bytes": 118743,
+        "gzipBytes": 113526,
+        "brotliBytes": 114693
+      },
+      {
+        "path": "index.html",
+        "kind": "html",
+        "bytes": 21409,
+        "gzipBytes": 6478,
+        "brotliBytes": 6105
+      },
+      {
+        "path": "method.html",
+        "kind": "html",
+        "bytes": 11452,
+        "gzipBytes": 3648,
+        "brotliBytes": 3426
+      },
+      {
+        "path": "guide.html",
+        "kind": "html",
+        "bytes": 10279,
+        "gzipBytes": 3812,
+        "brotliBytes": 3512
+      },
+      {
+        "path": "assets/app-CFg7U3jx.css",
+        "kind": "css",
+        "bytes": 9536,
+        "gzipBytes": 2719,
+        "brotliBytes": 2513
+      },
+      {
+        "path": "price-volume-mix-analysis.html",
+        "kind": "html",
+        "bytes": 7491,
+        "gzipBytes": 2719,
+        "brotliBytes": 2487
+      },
+      {
+        "path": "assets/site-Dk7TKYHq.css",
+        "kind": "css",
+        "bytes": 5596,
+        "gzipBytes": 1798,
+        "brotliBytes": 1669
+      },
+      {
+        "path": "privacy.html",
+        "kind": "html",
+        "bytes": 5079,
+        "gzipBytes": 1997,
+        "brotliBytes": 1794
+      },
+      {
+        "path": "_headers",
+        "kind": "other",
+        "bytes": 1021,
+        "gzipBytes": 432,
+        "brotliBytes": 399
+      },
+      {
+        "path": "app/index.html",
+        "kind": "html",
+        "bytes": 806,
+        "gzipBytes": 435,
+        "brotliBytes": 341
+      },
+      {
+        "path": "404.html",
+        "kind": "html",
+        "bytes": 799,
+        "gzipBytes": 465,
+        "brotliBytes": 381
+      },
+      {
+        "path": "favicon.svg",
+        "kind": "other",
+        "bytes": 296,
+        "gzipBytes": 177,
+        "brotliBytes": 147
+      }
+    ],
+    "totals": {
+      "js": 3535829,
+      "wasm": 77238934,
+      "css": 15132,
+      "html": 57315,
+      "other": 1180978,
+      "all": 82028188,
+      "gzipBytes": 19258799,
+      "brotliBytes": 15708451
+    },
+    "toolPageIncludesWasm": false,
+    "toolPage": {
+      "files": [
+        {
+          "path": "app/index.html",
+          "bytes": 806,
+          "gzipBytes": 435,
+          "brotliBytes": 341
+        },
+        {
+          "path": "assets/app-CFg7U3jx.css",
+          "bytes": 9536,
+          "gzipBytes": 2719,
+          "brotliBytes": 2513
+        },
+        {
+          "path": "assets/app-CdSUE4Ly.js",
+          "bytes": 993408,
+          "gzipBytes": 303155,
+          "brotliBytes": 286578
+        },
+        {
+          "path": "favicon.svg",
+          "bytes": 296,
+          "gzipBytes": 177,
+          "brotliBytes": 147
+        }
+      ],
+      "missing": [],
+      "bytes": 1004046,
+      "gzipBytes": 306486,
+      "brotliBytes": 289579
+    },
+    "duckdbOnFirstFile": {
+      "files": [
+        {
+          "path": "assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+          "bytes": 773223,
+          "gzipBytes": 189256,
+          "brotliBytes": 175699
+        },
+        {
+          "path": "assets/duckdb-eh-CfdE9-rk.wasm",
+          "bytes": 35913747,
+          "gzipBytes": 8128896,
+          "brotliBytes": 6506817
+        }
+      ],
+      "missing": [],
+      "bytes": 36686970,
+      "gzipBytes": 8318152,
+      "brotliBytes": 6682516
+    }
+  },
+  "engine": {
+    "config": {
+      "table": "sales",
+      "periodColumn": "year",
+      "prior": 2025,
+      "current": 2026,
+      "unitsColumn": "jobs",
+      "salesColumn": "sales",
+      "levels": [
+        {
+          "name": "Design",
+          "columns": [
+            "design"
+          ]
+        },
+        {
+          "name": "Coating",
+          "columns": [
+            "coating"
+          ]
+        },
+        {
+          "name": "Color",
+          "columns": [
+            "photochromic",
+            "polar"
+          ]
+        },
+        {
+          "name": "Material",
+          "columns": [
+            "material"
+          ]
+        }
+      ]
+    },
+    "identity": {
+      "moneyDecimals": 2,
+      "shareDecimals": 5
+    },
+    "sizes": [
+      {
+        "name": "small",
+        "rows": 10000,
+        "warmup": {
+          "generateMs": 20,
+          "bridgeMs": 65,
+          "dataCheckMs": 2
+        },
+        "duckdbThreads": 16,
+        "generateMs": {
+          "median": 15,
+          "min": 14,
+          "max": 18,
+          "samples": [
+            15,
+            14,
+            15,
+            18,
+            16
+          ]
+        },
+        "bridgeMs": {
+          "median": 43,
+          "min": 41,
+          "max": 45,
+          "samples": [
+            45,
+            41,
+            43,
+            41,
+            43
+          ]
+        },
+        "dataCheckMs": {
+          "median": 2,
+          "min": 2,
+          "max": 2,
+          "samples": [
+            2,
+            2,
+            2,
+            2,
+            2
+          ]
+        },
+        "dataCheck": {
+          "rows": 10000,
+          "priorRows": 4777,
+          "currentRows": 5223,
+          "otherPeriodRows": 0,
+          "blankPeriodRows": 0,
+          "blankMeasureRows": 0,
+          "negativeUnitRows": 0,
+          "negativeSalesRows": 0,
+          "zeroUnitSalesRows": 0
+        },
+        "cpu": {
+          "generateUserMs": {
+            "median": 16,
+            "min": 13,
+            "max": 23,
+            "samples": [
+              23,
+              13,
+              15,
+              18,
+              16
+            ]
+          },
+          "generateSystemMs": {
+            "median": 0,
+            "min": 0,
+            "max": 1,
+            "samples": [
+              1,
+              1,
+              0,
+              0,
+              0
+            ]
+          },
+          "bridgeUserMs": {
+            "median": 145,
+            "min": 140,
+            "max": 146,
+            "samples": [
+              140,
+              145,
+              143,
+              146,
+              146
+            ]
+          },
+          "bridgeSystemMs": {
+            "median": 32,
+            "min": 14,
+            "max": 35,
+            "samples": [
+              32,
+              33,
+              35,
+              17,
+              14
+            ]
+          }
+        },
+        "rssBytes": 415748096,
+        "maxAbsMoneyDelta": 1.7462298274040222e-9,
+        "maxAbsShareDelta": 9.43689570931383e-16,
+        "fingerprint": {
+          "sha256": "2bf397f905b9de5d70499eae32f992ce6f8fb9451f2dff9d8b1622ea6e4ea5b7",
+          "priorSales": 570231.4699999988,
+          "currentSales": 705160.7000000015,
+          "effects": [
+            {
+              "key": "volume",
+              "label": "Volume",
+              "value": 54746.55748098884
+            },
+            {
+              "key": "mix_1",
+              "label": "Mix: Design",
+              "value": 6693.225993164144
+            },
+            {
+              "key": "mix_2",
+              "label": "Mix: Coating",
+              "value": 8736.541443769911
+            },
+            {
+              "key": "mix_3",
+              "label": "Mix: Color",
+              "value": 4362.83964993641
+            },
+            {
+              "key": "mix_4",
+              "label": "Mix: Material",
+              "value": -1003.5726516061603
+            },
+            {
+              "key": "price",
+              "label": "Price (like-for-like)",
+              "value": 4651.251959044956
+            },
+            {
+              "key": "new_config",
+              "label": "New configurations",
+              "value": 84158.76852804693
+            },
+            {
+              "key": "discontinued",
+              "label": "Discontinued configurations",
+              "value": -27416.382403344433
+            },
+            {
+              "key": "no_units",
+              "label": "Sales with no units",
+              "value": 0
+            }
+          ],
+          "coverage": [
+            {
+              "level": 4,
+              "label": "Exact configuration",
+              "cells": 1144,
+              "sales": 230583.34000000046,
+              "share": 0.3269940312896053
+            },
+            {
+              "level": 3,
+              "label": "Fell back to Design + Coating + Color",
+              "cells": 1227,
+              "sales": 228544.57000000004,
+              "share": 0.3241028179817729
+            },
+            {
+              "level": 2,
+              "label": "Fell back to Design + Coating",
+              "cells": 773,
+              "sales": 164867.83000000025,
+              "share": 0.23380178447267397
+            },
+            {
+              "level": 1,
+              "label": "Fell back to Design",
+              "cells": 74,
+              "sales": 23171.810000000012,
+              "share": 0.032860325313081064
+            },
+            {
+              "level": 0,
+              "label": "No comparable group (overall average)",
+              "cells": 167,
+              "sales": 57993.15000000001,
+              "share": 0.08224104094286577
+            }
+          ],
+          "rounded": {
+            "priorSales": 570231.47,
+            "currentSales": 705160.7,
+            "effects": [
+              [
+                "volume",
+                54746.56
+              ],
+              [
+                "mix_1",
+                6693.23
+              ],
+              [
+                "mix_2",
+                8736.54
+              ],
+              [
+                "mix_3",
+                4362.84
+              ],
+              [
+                "mix_4",
+                -1003.57
+              ],
+              [
+                "price",
+                4651.25
+              ],
+              [
+                "new_config",
+                84158.77
+              ],
+              [
+                "discontinued",
+                -27416.38
+              ],
+              [
+                "no_units",
+                0
+              ]
+            ],
+            "coverage": [
+              [
+                4,
+                1144,
+                230583.34,
+                0.32699
+              ],
+              [
+                3,
+                1227,
+                228544.57,
+                0.3241
+              ],
+              [
+                2,
+                773,
+                164867.83,
+                0.2338
+              ],
+              [
+                1,
+                74,
+                23171.81,
+                0.03286
+              ],
+              [
+                0,
+                167,
+                57993.15,
+                0.08224
+              ]
+            ]
+          }
+        },
+        "errors": 0
+      },
+      {
+        "name": "medium",
+        "rows": 300000,
+        "warmup": {
+          "generateMs": 271,
+          "bridgeMs": 97,
+          "dataCheckMs": 5
+        },
+        "duckdbThreads": 16,
+        "generateMs": {
+          "median": 264,
+          "min": 260,
+          "max": 267,
+          "samples": [
+            266,
+            263,
+            267,
+            260,
+            264
+          ]
+        },
+        "bridgeMs": {
+          "median": 91,
+          "min": 86,
+          "max": 104,
+          "samples": [
+            104,
+            86,
+            91,
+            91,
+            89
+          ]
+        },
+        "dataCheckMs": {
+          "median": 5,
+          "min": 5,
+          "max": 6,
+          "samples": [
+            5,
+            5,
+            5,
+            6,
+            5
+          ]
+        },
+        "dataCheck": {
+          "rows": 300000,
+          "priorRows": 143920,
+          "currentRows": 156080,
+          "otherPeriodRows": 0,
+          "blankPeriodRows": 0,
+          "blankMeasureRows": 0,
+          "negativeUnitRows": 0,
+          "negativeSalesRows": 0,
+          "zeroUnitSalesRows": 0
+        },
+        "cpu": {
+          "generateUserMs": {
+            "median": 256,
+            "min": 251,
+            "max": 261,
+            "samples": [
+              253,
+              251,
+              259,
+              256,
+              261
+            ]
+          },
+          "generateSystemMs": {
+            "median": 7,
+            "min": 2,
+            "max": 13,
+            "samples": [
+              13,
+              11,
+              7,
+              2,
+              2
+            ]
+          },
+          "bridgeUserMs": {
+            "median": 374,
+            "min": 362,
+            "max": 394,
+            "samples": [
+              394,
+              372,
+              362,
+              374,
+              388
+            ]
+          },
+          "bridgeSystemMs": {
+            "median": 54,
+            "min": 40,
+            "max": 119,
+            "samples": [
+              119,
+              58,
+              54,
+              42,
+              40
+            ]
+          }
+        },
+        "rssBytes": 545357824,
+        "maxAbsMoneyDelta": 1.1175870895385742e-7,
+        "maxAbsShareDelta": 9.103828801926284e-15,
+        "fingerprint": {
+          "sha256": "2b94742147cf318dd7706f0a26e4208523f0cf1ecc3ab699defb4eda6ab2f468",
+          "priorSales": 17322916.779999983,
+          "currentSales": 21182673.439999994,
+          "effects": [
+            {
+              "key": "volume",
+              "label": "Volume",
+              "value": 1488092.934554139
+            },
+            {
+              "key": "mix_1",
+              "label": "Mix: Design",
+              "value": 342033.3870730389
+            },
+            {
+              "key": "mix_2",
+              "label": "Mix: Coating",
+              "value": 269429.83998278243
+            },
+            {
+              "key": "mix_3",
+              "label": "Mix: Color",
+              "value": 636916.2106327709
+            },
+            {
+              "key": "mix_4",
+              "label": "Mix: Material",
+              "value": -59418.08362219959
+            },
+            {
+              "key": "price",
+              "label": "Price (like-for-like)",
+              "value": 300161.44705786044
+            },
+            {
+              "key": "new_config",
+              "label": "New configurations",
+              "value": 1219535.6823322275
+            },
+            {
+              "key": "discontinued",
+              "label": "Discontinued configurations",
+              "value": -336994.7580106005
+            },
+            {
+              "key": "no_units",
+              "label": "Sales with no units",
+              "value": 0
+            }
+          ],
+          "coverage": [
+            {
+              "level": 4,
+              "label": "Exact configuration",
+              "cells": 13395,
+              "sales": 17391911.389999967,
+              "share": 0.8210442104610933
+            },
+            {
+              "level": 3,
+              "label": "Fell back to Design + Coating + Color",
+              "cells": 4156,
+              "sales": 1868552.3199999996,
+              "share": 0.08821135468536025
+            },
+            {
+              "level": 2,
+              "label": "Fell back to Design + Coating",
+              "cells": 596,
+              "sales": 205000.98000000019,
+              "share": 0.009677767094916809
+            },
+            {
+              "level": 0,
+              "label": "No comparable group (overall average)",
+              "cells": 1364,
+              "sales": 1717208.75,
+              "share": 0.08106666775862832
+            }
+          ],
+          "rounded": {
+            "priorSales": 17322916.78,
+            "currentSales": 21182673.44,
+            "effects": [
+              [
+                "volume",
+                1488092.93
+              ],
+              [
+                "mix_1",
+                342033.39
+              ],
+              [
+                "mix_2",
+                269429.84
+              ],
+              [
+                "mix_3",
+                636916.21
+              ],
+              [
+                "mix_4",
+                -59418.08
+              ],
+              [
+                "price",
+                300161.45
+              ],
+              [
+                "new_config",
+                1219535.68
+              ],
+              [
+                "discontinued",
+                -336994.76
+              ],
+              [
+                "no_units",
+                0
+              ]
+            ],
+            "coverage": [
+              [
+                4,
+                13395,
+                17391911.39,
+                0.82104
+              ],
+              [
+                3,
+                4156,
+                1868552.32,
+                0.08821
+              ],
+              [
+                2,
+                596,
+                205000.98,
+                0.00968
+              ],
+              [
+                0,
+                1364,
+                1717208.75,
+                0.08107
+              ]
+            ]
+          }
+        },
+        "errors": 0
+      },
+      {
+        "name": "large",
+        "rows": 3000000,
+        "warmup": {
+          "generateMs": 2753,
+          "bridgeMs": 233,
+          "dataCheckMs": 13
+        },
+        "duckdbThreads": 16,
+        "generateMs": {
+          "median": 2626,
+          "min": 2538,
+          "max": 2764,
+          "samples": [
+            2722,
+            2764,
+            2626,
+            2538,
+            2595
+          ]
+        },
+        "bridgeMs": {
+          "median": 228,
+          "min": 224,
+          "max": 278,
+          "samples": [
+            278,
+            235,
+            228,
+            224,
+            228
+          ]
+        },
+        "dataCheckMs": {
+          "median": 13,
+          "min": 13,
+          "max": 13,
+          "samples": [
+            13,
+            13,
+            13,
+            13,
+            13
+          ]
+        },
+        "dataCheck": {
+          "rows": 3000000,
+          "priorRows": 1440049,
+          "currentRows": 1559951,
+          "otherPeriodRows": 0,
+          "blankPeriodRows": 0,
+          "blankMeasureRows": 0,
+          "negativeUnitRows": 0,
+          "negativeSalesRows": 0,
+          "zeroUnitSalesRows": 0
+        },
+        "cpu": {
+          "generateUserMs": {
+            "median": 2559,
+            "min": 2499,
+            "max": 2729,
+            "samples": [
+              2659,
+              2729,
+              2559,
+              2499,
+              2535
+            ]
+          },
+          "generateSystemMs": {
+            "median": 41,
+            "min": 13,
+            "max": 49,
+            "samples": [
+              44,
+              13,
+              49,
+              25,
+              41
+            ]
+          },
+          "bridgeUserMs": {
+            "median": 1853,
+            "min": 1785,
+            "max": 1911,
+            "samples": [
+              1911,
+              1875,
+              1853,
+              1785,
+              1825
+            ]
+          },
+          "bridgeSystemMs": {
+            "median": 118,
+            "min": 103,
+            "max": 193,
+            "samples": [
+              115,
+              193,
+              118,
+              103,
+              127
+            ]
+          }
+        },
+        "rssBytes": 886939648,
+        "maxAbsMoneyDelta": 8.344650268554688e-7,
+        "maxAbsShareDelta": 2.6645352591003757e-15,
+        "fingerprint": {
+          "sha256": "3a7113c5909734f9c928c382a39fb1af3bb7b55c0557af89e0c72614275a994d",
+          "priorSales": 173972189.43000093,
+          "currentSales": 211161933.22999898,
+          "effects": [
+            {
+              "key": "volume",
+              "label": "Volume",
+              "value": 14493720.289519683
+            },
+            {
+              "key": "mix_1",
+              "label": "Mix: Design",
+              "value": 3180030.8617988527
+            },
+            {
+              "key": "mix_2",
+              "label": "Mix: Coating",
+              "value": 2433310.876737318
+            },
+            {
+              "key": "mix_3",
+              "label": "Mix: Color",
+              "value": 6806470.304804847
+            },
+            {
+              "key": "mix_4",
+              "label": "Mix: Material",
+              "value": -115844.50086419909
+            },
+            {
+              "key": "price",
+              "label": "Price (like-for-like)",
+              "value": 3189685.548419725
+            },
+            {
+              "key": "new_config",
+              "label": "New configurations",
+              "value": 9954298.077159096
+            },
+            {
+              "key": "discontinued",
+              "label": "Discontinued configurations",
+              "value": -2751927.65757512
+            },
+            {
+              "key": "no_units",
+              "label": "Sales with no units",
+              "value": 0
+            }
+          ],
+          "coverage": [
+            {
+              "level": 4,
+              "label": "Exact configuration",
+              "cells": 24626,
+              "sales": 192426005.1299994,
+              "share": 0.9112722268952128
+            },
+            {
+              "level": 3,
+              "label": "Fell back to Design + Coating + Color",
+              "cells": 2359,
+              "sales": 1659523.450000002,
+              "share": 0.007859008603565105
+            },
+            {
+              "level": 2,
+              "label": "Fell back to Design + Coating",
+              "cells": 21,
+              "sales": 17881.239999999998,
+              "share": 0.00008468022491782945
+            },
+            {
+              "level": 0,
+              "label": "No comparable group (overall average)",
+              "cells": 2354,
+              "sales": 17058523.410000045,
+              "share": 0.08078408427630651
+            }
+          ],
+          "rounded": {
+            "priorSales": 173972189.43,
+            "currentSales": 211161933.23,
+            "effects": [
+              [
+                "volume",
+                14493720.29
+              ],
+              [
+                "mix_1",
+                3180030.86
+              ],
+              [
+                "mix_2",
+                2433310.88
+              ],
+              [
+                "mix_3",
+                6806470.3
+              ],
+              [
+                "mix_4",
+                -115844.5
+              ],
+              [
+                "price",
+                3189685.55
+              ],
+              [
+                "new_config",
+                9954298.08
+              ],
+              [
+                "discontinued",
+                -2751927.66
+              ],
+              [
+                "no_units",
+                0
+              ]
+            ],
+            "coverage": [
+              [
+                4,
+                24626,
+                192426005.13,
+                0.91127
+              ],
+              [
+                3,
+                2359,
+                1659523.45,
+                0.00786
+              ],
+              [
+                2,
+                21,
+                17881.24,
+                0.00008
+              ],
+              [
+                0,
+                2354,
+                17058523.41,
+                0.08078
+              ]
+            ]
+          }
+        },
+        "errors": 0
+      }
+    ]
+  },
+  "browser": {
+    "harness": "scripts/cdp.mjs",
+    "chromium": "Chrome/152.0.7977.82",
+    "chromiumVersionCommand": "Chromium 152.0.7977.82 Arch Linux",
+    "origin": "http://127.0.0.1:42411/app/",
+    "cacheControl": "no-store",
+    "contentEncoding": "identity",
+    "freshProfile": true,
+    "discardedWarmup": [
+      {
+        "name": "small",
+        "rows": 10000,
+        "totalMs": 1398,
+        "interactiveMs": 140,
+        "dclMs": 110,
+        "loadMs": 110,
+        "parseMs": 1132,
+        "configureMs": 15,
+        "calculateMs": 222,
+        "prior": 570231,
+        "current": 705161,
+        "effects": [
+          54747,
+          6693,
+          8737,
+          4363,
+          -1004,
+          4651,
+          84159,
+          -27416
+        ],
+        "residual": 0,
+        "source": "10000.csv · 10,000 rows · 10 columns",
+        "coldHits": [
+          {
+            "path": "/app/",
+            "bytes": 806,
+            "ms": 6
+          },
+          {
+            "path": "/assets/app-CFg7U3jx.css",
+            "bytes": 9536,
+            "ms": 2
+          },
+          {
+            "path": "/assets/app-CdSUE4Ly.js",
+            "bytes": 993408,
+            "ms": 6
+          },
+          {
+            "path": "/favicon.svg",
+            "bytes": 296,
+            "ms": 1
+          }
+        ],
+        "fileHits": [
+          {
+            "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+            "bytes": 773223,
+            "ms": 5
+          },
+          {
+            "path": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "bytes": 35913747,
+            "ms": 121
+          }
+        ],
+        "chromium": "Chrome/152.0.7977.82"
+      }
+    ],
+    "wasmRequestedBeforeInteractive": false,
+    "coldLoad": {
+      "dclMs": {
+        "median": 103,
+        "min": 97,
+        "max": 112,
+        "samples": [
+          112,
+          99,
+          102,
+          106,
+          103,
+          99,
+          107,
+          97,
+          103,
+          107
+        ]
+      },
+      "loadMs": {
+        "median": 103,
+        "min": 97,
+        "max": 112,
+        "samples": [
+          112,
+          99,
+          102,
+          106,
+          103,
+          99,
+          107,
+          97,
+          103,
+          107
+        ]
+      },
+      "interactiveMs": {
+        "median": 133.5,
+        "min": 129,
+        "max": 145,
+        "samples": [
+          145,
+          129,
+          135,
+          133,
+          133,
+          132,
+          140,
+          129,
+          134,
+          137
+        ]
+      },
+      "samples": 10
+    },
+    "files": [
+      {
+        "name": "small",
+        "rows": 10000,
+        "totalMs": {
+          "median": 1373,
+          "min": 1350,
+          "max": 1454,
+          "samples": [
+            1363,
+            1454,
+            1373,
+            1350,
+            1398
+          ]
+        },
+        "parseMs": {
+          "median": 1137,
+          "min": 1104,
+          "max": 1201,
+          "samples": [
+            1137,
+            1201,
+            1127,
+            1104,
+            1151
+          ]
+        },
+        "configureMs": {
+          "median": 15,
+          "min": 14,
+          "max": 24,
+          "samples": [
+            14,
+            24,
+            15,
+            16,
+            14
+          ]
+        },
+        "calculateMs": {
+          "median": 218,
+          "min": 138,
+          "max": 221,
+          "samples": [
+            138,
+            218,
+            219,
+            213,
+            221
+          ]
+        },
+        "displayedPrior": 570231,
+        "displayedCurrent": 705161,
+        "identicalDisplayed": true,
+        "errors": 0,
+        "samples": [
+          {
+            "totalMs": 1363,
+            "parseMs": 1137,
+            "configureMs": 14,
+            "calculateMs": 138,
+            "interactiveMs": 145,
+            "dclMs": 112,
+            "loadMs": 112,
+            "prior": 570231,
+            "current": 705161,
+            "resources": [
+              {
+                "name": "http://127.0.0.1:42411/assets/app-CdSUE4Ly.js",
+                "start": 22.899999976158142,
+                "duration": 19.30000001192093,
+                "transfer": 993708,
+                "encoded": 993408,
+                "decoded": 993408,
+                "path": "/assets/app-CdSUE4Ly.js"
+              },
+              {
+                "name": "http://127.0.0.1:42411/assets/app-CFg7U3jx.css",
+                "start": 23.19999998807907,
+                "duration": 11.800000011920929,
+                "transfer": 9836,
+                "encoded": 9536,
+                "decoded": 9536,
+                "path": "/assets/app-CFg7U3jx.css"
+              },
+              {
+                "name": "http://127.0.0.1:42411/favicon.svg",
+                "start": 151.5,
+                "duration": 3.899999976158142,
+                "transfer": 596,
+                "encoded": 296,
+                "decoded": 296,
+                "path": "/favicon.svg"
+              },
+              {
+                "name": "http://127.0.0.1:42411/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+                "start": 183.5,
+                "duration": -4,
+                "transfer": 773523,
+                "encoded": 773223,
+                "decoded": 773223,
+                "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js"
+              }
+            ],
+            "coldHits": [
+              {
+                "path": "/app/",
+                "bytes": 806,
+                "ms": 2
+              },
+              {
+                "path": "/assets/app-CFg7U3jx.css",
+                "bytes": 9536,
+                "ms": 2
+              },
+              {
+                "path": "/assets/app-CdSUE4Ly.js",
+                "bytes": 993408,
+                "ms": 4
+              },
+              {
+                "path": "/favicon.svg",
+                "bytes": 296,
+                "ms": 1
+              }
+            ],
+            "fileHits": [
+              {
+                "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+                "bytes": 773223,
+                "ms": 3
+              },
+              {
+                "path": "/assets/duckdb-eh-CfdE9-rk.wasm",
+                "bytes": 35913747,
+                "ms": 118
+              }
+            ]
+          },
+          {
+            "totalMs": 1454,
+            "parseMs": 1201,
+            "configureMs": 24,
+            "calculateMs": 218,
+            "interactiveMs": 129,
+            "dclMs": 99,
+            "loadMs": 99,
+            "prior": 570231,
+            "current": 705161,
+            "resources": [
+              {
+                "name": "http://127.0.0.1:42411/assets/app-CdSUE4Ly.js",
+                "start": 17.400000005960464,
+                "duration": 17.099999994039536,
+                "transfer": 993708,
+                "encoded": 993408,
+                "decoded": 993408,
+                "path": "/assets/app-CdSUE4Ly.js"
+              },
+              {
+                "name": "http://127.0.0.1:42411/assets/app-CFg7U3jx.css",
+                "start": 17.80000001192093,
+                "duration": 10.5,
+                "transfer": 9836,
+                "encoded": 9536,
+                "decoded": 9536,
+                "path": "/assets/app-CFg7U3jx.css"
+              },
+              {
+                "name": "http://127.0.0.1:42411/favicon.svg",
+                "start": 135.30000001192093,
+                "duration": 3.9000000059604645,
+                "transfer": 596,
+                "encoded": 296,
+                "decoded": 296,
+                "path": "/favicon.svg"
+              },
+              {
+                "name": "http://127.0.0.1:42411/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+                "start": 171.10000002384186,
+                "duration": -3.5,
+                "transfer": 773523,
+                "encoded": 773223,
+                "decoded": 773223,
+                "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js"
+              }
+            ],
+            "coldHits": [
+              {
+                "path": "/app/",
+                "bytes": 806,
+                "ms": 1
+              },
+              {
+                "path": "/assets/app-CFg7U3jx.css",
+                "bytes": 9536,
+                "ms": 1
+              },
+              {
+                "path": "/assets/app-CdSUE4Ly.js",
+                "bytes": 993408,
+                "ms": 2
+              },
+              {
+                "path": "/favicon.svg",
+                "bytes": 296,
+                "ms": 1
+              }
+            ],
+            "fileHits": [
+              {
+                "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+                "bytes": 773223,
+                "ms": 3
+              },
+              {
+                "path": "/assets/duckdb-eh-CfdE9-rk.wasm",
+                "bytes": 35913747,
+                "ms": 110
+              }
+            ]
+          },
+          {
+            "totalMs": 1373,
+            "parseMs": 1127,
+            "configureMs": 15,
+            "calculateMs": 219,
+            "interactiveMs": 135,
+            "dclMs": 102,
+            "loadMs": 102,
+            "prior": 570231,
+            "current": 705161,
+            "resources": [
+              {
+                "name": "http://127.0.0.1:42411/assets/app-CdSUE4Ly.js",
+                "start": 16.900000005960464,
+                "duration": 12.599999994039536,
+                "transfer": 993708,
+                "encoded": 993408,
+                "decoded": 993408,
+                "path": "/assets/app-CdSUE4Ly.js"
+              },
+              {
+                "name": "http://127.0.0.1:42411/assets/app-CFg7U3jx.css",
+                "start": 17.5,
+                "duration": 9.900000005960464,
+                "transfer": 9836,
+                "encoded": 9536,
+                "decoded": 9536,
+                "path": "/assets/app-CFg7U3jx.css"
+              },
+              {
+                "name": "http://127.0.0.1:42411/favicon.svg",
+                "start": 140.7000000178814,
+                "duration": 3.899999976158142,
+                "transfer": 596,
+                "encoded": 296,
+                "decoded": 296,
+                "path": "/favicon.svg"
+              },
+              {
+                "name": "http://127.0.0.1:42411/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+                "start": 174.2000000178814,
+                "duration": -4.100000023841858,
+                "transfer": 773523,
+                "encoded": 773223,
+                "decoded": 773223,
+                "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js"
+              }
+            ],
+            "coldHits": [
+              {
+                "path": "/app/",
+                "bytes": 806,
+                "ms": 1
+              },
+              {
+                "path": "/assets/app-CdSUE4Ly.js",
+                "bytes": 993408,
+                "ms": 3
+              },
+              {
+                "path": "/assets/app-CFg7U3jx.css",
+                "bytes": 9536,
+                "ms": 1
+              },
+              {
+                "path": "/favicon.svg",
+                "bytes": 296,
+                "ms": 1
+              }
+            ],
+            "fileHits": [
+              {
+                "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+                "bytes": 773223,
+                "ms": 3
+              },
+              {
+                "path": "/assets/duckdb-eh-CfdE9-rk.wasm",
+                "bytes": 35913747,
+                "ms": 111
+              }
+            ]
+          },
+          {
+            "totalMs": 1350,
+            "parseMs": 1104,
+            "configureMs": 16,
+            "calculateMs": 213,
+            "interactiveMs": 133,
+            "dclMs": 106,
+            "loadMs": 106,
+            "prior": 570231,
+            "current": 705161,
+            "resources": [
+              {
+                "name": "http://127.0.0.1:42411/assets/app-CdSUE4Ly.js",
+                "start": 17.400000005960464,
+                "duration": 15.900000005960464,
+                "transfer": 993708,
+                "encoded": 993408,
+                "decoded": 993408,
+                "path": "/assets/app-CdSUE4Ly.js"
+              },
+              {
+                "name": "http://127.0.0.1:42411/assets/app-CFg7U3jx.css",
+                "start": 18.30000001192093,
+                "duration": 11.699999988079071,
+                "transfer": 9836,
+                "encoded": 9536,
+                "decoded": 9536,
+                "path": "/assets/app-CFg7U3jx.css"
+              },
+              {
+                "name": "http://127.0.0.1:42411/favicon.svg",
+                "start": 139.5,
+                "duration": 3.600000023841858,
+                "transfer": 596,
+                "encoded": 296,
+                "decoded": 296,
+                "path": "/favicon.svg"
+              },
+              {
+                "name": "http://127.0.0.1:42411/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+                "start": 176.10000002384186,
+                "duration": -3.5,
+                "transfer": 773523,
+                "encoded": 773223,
+                "decoded": 773223,
+                "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js"
+              }
+            ],
+            "coldHits": [
+              {
+                "path": "/app/",
+                "bytes": 806,
+                "ms": 1
+              },
+              {
+                "path": "/assets/app-CFg7U3jx.css",
+                "bytes": 9536,
+                "ms": 1
+              },
+              {
+                "path": "/assets/app-CdSUE4Ly.js",
+                "bytes": 993408,
+                "ms": 2
+              },
+              {
+                "path": "/favicon.svg",
+                "bytes": 296,
+                "ms": 1
+              }
+            ],
+            "fileHits": [
+              {
+                "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+                "bytes": 773223,
+                "ms": 3
+              },
+              {
+                "path": "/assets/duckdb-eh-CfdE9-rk.wasm",
+                "bytes": 35913747,
+                "ms": 102
+              }
+            ]
+          },
+          {
+            "totalMs": 1398,
+            "parseMs": 1151,
+            "configureMs": 14,
+            "calculateMs": 221,
+            "interactiveMs": 133,
+            "dclMs": 103,
+            "loadMs": 103,
+            "prior": 570231,
+            "current": 705161,
+            "resources": [
+              {
+                "name": "http://127.0.0.1:42411/assets/app-CdSUE4Ly.js",
+                "start": 21.69999998807907,
+                "duration": 16.30000001192093,
+                "transfer": 993708,
+                "encoded": 993408,
+                "decoded": 993408,
+                "path": "/assets/app-CdSUE4Ly.js"
+              },
+              {
+                "name": "http://127.0.0.1:42411/assets/app-CFg7U3jx.css",
+                "start": 22.19999998807907,
+                "duration": 10.300000011920929,
+                "transfer": 9836,
+                "encoded": 9536,
+                "decoded": 9536,
+                "path": "/assets/app-CFg7U3jx.css"
+              },
+              {
+                "name": "http://127.0.0.1:42411/favicon.svg",
+                "start": 138.90000000596046,
+                "duration": 3.5999999940395355,
+                "transfer": 596,
+                "encoded": 296,
+                "decoded": 296,
+                "path": "/favicon.svg"
+              },
+              {
+                "name": "http://127.0.0.1:42411/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+                "start": 174.59999999403954,
+                "duration": -4.300000011920929,
+                "transfer": 773523,
+                "encoded": 773223,
+                "decoded": 773223,
+                "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js"
+              }
+            ],
+            "coldHits": [
+              {
+                "path": "/app/",
+                "bytes": 806,
+                "ms": 1
+              },
+              {
+                "path": "/assets/app-CFg7U3jx.css",
+                "bytes": 9536,
+                "ms": 1
+              },
+              {
+                "path": "/assets/app-CdSUE4Ly.js",
+                "bytes": 993408,
+                "ms": 3
+              },
+              {
+                "path": "/favicon.svg",
+                "bytes": 296,
+                "ms": 1
+              }
+            ],
+            "fileHits": [
+              {
+                "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+                "bytes": 773223,
+                "ms": 3
+              },
+              {
+                "path": "/assets/duckdb-eh-CfdE9-rk.wasm",
+                "bytes": 35913747,
+                "ms": 111
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "medium",
+        "rows": 300000,
+        "totalMs": {
+          "median": 2641,
+          "min": 2585,
+          "max": 2698,
+          "samples": [
+            2698,
+            2641,
+            2648,
+            2611,
+            2585
+          ]
+        },
+        "parseMs": {
+          "median": 2223,
+          "min": 2181,
+          "max": 2260,
+          "samples": [
+            2260,
+            2230,
+            2223,
+            2206,
+            2181
+          ]
+        },
+        "configureMs": {
+          "median": 15,
+          "min": 15,
+          "max": 25,
+          "samples": [
+            25,
+            15,
+            15,
+            15,
+            16
+          ]
+        },
+        "calculateMs": {
+          "median": 379,
+          "min": 370,
+          "max": 398,
+          "samples": [
+            393,
+            379,
+            398,
+            372,
+            370
+          ]
+        },
+        "displayedPrior": 17322917,
+        "displayedCurrent": 21182673,
+        "identicalDisplayed": true,
+        "errors": 0,
+        "samples": [
+          {
+            "totalMs": 2698,
+            "parseMs": 2260,
+            "configureMs": 25,
+            "calculateMs": 393,
+            "interactiveMs": 132,
+            "dclMs": 99,
+            "loadMs": 99,
+            "prior": 17322917,
+            "current": 21182673,
+            "resources": [
+              {
+                "name": "http://127.0.0.1:42411/assets/app-CdSUE4Ly.js",
+                "start": 16.30000001192093,
+                "duration": 14.5,
+                "transfer": 993708,
+                "encoded": 993408,
+                "decoded": 993408,
+                "path": "/assets/app-CdSUE4Ly.js"
+              },
+              {
+                "name": "http://127.0.0.1:42411/assets/app-CFg7U3jx.css",
+                "start": 16.900000005960464,
+                "duration": 12,
+                "transfer": 9836,
+                "encoded": 9536,
+                "decoded": 9536,
+                "path": "/assets/app-CFg7U3jx.css"
+              },
+              {
+                "name": "http://127.0.0.1:42411/favicon.svg",
+                "start": 137,
+                "duration": 3.199999988079071,
+                "transfer": 596,
+                "encoded": 296,
+                "decoded": 296,
+                "path": "/favicon.svg"
+              },
+              {
+                "name": "http://127.0.0.1:42411/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+                "start": 168.09999999403954,
+                "duration": -3.5,
+                "transfer": 773523,
+                "encoded": 773223,
+                "decoded": 773223,
+                "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js"
+              }
+            ],
+            "coldHits": [
+              {
+                "path": "/app/",
+                "bytes": 806,
+                "ms": 2
+              },
+              {
+                "path": "/assets/app-CdSUE4Ly.js",
+                "bytes": 993408,
+                "ms": 3
+              },
+              {
+                "path": "/assets/app-CFg7U3jx.css",
+                "bytes": 9536,
+                "ms": 1
+              },
+              {
+                "path": "/favicon.svg",
+                "bytes": 296,
+                "ms": 1
+              }
+            ],
+            "fileHits": [
+              {
+                "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+                "bytes": 773223,
+                "ms": 2
+              },
+              {
+                "path": "/assets/duckdb-eh-CfdE9-rk.wasm",
+                "bytes": 35913747,
+                "ms": 111
+              }
+            ]
+          },
+          {
+            "totalMs": 2641,
+            "parseMs": 2230,
+            "configureMs": 15,
+            "calculateMs": 379,
+            "interactiveMs": 140,
+            "dclMs": 107,
+            "loadMs": 107,
+            "prior": 17322917,
+            "current": 21182673,
+            "resources": [
+              {
+                "name": "http://127.0.0.1:42411/assets/app-CdSUE4Ly.js",
+                "start": 23.099999994039536,
+                "duration": 12.599999994039536,
+                "transfer": 993708,
+                "encoded": 993408,
+                "decoded": 993408,
+                "path": "/assets/app-CdSUE4Ly.js"
+              },
+              {
+                "name": "http://127.0.0.1:42411/assets/app-CFg7U3jx.css",
+                "start": 23.5,
+                "duration": 10.199999988079071,
+                "transfer": 9836,
+                "encoded": 9536,
+                "decoded": 9536,
+                "path": "/assets/app-CFg7U3jx.css"
+              },
+              {
+                "name": "http://127.0.0.1:42411/favicon.svg",
+                "start": 145.2999999821186,
+                "duration": 4.4000000059604645,
+                "transfer": 596,
+                "encoded": 296,
+                "decoded": 296,
+                "path": "/favicon.svg"
+              },
+              {
+                "name": "http://127.0.0.1:42411/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+                "start": 179.5,
+                "duration": -3.800000011920929,
+                "transfer": 773523,
+                "encoded": 773223,
+                "decoded": 773223,
+                "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js"
+              }
+            ],
+            "coldHits": [
+              {
+                "path": "/app/",
+                "bytes": 806,
+                "ms": 1
+              },
+              {
+                "path": "/assets/app-CFg7U3jx.css",
+                "bytes": 9536,
+                "ms": 1
+              },
+              {
+                "path": "/assets/app-CdSUE4Ly.js",
+                "bytes": 993408,
+                "ms": 3
+              },
+              {
+                "path": "/favicon.svg",
+                "bytes": 296,
+                "ms": 1
+              }
+            ],
+            "fileHits": [
+              {
+                "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+                "bytes": 773223,
+                "ms": 3
+              },
+              {
+                "path": "/assets/duckdb-eh-CfdE9-rk.wasm",
+                "bytes": 35913747,
+                "ms": 101
+              }
+            ]
+          },
+          {
+            "totalMs": 2648,
+            "parseMs": 2223,
+            "configureMs": 15,
+            "calculateMs": 398,
+            "interactiveMs": 129,
+            "dclMs": 97,
+            "loadMs": 97,
+            "prior": 17322917,
+            "current": 21182673,
+            "resources": [
+              {
+                "name": "http://127.0.0.1:42411/assets/app-CdSUE4Ly.js",
+                "start": 16.19999998807907,
+                "duration": 12.900000005960464,
+                "transfer": 993708,
+                "encoded": 993408,
+                "decoded": 993408,
+                "path": "/assets/app-CdSUE4Ly.js"
+              },
+              {
+                "name": "http://127.0.0.1:42411/assets/app-CFg7U3jx.css",
+                "start": 16.69999998807907,
+                "duration": 10.800000011920929,
+                "transfer": 9836,
+                "encoded": 9536,
+                "decoded": 9536,
+                "path": "/assets/app-CFg7U3jx.css"
+              },
+              {
+                "name": "http://127.0.0.1:42411/favicon.svg",
+                "start": 135.09999999403954,
+                "duration": 3.4000000059604645,
+                "transfer": 596,
+                "encoded": 296,
+                "decoded": 296,
+                "path": "/favicon.svg"
+              },
+              {
+                "name": "http://127.0.0.1:42411/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+                "start": 169.30000001192093,
+                "duration": -3.300000011920929,
+                "transfer": 773523,
+                "encoded": 773223,
+                "decoded": 773223,
+                "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js"
+              }
+            ],
+            "coldHits": [
+              {
+                "path": "/app/",
+                "bytes": 806,
+                "ms": 1
+              },
+              {
+                "path": "/assets/app-CdSUE4Ly.js",
+                "bytes": 993408,
+                "ms": 2
+              },
+              {
+                "path": "/assets/app-CFg7U3jx.css",
+                "bytes": 9536,
+                "ms": 1
+              },
+              {
+                "path": "/favicon.svg",
+                "bytes": 296,
+                "ms": 1
+              }
+            ],
+            "fileHits": [
+              {
+                "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+                "bytes": 773223,
+                "ms": 2
+              },
+              {
+                "path": "/assets/duckdb-eh-CfdE9-rk.wasm",
+                "bytes": 35913747,
+                "ms": 111
+              }
+            ]
+          },
+          {
+            "totalMs": 2611,
+            "parseMs": 2206,
+            "configureMs": 15,
+            "calculateMs": 372,
+            "interactiveMs": 134,
+            "dclMs": 103,
+            "loadMs": 103,
+            "prior": 17322917,
+            "current": 21182673,
+            "resources": [
+              {
+                "name": "http://127.0.0.1:42411/assets/app-CdSUE4Ly.js",
+                "start": 18,
+                "duration": 15.600000023841858,
+                "transfer": 993708,
+                "encoded": 993408,
+                "decoded": 993408,
+                "path": "/assets/app-CdSUE4Ly.js"
+              },
+              {
+                "name": "http://127.0.0.1:42411/assets/app-CFg7U3jx.css",
+                "start": 18.600000023841858,
+                "duration": 12,
+                "transfer": 9836,
+                "encoded": 9536,
+                "decoded": 9536,
+                "path": "/assets/app-CFg7U3jx.css"
+              },
+              {
+                "name": "http://127.0.0.1:42411/favicon.svg",
+                "start": 141.10000002384186,
+                "duration": 3.5,
+                "transfer": 596,
+                "encoded": 296,
+                "decoded": 296,
+                "path": "/favicon.svg"
+              },
+              {
+                "name": "http://127.0.0.1:42411/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+                "start": 177.60000002384186,
+                "duration": -3.800000011920929,
+                "transfer": 773523,
+                "encoded": 773223,
+                "decoded": 773223,
+                "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js"
+              }
+            ],
+            "coldHits": [
+              {
+                "path": "/app/",
+                "bytes": 806,
+                "ms": 1
+              },
+              {
+                "path": "/assets/app-CFg7U3jx.css",
+                "bytes": 9536,
+                "ms": 1
+              },
+              {
+                "path": "/assets/app-CdSUE4Ly.js",
+                "bytes": 993408,
+                "ms": 3
+              },
+              {
+                "path": "/favicon.svg",
+                "bytes": 296,
+                "ms": 1
+              }
+            ],
+            "fileHits": [
+              {
+                "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+                "bytes": 773223,
+                "ms": 3
+              },
+              {
+                "path": "/assets/duckdb-eh-CfdE9-rk.wasm",
+                "bytes": 35913747,
+                "ms": 108
+              }
+            ]
+          },
+          {
+            "totalMs": 2585,
+            "parseMs": 2181,
+            "configureMs": 16,
+            "calculateMs": 370,
+            "interactiveMs": 137,
+            "dclMs": 107,
+            "loadMs": 107,
+            "prior": 17322917,
+            "current": 21182673,
+            "resources": [
+              {
+                "name": "http://127.0.0.1:42411/assets/app-CdSUE4Ly.js",
+                "start": 17.400000005960464,
+                "duration": 19.799999982118607,
+                "transfer": 993708,
+                "encoded": 993408,
+                "decoded": 993408,
+                "path": "/assets/app-CdSUE4Ly.js"
+              },
+              {
+                "name": "http://127.0.0.1:42411/assets/app-CFg7U3jx.css",
+                "start": 17.900000005960464,
+                "duration": 13.099999994039536,
+                "transfer": 9836,
+                "encoded": 9536,
+                "decoded": 9536,
+                "path": "/assets/app-CFg7U3jx.css"
+              },
+              {
+                "name": "http://127.0.0.1:42411/favicon.svg",
+                "start": 143.2999999821186,
+                "duration": 4,
+                "transfer": 596,
+                "encoded": 296,
+                "decoded": 296,
+                "path": "/favicon.svg"
+              },
+              {
+                "name": "http://127.0.0.1:42411/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+                "start": 179,
+                "duration": -3.9000000059604645,
+                "transfer": 773523,
+                "encoded": 773223,
+                "decoded": 773223,
+                "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js"
+              }
+            ],
+            "coldHits": [
+              {
+                "path": "/app/",
+                "bytes": 806,
+                "ms": 1
+              },
+              {
+                "path": "/assets/app-CFg7U3jx.css",
+                "bytes": 9536,
+                "ms": 1
+              },
+              {
+                "path": "/assets/app-CdSUE4Ly.js",
+                "bytes": 993408,
+                "ms": 4
+              },
+              {
+                "path": "/favicon.svg",
+                "bytes": 296,
+                "ms": 1
+              }
+            ],
+            "fileHits": [
+              {
+                "path": "/assets/duckdb-browser-eh.worker-CwdVMcbT.js",
+                "bytes": 773223,
+                "ms": 2
+              },
+              {
+                "path": "/assets/duckdb-eh-CfdE9-rk.wasm",
+                "bytes": 35913747,
+                "ms": 111
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "vetting": {
+    "errors": 0,
+    "bridgeTotalsNonZero": true,
+    "roundedFingerprintsStable": true,
+    "browserMatchedEngine": true,
+    "wasmDownloadedOnFirstFile": true
+  }
+}
