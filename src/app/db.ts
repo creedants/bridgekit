@@ -12,42 +12,180 @@ export interface BrowserDatabase {
   loadFile(file: File, table: string): Promise<void>;
 }
 
+// One open per page. A rejection clears it so the next call can try again.
+// A stale attempt must not clear a newer one.
+let opening: Promise<BrowserDatabase> | undefined;
+
+/** Returns the page's database, starting it on the first call. */
+export function openBrowserDatabase(): Promise<BrowserDatabase> {
+  opening ??= openFresh();
+  return opening;
+}
+
+function openFresh(): Promise<BrowserDatabase> {
+  const attempt = instantiateBrowserDatabase().then(
+    (database) => database,
+    (error: unknown) => {
+      if (opening === attempt) opening = undefined;
+      throw error;
+    },
+  );
+  return attempt;
+}
+
+const IDLE_CAP_MS = 2000;
+
+/**
+ * Opens the shared database after the load event, on an idle callback.
+ * Save-Data leaves it closed until a file is chosen.
+ * A failure is ignored. The next openBrowserDatabase call tries again.
+ */
+export function warmBrowserDatabase(): void {
+  if (networkSaveData()) return;
+  const kick = () => {
+    void openBrowserDatabase().catch(() => {});
+  };
+  const whenIdle = () => {
+    if (typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(kick, { timeout: IDLE_CAP_MS });
+      return;
+    }
+    window.setTimeout(kick, IDLE_CAP_MS);
+  };
+  if (document.readyState === "complete") whenIdle();
+  else window.addEventListener("load", whenIdle, { once: true });
+}
+
+// The DOM lib in this toolchain does not declare Network Information.
+// Read the live property and accept only a boolean true.
+function networkSaveData(): boolean {
+  const host: unknown = navigator;
+  if (typeof host !== "object" || host === null || !("connection" in host)) return false;
+  const connection = host.connection;
+  if (typeof connection !== "object" || connection === null || !("saveData" in connection)) return false;
+  return connection.saveData === true;
+}
+
 // The wasm and worker files are bundled with the app so nothing is fetched
 // from a third-party host.
-export async function openBrowserDatabase(): Promise<BrowserDatabase> {
+// A wasm fetch can reject inside the worker and never answer the page, so the
+// bootstrap posts the ERROR that instantiate already rejects on. It records
+// only the INSTANTIATE id and removes itself once that request is answered.
+// A worker script that fails to load throws on the worker. DuckDB's error
+// handler drops the pending request without rejecting it, so the page also
+// races instantiate against the worker error event.
+// The blob has no page URL, so the worker script and wasm address are absolute.
+function pageUrl(url: string): string {
+  return new URL(url, location.href).href;
+}
+
+function databaseWorker(scriptUrl: string): { worker: Worker; release: () => void } {
+  const absolute = pageUrl(scriptUrl);
+  const source = `const duckdbPost = self.postMessage.bind(self);
+let instantiateId;
+let startup = true;
+function stopStartup() {
+  if (!startup) return;
+  startup = false;
+  self.postMessage = duckdbPost;
+  self.removeEventListener("message", onPageMessage);
+  self.removeEventListener("unhandledrejection", onUnhandledRejection);
+}
+function onPageMessage(event) {
+  const data = event.data;
+  if (!startup || !data || data.type !== "INSTANTIATE" || typeof data.messageId !== "number") return;
+  instantiateId = data.messageId;
+}
+function onUnhandledRejection(event) {
+  if (!startup) return;
+  event.preventDefault();
+  const reason = event.reason;
+  const message = reason instanceof Error ? reason.message : String(reason);
+  const name = reason instanceof Error ? reason.name : "Error";
+  const stack = reason instanceof Error ? reason.stack : undefined;
+  duckdbPost({
+    messageId: 0,
+    requestId: instantiateId,
+    type: "ERROR",
+    data: { name, message, stack },
+  });
+  stopStartup();
+}
+self.addEventListener("message", onPageMessage);
+self.addEventListener("unhandledrejection", onUnhandledRejection);
+self.postMessage = function (message, transfer) {
+  if (
+    startup &&
+    message &&
+    typeof instantiateId === "number" &&
+    message.requestId === instantiateId &&
+    (message.type === "OK" || message.type === "ERROR")
+  ) {
+    stopStartup();
+  }
+  return duckdbPost(message, transfer);
+};
+importScripts(${JSON.stringify(absolute)});
+`;
+  const objectUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+  try {
+    return { worker: new Worker(objectUrl), release: () => URL.revokeObjectURL(objectUrl) };
+  } catch (error) {
+    URL.revokeObjectURL(objectUrl);
+    throw error;
+  }
+}
+
+async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
   const bundle = await duckdb.selectBundle({
     mvp: { mainModule: mvpWasm, mainWorker: mvpWorker },
     eh: { mainModule: ehWasm, mainWorker: ehWorker },
   });
-  const worker = new Worker(bundle.mainWorker!);
-  const db = new duckdb.AsyncDuckDB(new duckdb.VoidLogger(), worker);
-  await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-  const connection = await db.connect();
-
-  const query: Query = async (sql) => {
-    const result = await connection.query(sql);
-    return result.toArray().map((row) => row.toJSON() as Record<string, unknown>);
-  };
-
-  return {
-    query,
-    async loadFile(file, table) {
-      const isParquet = /\.parquet$/i.test(file.name);
-      const isExcel = /\.xlsx$/i.test(file.name);
-      if (!isParquet && !isExcel && !/\.(csv|tsv|txt)$/i.test(file.name)) {
-        throw new Error("Use a CSV, Excel (.xlsx) or Parquet file");
-      }
-      const registered = isParquet ? "upload.parquet" : "upload.csv";
-      if (isExcel) {
-        await db.registerFileText(registered, await firstSheetAsCsv(file));
-      } else {
-        await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
-      }
-      const reader = isParquet ? `read_parquet('${registered}')` : `read_csv('${registered}')`;
-      await query(`CREATE OR REPLACE TABLE "${table}" AS SELECT * FROM ${reader}`);
-      await convertFormattedNumbers(query, table);
-    },
-  };
+  if (bundle.mainWorker == null) throw new Error("DuckDB bundle is missing its worker");
+  const script = databaseWorker(bundle.mainWorker);
+  try {
+    const db = new duckdb.AsyncDuckDB(new duckdb.VoidLogger(), script.worker);
+    const pthread = bundle.pthreadWorker == null ? null : pageUrl(bundle.pthreadWorker);
+    const startFailed = new Promise<never>((_, reject) => {
+      script.worker.addEventListener(
+        "error",
+        (event) => reject(new Error(event.message || "The database worker did not start")),
+        { once: true },
+      );
+    });
+    // If instantiate settles first, a later worker error must not reject unhandled.
+    startFailed.catch(() => {});
+    await Promise.race([db.instantiate(pageUrl(bundle.mainModule), pthread), startFailed]);
+    const connection = await db.connect();
+    const query: Query = async (sql) => {
+      const result = await connection.query(sql);
+      return result.toArray().map((row) => row.toJSON() as Record<string, unknown>);
+    };
+    return {
+      query,
+      async loadFile(file, table) {
+        const isParquet = /\.parquet$/i.test(file.name);
+        const isExcel = /\.xlsx$/i.test(file.name);
+        if (!isParquet && !isExcel && !/\.(csv|tsv|txt)$/i.test(file.name)) {
+          throw new Error("Use a CSV, Excel (.xlsx) or Parquet file");
+        }
+        const registered = isParquet ? "upload.parquet" : "upload.csv";
+        if (isExcel) {
+          await db.registerFileText(registered, await firstSheetAsCsv(file));
+        } else {
+          await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+        }
+        const reader = isParquet ? `read_parquet('${registered}')` : `read_csv('${registered}')`;
+        await query(`CREATE OR REPLACE TABLE "${table}" AS SELECT * FROM ${reader}`);
+        await convertFormattedNumbers(query, table);
+      },
+    };
+  } catch (error) {
+    script.worker.terminate();
+    throw error;
+  } finally {
+    script.release();
+  }
 }
 
 /** Reads the first worksheet of an .xlsx file, taking formula results and formatting dates as ISO. */
