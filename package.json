@@ -12,6 +12,7 @@
     "demo": "node scripts/demo.ts",
     "typecheck": "tsc --noEmit",
     "smoke": "node scripts/smoke.mjs",
+    "perf": "node scripts/perf/baseline.mjs",
     "build:cloudflare": "VITE_PAGE_COUNTS=1 VITE_WORKSPACES=1 VITE_AI_COMMENTARY=1 vite build && node scripts/compress-wasm.mjs",
     "cf:dev": "wrangler d1 migrations apply bridgekit --local && wrangler dev",
     "cf:deploy": "wrangler d1 migrations apply bridgekit --remote && wrangler deploy",
