@@ -58,7 +58,7 @@ const exported = JSON.parse(
 if (exported.error || exported.bytes < 10_000) fail(`Excel export: ${exported.error ?? "no file"}`);
 console.log(`ok  Excel export (${exported.bytes} bytes in ${exported.ms} ms)`);
 
-// Zero data retention: load a real file, then prove nothing was stored or sent.
+// Private by default: load a real file, then prove no data was stored or sent.
 await browser.goto(`${base}/app/`);
 await browser.evalJs("window.__violations = []; document.addEventListener('securitypolicyviolation', (e) => window.__violations.push(e.violatedDirective + ' ' + e.blockedURI)); true");
 await browser.send("DOM.enable");
@@ -85,12 +85,13 @@ const leaks = browser.requests.filter(
 if (leaks.length) fail(`requests that could carry data: ${JSON.stringify(leaks.slice(0, 5))}`);
 console.log(`ok  network: ${browser.requests.length} requests, all GET to ${origin}; ${sent.length} after the file was loaded`);
 
+const selected = await browser.evalJs("document.querySelector('.values input:checked').closest('label').textContent.trim()");
 const stored = JSON.parse(
   await browser.evalJs(`(async () => {
     let opfs = 0;
     try { for await (const _ of (await navigator.storage.getDirectory()).keys()) opfs++; } catch {}
     return JSON.stringify({
-      localStorage: Object.keys(localStorage),
+      localStorage: Object.fromEntries(Object.entries(localStorage)),
       sessionStorage: Object.keys(sessionStorage),
       cookies: document.cookie,
       indexedDB: (await indexedDB.databases()).map((d) => d.name),
@@ -101,28 +102,58 @@ const stored = JSON.parse(
     });
   })()`),
 );
-const kept = Object.entries(stored).filter(([key, value]) => key !== "violations" && (Array.isArray(value) ? value.length : value));
+const kept = Object.entries(stored).filter(
+  ([key, value]) => !["violations", "localStorage"].includes(key) && (Array.isArray(value) ? value.length : value),
+);
 if (kept.length) fail(`data left in the browser: ${JSON.stringify(Object.fromEntries(kept))}`);
 if (stored.violations.length) fail(`content policy violations: ${stored.violations.join("; ")}`);
-console.log("ok  storage: nothing in localStorage, sessionStorage, cookies, IndexedDB, caches, private file system or service workers");
+console.log("ok  storage: nothing in sessionStorage, cookies, IndexedDB, caches, private file system or service workers");
 
-// Opting in stores the mapping only, never filter selections; opting out deletes it.
-await browser.evalJs("[...document.querySelectorAll('.check input')].find(i => i.closest('label').textContent.includes('Remember')).click()");
-await browser.sleep(300);
-const remembered = await browser.evalJs("JSON.stringify(Object.fromEntries(Object.entries(localStorage)))");
-const selected = await browser.evalJs("document.querySelector('.values input:checked').closest('label').textContent.trim()");
-if (!remembered.includes("bridgekit:setup:")) fail("opting in did not store the setup");
-if (/"filters":\[[^\]]/.test(remembered.replaceAll("\\", ""))) fail("a filter selection was stored");
-if (JSON.parse(remembered)[Object.keys(JSON.parse(remembered)).find((k) => k.includes("setup:"))].includes(`"${selected}"`)) fail("a data value was stored");
-await browser.evalJs("[...document.querySelectorAll('.check input')].find(i => i.closest('label').textContent.includes('Remember')).click()");
-await browser.sleep(300);
-if ((await browser.evalJs("localStorage.length")) !== 0) fail("opting out left data in localStorage");
-console.log("ok  remember setup: stores the column mapping only, and unticking deletes it");
+// Remembering is on by default: localStorage holds one setup per set of
+// columns used (the sample data and this file) and nothing else, with no
+// filter selection or other value from the data.
+const entries = Object.entries(stored.localStorage);
+if (entries.length !== 2 || !entries.every(([key]) => key.startsWith("bridgekit:setup:"))) {
+  fail(`unexpected localStorage: ${JSON.stringify(Object.keys(stored.localStorage))}`);
+}
+for (const [, value] of entries) {
+  if (JSON.parse(value).filters.length) fail("a filter selection was stored");
+  if (value.includes(`"${selected}"`)) fail("a data value was stored");
+}
+console.log("ok  remember setup (default): stores the column mapping only");
+
+const loadCsv = async () => {
+  await browser.goto(`${base}/app/`);
+  const { root } = await browser.send("DOM.getDocument");
+  const { nodeId } = await browser.send("DOM.querySelector", { nodeId: root.nodeId, selector: "input[type=file][accept*=csv]" });
+  await browser.send("DOM.setFileInputFiles", { nodeId, files: [new URL("../public/sample-sales.csv", import.meta.url).pathname] });
+  await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent");
+};
+const rememberBox = "[...document.querySelectorAll('.check input')].find(i => i.closest('label').textContent.includes('Remember'))";
 
 await browser.evalJs("T.btn('Clear data').click()");
 await browser.sleep(1500);
 if (!(await browser.evalJs("!document.querySelector('aside') && document.body.innerText.includes('Load a sales file')"))) fail("Clear data did not reset the tool");
 console.log("ok  clear data returns to the empty tool");
+
+// The next file with the same columns opens with the remembered setup, minus filters.
+await loadCsv();
+const restored = await browser.evalJs(
+  "document.body.innerText.includes('Restored the setup') && document.querySelectorAll('.values input:checked').length === 0",
+);
+if (!restored) fail("the remembered setup was not restored without its filters");
+console.log("ok  remember setup: restored on the next load, without filter selections");
+
+// Unticking deletes the setup and keeps only the "off" choice, which survives a reload.
+await browser.evalJs(`${rememberBox}.click()`);
+await browser.sleep(300);
+const afterOff = await browser.evalJs("JSON.stringify(Object.fromEntries(Object.entries(localStorage)))");
+if (afterOff !== JSON.stringify({ "bridgekit:remember": "off" })) fail(`opting out left data in localStorage: ${afterOff}`);
+console.log("ok  remember setup: unticking deletes what was stored");
+
+await loadCsv();
+if (!(await browser.evalJs(`!${rememberBox}.checked && localStorage.length === 1`))) fail("remembering turned itself back on after a reload");
+console.log("ok  remember setup: staying off survives a reload");
 
 browser.close();
 console.log("smoke test passed");

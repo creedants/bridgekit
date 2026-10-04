@@ -90,10 +90,11 @@ export function viewSql(setup: Setup): string {
     ${conditions.length ? "WHERE " + conditions.join(" AND ") : ""}`;
 }
 
-// Zero data retention: by default nothing is written to the browser. Only if
-// the user turns on "Remember this setup" is the column mapping stored, keyed
-// by the set of column names, and filter selections are never stored because
-// they are values from the data.
+// Private by default: nothing from the data is written to the browser. The
+// column mapping is remembered unless the user turns that off, keyed by the set
+// of column names. Filter selections are never stored because they are values
+// from the data. Turning it off deletes everything and leaves only the "off"
+// preference, so the choice survives a reload.
 const PREFIX = "bridgekit:";
 const REMEMBER_KEY = PREFIX + "remember";
 const storageKey = (columns: Column[]) =>
@@ -101,7 +102,7 @@ const storageKey = (columns: Column[]) =>
 
 export function isRemembering(): boolean {
   try {
-    return localStorage.getItem(REMEMBER_KEY) === "1";
+    return localStorage.getItem(REMEMBER_KEY) !== "off";
   } catch {
     return false;
   }
@@ -110,13 +111,10 @@ export function isRemembering(): boolean {
 /** Turning this off deletes everything the tool has stored. */
 export function setRemembering(on: boolean): void {
   try {
-    if (on) {
-      localStorage.setItem(REMEMBER_KEY, "1");
-      return;
-    }
     for (const key of Object.keys(localStorage)) {
       if (key.startsWith(PREFIX)) localStorage.removeItem(key);
     }
+    if (!on) localStorage.setItem(REMEMBER_KEY, "off");
   } catch {
     // Storage can be blocked; then nothing is stored, which is the safe outcome.
   }
@@ -150,15 +148,12 @@ export function isValidSetup(value: unknown, columns: Column[]): value is Setup 
   );
 }
 
-// Earlier versions saved the setup without asking. Unless the user has opted
-// in, anything left from them is deleted when the tool starts.
-if (typeof localStorage !== "undefined" && !isRemembering()) setRemembering(false);
-
 export function loadSavedSetup(columns: Column[]): Setup | null {
   if (!isRemembering()) return null;
   try {
     const saved: unknown = JSON.parse(localStorage.getItem(storageKey(columns)) ?? "null");
-    return isValidSetup(saved, columns) ? saved : null;
+    // Very early versions stored filters too; drop them rather than trust them.
+    return isValidSetup(saved, columns) ? { ...saved, filters: [] } : null;
   } catch {
     return null;
   }

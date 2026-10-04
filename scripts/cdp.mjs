@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 export async function open(port = 9340) {
+  // A fresh profile each run, so nothing a previous run stored affects this one.
+  rmSync(`/tmp/bridgekit-smoke-profile-${port}`, { recursive: true, force: true });
   const chrome = spawn("chromium", ["--headless=new", "--disable-gpu", "--hide-scrollbars", `--remote-debugging-port=${port}`, "--window-size=1360,900", `--user-data-dir=/tmp/bridgekit-smoke-profile-${port}`, "about:blank"], { stdio: "ignore" });
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let target;

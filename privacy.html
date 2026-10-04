@@ -28,7 +28,7 @@
     <article>
       <div class="wrap narrow">
         <h1>Privacy</h1>
-        <p class="sub">The short version: your sales file never leaves your computer, and the tool keeps nothing once the tab is closed.</p>
+        <p class="sub">The short version: your sales file never leaves your computer, and none of its data is kept once the tab is closed. The tool remembers your column choices in your browser, and you can turn that off.</p>
 
         <h2>Your files</h2>
         <ul>
@@ -39,8 +39,10 @@
 
         <h2>What is stored, and where</h2>
         <ul>
-          <li>By default, nothing. The data lives in the tab’s memory and is gone when you close or reload the tab, or choose <b>Clear data</b>.</li>
-          <li>If you tick <b>Remember this setup in this browser</b>, your column choices, attribute order and options are saved in your browser’s local storage. Filter selections are not saved, because they are values from your data. Unticking the box deletes what was saved.</li>
+          <li>Your data is never stored. It lives in the tab’s memory and is gone when you close or reload the tab, or choose <b>Clear data</b>.</li>
+          <li>Your setup is remembered unless you turn it off. After you calculate a bridge, your column choices, attribute order and options are saved in your browser’s local storage, so the next file with the same columns opens ready. This includes your column names and attribute names, but no values from your data: filter selections are not saved for that reason.</li>
+          <li>Unticking <b>Remember this setup in this browser</b> deletes everything the tool saved. The tool then keeps one setting, that remembering is off, so it stays off next time.</li>
+          <li>Local storage stays on your computer; it is not sent to us. Clearing your browser’s site data also removes it.</li>
           <li>The tool does not use IndexedDB, browser caches, a private file system or a service worker.</li>
           <li>The site sets no cookies and has no accounts.</li>
         </ul>
