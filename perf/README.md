@@ -46,7 +46,7 @@ Sizes are 10,000, 300,000, and 3,000,000 rows. The browser measures the first tw
 Bytes:
 
 - `build.totals` sums every file under `dist/`. `gzipBytes` is zlib gzip at the default level. `brotliBytes` is brotli quality 5.
-- `build.toolPage` sums the files the cold tool page requested before it became interactive. The local server records those requests, including the HTML document.
+- `build.toolPage` sums the files the local server saw by the time the harness observed the interactive mark, including the HTML document. The page sets the mark. The harness polls until it reads that mark, so a request in the gap, such as the favicon, is included.
 - `build.duckdbOnFirstFile` sums the DuckDB wasm and worker files requested while the first file was loading.
 
 The local server sends bytes with no content encoding. `npm run build:cloudflare` is a different bundle. It turns on page counts, workspaces, and AI commentary, and it replaces each wasm file with a gzip copy. This script does not run that build.

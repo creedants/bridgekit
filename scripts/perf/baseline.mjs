@@ -5,7 +5,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { cpus, loadavg, arch, platform, release } from "node:os";
-import { extname, join, relative, sep } from "node:path";
+import { extname, join, relative, resolve, sep } from "node:path";
 import { gzipSync, brotliCompressSync, constants } from "node:zlib";
 import { open } from "../cdp.mjs";
 import { openDatabase } from "../../src/duckdb.ts";
@@ -57,7 +57,7 @@ window.__interactiveMs = null;
 `;
 
 const root = process.cwd();
-const defaultOut = join(root, "perf", "baseline.json");
+const defaultOut = resolve(root, "perf", "baseline.json");
 
 function die(message) {
   const error = new Error(message);
@@ -82,8 +82,7 @@ function sampleCount() {
 
 function assertFullRun(out, count) {
   const partial = process.argv.includes("--skip-build") || option("--only") || count !== 5;
-  const resolved = join(root, out);
-  if (partial && resolved === defaultOut) {
+  if (partial && resolve(root, out) === defaultOut) {
     die("A partial run cannot write perf/baseline.json. Pass --out to another path.");
   }
 }
@@ -837,7 +836,7 @@ async function main() {
   const atStart = machineInfo();
   const count = sampleCount();
   const only = option("--only");
-  const out = option("--out") ?? defaultOut;
+  const out = resolve(root, option("--out") ?? defaultOut);
   assertFullRun(out, count);
   if (only && !["assets", "engine", "browser"].includes(only)) die("--only must be assets, engine, or browser");
   const chrome = spawnSync("chromium", ["--version"], { encoding: "utf8" });
@@ -912,7 +911,7 @@ async function main() {
       identity: `Money rounded to ${MONEY_DECIMALS} decimals and coverage shares rounded to ${SHARE_DECIMALS} decimals. Raw float sums are not bit-stable.`,
       gzipBytes: "zlib gzip at the default level.",
       brotliBytes: `zlib brotli quality ${BROTLI_QUALITY}.`,
-      toolPage: "Dist files the cold tool page requested before the interactive mark.",
+      toolPage: "Dist files the local server saw by the time the harness observed the interactive mark. The page sets the mark and the harness polls for it, so a request in that gap is included.",
       duckdbOnFirstFile: "DuckDB wasm and worker files requested after the interactive mark, during the first file.",
       cloudflareBuild: "npm run build:cloudflare is a different bundle. It sets VITE_PAGE_COUNTS, VITE_WORKSPACES, and VITE_AI_COMMENTARY, then replaces each wasm file with a gzip copy. This script does not run it.",
     },
