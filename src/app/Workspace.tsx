@@ -1,0 +1,336 @@
+import { useEffect, useRef, useState } from "react";
+import type { BridgeSummary } from "../summary.ts";
+import * as api from "./account.ts";
+import { signedWhole, whole } from "./format.ts";
+import type { Setup } from "./setup.ts";
+
+/**
+ * Pro workspaces: sign in, save setups and bridge totals, share them with a
+ * team. Shown only in builds with VITE_WORKSPACES=1. What is saved is the
+ * setup without filter values and the bridge totals; the file stays in the tab.
+ */
+export default function WorkspacePanel(props: {
+  columns: string[];
+  setup: Setup | null;
+  /** The current bridge, when it matches the setup on screen. */
+  bridge: { summary: BridgeSummary; setup: Setup } | null;
+  onUseSetup: (setup: Setup) => void;
+}) {
+  const [config, setConfig] = useState<api.Config | null>(null);
+  const [user, setUser] = useState<api.User | null | undefined>(undefined);
+  const [workspaces, setWorkspaces] = useState<api.Workspace[]>([]);
+  const [active, setActive] = useState("");
+  const [plan, setPlan] = useState<{ role: string; plan: api.Plan } | null>(null);
+  const [setups, setSetups] = useState<api.SavedSetup[]>([]);
+  const [bridges, setBridges] = useState<api.SavedBridge[]>([]);
+  const [viewing, setViewing] = useState<api.SavedBridge | null>(null);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function act(work: () => Promise<unknown>, done = "") {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await work();
+      setMessage(done);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadWorkspaces(prefer?: string) {
+    const list = await api.listWorkspaces();
+    setWorkspaces(list);
+    setActive((current) => prefer ?? (list.some((w) => w.id === current) ? current : (list[0]?.id ?? "")));
+  }
+
+  useEffect(() => {
+    act(async () => {
+      const [found, signedIn] = await Promise.all([api.getConfig(), api.getUser()]);
+      setConfig(found);
+      setUser(signedIn);
+      if (!signedIn) return;
+      // An invitation link is /app/?invitation=ID; accept it once signed in.
+      const invitation = new URLSearchParams(location.search).get("invitation");
+      if (invitation) {
+        await api.acceptInvitation(invitation);
+        history.replaceState(null, "", location.pathname);
+      }
+      await loadWorkspaces();
+      if (invitation) setMessage("You have joined the workspace.");
+      // Paddle's checkout returns to /app/?subscribed=1; its confirmation reaches the server separately.
+      if (new URLSearchParams(location.search).has("subscribed")) {
+        history.replaceState(null, "", location.pathname);
+        setMessage("Thank you. Pro switches on as soon as Paddle confirms the payment, usually within a minute; reload to check.");
+      }
+    });
+  }, []);
+
+  const columnsKey = props.columns.join("|");
+  useEffect(() => {
+    if (!active) return;
+    act(async () => {
+      const [found, saved] = await Promise.all([api.getPlan(active), api.listBridges(active)]);
+      setPlan(found);
+      setBridges(saved);
+      setSetups(props.columns.length ? await api.listSetups(active, props.columns) : []);
+    });
+  }, [active, columnsKey]);
+
+  if (user === undefined) return <fieldset className="team"><legend>Workspace</legend>{error && <p className="error">{error}</p>}</fieldset>;
+
+  if (user === null) return <SignIn config={config} busy={busy} error={error} message={message} act={act} />;
+
+  const pro = plan?.plan.pro ?? false;
+  const canManage = plan?.role === "owner" || plan?.role === "admin";
+  return (
+    <fieldset className="team">
+      <legend>Workspace</legend>
+      <p className="hint">
+        Signed in as {user.email}.{" "}
+        <button className="link" onClick={() => act(async () => { await api.signOut(); setUser(null); })}>Sign out</button>
+      </p>
+
+      {workspaces.length === 0 ? (
+        <CreateWorkspace busy={busy} onCreate={(name) => act(async () => loadWorkspaces((await api.createWorkspace(name)).id))} />
+      ) : (
+        <>
+          {workspaces.length > 1 && (
+            <select aria-label="Workspace" value={active} onChange={(e) => setActive(e.target.value)}>
+              {workspaces.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+            </select>
+          )}
+          {workspaces.length === 1 && <p><b>{workspaces[0].name}</b></p>}
+          {plan && (
+            pro ? (
+              <p className="hint">Pro, {plan.plan.seats} {plan.plan.seats === 1 ? "seat" : "seats"}{plan.plan.status === "canceled" && plan.plan.currentPeriodEnd ? `, ends ${plan.plan.currentPeriodEnd.slice(0, 10)}` : ""}.</p>
+            ) : (
+              <Subscribe canManage={canManage} billing={config?.billing ?? false} busy={busy} onSubscribe={(seats) => act(async () => { location.href = (await api.checkout(active, seats)).checkoutUrl; })} />
+            )
+          )}
+
+          {props.columns.length > 0 && (
+            <>
+              <h4>Setups for these columns</h4>
+              {setups.length === 0 && <p className="hint">None saved yet.</p>}
+              <ul className="saved">
+                {setups.map((s) => (
+                  <li key={s.id}>
+                    <span title={`${s.createdBy ?? ""} · ${s.createdAt.slice(0, 10)}`}>{s.name}</span>
+                    <button className="link" onClick={() => { props.onUseSetup(s.setup); setMessage(`Using “${s.name}”.`); }}>Use</button>
+                    <button className="icon" aria-label={`Delete ${s.name}`} onClick={() => act(async () => { await api.deleteSaved(active, "setups", s.id); setSetups((all) => all.filter((x) => x.id !== s.id)); })}>×</button>
+                  </li>
+                ))}
+              </ul>
+              {props.setup && (
+                <SaveForm
+                  label="Save setup"
+                  initial="Setup"
+                  disabled={!pro || busy}
+                  onSave={(name) =>
+                    act(async () => {
+                      await api.saveSetup(active, name, props.columns, { ...props.setup!, filters: [] });
+                      setSetups(await api.listSetups(active, props.columns));
+                    }, "Setup saved. Filter selections are not saved.")
+                  }
+                />
+              )}
+            </>
+          )}
+
+          <h4>Saved bridges</h4>
+          {bridges.length === 0 && <p className="hint">None saved yet.</p>}
+          <ul className="saved">
+            {bridges.map((b) => (
+              <li key={b.id}>
+                <button className="link" onClick={() => setViewing(b)}>{b.name}</button>
+                <span className="hint">{b.createdAt.slice(0, 10)}</span>
+                <button className="icon" aria-label={`Delete ${b.name}`} onClick={() => act(async () => { await api.deleteSaved(active, "bridges", b.id); setBridges((all) => all.filter((x) => x.id !== b.id)); })}>×</button>
+              </li>
+            ))}
+          </ul>
+          {props.bridge && (
+            <SaveForm
+              label="Save this bridge"
+              initial={`${props.bridge.summary.prior} to ${props.bridge.summary.current}`}
+              disabled={!pro || busy}
+              onSave={(name) =>
+                act(async () => {
+                  const { summary, setup } = props.bridge!;
+                  await api.saveBridge(active, {
+                    name,
+                    columns: props.columns,
+                    setup: { ...setup, filters: [] },
+                    summary,
+                    filterColumns: setup.filters.filter((f) => f.values.length > 0).map((f) => f.column),
+                  });
+                  setBridges(await api.listBridges(active));
+                }, "Bridge totals saved.")
+              }
+            />
+          )}
+          {props.bridge && <p className="hint">Saves the totals and the setup. Not the file, rows or filter selections.</p>}
+
+          <Members workspace={active} canManage={canManage} seats={plan?.plan.seats ?? 1} act={act} />
+        </>
+      )}
+
+      {message && <p className="hint" role="status">{message}</p>}
+      {error && <p className="error">{error}</p>}
+
+      <details className="danger">
+        <summary>Delete account</summary>
+        <p className="hint">Deletes your account. Workspaces where you are the only member are deleted with everything saved in them.</p>
+        <button
+          disabled={busy}
+          onClick={() => {
+            if (confirm("Delete your Bridgekit account? This cannot be undone.")) {
+              act(async () => { await api.deleteAccount(); setUser(null); }, "Account deleted.");
+            }
+          }}
+        >
+          Delete my account
+        </button>
+      </details>
+
+      {viewing && <BridgeDialog bridge={viewing} onClose={() => setViewing(null)} />}
+    </fieldset>
+  );
+}
+
+type Act = (work: () => Promise<unknown>, done?: string) => Promise<void>;
+
+function SignIn(props: { config: api.Config | null; busy: boolean; error: string; message: string; act: Act }) {
+  const [email, setEmail] = useState("");
+  const labels = { microsoft: "Microsoft", google: "Google" };
+  return (
+    <fieldset className="team">
+      <legend>Workspace</legend>
+      <p className="hint">With Pro, setups and bridge totals are saved to a workspace your team can open from any computer. Your file is never uploaded.</p>
+      <form
+        className="row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          props.act(() => api.emailSignIn(email), "Check your email for a sign-in link.");
+        }}
+      >
+        <input type="email" required placeholder="Work email" aria-label="Work email" value={email} onChange={(e) => setEmail(e.target.value)} />
+        <button disabled={props.busy || !email}>Email me a link</button>
+      </form>
+      {props.config?.providers.map((p) => (
+        <button key={p} disabled={props.busy} onClick={() => props.act(() => api.providerSignIn(p))}>Sign in with {labels[p]}</button>
+      ))}
+      {props.message && <p className="hint" role="status">{props.message}</p>}
+      {props.error && <p className="error">{props.error}</p>}
+    </fieldset>
+  );
+}
+
+function CreateWorkspace(props: { busy: boolean; onCreate: (name: string) => void }) {
+  const [name, setName] = useState("");
+  return (
+    <form className="row" onSubmit={(e) => { e.preventDefault(); props.onCreate(name.trim()); }}>
+      <input required maxLength={60} placeholder="Workspace name, e.g. Pricing team" aria-label="Workspace name" value={name} onChange={(e) => setName(e.target.value)} />
+      <button disabled={props.busy || !name.trim()}>Create workspace</button>
+    </form>
+  );
+}
+
+function Subscribe(props: { canManage: boolean; billing: boolean; busy: boolean; onSubscribe: (seats: number) => void }) {
+  const [seats, setSeats] = useState(1);
+  if (!props.billing) return <p className="hint">Saving needs Pro, which is not on sale yet.</p>;
+  if (!props.canManage) return <p className="hint">Saving needs Pro. Ask the workspace owner to subscribe.</p>;
+  return (
+    <>
+      <p className="hint">Saving needs Pro. <a href="/#pricing" target="_blank" rel="noreferrer">Pricing</a></p>
+      <div className="row">
+        <label className="hint">
+          Seats <input type="number" min={1} max={200} value={seats} onChange={(e) => setSeats(Math.max(1, Math.floor(Number(e.target.value) || 1)))} style={{ width: 64 }} />
+        </label>
+        <button disabled={props.busy} onClick={() => props.onSubscribe(seats)}>Subscribe</button>
+      </div>
+      <p className="hint">Payment is taken by Paddle, our reseller, on its own checkout page.</p>
+    </>
+  );
+}
+
+function SaveForm(props: { label: string; initial: string; disabled: boolean; onSave: (name: string) => void }) {
+  const [name, setName] = useState(props.initial);
+  useEffect(() => setName(props.initial), [props.initial]);
+  return (
+    <form className="row" onSubmit={(e) => { e.preventDefault(); props.onSave(name.trim()); }}>
+      <input required maxLength={120} aria-label={`${props.label}: name`} value={name} onChange={(e) => setName(e.target.value)} />
+      <button disabled={props.disabled || !name.trim()}>{props.label}</button>
+    </form>
+  );
+}
+
+function Members(props: { workspace: string; canManage: boolean; seats: number; act: Act }) {
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState<{ members: api.Member[]; invitations: api.Invitation[] } | null>(null);
+  const [email, setEmail] = useState("");
+  const refresh = () => props.act(async () => setData(await api.getMembers(props.workspace)));
+  useEffect(() => {
+    if (open) refresh();
+  }, [open, props.workspace]);
+  const pending = data?.invitations.filter((i) => i.status === "pending") ?? [];
+  return (
+    <details className="members" onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary>Members</summary>
+      <ul className="saved">
+        {data?.members.map((m) => (
+          <li key={m.id}>
+            <span>{m.user.name || m.user.email}</span>
+            <span className="hint">{m.role}</span>
+            {props.canManage && m.role !== "owner" && (
+              <button className="icon" aria-label={`Remove ${m.user.email}`} onClick={() => props.act(async () => { await api.removeMember(props.workspace, m.id); await refresh(); })}>×</button>
+            )}
+          </li>
+        ))}
+        {pending.map((i) => <li key={i.id}><span>{i.email}</span><span className="hint">invited</span></li>)}
+      </ul>
+      {props.canManage && (
+        <>
+          <form className="row" onSubmit={(e) => { e.preventDefault(); props.act(async () => { await api.invite(props.workspace, email); setEmail(""); await refresh(); }, "Invitation sent."); }}>
+            <input type="email" required placeholder="Colleague’s email" aria-label="Colleague’s email" value={email} onChange={(e) => setEmail(e.target.value)} />
+            <button disabled={!email}>Invite</button>
+          </form>
+          <p className="hint">{props.seats} {props.seats === 1 ? "seat" : "seats"}. Each member uses one.</p>
+        </>
+      )}
+    </details>
+  );
+}
+
+function BridgeDialog(props: { bridge: api.SavedBridge; onClose: () => void }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => ref.current?.showModal(), []);
+  const { summary, setup } = props.bridge;
+  const ofPrior = (n: number) => (summary.priorTotal > 0 ? ((n / summary.priorTotal) * 100).toFixed(1) + "%" : "");
+  return (
+    <dialog ref={ref} className="saved-bridge" onClose={props.onClose}>
+      <div className="toolbar">
+        <h3>{props.bridge.name}</h3>
+        <button onClick={() => ref.current?.close()}>Close</button>
+      </div>
+      <table>
+        <tbody>
+          <tr><td>{summary.measure} {summary.prior}</td><td className="num">{whole(summary.priorTotal)}</td><td /></tr>
+          {summary.effects.map((e) => (
+            <tr key={e.label}><td>{e.label}</td><td className="num">{signedWhole(e.value)}</td><td className="num">{ofPrior(e.value)}</td></tr>
+          ))}
+          <tr className="total"><td>{summary.measure} {summary.current}</td><td className="num">{whole(summary.currentTotal)}</td><td /></tr>
+        </tbody>
+      </table>
+      <p className="hint">
+        Attributes: {summary.attributes.join(", ")}. {(summary.exactMatchShare * 100).toFixed(1)}% of current units matched an exact prior configuration.
+        {props.bridge.filterColumns.length > 0 && ` Filtered on ${props.bridge.filterColumns.join(", ")}; the selected values were not saved.`}
+        {" "}Units: {setup.unitsColumn}. Sales: {setup.salesColumn}. Saved by {props.bridge.createdBy ?? "a former member"} on {props.bridge.createdAt.slice(0, 10)}.
+      </p>
+    </dialog>
+  );
+}

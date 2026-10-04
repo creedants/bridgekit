@@ -28,7 +28,7 @@
     <article>
       <div class="wrap narrow">
         <h1>Privacy</h1>
-        <p class="sub">The short version: your sales file never leaves your computer, and none of its data is kept once the tab is closed. The tool remembers your column choices in your browser, and you can turn that off.</p>
+        <p class="sub">The short version: your sales file never leaves your computer, and none of its data is kept once the tab is closed<!-- feature:workspaces --> unless you save bridge totals to a Pro workspace<!-- /feature:workspaces -->. The tool remembers your column choices in your browser, and you can turn that off.</p>
 
         <h2>Your files</h2>
         <ul>
@@ -39,12 +39,17 @@
 
         <h2>What is stored, and where</h2>
         <ul>
-          <li>Your data is never stored. It lives in the tab’s memory and is gone when you close or reload the tab, or choose <b>Clear data</b>.</li>
+          <li>Your file and its rows are never stored. They live in the tab’s memory and is gone when you close or reload the tab, or choose <b>Clear data</b>.</li>
           <li>Your setup is remembered unless you turn it off. After you calculate a bridge, your column choices, attribute order and options are saved in your browser’s local storage, so the next file with the same columns opens ready. This includes your column names and attribute names, but no values from your data: filter selections are not saved for that reason.</li>
           <li>Unticking <b>Remember this setup in this browser</b> deletes everything the tool saved. The tool then keeps one setting, that remembering is off, so it stays off next time.</li>
           <li>Local storage stays on your computer; it is not sent to us. Clearing your browser’s site data also removes it.</li>
           <li>The tool does not use IndexedDB, browser caches, a private file system or a service worker.</li>
+          <!-- feature:!workspaces -->
           <li>The site sets no cookies and has no accounts.</li>
+          <!-- /feature:!workspaces -->
+          <!-- feature:workspaces -->
+          <li>The site sets no cookies unless you sign in to a Pro workspace. Signing in sets one cookie that keeps you signed in; signing out removes it.</li>
+          <!-- /feature:workspaces -->
         </ul>
 
         <!-- feature:ai -->
@@ -57,17 +62,40 @@
         </ul>
 
         <!-- /feature:ai -->
+        <!-- feature:workspaces -->
+        <h2>Pro workspaces (optional)</h2>
+        <p>Nobody needs an account to use the tool. If you sign in to a Pro workspace:</p>
+        <ul>
+          <li><b>What is stored:</b> your email address (and your name, if you sign in with Microsoft or Google), the workspaces you belong to, their members and invitations, and what members choose to save: setups and bridge totals. A saved setup holds column names, attribute order and options. A saved bridge holds the totals you see in the bridge table, the attribute names and the names of any filtered columns.</li>
+          <li><b>What is not stored:</b> your file, its rows, filter selections or any other value from your data. Sign-in sessions do not record your IP address or browser. Your IP address is used briefly, in memory, to slow repeated sign-in attempts.</li>
+          <li><b>Who sees it:</b> members of the workspace. Any member can delete a saved item.</li>
+          <li><b>Companies involved:</b> Cloudflare hosts the site and the database. Resend sends sign-in and invitation emails. Paddle takes payment as our reseller, on its own checkout page, and holds your billing details; we only receive the subscription status and seat count. If you sign in with Microsoft or Google, they confirm who you are.</li>
+          <li><b>Deleting:</b> <b>Delete account</b> in the tool deletes your account. Workspaces where you are the only member are deleted with everything saved in them.</li>
+        </ul>
+
+        <!-- /feature:workspaces -->
         <h2>What we can see</h2>
         <ul>
+          <!-- feature:!counts -->
           <li>The site has no analytics or tracking scripts and loads nothing from third parties.</li>
+          <!-- /feature:!counts -->
+          <!-- feature:counts -->
+          <li>The site has no tracking scripts and loads nothing from third parties.</li>
+          <li>The site’s server counts page loads: for each page, the date and the website you came from, if any. It does not record your IP address, set a cookie or keep anything else about you. In the tool, it counts only that the page was opened.</li>
+          <!-- /feature:counts -->
           <li>The company hosting the site can see ordinary web server logs, such as the pages requested and IP addresses. It cannot see your files.</li>
         </ul>
 
         <h2>Checking this yourself</h2>
-        <p>Open your browser’s developer tools, go to the network panel, and load a file. No request carries your data. The pages also carry a content security policy that only allows connections to this site, so the browser itself blocks anything else. The source code is published so anyone can confirm what the page does, and its automated test checks that nothing is stored or sent.</p>
+        <p>Open your browser’s developer tools, go to the network panel, and load a file. No request carries your data. The pages also carry a content security policy that only allows connections to this site, so the browser itself blocks anything else. The source code is published so anyone can confirm what the page does, and its automated test checks that none of your data is stored or sent.</p>
 
         <h2>If this changes</h2>
+        <!-- feature:!workspaces -->
         <p>Planned paid features such as saved workspaces across devices would store your setup on a server. This page will be updated before any such feature is released, and uploading data will never be required to use the free tool.</p>
+        <!-- /feature:!workspaces -->
+        <!-- feature:workspaces -->
+        <p>This page will be updated before any change to what is stored or sent. Uploading data will never be required to use the free tool.</p>
+        <!-- /feature:workspaces -->
       </div>
     </article>
 

@@ -73,10 +73,16 @@ The tool sends nothing and keeps none of the data:
   Unticking "Remember this setup in this browser" deletes it and leaves a
   single `bridgekit:remember=off` flag so the choice persists.
 - No analytics and no third-party requests. Built pages carry a content
-  security policy limited to their own origin; `public/_headers` sends the same
-  policy as a response header on hosts that support it, which is what covers
-  the database worker.
+  security policy limited to their own origin (`scripts/policy.ts`);
+  `public/_headers` sends the same policy as a response header on hosts that
+  support it, which is what covers the database worker.
 - `npm run smoke` asserts all of the above against a running server.
+
+The Cloudflare build adds opt-in features (see Deploying). For a visitor who
+does not sign in, the only difference is that the server counts the page load;
+the smoke test passes against it unchanged. Pages that describe the site mark
+feature-specific wording with `<!-- feature:NAME -->`, so each build states
+only what is true for it.
 
 ## Optional AI commentary
 
@@ -108,9 +114,41 @@ prescription lens sales so you can try it without a file.
 
 ## Deploying
 
-`npm run build` writes a static site to `dist/`. Any static host works. Check
-the host's per-file size limit first: the DuckDB WebAssembly files are 36 MB
-and 41 MB, which is over the limit on some hosts.
+`npm run build` writes the free, static site to `dist/`. Any static host works
+if it allows single files over 40 MB: the DuckDB WebAssembly files are 36 MB
+and 41 MB.
+
+### Cloudflare, with the opt-in features
+
+`npm run build:cloudflare` builds the site with page counts, Pro workspaces
+and AI commentary switched on, then gzips the two engine files to about 8 MB
+each, under Cloudflare's 25 MiB per-file limit. The Worker in `server/` serves
+the site and the API on one address, so the security policy stays limited to
+the site's own origin:
+
+- `server/counts.ts`: a daily count per page and referring site, taken as the
+  Worker serves each page. No script, cookie or visitor details.
+- `server/auth.ts`, `server/workspace.ts`: accounts (Better Auth: emailed
+  sign-in link, Microsoft, Google) and team workspaces that save setups without
+  filter values and bridge totals (`src/summary.ts`). Saving needs Pro.
+- `server/paddle.ts`: Pro subscriptions through Paddle. Checkout opens on
+  `/pay/`, the only page allowed to load Paddle's script.
+- `server/commentary.ts`: AI commentary for Pro members.
+- `migrations/`: the D1 database tables. `scripts/auth-schema.ts` regenerates
+  the account tables from `server/auth.ts`.
+
+To run all of it on this machine with a local database and no Cloudflare
+account: copy `.dev.vars.example` to `.dev.vars`, set `BETTER_AUTH_SECRET`,
+then `npm run build:cloudflare && npm run cf:dev` and open
+http://localhost:8790. Without an email key, sign-in links are printed in the
+terminal. `npm run smoke -- http://localhost:8790` runs the smoke test against
+it.
+
+To go live: create the D1 database (`wrangler d1 create bridgekit`) and put
+its id in `wrangler.jsonc`, set `BETTER_AUTH_URL` to the real address, add the
+secrets listed there with `wrangler secret put`, build with
+`VITE_PADDLE_CLIENT_TOKEN` (and `VITE_PADDLE_ENVIRONMENT=live` when ready),
+then `npm run cf:deploy`. `npm run stats` prints the page counts.
 
 ## Layout
 

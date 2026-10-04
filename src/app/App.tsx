@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { dataCheck, runBridge, type BridgeConfig } from "../engine.ts";
+import { summarize } from "../summary.ts";
 import { createSyntheticSales } from "../synth.ts";
 import { openBrowserDatabase, type BrowserDatabase } from "./db.ts";
 import { exportExcel } from "./exportExcel.ts";
@@ -23,6 +24,9 @@ import {
   type Setup,
 } from "./setup.ts";
 import { SetupPanel } from "./SetupPanel.tsx";
+
+// Pro workspaces exist only in builds with VITE_WORKSPACES=1; elsewhere the code is left out.
+const WorkspacePanel = import.meta.env.VITE_WORKSPACES === "1" ? lazy(() => import("./Workspace.tsx")) : null;
 
 const SAMPLE_ROWS = 1_000_000;
 const MAX_SAMPLE_ROWS = 5_000_000;
@@ -332,6 +336,11 @@ export function App() {
             gross sales and cost are optional. See the <a href="/guide.html">guide</a>, or{" "}
             <a href="/sample-sales.csv" download>download a small sample file</a>.
           </p>
+          {WorkspacePanel && (
+            <Suspense>
+              <WorkspacePanel columns={[]} setup={null} bridge={null} onUseSetup={() => {}} />
+            </Suspense>
+          )}
         </main>
       ) : (
         <div className="workspace">
@@ -397,6 +406,19 @@ export function App() {
                 </label>
               </p>
             </div>
+            {WorkspacePanel && (
+              <Suspense>
+                <WorkspacePanel
+                  columns={columns.map((c) => c.name)}
+                  setup={setup}
+                  bridge={run && run.signature === signature ? { summary: summarize(run.result, run.config), setup } : null}
+                  onUseSetup={(saved) => {
+                    if (isValidSetup(saved, columns)) setSetup(saved);
+                    else setError("That saved setup does not match the columns in this data.");
+                  }}
+                />
+              </Suspense>
+            )}
           </aside>
           <main>
             {notice && <p className="notice">{notice}</p>}

@@ -12,7 +12,7 @@
     "demo": "node scripts/demo.ts",
     "typecheck": "tsc --noEmit",
     "smoke": "node scripts/smoke.mjs",
-    "build:cloudflare": "VITE_PAGE_COUNTS=1 VITE_WORKSPACES=1 vite build && node scripts/compress-wasm.mjs",
+    "build:cloudflare": "VITE_PAGE_COUNTS=1 VITE_WORKSPACES=1 VITE_AI_COMMENTARY=1 vite build && node scripts/compress-wasm.mjs",
     "cf:dev": "wrangler d1 migrations apply bridgekit --local && wrangler dev",
     "cf:deploy": "wrangler d1 migrations apply bridgekit --remote && wrangler deploy",
     "stats": "wrangler d1 execute bridgekit --remote --command \"SELECT day, path, referrer, views FROM page_views ORDER BY day DESC, views DESC LIMIT 100\""

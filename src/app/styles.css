@@ -122,6 +122,22 @@ tr.clickable:hover td { background: var(--accent-soft); }
 .summary { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 4px; max-width: 760px; }
 .summary h3 { margin: 8px 0; }
 .summary p { font-size: 13px; }
+.team h4 { margin: 10px 0 2px; font-size: 12px; color: var(--text-2); }
+.team input { min-width: 0; flex: 1; }
+.team .row { flex-wrap: nowrap; }
+.team details summary { cursor: pointer; color: var(--text-2); font-size: 12px; }
+.team .danger { margin-top: 8px; }
+.saved { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.saved li { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.saved li > :first-child { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+button.link { border: 0; background: none; padding: 0; height: auto; color: var(--accent); text-decoration: underline; }
+button.link:hover:not(:disabled) { background: none; }
+.empty .team { margin-top: 24px; border-top: 1px solid var(--line); border-bottom: 0; max-width: 420px; }
+dialog.saved-bridge { border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 12px 16px; max-width: 560px; width: calc(100% - 32px); }
+dialog.saved-bridge::backdrop { background: rgb(15 23 42 / 0.25); }
+dialog.saved-bridge table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+dialog.saved-bridge td { padding: 3px 6px; border-bottom: 1px solid var(--line); }
+dialog.saved-bridge .total td { font-weight: 600; }
 .ai { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 4px; }
 .ai details { margin: 6px 0; font-size: 12px; }
 .ai summary { cursor: pointer; color: var(--accent); }

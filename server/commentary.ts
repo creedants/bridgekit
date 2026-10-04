@@ -44,7 +44,7 @@ Rules:
 export async function handleCommentary(request: Request, options: CommentaryOptions): Promise<Response> {
   if (request.method !== "POST") return reply(405, { error: "Use POST." });
   if (options.authorize && !(await options.authorize(request))) {
-    return reply(403, { error: "AI commentary is not available for this account." });
+    return reply(403, { error: "AI commentary is part of Pro. Sign in to a workspace with Pro to use it." });
   }
   const raw = await request.text();
   if (raw.length > MAX_BODY_BYTES) return reply(413, { error: "That request is too large to be bridge totals." });

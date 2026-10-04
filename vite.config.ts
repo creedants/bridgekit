@@ -1,49 +1,26 @@
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
 import { defineConfig, loadEnv, type Plugin } from "vite";
-
-// The built pages may only talk to their own origin, so the tool cannot send
-// data anywhere even if a dependency tried to. Not applied in dev, where Vite
-// needs inline scripts and a websocket for reloading.
-const TOOL_POLICY = [
-  "default-src 'self'",
-  "script-src 'self' 'wasm-unsafe-eval'",
-  "worker-src 'self' blob:",
-  "connect-src 'self'",
-  "img-src 'self' data: blob:",
-  "style-src 'self' 'unsafe-inline'",
-  "font-src 'self'",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "form-action 'none'",
-].join("; ");
+import { applyFeatureBlocks } from "./scripts/feature-blocks.ts";
+import { PAY_POLICY, TOOL_POLICY } from "./scripts/policy.ts";
 
 function contentSecurityPolicy(): Plugin {
   return {
     name: "content-security-policy",
     apply: "build",
-    transformIndexHtml(html) {
+    transformIndexHtml(html, context) {
+      const policy = context.path.startsWith("/pay/") ? PAY_POLICY : TOOL_POLICY;
       return html.replace(
         "<head>",
-        `<head>\n    <meta http-equiv="Content-Security-Policy" content="${TOOL_POLICY}" />\n    <meta name="referrer" content="no-referrer" />`,
+        `<head>\n    <meta http-equiv="Content-Security-Policy" content="${policy}" />\n    <meta name="referrer" content="no-referrer" />`,
       );
     },
   };
 }
 
-// Wording for an optional feature sits between <!-- feature:NAME --> and
-// <!-- /feature:NAME --> in the pages and is kept only when the feature is
-// switched on, so the privacy page always describes the build it ships in.
+// Keeps or drops wording for optional features; see scripts/feature-blocks.ts.
 function featureBlocks(enabled: Record<string, boolean>): Plugin {
-  return {
-    name: "feature-blocks",
-    transformIndexHtml(html) {
-      return html.replace(
-        /[ \t]*<!-- feature:([a-z-]+) -->([\s\S]*?)<!-- \/feature:\1 -->\n?/g,
-        (_, name: string, body: string) => (enabled[name] ? body.replace(/^\n/, "") : ""),
-      );
-    },
-  };
+  return { name: "feature-blocks", transformIndexHtml: (html) => applyFeatureBlocks(html, enabled) };
 }
 
 // In development, serves the AI commentary endpoint from this server when
@@ -78,7 +55,11 @@ export default defineConfig(({ mode }) => {
     plugins: [
       react(),
       contentSecurityPolicy(),
-      featureBlocks({ ai: env.VITE_AI_COMMENTARY === "1" }),
+      featureBlocks({
+        ai: env.VITE_AI_COMMENTARY === "1",
+        counts: env.VITE_PAGE_COUNTS === "1",
+        workspaces: env.VITE_WORKSPACES === "1",
+      }),
       devCommentary(env.ANTHROPIC_API_KEY),
     ],
     optimizeDeps: { exclude: ["@duckdb/duckdb-wasm"] },
@@ -91,6 +72,7 @@ export default defineConfig(({ mode }) => {
           privacy: resolve(import.meta.dirname, "privacy.html"),
           article: resolve(import.meta.dirname, "price-volume-mix-analysis.html"),
           app: resolve(import.meta.dirname, "app/index.html"),
+          ...(env.VITE_WORKSPACES === "1" ? { pay: resolve(import.meta.dirname, "pay/index.html") } : {}),
         },
       },
     },

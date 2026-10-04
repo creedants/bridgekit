@@ -39,6 +39,16 @@ app.use("/api/*", async (c, next) => {
   await next();
 });
 
+// Changes must come from the site itself. The session cookie is already
+// SameSite=Lax, which stops most cross-site requests; this is a second check.
+// (Better Auth checks the origin on its own routes.)
+app.use("/api/workspaces/*", async (c, next) => {
+  if (c.req.method !== "GET" && c.req.header("origin") !== new URL(c.env.BETTER_AUTH_URL).origin) {
+    return c.json({ error: "Requests must come from this site." }, 403);
+  }
+  await next();
+});
+
 app.on(["GET", "POST"], "/api/auth/*", (c) => c.get("auth").handler(c.req.raw));
 
 async function userId(c: Context<App>): Promise<string> {
