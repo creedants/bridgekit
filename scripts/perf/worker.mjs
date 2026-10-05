@@ -1,10 +1,10 @@
 // Times local wrangler dev routes and writes perf/worker-baseline.json.
-// Never passes --remote. Stops the dev server on the way out, including after a failure.
+// Never passes --remote. Stops only the dev process this run started.
 import { randomBytes } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fchmodSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { request as httpRequest } from "node:http";
-import { arch, cpus, loadavg, platform, release } from "node:os";
+import { arch, cpus, loadavg, platform, release, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
 
@@ -26,7 +26,7 @@ const defaultOut = resolve(root, "perf", "worker-baseline.json");
 const wranglerBin = join(root, "node_modules", ".bin", "wrangler");
 
 let devChild = null;
-let devPort = 0;
+let runDir = null;
 let envFile = null;
 let authSecret = null;
 
@@ -146,32 +146,75 @@ function exitedWithin(child, ms) {
   });
 }
 
-async function stopDev() {
+function descendantPids(pid) {
+  const out = spawnSync("ps", ["-eo", "pid=,ppid="], { encoding: "utf8" }).stdout ?? "";
+  const children = new Map();
+  for (const line of out.split("\n")) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)$/);
+    if (!match) continue;
+    const child = Number(match[1]);
+    const parent = Number(match[2]);
+    const list = children.get(parent);
+    if (list) list.push(child);
+    else children.set(parent, [child]);
+  }
+  const found = [];
+  const stack = [...(children.get(pid) ?? [])];
+  const seen = new Set();
+  while (stack.length) {
+    const current = stack.pop();
+    if (seen.has(current)) continue;
+    seen.add(current);
+    if (!isZombie(current)) found.push(current);
+    for (const child of children.get(current) ?? []) stack.push(child);
+  }
+  return found;
+}
+
+function isZombie(pid) {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const rest = stat.slice(stat.lastIndexOf(")") + 2);
+    return rest.startsWith("Z");
+  } catch {
+    return false;
+  }
+}
+
+function signalOwned(pid, signal) {
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    try { process.kill(pid, signal); } catch { /* already gone */ }
+  }
+}
+
+async function stopOwnedProcess() {
   const child = devChild;
-  const port = devPort;
   devChild = null;
-  if (child?.pid) {
-    try { process.kill(-child.pid, "SIGTERM"); } catch { try { child.kill("SIGTERM"); } catch { /* already gone */ } }
-    const stopped = await exitedWithin(child, 4000);
-    if (!stopped) {
-      try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch { /* already gone */ } }
-      await exitedWithin(child, 2000);
+  if (!child?.pid) return;
+  const pid = child.pid;
+  // The listening port is not ownership. Only this process group is stopped.
+  signalOwned(pid, "SIGTERM");
+  let stopped = await exitedWithin(child, 4000);
+  const extras = descendantPids(pid);
+  if (!stopped || extras.length) {
+    signalOwned(pid, "SIGKILL");
+    for (const id of extras) {
+      try { process.kill(id, "SIGKILL"); } catch { /* already gone */ }
     }
+    stopped = await exitedWithin(child, 2000);
   }
-  if (port) {
-    for (const pid of listenPids(port)) {
-      try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
-    }
-    await sleep(200);
-    const left = listenPids(port);
-    if (left.length) die(`port ${port} still has pid ${left.join(", ")}`);
-  }
-  const leftovers = devProcesses();
-  if (leftovers.length) die(`wrangler or workerd still running\n${leftovers.join("\n")}`);
-  if (envFile) {
-    rmSync(envFile, { force: true });
-    envFile = null;
-  }
+  const still = descendantPids(pid);
+  if (!stopped || still.length) die(`the dev process ${pid} did not exit`);
+}
+
+function removeRunDir() {
+  const dir = runDir;
+  if (!dir) return;
+  runDir = null;
+  envFile = null;
+  rmSync(dir, { recursive: true, force: true });
 }
 
 function plain(text) {
@@ -184,12 +227,49 @@ function scrub(text) {
   return cleaned.split(authSecret).join("<redacted>");
 }
 
-function writeAuthEnv() {
-  const path = `/tmp/bridgekit-perf-worker-${process.pid}.env`;
+function createRunDir() {
+  const dir = mkdtempSync(join(tmpdir(), "bridgekit-perf-worker-"));
+  chmodSync(dir, 0o700);
+  for (const name of ["home", "config", "cache", "state", "run", "tmp", "logs"]) {
+    mkdirSync(join(dir, name), { mode: 0o700 });
+  }
+  runDir = dir;
+  return dir;
+}
+
+function writeAuthEnv(dir) {
+  const path = join(dir, "auth.env");
   authSecret = randomBytes(32).toString("hex");
-  writeFileSync(path, `BETTER_AUTH_SECRET=${authSecret}\n`, { mode: 0o600 });
-  chmodSync(path, 0o600);
+  const fd = openSync(path, "wx", 0o600);
+  try {
+    writeSync(fd, `BETTER_AUTH_SECRET=${authSecret}\n`);
+    fchmodSync(fd, 0o600);
+  } finally {
+    closeSync(fd);
+  }
+  envFile = path;
   return path;
+}
+
+function wranglerEnv() {
+  if (!runDir) die("the private wrangler directory is missing");
+  // Allowlist. Inherited CLOUDFLARE_* and CF_* values stay out, and Wrangler state stays in this directory.
+  return {
+    PATH: process.env.PATH ?? "",
+    HOME: join(runDir, "home"),
+    TMPDIR: join(runDir, "tmp"),
+    LANG: "C.UTF-8",
+    XDG_CONFIG_HOME: join(runDir, "config"),
+    XDG_CACHE_HOME: join(runDir, "cache"),
+    XDG_STATE_HOME: join(runDir, "state"),
+    XDG_RUNTIME_DIR: join(runDir, "run"),
+    WRANGLER_SEND_METRICS: "false",
+    WRANGLER_SEND_ERROR_REPORTS: "false",
+    WRANGLER_HIDE_BANNER: "true",
+    WRANGLER_WRITE_LOGS: "false",
+    WRANGLER_LOG_PATH: join(runDir, "logs"),
+    CLOUDFLARE_CF_FETCH_ENABLED: "false",
+  };
 }
 
 function wasmAssets() {
@@ -467,21 +547,27 @@ async function timeRoute(origin, route, count, processCold) {
 }
 
 function runWrangler(args) {
-  const result = spawnSync(wranglerBin, localOnly(args), { cwd: root, encoding: "utf8" });
+  if (!envFile) die("the generated env file is missing");
+  // After the command. Before it, yargs treats --local as unknown.
+  const result = spawnSync(wranglerBin, localOnly([...args, `--env-file=${envFile}`]), {
+    cwd: root,
+    encoding: "utf8",
+    env: wranglerEnv(),
+  });
   if (result.error) die(result.error.message);
   return result;
 }
 
 function startDev(port, file) {
   if (listenPids(port).length) die(`port ${port} is already in use. Stop that process before npm run perf:worker.`);
-  const args = localOnly(["dev", "--env-file", file, "--port", String(port), "--ip", "127.0.0.1"]);
+  const args = localOnly(["dev", "--port", String(port), "--ip", "127.0.0.1", `--env-file=${file}`]);
   const child = spawn(wranglerBin, args, {
     cwd: root,
+    env: wranglerEnv(),
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
   devChild = child;
-  devPort = port;
   let text = "";
   const keep = (chunk) => {
     text += chunk.toString();
@@ -601,106 +687,111 @@ async function main() {
   assertFullRun(out, count);
   const atStart = machineInfo();
   const port = devPortFromConfig();
-  devPort = port;
   printPgrep("before");
   if (!existsSync(join(root, "dist", "app", "index.html"))) die("dist/app/index.html is missing. Run npm run build:cloudflare first.");
 
-  const migration = runWrangler(["d1", "migrations", "apply", "bridgekit", "--local"]);
-  if (migration.status !== 0) die(migration.stderr || migration.stdout || "local migration failed");
-  const version = runWrangler(["--version"]);
-  if (version.status !== 0) die(version.stderr || "wrangler --version failed");
-
-  const assets = wasmAssets();
-  const routes = buildRoutes(assets);
-  envFile = writeAuthEnv();
-  const started = startDev(port, envFile);
-  const timed = [];
-  let counts = null;
-  let beforeCounts = null;
-  let pagePaths = [];
-  let countedPaths = [];
+  let file = null;
   try {
-    await waitReady(started.child, started.readLog, port);
-    if (/--remote\b/.test(scrub(started.readLog()))) die("wrangler dev reported --remote. Refusing to continue.");
-    const origin = `http://127.0.0.1:${port}`;
-    beforeCounts = pageCounts();
-    if (!beforeCounts.ok) die(`page counts were not readable before the run: ${beforeCounts.error}`);
-    for (let i = 0; i < routes.length; i++) {
-      console.error(`route ${routes[i].id}`);
-      timed.push(await timeRoute(origin, routes[i], count, i === 0));
+    const dir = createRunDir();
+    file = writeAuthEnv(dir);
+    const migration = runWrangler(["d1", "migrations", "apply", "bridgekit", "--local"]);
+    if (migration.status !== 0) die(migration.stderr || migration.stdout || "local migration failed");
+    const version = runWrangler(["--version"]);
+    if (version.status !== 0) die(version.stderr || "wrangler --version failed");
+
+    const assets = wasmAssets();
+    const routes = buildRoutes(assets);
+    const started = startDev(port, file);
+    const timed = [];
+    let counts = null;
+    let beforeCounts = null;
+    let pagePaths = [];
+    let countedPaths = [];
+    try {
+      await waitReady(started.child, started.readLog, port);
+      if (/--remote\b/.test(scrub(started.readLog()))) die("wrangler dev reported --remote. Refusing to continue.");
+      const origin = `http://127.0.0.1:${port}`;
+      beforeCounts = pageCounts();
+      if (!beforeCounts.ok) die(`page counts were not readable before the run: ${beforeCounts.error}`);
+      for (let i = 0; i < routes.length; i++) {
+        console.error(`route ${routes[i].id}`);
+        timed.push(await timeRoute(origin, routes[i], count, i === 0));
+      }
+      pagePaths = [...new Set(timed.filter((route) => route.group === "page").map((route) => route.finalPath))];
+      countedPaths = [...new Set(timed.filter((route) => route.pageCounted).map((route) => route.finalPath))];
+      const needed = count + WARMUP + 1;
+      counts = await pageCountsSettled(countedPaths, beforeCounts, needed);
+      const log = scrub(started.readLog());
+      if (log.includes("count failed")) die("page count logged a failure. The response timings do not include a successful insert.");
+      if (!counts.ok) die(`page counts were not readable: ${counts.error}`);
+      const missing = countedPaths.filter((path) => viewsOf(counts, path) - viewsOf(beforeCounts, path) < needed);
+      if (missing.length) die(`page counts did not rise by ${needed} for ${missing.join(", ")}. rows ${JSON.stringify(counts.rows)}`);
+    } finally {
+      await stopOwnedProcess();
     }
-    pagePaths = [...new Set(timed.filter((route) => route.group === "page").map((route) => route.finalPath))];
-    countedPaths = [...new Set(timed.filter((route) => route.pageCounted).map((route) => route.finalPath))];
-    const needed = count + WARMUP + 1;
-    counts = await pageCountsSettled(countedPaths, beforeCounts, needed);
-    const log = scrub(started.readLog());
-    if (log.includes("count failed")) die("page count logged a failure. The response timings do not include a successful insert.");
-    if (!counts.ok) die(`page counts were not readable: ${counts.error}`);
-    const missing = countedPaths.filter((path) => viewsOf(counts, path) - viewsOf(beforeCounts, path) < needed);
-    if (missing.length) die(`page counts did not rise by ${needed} for ${missing.join(", ")}. rows ${JSON.stringify(counts.rows)}`);
+
+    printPgrep("after");
+    const report = {
+      ok: true,
+      capturedAt: new Date().toISOString(),
+      definitions: {
+        ttfbMs: "Time from sending the request until the first response headers arrive. For a page that redirects, this is the redirect, not the HTML.",
+        totalMs: "Time from sending the request until the final response body ends. Page redirects are included.",
+        bytes: "Bytes received on the wire. The client does not decompress them.",
+        contentEncoding: "The content-encoding header on the response, or identity when that header is absent.",
+        byteMatch: "stored-br, stored-gz, or raw when the wire size equals that file. other when it equals none of them. null for routes that are not wasm.",
+        cold: "The first request to that route in this process. Only page-home is the first request after wrangler dev becomes ready.",
+        steady: `${count} request${count === 1 ? "" : "s"} after one discarded warm-up. The median is the middle sample.`,
+        pageCount: "A 200 HTML response from the Worker schedules countPageView. The script then reads local D1 and requires that rise on routes whose final path is the path it requested. A redirect onto a path outside run_worker_first is stored and not required. There is no public route that reads the counts.",
+        authEnv: "Every wrangler command receives a generated BETTER_AUTH_SECRET through --env-file. The child environment keeps PATH, a private HOME, and the switches that turn off telemetry, error reports, the update banner, and the cf.json fetch. .env, .env.local, and .dev.vars are not read. Commentary, Paddle, and sign-in keys are unset.",
+      },
+      productionBlindSpots: [
+        "The clock is local wrangler dev, which is miniflare on this machine. It is not the Cloudflare edge and it has no edge cache.",
+        "Cloudflare replaces the browser Accept-Encoding with br, gzip before the Worker runs. The browser header is request.cf.clientAcceptEncoding. Local wrangler does not do that replacement.",
+        "Miniflare can recompress a Worker response. When gzip is listed before br, a body the Worker stored as Brotli can arrive as gzip. cache-control no-transform does not stop that in local dev.",
+        "Page-count inserts run in waitUntil after the response. totalMs ends when the body ends.",
+      ],
+      git: gitInfo(),
+      machine: { ...atStart, loadAvgAtEnd: loadavg() },
+      wrangler: {
+        version: version.stdout.trim(),
+        command: "wrangler <command> --env-file <private file>. dev uses --port <wrangler.jsonc dev.port> and --ip 127.0.0.1",
+        remote: false,
+        port,
+        ip: "127.0.0.1",
+      },
+      sampleCount: count,
+      warmupDiscarded: WARMUP,
+      pageCounts: {
+        before: beforeCounts.rows,
+        after: counts.rows,
+        delta: pagePaths.map((path) => ({
+          path,
+          views: viewsOf(counts, path) - viewsOf(beforeCounts, path),
+          countedByWorker: countedPaths.includes(path),
+        })),
+      },
+      routes: timed,
+      vetting: {
+        requestErrors: 0,
+        unexpectedStatuses: 0,
+        routes: timed.length,
+        pageCountsRecorded: true,
+      },
+    };
+
+    mkdirSync(join(root, "perf"), { recursive: true });
+    const partial = `${out}.partial`;
+    writeFileSync(partial, JSON.stringify(report, null, 2) + "\n");
+    rmSync(out, { force: true });
+    const renamed = spawnSync("mv", [partial, out], { encoding: "utf8" });
+    if (renamed.status !== 0) die(renamed.stderr || "could not move the result into place");
+    printTable(timed);
+    console.log(`page counts ${JSON.stringify(report.pageCounts.delta)}`);
+    console.log(`wrote ${out}`);
   } finally {
-    await stopDev();
+    removeRunDir();
   }
-
-  printPgrep("after");
-  const report = {
-    ok: true,
-    capturedAt: new Date().toISOString(),
-    definitions: {
-      ttfbMs: "Time from sending the request until the first response headers arrive. For a page that redirects, this is the redirect, not the HTML.",
-      totalMs: "Time from sending the request until the final response body ends. Page redirects are included.",
-      bytes: "Bytes received on the wire. The client does not decompress them.",
-      contentEncoding: "The content-encoding header on the response, or identity when that header is absent.",
-      byteMatch: "stored-br, stored-gz, or raw when the wire size equals that file. other when it equals none of them. null for routes that are not wasm.",
-      cold: "The first request to that route in this process. Only page-home is the first request after wrangler dev becomes ready.",
-      steady: "Five requests after one discarded warm-up. The median is the middle sample.",
-      pageCount: "A 200 HTML response from the Worker schedules countPageView. The script then reads local D1 and requires that rise on routes whose final path is the path it requested. A redirect onto a path outside run_worker_first is stored and not required. There is no public route that reads the counts.",
-      authEnv: "wrangler dev receives a generated BETTER_AUTH_SECRET through --env-file. .dev.vars is not read. Commentary, Paddle, and sign-in keys are unset.",
-    },
-    productionBlindSpots: [
-      "The clock is local wrangler dev, which is miniflare on this machine. It is not the Cloudflare edge and it has no edge cache.",
-      "Cloudflare replaces the browser Accept-Encoding with br, gzip before the Worker runs. The browser header is request.cf.clientAcceptEncoding. Local wrangler does not do that replacement.",
-      "Miniflare can recompress a Worker response. When gzip is listed before br, a body the Worker stored as Brotli can arrive as gzip. cache-control no-transform does not stop that in local dev.",
-      "Page-count inserts run in waitUntil after the response. totalMs ends when the body ends.",
-    ],
-    git: gitInfo(),
-    machine: { ...atStart, loadAvgAtEnd: loadavg() },
-    wrangler: {
-      version: version.stdout.trim(),
-      command: "wrangler dev --env-file <generated> --port <wrangler.jsonc dev.port> --ip 127.0.0.1",
-      remote: false,
-      port,
-      ip: "127.0.0.1",
-    },
-    sampleCount: count,
-    warmupDiscarded: WARMUP,
-    pageCounts: {
-      before: beforeCounts.rows,
-      after: counts.rows,
-      delta: pagePaths.map((path) => ({
-        path,
-        views: viewsOf(counts, path) - viewsOf(beforeCounts, path),
-        countedByWorker: countedPaths.includes(path),
-      })),
-    },
-    routes: timed,
-    vetting: {
-      requestErrors: 0,
-      unexpectedStatuses: 0,
-      routes: timed.length,
-      pageCountsRecorded: true,
-    },
-  };
-
-  mkdirSync(join(root, "perf"), { recursive: true });
-  const partial = `${out}.partial`;
-  writeFileSync(partial, JSON.stringify(report, null, 2) + "\n");
-  rmSync(out, { force: true });
-  const renamed = spawnSync("mv", [partial, out], { encoding: "utf8" });
-  if (renamed.status !== 0) die(renamed.stderr || "could not move the result into place");
-  printTable(timed);
-  console.log(`page counts ${JSON.stringify(report.pageCounts.delta)}`);
-  console.log(`wrote ${out}`);
 }
 
 let shuttingDown = false;
@@ -708,10 +799,17 @@ async function shutdown(code) {
   if (shuttingDown) return;
   shuttingDown = true;
   try {
-    await stopDev();
+    await stopOwnedProcess();
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     code = 1;
+  } finally {
+    try {
+      removeRunDir();
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      code = 1;
+    }
   }
   process.exit(code);
 }

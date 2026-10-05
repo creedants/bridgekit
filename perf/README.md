@@ -29,7 +29,7 @@ A non-zero delay is a partial run. During the wait the page may download the Duc
 
 `npm run perf:worker` applies local D1 migrations, starts `wrangler dev` on 127.0.0.1, times the routes below, writes `perf/worker-baseline.json`, and stops the dev server. Run `npm run build:cloudflare` first so each wasm file has a `.br` copy and a `.gz` copy. The script refuses `--remote`. It does not deploy.
 
-The dev server gets a generated `BETTER_AUTH_SECRET` through `--env-file`. The script does not read `.dev.vars`, and it does not load commentary, Paddle, or sign-in keys. Those routes stop at the local refusal.
+Every wrangler command gets a generated `BETTER_AUTH_SECRET` through `--env-file`, and a child environment that keeps `PATH` and a private home directory. Telemetry, error reports, the update check banner, and the `cf.json` fetch are off. The script does not read `.env`, `.env.local`, or `.dev.vars`, and it does not pass inherited Cloudflare credentials. Commentary, Paddle, and sign-in keys stay unset. Those routes stop at the local refusal.
 
 Each route records the first request, discards one warm-up, then keeps five steady samples. The median is the middle steady sample. The first request is first-hit for that route in one process. Only the home page is the first request after the process starts.
 
