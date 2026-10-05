@@ -120,10 +120,13 @@ function listenPids(port) {
 
 function devProcesses() {
   const out = spawnSync("ps", ["-eo", "pid,args"], { encoding: "utf8" }).stdout ?? "";
+  const wranglerBinPath = `${root}/node_modules/.bin/wrangler`;
+  const wranglerPkg = `${root}/node_modules/wrangler/`;
   return out.split("\n").filter((line) => {
-    if (!line.includes(root)) return false;
     if (line.includes("scripts/perf/worker.mjs")) return false;
-    return line.includes("node_modules/.bin/wrangler") || line.includes("node_modules/wrangler/") || line.includes("workerd");
+    if (line.includes(wranglerBinPath) || line.includes(wranglerPkg)) return true;
+    // argv0 is a path ending in /workerd. A shell that only mentions the word does not match.
+    return line.includes(root) && /(?:^|\s)\S+\/workerd(?:\s|$)/.test(line);
   });
 }
 
