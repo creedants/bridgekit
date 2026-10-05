@@ -42,7 +42,7 @@ const BRIDGE = {
 const CSV_COLUMNS = ["year", "customer", "design", "coating", "photochromic", "polar", "material", "finish_type", "jobs", "sales"];
 const CSV_DIR = "/tmp/bridgekit-perf";
 
-// DuckDB starts on the first file, not at page load. The interactive mark stops at the empty tool.
+// The mark fires when the empty tool is ready. DuckDB opens after the load event, on an idle callback, unless Save-Data is on. A pick delay waits after this mark.
 const INTERACTIVE_WATCH = `
 window.__interactiveMs = null;
 (function watch() {
@@ -927,7 +927,7 @@ async function main() {
       gzipBytes: "zlib gzip at the default level.",
       brotliBytes: `zlib brotli quality ${BROTLI_QUALITY}.`,
       toolPage: "Dist files the local server saw by the time the harness observed the interactive mark. The page sets the mark and the harness polls for it, so a request in that gap is included.",
-      duckdbOnFirstFile: "DuckDB wasm and worker files requested after the interactive mark, during the first file.",
+      duckdbOnFirstFile: "DuckDB wasm and worker files requested after the interactive mark. The window includes a nonzero pick delay and the first file. An idle open that finishes before the mark is counted in toolPage instead.",
       cloudflareBuild: "npm run build:cloudflare is a different bundle. It sets VITE_PAGE_COUNTS, VITE_WORKSPACES, and VITE_AI_COMMENTARY, then stores a Brotli copy and a gzip copy of each wasm file and deletes the original. This script does not run it.",
     },
     git: gitInfo(),
