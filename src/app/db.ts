@@ -149,7 +149,11 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
     const startFailed = new Promise<never>((_, reject) => {
       script.worker.addEventListener(
         "error",
-        (event) => reject(new Error(event.message || "The database worker did not start")),
+        (event) => {
+          // The browser message names the worker script URL. The page shows one sentence.
+          console.error(event.message);
+          reject(new Error("The database worker did not start"));
+        },
         { once: true },
       );
     });
