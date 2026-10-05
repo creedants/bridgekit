@@ -128,6 +128,14 @@ function literal(value: string | number): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
+function structKey(alias: string | null, columns: string[]): string {
+  const fields = columns.map((column) => {
+    const value = alias ? `${alias}.${ident(column)}` : ident(column);
+    return `${ident(column)}: ${value}`;
+  });
+  return `{${fields.join(", ")}}`;
+}
+
 function validate(config: BridgeConfig): void {
   if (config.levels.length === 0) throw new Error("At least one level is required");
   const reserved = /^(q0|s0|q1|s1|z0|z1|g0|g1|rs0|rs1|r0|match_level|surviving_level|status|ref_price|volume|price|new_config|discontinued|no_units|price_list|price_discount|price_sales|cost_rate|(ref|mix)_\d+|[qsp][01]_l\d+)$/i;
@@ -167,14 +175,66 @@ export function cellsSql(config: BridgeConfig): string {
   const continuing = "(q0 > 0 AND q1 <> 0)";
   const scope = full ? ` FILTER (WHERE ${continuing})` : "";
 
-  const windows: string[] = [];
   const groupPrices: string[] = [];
   for (let j = 1; j <= k; j++) {
-    const partition = cumulativeColumns(config.levels, j).map(ident).join(", ");
-    windows.push(`sum(q0)${scope} OVER (PARTITION BY ${partition}) AS q0_l${j}`);
-    windows.push(`sum(s0)${scope} OVER (PARTITION BY ${partition}) AS s0_l${j}`);
-    windows.push(`sum(q1) OVER (PARTITION BY ${partition}) AS q1_l${j}`);
     groupPrices.push(`CASE WHEN q0_l${j} > 0 THEN s0_l${j} / q0_l${j} END AS p0_l${j}`);
+  }
+
+  // Joining every level in one FROM makes DuckDB cross-join those aggregates first
+  // (184 million rows at 3 million sales rows).
+  const levelCtes: string[] = [
+    `totals AS (
+  SELECT sum(s0)${scope} AS tot_s0, sum(q0)${scope} AS tot_q0
+  FROM cells
+)`,
+  ];
+  for (let j = 1; j < k; j++) {
+    const columns = cumulativeColumns(config.levels, j);
+    const group = columns.map(ident).join(", ");
+    levelCtes.push(`lvl${j} AS (
+  SELECT ${structKey(null, columns)} AS k, sum(q0)${scope} AS q0_l${j}, sum(s0)${scope} AS s0_l${j}, sum(q1) AS q1_l${j}
+  FROM cells
+  GROUP BY ${group}
+)`);
+  }
+  const finest = (alias: string) => {
+    const onCell = `(${alias}.q0 > 0 AND ${alias}.q1 <> 0)`;
+    return `${full ? `CASE WHEN ${onCell} THEN ${alias}.q0 END` : `${alias}.q0`} AS q0_l${k},
+    ${full ? `CASE WHEN ${onCell} THEN ${alias}.s0 END` : `${alias}.s0`} AS s0_l${k},
+    ${alias}.q1 AS q1_l${k}`;
+  };
+  const joinCtes: string[] = [];
+  if (k === 1) {
+    joinCtes.push(`windowed AS (
+  SELECT c.*,
+    t.tot_s0 / t.tot_q0 AS r0,
+    ${finest("c")}
+  FROM cells c
+  CROSS JOIN totals t
+)`);
+  } else {
+    let source = "cells c\n  CROSS JOIN totals t";
+    let alias = "c";
+    for (let j = 1; j < k; j++) {
+      const columns = cumulativeColumns(config.levels, j);
+      const last = j === k - 1;
+      const name = last ? "windowed" : `joined_${j}`;
+      const extras = [
+        ...(j === 1 ? ["t.tot_s0 / t.tot_q0 AS r0"] : []),
+        `a${j}.q0_l${j}`,
+        `a${j}.s0_l${j}`,
+        `a${j}.q1_l${j}`,
+      ];
+      if (last) extras.push(finest(alias));
+      joinCtes.push(`${name} AS${last ? "" : " MATERIALIZED"} (
+  SELECT ${j === 1 ? "c" : alias}.*,
+    ${extras.join(",\n    ")}
+  FROM ${source}
+  JOIN lvl${j} a${j} ON a${j}.k IS NOT DISTINCT FROM ${structKey(alias, columns)}
+)`);
+      source = name;
+      alias = name;
+    }
   }
 
   // R_j = coalesce(p0_lj, ..., p0_l1, r0)
@@ -223,7 +283,7 @@ export function cellsSql(config: BridgeConfig): string {
   (q1 - q0) * (ref_${k} - ${survivingRef}) AS discontinued`;
 
   return `
-WITH cells AS (
+WITH cells AS MATERIALIZED (
   SELECT ${allColumns.join(", ")},
     round(coalesce(sum(${units}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE, 6) AS q0,
     coalesce(sum(${measure}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE AS s0,
@@ -245,12 +305,8 @@ WITH cells AS (
   WHERE ${period} IN (${prior}, ${current})
   GROUP BY ${allColumns.join(", ")}
 ),
-windowed AS (
-  SELECT *,
-    sum(s0)${scope} OVER () / sum(q0)${scope} OVER () AS r0,
-    ${windows.join(",\n    ")}
-  FROM cells
-),
+${levelCtes.join(",\n")},
+${joinCtes.join(",\n")},
 priced AS (
   SELECT *,
     ${groupPrices.join(",\n    ")}
