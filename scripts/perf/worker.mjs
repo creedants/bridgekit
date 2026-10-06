@@ -212,9 +212,24 @@ async function stopOwnedProcess() {
 function removeRunDir() {
   const dir = runDir;
   if (!dir) return;
+  // maxRetries runs only after the native call starts. A throw before that still needs another call.
+  let failure = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+      failure = null;
+      break;
+    } catch (error) {
+      failure = error;
+    }
+  }
+  if (failure) {
+    const message = failure instanceof Error ? failure.message : failure;
+    console.error(`could not remove ${dir}: ${message}`);
+    throw failure;
+  }
   runDir = null;
   envFile = null;
-  rmSync(dir, { recursive: true, force: true });
 }
 
 function plain(text) {
@@ -229,11 +244,11 @@ function scrub(text) {
 
 function createRunDir() {
   const dir = mkdtempSync(join(tmpdir(), "bridgekit-perf-worker-"));
+  runDir = dir;
   chmodSync(dir, 0o700);
   for (const name of ["home", "config", "cache", "state", "run", "tmp", "logs"]) {
     mkdirSync(join(dir, name), { mode: 0o700 });
   }
-  runDir = dir;
   return dir;
 }
 
