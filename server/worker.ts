@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { serveCompressedWasm } from "./assets.ts";
 import { createAuth, type Auth } from "./auth.ts";
-import type { ExecutionContext } from "./cloudflare.ts";
+import type { ExecutionContext, Fetcher } from "./cloudflare.ts";
 import { handleCommentary } from "./commentary.ts";
 import { countPageView, pageView } from "./counts.ts";
 import type { Env } from "./env.ts";
@@ -150,8 +150,38 @@ app.all("/api/*", (c) => c.json({ error: "Not found." }, 404));
 
 app.get("/assets/*", async (c) => serveCompressedWasm(c.req.raw, c.env.ASSETS));
 
+const ASSET_REDIRECT = new Set([301, 302, 303, 307, 308]);
+
+/**
+ * `/guide.html` is answered with a redirect to `/guide`. That second request
+ * never reaches this Worker, so return the page from the request already here.
+ * Two hops covers an `.html` file and a folder `index.html`.
+ */
+async function pageResponse(request: Request, assets: Fetcher): Promise<Response> {
+  let response = await assets.fetch(request);
+  if (!new URL(request.url).pathname.endsWith(".html")) return response;
+  let from = request.url;
+  for (let hop = 0; hop < 2; hop++) {
+    if (!ASSET_REDIRECT.has(response.status)) return response;
+    const location = response.headers.get("location");
+    if (!location) return response;
+    let target: URL;
+    try {
+      target = new URL(location, from);
+    } catch {
+      return response;
+    }
+    if (target.origin !== new URL(from).origin) return response;
+    // body.cancel() never settles under Node's fetch. Read the small redirect body instead.
+    await response.arrayBuffer();
+    from = target.href;
+    response = await assets.fetch(new Request(target, request));
+  }
+  return response;
+}
+
 app.get("*", async (c) => {
-  const response = await c.env.ASSETS.fetch(c.req.raw);
+  const response = await pageResponse(c.req.raw, c.env.ASSETS);
   const view = pageView(c.req.raw, response);
   if (view) {
     (c.executionCtx as unknown as ExecutionContext).waitUntil(
