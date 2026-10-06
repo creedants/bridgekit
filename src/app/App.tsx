@@ -72,7 +72,6 @@ function describeSetup(setup: Setup, prior: string, current: string, source: str
 }
 
 export function App() {
-  const database = useRef<Promise<BrowserDatabase>>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -89,8 +88,7 @@ export function App() {
   const [run, setRun] = useState<(Run & { id: number; signature: string }) | null>(null);
 
   function db(): Promise<BrowserDatabase> {
-    database.current ??= openBrowserDatabase();
-    return database.current;
+    return openBrowserDatabase();
   }
   const query = () => db().then((d) => d.query);
 
