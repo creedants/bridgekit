@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDatabase } from "../src/duckdb.ts";
-import { runBridge, drill, unmatched, dataCheck, priceDistribution, sensitivity, trend, priceRealization, priceGaps, accountBridge, type BridgeConfig, type BridgeResult } from "../src/engine.ts";
+import { runBridge, drill, unmatched, dataCheck, priceDistribution, sensitivity, trend, priceRealization, priceGaps, accountBridge, type BridgeConfig, type BridgeResult, type Level } from "../src/engine.ts";
+import { PERIOD, VIEW, viewSql, type Setup } from "../src/app/setup.ts";
 import { createSyntheticSales } from "../src/synth.ts";
 
 function effect(result: BridgeResult, key: string): number {
@@ -393,6 +394,202 @@ test("review findings: float units that net to zero, offsetting splits, null sal
   );
 });
 
+function gap(actual: number, expected: number): number {
+  const diff = Math.abs(actual - expected);
+  const scale = Math.max(Math.abs(actual), Math.abs(expected));
+  if (diff <= 1e-9) return diff;
+  return scale === 0 ? diff : diff / scale;
+}
+
+function asNumber(value: unknown): number | null {
+  if (typeof value === "number") return value;
+  if (typeof value === "bigint") return Number(value);
+  return null;
+}
+
+function assertClose(actual: number, expected: number, label: string): void {
+  const seen = gap(actual, expected);
+  assert.ok(seen <= 1e-9, `${label} expected ${expected}, got ${actual}, gap ${seen}`);
+}
+
+test("cell rows match the previous cells SQL", async () => {
+  const query = await openDatabase();
+  const levels: Level[] = [
+    { name: "Design", columns: ["design"] },
+    { name: "Coating", columns: ["coating"] },
+    { name: "Color", columns: ["photochromic", "polar"] },
+    { name: "Material", columns: ["material"] },
+  ];
+  await createSyntheticSales(query, 100, "s100");
+  await createSyntheticSales(query, 2_000, "s2000");
+  await createSyntheticSales(query, 10_000, "s10000");
+  await query(`CREATE TABLE hand AS SELECT * FROM (VALUES
+    ('p0', 'A', 10, 100.0), ('p0', 'B', 10, 200.0),
+    ('p1', 'A', 10, 110.0), ('p1', 'B', 20, 400.0), ('p1', 'C', 5, 150.0),
+    ('p0', 'A', 0, 7.0), ('p1', 'B', 0, 4.0)
+  ) v(period, product, units, sales)`);
+  await query(`CREATE TABLE disc AS SELECT * FROM (VALUES
+    ('p0', 'D1', 'basic', 10, 100.0), ('p0', 'D1', 'premium', 10, 300.0),
+    ('p0', 'D2', 'old', 8, 80.0),
+    ('p1', 'D1', 'basic', 10, 100.0), ('p1', 'D1', 'premium', 12, 360.0),
+    ('p1', 'D2', 'newcoat', 4, 200.0)
+  ) v(period, design, coating, units, sales)`);
+  await query(`CREATE TABLE nulls AS SELECT * FROM (VALUES
+    ('p0', NULL, 'basic', 2.5, 10.0),
+    ('p0', 'D1', NULL, 1.5, 20.0),
+    ('p0', 'D1', 'basic', 4, 40.0),
+    ('p1', NULL, 'premium', 1, 7.0),
+    ('p1', 'D1', NULL, 0, 3.0),
+    ('p1', 'D1', 'basic', 5, 55.0)
+  ) v(period, design, coating, units, sales)`);
+  await query(`CREATE TABLE data (
+    order_date DATE, design VARCHAR, customer VARCHAR, jobs INTEGER, sales DOUBLE
+  )`);
+  await query(`INSERT INTO data VALUES
+    (DATE '2025-01-10', 'A', 'keep', 2, 20),
+    (DATE '2025-08-10', 'A', 'keep', 3, 30),
+    (DATE '2025-01-10', 'A', 'drop', 9, 90),
+    (DATE '2026-03-01', 'A', 'keep', 4, 50),
+    (DATE '2026-03-01', 'B', 'keep', 1, 15),
+    (DATE '2026-09-01', 'A', 'keep', 8, 80)
+  `);
+  const ytd: Setup = {
+    periodColumn: "order_date",
+    grain: "ytd",
+    unitsColumn: "jobs",
+    salesColumn: "sales",
+    levels: [{ name: "Design", columns: ["design"] }],
+    filters: [{ column: "customer", mode: "include", values: ["keep"] }],
+  };
+  await query(viewSql(ytd));
+
+  const synth = {
+    periodColumn: "year",
+    prior: 2025,
+    current: 2026,
+    unitsColumn: "jobs",
+    salesColumn: "sales",
+  } as const;
+  const shapes: { label: string; config: BridgeConfig; drill?: { columns: string[]; filter: { column: string; value: string } } }[] = [
+    { label: "100 rows, four attributes", config: { ...synth, table: "s100", levels } },
+    { label: "2000 rows, four attributes", config: { ...synth, table: "s2000", levels } },
+    { label: "10000 rows, four attributes", config: { ...synth, table: "s10000", levels } },
+    { label: "100 rows, one attribute", config: { ...synth, table: "s100", levels: [levels[0]] } },
+    { label: "gross column", config: { ...synth, table: "s2000", levels, grossColumn: "gross_sales" } },
+    { label: "cost column", config: { ...synth, table: "s2000", levels, costColumn: "cost" } },
+    { label: "full new and discontinued", config: { ...synth, table: "s2000", levels, newAndDiscontinued: "full" } },
+    {
+      label: "zero-unit rows",
+      config: {
+        table: "hand", periodColumn: "period", prior: "p0", current: "p1",
+        unitsColumn: "units", salesColumn: "sales",
+        levels: [{ name: "Product", columns: ["product"] }],
+      },
+    },
+    {
+      label: "new and discontinued configurations",
+      config: {
+        table: "disc", periodColumn: "period", prior: "p0", current: "p1",
+        unitsColumn: "units", salesColumn: "sales",
+        levels: [{ name: "Design", columns: ["design"] }, { name: "Coating", columns: ["coating"] }],
+      },
+      drill: { columns: ["coating"], filter: { column: "design", value: "D2" } },
+    },
+    {
+      label: "null attribute values",
+      config: {
+        table: "nulls", periodColumn: "period", prior: "p0", current: "p1",
+        unitsColumn: "units", salesColumn: "sales",
+        levels: [{ name: "Design", columns: ["design"] }, { name: "Coating", columns: ["coating"] }],
+      },
+    },
+    {
+      label: "year-to-date view with a customer filter",
+      config: {
+        table: VIEW, periodColumn: PERIOD, prior: "2025 YTD", current: "2026 YTD",
+        unitsColumn: "jobs", salesColumn: "sales",
+        levels: [{ name: "Design", columns: ["design"] }],
+      },
+    },
+  ];
+
+  for (const shape of shapes) {
+    const config = { ...shape.config, cellsTable: "new_cells" };
+    const result = await runBridge(query, config);
+    await query(`CREATE OR REPLACE TEMP TABLE old_cells AS ${legacyCellsSql(shape.config)}`);
+    const columns = (await query(`SELECT name, type FROM pragma_table_info('new_cells')`)).map((row) => ({
+      name: String(row.name),
+      type: String(row.type),
+    }));
+    const oldColumns = (await query(`SELECT name FROM pragma_table_info('old_cells')`)).map((row) => String(row.name));
+    assert.deepEqual(columns.map((column) => column.name), oldColumns, `${shape.label} columns`);
+
+    const keys = shape.config.levels.flatMap((level) => level.columns);
+    const order = keys.map((key) => ident(key)).join(", ");
+    const fresh = await query(`SELECT * FROM new_cells ORDER BY ${order}`);
+    const previous = await query(`SELECT * FROM old_cells ORDER BY ${order}`);
+    assert.equal(fresh.length, previous.length, `${shape.label} row count`);
+    assert.ok(fresh.length > 0, `${shape.label} produced no cells`);
+
+    for (let i = 0; i < fresh.length; i++) {
+      for (const column of columns) {
+        const actual = fresh[i][column.name];
+        const expected = previous[i][column.name];
+        const actualNumber = asNumber(actual);
+        const expectedNumber = asNumber(expected);
+        if (actualNumber !== null && expectedNumber !== null) {
+          assertClose(actualNumber, expectedNumber, `${shape.label} ${column.name} row ${i}`);
+        } else {
+          assert.equal(actual ?? null, expected ?? null, `${shape.label} ${column.name} row ${i}`);
+        }
+      }
+    }
+
+    const [totals] = await query(`SELECT sum(s0 + z0) AS s0, sum(s1 + z1) AS s1, sum(s1) AS unit_s1 FROM old_cells`);
+    assertClose(result.priorSales, Number(totals.s0), `${shape.label} prior sales`);
+    assertClose(result.currentSales, Number(totals.s1), `${shape.label} current sales`);
+    for (const effect of result.effects) {
+      const [sum] = await query(`SELECT sum(${ident(effect.key)}) AS v FROM old_cells`);
+      assertClose(effect.value, Number(sum.v), `${shape.label} effect ${effect.key}`);
+    }
+    const coverage = await query(
+      `SELECT match_level, count(*)::DOUBLE AS cells, sum(s1) AS sales
+       FROM old_cells WHERE q1 <> 0 OR s1 <> 0
+       GROUP BY match_level ORDER BY match_level DESC`,
+    );
+    assert.equal(result.coverage.length, coverage.length, `${shape.label} coverage rows`);
+    const unitSales = Number(totals.unit_s1);
+    for (let i = 0; i < result.coverage.length; i++) {
+      const actual = result.coverage[i];
+      const expected = coverage[i];
+      assert.equal(actual.level, Number(expected.match_level), `${shape.label} coverage level`);
+      assert.equal(actual.cells, Number(expected.cells), `${shape.label} coverage cells`);
+      assertClose(actual.sales, Number(expected.sales), `${shape.label} coverage sales`);
+      const share = unitSales === 0 ? 0 : Number(expected.sales) / unitSales;
+      assertClose(actual.share, share, `${shape.label} coverage share`);
+    }
+
+    if (shape.drill) {
+      const options = {
+        columns: shape.drill.columns,
+        filters: [shape.drill.filter],
+        sortBy: "change" as const,
+      };
+      const fromNew = await drill(query, config, options);
+      const fromOld = await drill(query, { ...shape.config, cellsTable: "old_cells" }, options);
+      assert.equal(fromNew.length, fromOld.length, `${shape.label} drill rows`);
+      for (let i = 0; i < fromNew.length; i++) {
+        for (const key of Object.keys(fromNew[i])) {
+          const actual = asNumber(fromNew[i][key]);
+          const expected = asNumber(fromOld[i][key]);
+          if (actual !== null && expected !== null) assertClose(actual, expected, `${shape.label} drill ${key}`);
+          else assert.equal(fromNew[i][key] ?? null, fromOld[i][key] ?? null, `${shape.label} drill ${key}`);
+        }
+      }
+    }
+  }
+});
+
 test("rejects a missing prior period and duplicate columns", async () => {
   const query = await openDatabase();
   await query(`CREATE TABLE t AS SELECT 'p1' AS period, 'A' AS product, 1 AS units, 1.0 AS sales`);
@@ -407,3 +604,167 @@ test("rejects a missing prior period and duplicate columns", async () => {
     /more than one level/,
   );
 });
+
+function ident(name: string): string {
+  return `"${name.replaceAll('"', '""')}"`;
+}
+
+function literal(value: string | number): string {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("Period value must be finite");
+    return String(value);
+  }
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function validate(config: BridgeConfig): void {
+  if (config.levels.length === 0) throw new Error("At least one level is required");
+  const reserved = /^(q0|s0|q1|s1|z0|z1|g0|g1|rs0|rs1|r0|match_level|surviving_level|status|ref_price|volume|price|new_config|discontinued|no_units|price_list|price_discount|price_sales|cost_rate|(ref|mix)_\d+|[qsp][01]_l\d+)$/i;
+  const seen = new Set<string>();
+  for (const level of config.levels) {
+    if (level.columns.length === 0) throw new Error(`Level "${level.name}" has no columns`);
+    for (const column of level.columns) {
+      if (seen.has(column)) throw new Error(`Column "${column}" is used in more than one level`);
+      if (reserved.test(column)) {
+        throw new Error(`Column "${column}" has a name the calculation uses internally. Rename it in your file and load it again.`);
+      }
+      seen.add(column);
+    }
+  }
+}
+
+function cumulativeColumns(levels: Level[], j: number): string[] {
+  return levels.slice(0, j).flatMap((level) => level.columns);
+}
+
+function legacyCellsSql(config: BridgeConfig): string {
+  validate(config);
+  const k = config.levels.length;
+  const allColumns = cumulativeColumns(config.levels, k).map(ident);
+  const period = ident(config.periodColumn);
+  const prior = literal(config.prior);
+  const current = literal(config.current);
+  const units = ident(config.unitsColumn);
+  const sales = ident(config.salesColumn);
+  const hasUnits = `(${units} IS NOT NULL AND ${units} <> 0)`;
+  const cost = config.costColumn ? ident(config.costColumn) : null;
+  const gross = !cost && config.grossColumn ? ident(config.grossColumn) : null;
+  const measure = cost ? `(coalesce(${sales}, 0) - coalesce(${cost}, 0))` : sales;
+  const full = config.newAndDiscontinued === "full";
+  const continuing = "(q0 > 0 AND q1 <> 0)";
+  const scope = full ? ` FILTER (WHERE ${continuing})` : "";
+
+  const windows: string[] = [];
+  const groupPrices: string[] = [];
+  for (let j = 1; j <= k; j++) {
+    const partition = cumulativeColumns(config.levels, j).map(ident).join(", ");
+    windows.push(`sum(q0)${scope} OVER (PARTITION BY ${partition}) AS q0_l${j}`);
+    windows.push(`sum(s0)${scope} OVER (PARTITION BY ${partition}) AS s0_l${j}`);
+    windows.push(`sum(q1) OVER (PARTITION BY ${partition}) AS q1_l${j}`);
+    groupPrices.push(`CASE WHEN q0_l${j} > 0 THEN s0_l${j} / q0_l${j} END AS p0_l${j}`);
+  }
+
+  const refs: string[] = ["r0 AS ref_0"];
+  for (let j = 1; j <= k; j++) {
+    const chain = Array.from({ length: j }, (_, i) => `p0_l${j - i}`).join(", ");
+    refs.push(`coalesce(${chain}, r0) AS ref_${j}`);
+  }
+  const matchLevel = full
+    ? `CASE WHEN q0 > 0 THEN ${k} ELSE 0 END`
+    : "CASE " +
+      Array.from({ length: k }, (_, i) => `WHEN p0_l${k - i} IS NOT NULL THEN ${k - i}`).join(" ") +
+      " ELSE 0 END";
+
+  const survivingLevel = full
+    ? String(k)
+    : "CASE " +
+      Array.from({ length: k }, (_, i) => `WHEN q1_l${k - i} > 0 THEN ${k - i}`).join(" ") +
+      " ELSE 0 END";
+  const survivingRef =
+    "CASE surviving_level " +
+    Array.from({ length: k + 1 }, (_, j) => `WHEN ${j} THEN ref_${j}`).join(" ") +
+    " END";
+
+  const mixes = Array.from(
+    { length: k },
+    (_, i) =>
+      `CASE WHEN ${full ? continuing : `surviving_level >= ${i + 1}`} THEN (q1 - q0) * (ref_${i + 1} - ref_${i}) ELSE 0 END AS mix_${i + 1}`,
+  );
+  const rest = `s1 - s0 - (q1 - q0) * ref_${k}`;
+  const rated = full ? continuing : `match_level = ${k}`;
+  const effects = full
+    ? `CASE WHEN ${continuing} THEN ref_${k} END AS ref_price,
+  CASE WHEN ${continuing} THEN (q1 - q0) * ref_0 ELSE 0 END AS volume,
+  ${mixes.join(",\n  ")},
+  CASE WHEN ${continuing} THEN ${rest} ELSE 0 END AS price,
+  CASE WHEN q0 <= 0 AND NOT (q1 = 0 AND q0 <> 0) THEN s1 - s0 ELSE 0 END AS new_config,
+  CASE WHEN q1 = 0 AND q0 <> 0 THEN s1 - s0 ELSE 0 END AS discontinued`
+    : `ref_${k} AS ref_price,
+  (q1 - q0) * ref_0 AS volume,
+  ${mixes.join(",\n  ")},
+  CASE WHEN match_level = ${k} THEN ${rest} ELSE 0 END AS price,
+  CASE WHEN match_level < ${k} THEN ${rest} ELSE 0 END AS new_config,
+  (q1 - q0) * (ref_${k} - ${survivingRef}) AS discontinued`;
+
+  return `
+WITH cells AS (
+  SELECT ${allColumns.join(", ")},
+    round(coalesce(sum(${units}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE, 6) AS q0,
+    coalesce(sum(${measure}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE AS s0,
+    round(coalesce(sum(${units}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE, 6) AS q1,
+    coalesce(sum(${measure}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE AS s1,
+    coalesce(sum(${measure}) FILTER (WHERE ${period} = ${prior} AND NOT ${hasUnits}), 0)::DOUBLE AS z0,
+    coalesce(sum(${measure}) FILTER (WHERE ${period} = ${current} AND NOT ${hasUnits}), 0)::DOUBLE AS z1${
+      gross
+        ? `,
+    coalesce(sum(${gross}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE AS g0,
+    coalesce(sum(${gross}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE AS g1`
+        : cost
+          ? `,
+    coalesce(sum(${sales}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE AS rs0,
+    coalesce(sum(${sales}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE AS rs1`
+          : ""
+    }
+  FROM ${ident(config.table)}
+  WHERE ${period} IN (${prior}, ${current})
+  GROUP BY ${allColumns.join(", ")}
+),
+windowed AS (
+  SELECT *,
+    sum(s0)${scope} OVER () / sum(q0)${scope} OVER () AS r0,
+    ${windows.join(",\n    ")}
+  FROM cells
+),
+priced AS (
+  SELECT *,
+    ${groupPrices.join(",\n    ")}
+  FROM windowed
+),
+referenced AS (
+  SELECT *,
+    ${matchLevel} AS match_level,
+    ${survivingLevel} AS surviving_level,
+    ${refs.join(",\n    ")}
+  FROM priced
+),
+priced_effects AS (
+SELECT ${allColumns.join(", ")}, q0, s0, q1, s1, z0, z1,${gross ? " g0, g1," : ""}${cost ? " rs0, rs1," : ""} match_level, surviving_level,
+  ${Array.from({ length: k + 1 }, (_, j) => `ref_${j}`).join(", ")},
+  CASE WHEN q1 = 0 AND q0 <> 0 THEN 'discontinued' WHEN q0 <= 0 THEN 'new' ELSE 'continuing' END AS status,
+  ${effects},
+  z1 - z0 AS no_units
+FROM referenced
+)
+SELECT *${
+    gross
+      ? `,
+  CASE WHEN ${rated} AND g0 <> 0 AND q0 > 0 AND q1 <> 0 THEN (g1 - q1 * g0 / q0) * (s0 / g0) ELSE 0 END AS price_list,
+  price - CASE WHEN ${rated} AND g0 <> 0 AND q0 > 0 AND q1 <> 0 THEN (g1 - q1 * g0 / q0) * (s0 / g0) ELSE 0 END AS price_discount`
+      : cost
+        ? `,
+  CASE WHEN ${rated} AND q0 > 0 THEN rs1 - q1 * rs0 / q0 ELSE 0 END AS price_sales,
+  price - CASE WHEN ${rated} AND q0 > 0 THEN rs1 - q1 * rs0 / q0 ELSE 0 END AS cost_rate`
+        : ""
+  }
+FROM priced_effects`;
+}
