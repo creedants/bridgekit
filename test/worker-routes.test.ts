@@ -18,16 +18,31 @@ function html(body: string): Response {
   return new Response(body, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
 }
 
-function bindings(pages: Record<string, Response>): { env: Env; db: Env["DB"] } {
+type AssetCall = { method: string; pathname: string; search: string; ifNoneMatch: string | null; body: string };
+type AssetPage = Response | ((request: Request) => Response);
+
+function bindings(pages: Record<string, AssetPage>): { env: Env; db: Env["DB"]; calls: AssetCall[] } {
   const db = testDatabase();
+  const calls: AssetCall[] = [];
   const assets: Fetcher = {
     async fetch(input) {
-      const path = new URL(typeof input === "string" ? input : input.url).pathname;
-      return pages[path] ? pages[path].clone() : new Response("missing", { status: 500 });
+      const request = input instanceof Request ? input : new Request(input);
+      const url = new URL(request.url);
+      calls.push({
+        method: request.method,
+        pathname: url.pathname,
+        search: url.search,
+        ifNoneMatch: request.headers.get("if-none-match"),
+        body: await request.clone().text(),
+      });
+      const page = pages[url.pathname];
+      if (!page) return new Response("missing", { status: 500 });
+      return typeof page === "function" ? page(request) : page.clone();
     },
   };
   return {
     db,
+    calls,
     env: {
       ASSETS: assets,
       DB: db,
@@ -37,21 +52,18 @@ function bindings(pages: Record<string, Response>): { env: Env; db: Env["DB"] } 
   };
 }
 
-async function open(path: string, env: Env): Promise<Response> {
+async function open(path: string, env: Env, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  if (!headers.has("user-agent")) headers.set("user-agent", "Mozilla/5.0");
+  if (!headers.has("sec-fetch-dest")) headers.set("sec-fetch-dest", "document");
   const pending: Promise<unknown>[] = [];
-  const response = await app.fetch(
-    new Request(`http://127.0.0.1:8790${path}`, {
-      headers: { "user-agent": "Mozilla/5.0", "sec-fetch-dest": "document" },
-    }),
-    env,
-    {
-      waitUntil(promise) {
-        pending.push(promise);
-      },
-      passThroughOnException() {},
-      props: {},
+  const response = await app.fetch(new Request(`http://127.0.0.1:8790${path}`, { ...init, headers }), env, {
+    waitUntil(promise) {
+      pending.push(promise);
     },
-  );
+    passThroughOnException() {},
+    props: {},
+  });
   await Promise.all(pending);
   return response;
 }
@@ -62,7 +74,7 @@ async function views(db: Env["DB"]): Promise<{ path: string; referrer: string; v
 }
 
 test("an html address returns that page and counts the request once", async () => {
-  const { env, db } = bindings({
+  const { env, db, calls } = bindings({
     "/guide.html": redirect("/guide"),
     "/guide": html(GUIDE),
     "/method.html": redirect("/method"),
@@ -85,6 +97,10 @@ test("an html address returns that page and counts the request once", async () =
   assert.equal(await privacy.text(), PRIVACY);
   assert.equal(article.status, 200);
   assert.equal(await article.text(), ARTICLE);
+  assert.deepEqual(
+    calls.map((call) => call.pathname),
+    ["/guide", "/method", "/privacy", "/price-volume-mix-analysis"],
+  );
   assert.deepEqual(await views(db), [
     { path: "/guide.html", referrer: "", views: 1 },
     { path: "/method.html", referrer: "", views: 1 },
@@ -114,23 +130,116 @@ test("two requests for the same html address count two views of that address", a
   assert.deepEqual(await views(db), [{ path: "/method.html", referrer: "", views: 2 }]);
 });
 
-test("an html file served without a redirect is counted once", async () => {
-  const { env, db } = bindings({
-    "/privacy.html": html(PRIVACY),
+test("an html address is read from the extensionless file even when the html name itself is a page", async () => {
+  const { env, db, calls } = bindings({
+    "/privacy.html": html("<!doctype html><title>Wrong</title>"),
+    "/privacy": html(PRIVACY),
   });
   const response = await open("/privacy.html", env);
   assert.equal(response.status, 200);
   assert.equal(await response.text(), PRIVACY);
+  assert.deepEqual(calls.map((call) => call.pathname), ["/privacy"]);
   assert.deepEqual(await views(db), [{ path: "/privacy.html", referrer: "", views: 1 }]);
 });
 
-test("a redirect to another site is returned and not counted", async () => {
-  const { env, db } = bindings({
-    "/guide.html": redirect("https://evil.example/guide"),
+test("index.html redirects stay redirects", async () => {
+  const { env, db, calls } = bindings({
+    "/index.html": redirect("/"),
+    "/": html(GUIDE),
+    "/app/index.html": redirect("/app/"),
+    "/app/": html(METHOD),
+    "/pay/index.html": redirect("/pay/"),
+    "/pay/": html(ARTICLE),
   });
-  const response = await open("/guide.html", env);
-  assert.equal(response.status, 307);
-  assert.equal(response.headers.get("location"), "https://evil.example/guide");
+  const home = await open("/index.html", env);
+  const appPage = await open("/app/index.html", env);
+  const pay = await open("/pay/index.html", env);
+  assert.equal(home.status, 307);
+  assert.equal(home.headers.get("location"), "/");
+  assert.equal(appPage.status, 307);
+  assert.equal(appPage.headers.get("location"), "/app/");
+  assert.equal(pay.status, 307);
+  assert.equal(pay.headers.get("location"), "/pay/");
+  assert.deepEqual(
+    calls.map((call) => call.pathname),
+    ["/index.html", "/app/index.html", "/pay/index.html"],
+  );
+  assert.deepEqual(await views(db), []);
+});
+
+test("HEAD does not count", async () => {
+  const { env, db, calls } = bindings({
+    "/guide.html": redirect("/guide"),
+    "/guide": html(GUIDE),
+  });
+  const response = await open("/guide.html", env, { method: "HEAD" });
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "");
+  assert.deepEqual(calls, [{ method: "HEAD", pathname: "/guide", search: "", ifNoneMatch: null, body: "" }]);
+  assert.deepEqual(await views(db), []);
+});
+
+test("a conditional 304 does not count", async () => {
+  const { env, db, calls } = bindings({
+    "/method.html": redirect("/method"),
+    "/method": (request) => {
+      assert.equal(request.headers.get("if-none-match"), '"page"');
+      return new Response(null, { status: 304, headers: { etag: '"page"' } });
+    },
+  });
+  const response = await open("/method.html", env, { headers: { "if-none-match": '"page"' } });
+  assert.equal(response.status, 304);
+  assert.equal(response.headers.get("etag"), '"page"');
+  assert.deepEqual(calls.map((call) => ({ method: call.method, pathname: call.pathname, ifNoneMatch: call.ifNoneMatch })), [
+    { method: "GET", pathname: "/method", ifNoneMatch: '"page"' },
+  ]);
+  assert.deepEqual(await views(db), []);
+});
+
+test("a query string is kept on the asset request and the count uses the html address", async () => {
+  const { env, db, calls } = bindings({
+    "/privacy.html": redirect("/privacy"),
+    "/privacy": html(PRIVACY),
+  });
+  const response = await open("/privacy.html?a=1&a=2&encoded=%2F", env);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), PRIVACY);
+  assert.deepEqual(calls, [
+    { method: "GET", pathname: "/privacy", search: "?a=1&a=2&encoded=%2F", ifNoneMatch: null, body: "" },
+  ]);
+  assert.deepEqual(await views(db), [{ path: "/privacy.html", referrer: "", views: 1 }]);
+});
+
+test("POST and PUT to an extensionless page are passed through unchanged", async () => {
+  const denied = new Response(null, {
+    status: 405,
+    headers: {
+      allow: "GET, HEAD",
+      "content-security-policy": "default-src 'self'",
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
+      "permissions-policy": "camera=()",
+    },
+  });
+  const { env, db, calls } = bindings({
+    "/guide": (request) => {
+      assert.equal(request.headers.get("x-probe"), "1");
+      return denied.clone();
+    },
+  });
+  for (const method of ["POST", "PUT"]) {
+    const response = await open("/guide?x=1", env, { method, body: "payload", headers: { "x-probe": "1" } });
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get("allow"), "GET, HEAD");
+    assert.equal(response.headers.get("content-security-policy"), "default-src 'self'");
+    assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(response.headers.get("permissions-policy"), "camera=()");
+  }
+  assert.deepEqual(calls, [
+    { method: "POST", pathname: "/guide", search: "?x=1", ifNoneMatch: null, body: "payload" },
+    { method: "PUT", pathname: "/guide", search: "?x=1", ifNoneMatch: null, body: "payload" },
+  ]);
   assert.deepEqual(await views(db), []);
 });
 
