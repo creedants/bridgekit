@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { serveCompressedWasm } from "./assets.ts";
 import { createAuth, type Auth } from "./auth.ts";
-import type { ExecutionContext } from "./cloudflare.ts";
+import type { ExecutionContext, Fetcher } from "./cloudflare.ts";
 import { handleCommentary } from "./commentary.ts";
 import { countPageView, pageView } from "./counts.ts";
 import type { Env } from "./env.ts";
@@ -150,8 +150,18 @@ app.all("/api/*", (c) => c.json({ error: "Not found." }, 404));
 
 app.get("/assets/*", async (c) => serveCompressedWasm(c.req.raw, c.env.ASSETS));
 
+/** The asset layer redirects these four names to the same file without `.html`. */
+const HTML_PAGE = new Set(["/guide.html", "/method.html", "/privacy.html", "/price-volume-mix-analysis.html"]);
+
+async function pageResponse(request: Request, assets: Fetcher): Promise<Response> {
+  const url = new URL(request.url);
+  if (!HTML_PAGE.has(url.pathname)) return assets.fetch(request);
+  url.pathname = url.pathname.slice(0, -".html".length);
+  return assets.fetch(new Request(url, request));
+}
+
 app.get("*", async (c) => {
-  const response = await c.env.ASSETS.fetch(c.req.raw);
+  const response = await pageResponse(c.req.raw, c.env.ASSETS);
   const view = pageView(c.req.raw, response);
   if (view) {
     (c.executionCtx as unknown as ExecutionContext).waitUntil(
@@ -160,5 +170,9 @@ app.get("*", async (c) => {
   }
   return response;
 });
+
+for (const pathname of HTML_PAGE) {
+  app.all(pathname.slice(0, -".html".length), (c) => c.env.ASSETS.fetch(c.req.raw));
+}
 
 export default app;
