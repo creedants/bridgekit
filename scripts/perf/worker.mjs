@@ -706,6 +706,7 @@ async function main() {
   if (!existsSync(join(root, "dist", "app", "index.html"))) die("dist/app/index.html is missing. Run npm run build:cloudflare first.");
 
   let file = null;
+  let finished = false;
   try {
     const dir = createRunDir();
     file = writeAuthEnv(dir);
@@ -804,8 +805,15 @@ async function main() {
     printTable(timed);
     console.log(`page counts ${JSON.stringify(report.pageCounts.delta)}`);
     console.log(`wrote ${out}`);
+    finished = true;
   } finally {
-    removeRunDir();
+    try {
+      removeRunDir();
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      // A throw from finally replaces the error still propagating.
+      if (finished) throw error;
+    }
   }
 }
 
