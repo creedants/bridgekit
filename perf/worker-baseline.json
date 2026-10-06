@@ -1,0 +1,2347 @@
+{
+  "ok": true,
+  "capturedAt": "2026-10-05T14:26:05.761Z",
+  "definitions": {
+    "ttfbMs": "Time from sending the request until the first response headers arrive. For a page that redirects, this is the redirect, not the HTML.",
+    "totalMs": "Time from sending the request until the final response body ends. Page redirects are included.",
+    "bytes": "Bytes received on the wire. The client does not decompress them.",
+    "contentEncoding": "The content-encoding header on the response, or identity when that header is absent.",
+    "byteMatch": "stored-br, stored-gz, or raw when the wire size equals that file. other when it equals none of them. null for routes that are not wasm.",
+    "cold": "The first request to that route in this process. Only page-home is the first request after wrangler dev becomes ready.",
+    "steady": "Five requests after one discarded warm-up. The median is the middle sample.",
+    "pageCount": "A 200 HTML response from the Worker schedules countPageView. The script then reads local D1 and requires that rise on routes whose final path is the path it requested. A redirect onto a path outside run_worker_first is stored and not required. There is no public route that reads the counts.",
+    "authEnv": "wrangler dev receives a generated BETTER_AUTH_SECRET through --env-file. .dev.vars is not read. Commentary, Paddle, and sign-in keys are unset."
+  },
+  "productionBlindSpots": [
+    "The clock is local wrangler dev, which is miniflare on this machine. It is not the Cloudflare edge and it has no edge cache.",
+    "Cloudflare replaces the browser Accept-Encoding with br, gzip before the Worker runs. The browser header is request.cf.clientAcceptEncoding. Local wrangler does not do that replacement.",
+    "Miniflare can recompress a Worker response. When gzip is listed before br, a body the Worker stored as Brotli can arrive as gzip. cache-control no-transform does not stop that in local dev.",
+    "Page-count inserts run in waitUntil after the response. totalMs ends when the body ends."
+  ],
+  "git": {
+    "sha": "737a85ffe04125ab312813f7009eaa74a99e9930",
+    "branch": "perf/tooling",
+    "porcelain": ""
+  },
+  "machine": {
+    "cpuModel": "AMD Ryzen 7 7735HS with Radeon Graphics",
+    "cores": 16,
+    "arch": "x64",
+    "platform": "linux",
+    "osRelease": "7.2.5-3-omarchy",
+    "node": "v26.7.0",
+    "loadAvg": [
+      0.81,
+      1.02,
+      0.97
+    ],
+    "topProcesses": [
+      "%CPU %MEM COMMAND",
+      "83.3  0.2 node-MainThread",
+      "64.2  0.2 npm run perf:wo",
+      "11.1  0.0 python3",
+      " 7.1  2.1 t3code",
+      " 5.2  0.4 Hyprland"
+    ],
+    "loadAvgAtEnd": [
+      1.21,
+      1.1,
+      1
+    ]
+  },
+  "wrangler": {
+    "version": "4.147.0",
+    "command": "wrangler dev --env-file <generated> --port <wrangler.jsonc dev.port> --ip 127.0.0.1",
+    "remote": false,
+    "port": 8790,
+    "ip": "127.0.0.1"
+  },
+  "sampleCount": 5,
+  "warmupDiscarded": 1,
+  "pageCounts": {
+    "before": [
+      {
+        "path": "/",
+        "views": 16
+      },
+      {
+        "path": "/app/",
+        "views": 16
+      }
+    ],
+    "after": [
+      {
+        "path": "/",
+        "views": 23
+      },
+      {
+        "path": "/app/",
+        "views": 23
+      }
+    ],
+    "delta": [
+      {
+        "path": "/",
+        "views": 7,
+        "countedByWorker": true
+      },
+      {
+        "path": "/app/",
+        "views": 7,
+        "countedByWorker": true
+      },
+      {
+        "path": "/guide",
+        "views": 0,
+        "countedByWorker": false
+      },
+      {
+        "path": "/method",
+        "views": 0,
+        "countedByWorker": false
+      }
+    ]
+  },
+  "routes": [
+    {
+      "id": "page-home",
+      "group": "page",
+      "method": "GET",
+      "path": "/",
+      "finalPath": "/",
+      "requestAcceptEncoding": null,
+      "note": "Static HTML. A 200 from the Worker schedules a page-count write. Nothing here reads .dev.vars.",
+      "expectedStatuses": [
+        200
+      ],
+      "stored": null,
+      "processCold": true,
+      "pageCounted": true,
+      "cold": {
+        "status": 200,
+        "finalPath": "/",
+        "redirects": [],
+        "contentType": "text/html; charset=utf-8",
+        "contentEncoding": "identity",
+        "bytes": 21442,
+        "byteMatch": null,
+        "ttfbMs": 19.1,
+        "totalMs": 21.06
+      },
+      "steady": {
+        "status": 200,
+        "contentType": "text/html; charset=utf-8",
+        "contentEncoding": "identity",
+        "byteMatch": null,
+        "bytes": {
+          "median": 21442,
+          "min": 21442,
+          "max": 21442,
+          "samples": [
+            21442,
+            21442,
+            21442,
+            21442,
+            21442
+          ]
+        },
+        "ttfbMs": {
+          "median": 7.21,
+          "min": 6.58,
+          "max": 7.44,
+          "samples": [
+            7.21,
+            6.88,
+            7.44,
+            7.31,
+            6.58
+          ]
+        },
+        "totalMs": {
+          "median": 7.6,
+          "min": 6.95,
+          "max": 7.89,
+          "samples": [
+            7.6,
+            7.27,
+            7.89,
+            7.7,
+            6.95
+          ]
+        },
+        "samples": [
+          {
+            "status": 200,
+            "finalPath": "/",
+            "redirects": [],
+            "contentType": "text/html; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 21442,
+            "byteMatch": null,
+            "ttfbMs": 7.21,
+            "totalMs": 7.6
+          },
+          {
+            "status": 200,
+            "finalPath": "/",
+            "redirects": [],
+            "contentType": "text/html; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 21442,
+            "byteMatch": null,
+            "ttfbMs": 6.88,
+            "totalMs": 7.27
+          },
+          {
+            "status": 200,
+            "finalPath": "/",
+            "redirects": [],
+            "contentType": "text/html; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 21442,
+            "byteMatch": null,
+            "ttfbMs": 7.44,
+            "totalMs": 7.89
+          },
+          {
+            "status": 200,
+            "finalPath": "/",
+            "redirects": [],
+            "contentType": "text/html; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 21442,
+            "byteMatch": null,
+            "ttfbMs": 7.31,
+            "totalMs": 7.7
+          },
+          {
+            "status": 200,
+            "finalPath": "/",
+            "redirects": [],
+            "contentType": "text/html; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 21442,
+            "byteMatch": null,
+            "ttfbMs": 6.58,
+            "totalMs": 6.95
+          }
+        ]
+      },
+      "errors": 0
+    },
+    {
+      "id": "page-app",
+      "group": "page",
+      "method": "GET",
+      "path": "/app/",
+      "finalPath": "/app/",
+      "requestAcceptEncoding": null,
+      "note": "Static HTML. A 200 from the Worker schedules a page-count write. Nothing here reads .dev.vars.",
+      "expectedStatuses": [
+        200
+      ],
+      "stored": null,
+      "processCold": false,
+      "pageCounted": true,
+      "cold": {
+        "status": 200,
+        "finalPath": "/app/",
+        "redirects": [],
+        "contentType": "text/html; charset=utf-8",
+        "contentEncoding": "identity",
+        "bytes": 986,
+        "byteMatch": null,
+        "ttfbMs": 6.75,
+        "totalMs": 7.01
+      },
+      "steady": {
+        "status": 200,
+        "contentType": "text/html; charset=utf-8",
+        "contentEncoding": "identity",
+        "byteMatch": null,
+        "bytes": {
+          "median": 986,
+          "min": 986,
+          "max": 986,
+          "samples": [
+            986,
+            986,
+            986,
+            986,
+            986
+          ]
+        },
+        "ttfbMs": {
+          "median": 7.92,
+          "min": 6.51,
+          "max": 8.61,
+          "samples": [
+            8.38,
+            6.51,
+            7.09,
+            8.61,
+            7.92
+          ]
+        },
+        "totalMs": {
+          "median": 8.22,
+          "min": 6.77,
+          "max": 8.92,
+          "samples": [
+            8.91,
+            6.77,
+            7.29,
+            8.92,
+            8.22
+          ]
+        },
+        "samples": [
+          {
+            "status": 200,
+            "finalPath": "/app/",
+            "redirects": [],
+            "contentType": "text/html; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 986,
+            "byteMatch": null,
+            "ttfbMs": 8.38,
+            "totalMs": 8.91
+          },
+          {
+            "status": 200,
+            "finalPath": "/app/",
+            "redirects": [],
+            "contentType": "text/html; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 986,
+            "byteMatch": null,
+            "ttfbMs": 6.51,
+            "totalMs": 6.77
+          },
+          {
+            "status": 200,
+            "finalPath": "/app/",
+            "redirects": [],
+            "contentType": "text/html; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 986,
+            "byteMatch": null,
+            "ttfbMs": 7.09,
+            "totalMs": 7.29
+          },
+          {
+            "status": 200,
+            "finalPath": "/app/",
+            "redirects": [],
+            "contentType": "text/html; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 986,
+            "byteMatch": null,
+            "ttfbMs": 8.61,
+            "totalMs": 8.92
+          },
+          {
+            "status": 200,
+            "finalPath": "/app/",
+            "redirects": [],
+            "contentType": "text/html; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 986,
+            "byteMatch": null,
+            "ttfbMs": 7.92,
+            "totalMs": 8.22
+          }
+        ]
+      },
+      "errors": 0
+    },
+    {
+      "id": "page-guide",
+      "group": "page",
+      "method": "GET",
+      "path": "/guide.html",
+      "finalPath": "/guide",
+      "requestAcceptEncoding": null,
+      "note": "Site links here. Assets html_handling answers with 307 to /guide, which is not in run_worker_first, so the HTML bypasses the Worker and page_views does not rise. totalMs includes the redirect.",
+      "expectedStatuses": [
+        200
+      ],
+      "stored": null,
+      "processCold": false,
+      "pageCounted": false,
+      "cold": {
+        "status": 200,
+        "finalPath": "/guide",
+        "redirects": [
+          {
+            "status": 307,
+            "location": "/guide"
+          }
+        ],
+        "contentType": "text/html; charset=utf-8",
+        "contentEncoding": "identity",
+        "bytes": 10279,
+        "byteMatch": null,
+        "ttfbMs": 9.03,
+        "totalMs": 13.68
+      },
+      "steady": {
+        "status": 200,
+        "contentType": "text/html; charset=utf-8",
+        "contentEncoding": "identity",
+        "byteMatch": null,
+        "bytes": {
+          "median": 10279,
+          "min": 10279,
+          "max": 10279,
+          "samples": [
+            10279,
+            10279,
+            10279,
+            10279,
+            10279
+          ]
+        },
+        "ttfbMs": {
+          "median": 6.01,
+          "min": 5.08,
+          "max": 6.38,
+          "samples": [
+            5.9,
+            6.17,
+            5.08,
+            6.38,
+            6.01
+          ]
+        },
+        "totalMs": {
+          "median": 9.6,
+          "min": 8.67,
+          "max": 12.39,
+          "samples": [
+            9.32,
+            9.73,
+            8.67,
+            12.39,
+            9.6
+          ]
+        },
+        "samples": [
+          {
+            "status": 200,
+            "finalPath": "/guide",
+            "redirects": [
+              {
+                "status": 307,
+                "location": "/guide"
+              }
+            ],
+            "contentType": "text/html; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 10279,
+            "byteMatch": null,
+            "ttfbMs": 5.9,
+            "totalMs": 9.32
+          },
+          {
+            "status": 200,
+            "finalPath": "/guide",
+            "redirects": [
+              {
+                "status": 307,
+                "location": "/guide"
+              }
+            ],
+            "contentType": "text/html; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 10279,
+            "byteMatch": null,
+            "ttfbMs": 6.17,
+            "totalMs": 9.73
+          },
+          {
+            "status": 200,
+            "finalPath": "/guide",
+            "redirects": [
+              {
+                "status": 307,
+                "location": "/guide"
+              }
+            ],
+            "contentType": "text/html; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 10279,
+            "byteMatch": null,
+            "ttfbMs": 5.08,
+            "totalMs": 8.67
+          },
+          {
+            "status": 200,
+            "finalPath": "/guide",
+            "redirects": [
+              {
+                "status": 307,
+                "location": "/guide"
+              }
+            ],
+            "contentType": "text/html; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 10279,
+            "byteMatch": null,
+            "ttfbMs": 6.38,
+            "totalMs": 12.39
+          },
+          {
+            "status": 200,
+            "finalPath": "/guide",
+            "redirects": [
+              {
+                "status": 307,
+                "location": "/guide"
+              }
+            ],
+            "contentType": "text/html; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 10279,
+            "byteMatch": null,
+            "ttfbMs": 6.01,
+            "totalMs": 9.6
+          }
+        ]
+      },
+      "errors": 0
+    },
+    {
+      "id": "page-method",
+      "group": "page",
+      "method": "GET",
+      "path": "/method.html",
+      "finalPath": "/method",
+      "requestAcceptEncoding": null,
+      "note": "Site links here. Assets html_handling answers with 307 to /method, which is not in run_worker_first, so the HTML bypasses the Worker and page_views does not rise. totalMs includes the redirect.",
+      "expectedStatuses": [
+        200
+      ],
+      "stored": null,
+      "processCold": false,
+      "pageCounted": false,
+      "cold": {
+        "status": 200,
+        "finalPath": "/method",
+        "redirects": [
+          {
+            "status": 307,
+            "location": "/method"
+          }
+        ],
+        "contentType": "text/html; charset=utf-8",
+        "contentEncoding": "identity",
+        "bytes": 11452,
+        "byteMatch": null,
+        "ttfbMs": 5.18,
+        "totalMs": 8.29
+      },
+      "steady": {
+        "status": 200,
+        "contentType": "text/html; charset=utf-8",
+        "contentEncoding": "identity",
+        "byteMatch": null,
+        "bytes": {
+          "median": 11452,
+          "min": 11452,
+          "max": 11452,
+          "samples": [
+            11452,
+            11452,
+            11452,
+            11452,
+            11452
+          ]
+        },
+        "ttfbMs": {
+          "median": 5.61,
+          "min": 5.53,
+          "max": 6.44,
+          "samples": [
+            6.44,
+            5.79,
+            5.61,
+            5.53,
+            5.59
+          ]
+        },
+        "totalMs": {
+          "median": 9.94,
+          "min": 9.01,
+          "max": 11.47,
+          "samples": [
+            11.47,
+            10.31,
+            9.01,
+            9.94,
+            9.52
+          ]
+        },
+        "samples": [
+          {
+            "status": 200,
+            "finalPath": "/method",
+            "redirects": [
+              {
+                "status": 307,
+                "location": "/method"
+              }
+            ],
+            "contentType": "text/html; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 11452,
+            "byteMatch": null,
+            "ttfbMs": 6.44,
+            "totalMs": 11.47
+          },
+          {
+            "status": 200,
+            "finalPath": "/method",
+            "redirects": [
+              {
+                "status": 307,
+                "location": "/method"
+              }
+            ],
+            "contentType": "text/html; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 11452,
+            "byteMatch": null,
+            "ttfbMs": 5.79,
+            "totalMs": 10.31
+          },
+          {
+            "status": 200,
+            "finalPath": "/method",
+            "redirects": [
+              {
+                "status": 307,
+                "location": "/method"
+              }
+            ],
+            "contentType": "text/html; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 11452,
+            "byteMatch": null,
+            "ttfbMs": 5.61,
+            "totalMs": 9.01
+          },
+          {
+            "status": 200,
+            "finalPath": "/method",
+            "redirects": [
+              {
+                "status": 307,
+                "location": "/method"
+              }
+            ],
+            "contentType": "text/html; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 11452,
+            "byteMatch": null,
+            "ttfbMs": 5.53,
+            "totalMs": 9.94
+          },
+          {
+            "status": 200,
+            "finalPath": "/method",
+            "redirects": [
+              {
+                "status": 307,
+                "location": "/method"
+              }
+            ],
+            "contentType": "text/html; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 11452,
+            "byteMatch": null,
+            "ttfbMs": 5.59,
+            "totalMs": 9.52
+          }
+        ]
+      },
+      "errors": 0
+    },
+    {
+      "id": "wasm-duckdb-eh-CfdE9-rk.wasm-br",
+      "group": "wasm",
+      "method": "GET",
+      "path": "/assets/duckdb-eh-CfdE9-rk.wasm",
+      "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+      "requestAcceptEncoding": "br",
+      "note": "Accept-Encoding br. serveCompressedWasm picks the stored file from this header.",
+      "expectedStatuses": [
+        200
+      ],
+      "stored": {
+        "brBytes": 5452859,
+        "gzBytes": 8090177,
+        "rawBytes": 35913747
+      },
+      "processCold": false,
+      "pageCounted": false,
+      "cold": {
+        "status": 200,
+        "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+        "redirects": [],
+        "contentType": "application/wasm",
+        "contentEncoding": "br",
+        "bytes": 5452859,
+        "byteMatch": "stored-br",
+        "ttfbMs": 4.47,
+        "totalMs": 17.58
+      },
+      "steady": {
+        "status": 200,
+        "contentType": "application/wasm",
+        "contentEncoding": "br",
+        "byteMatch": "stored-br",
+        "bytes": {
+          "median": 5452859,
+          "min": 5452859,
+          "max": 5452859,
+          "samples": [
+            5452859,
+            5452859,
+            5452859,
+            5452859,
+            5452859
+          ]
+        },
+        "ttfbMs": {
+          "median": 4.26,
+          "min": 3.86,
+          "max": 5.43,
+          "samples": [
+            4.87,
+            5.43,
+            3.98,
+            3.86,
+            4.26
+          ]
+        },
+        "totalMs": {
+          "median": 16.77,
+          "min": 15.54,
+          "max": 17.74,
+          "samples": [
+            16.93,
+            16.77,
+            15.54,
+            16.53,
+            17.74
+          ]
+        },
+        "samples": [
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "br",
+            "bytes": 5452859,
+            "byteMatch": "stored-br",
+            "ttfbMs": 4.87,
+            "totalMs": 16.93
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "br",
+            "bytes": 5452859,
+            "byteMatch": "stored-br",
+            "ttfbMs": 5.43,
+            "totalMs": 16.77
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "br",
+            "bytes": 5452859,
+            "byteMatch": "stored-br",
+            "ttfbMs": 3.98,
+            "totalMs": 15.54
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "br",
+            "bytes": 5452859,
+            "byteMatch": "stored-br",
+            "ttfbMs": 3.86,
+            "totalMs": 16.53
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "br",
+            "bytes": 5452859,
+            "byteMatch": "stored-br",
+            "ttfbMs": 4.26,
+            "totalMs": 17.74
+          }
+        ]
+      },
+      "errors": 0
+    },
+    {
+      "id": "wasm-duckdb-eh-CfdE9-rk.wasm-gzip",
+      "group": "wasm",
+      "method": "GET",
+      "path": "/assets/duckdb-eh-CfdE9-rk.wasm",
+      "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+      "requestAcceptEncoding": "gzip",
+      "note": "Accept-Encoding gzip. serveCompressedWasm picks the stored file from this header.",
+      "expectedStatuses": [
+        200
+      ],
+      "stored": {
+        "brBytes": 5452859,
+        "gzBytes": 8090177,
+        "rawBytes": 35913747
+      },
+      "processCold": false,
+      "pageCounted": false,
+      "cold": {
+        "status": 200,
+        "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+        "redirects": [],
+        "contentType": "application/wasm",
+        "contentEncoding": "gzip",
+        "bytes": 8090177,
+        "byteMatch": "stored-gz",
+        "ttfbMs": 4.76,
+        "totalMs": 23.82
+      },
+      "steady": {
+        "status": 200,
+        "contentType": "application/wasm",
+        "contentEncoding": "gzip",
+        "byteMatch": "stored-gz",
+        "bytes": {
+          "median": 8090177,
+          "min": 8090177,
+          "max": 8090177,
+          "samples": [
+            8090177,
+            8090177,
+            8090177,
+            8090177,
+            8090177
+          ]
+        },
+        "ttfbMs": {
+          "median": 4.89,
+          "min": 4.2,
+          "max": 5.5,
+          "samples": [
+            4.21,
+            4.2,
+            4.99,
+            4.89,
+            5.5
+          ]
+        },
+        "totalMs": {
+          "median": 23.69,
+          "min": 21.13,
+          "max": 25.17,
+          "samples": [
+            21.13,
+            21.99,
+            23.69,
+            25.05,
+            25.17
+          ]
+        },
+        "samples": [
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "gzip",
+            "bytes": 8090177,
+            "byteMatch": "stored-gz",
+            "ttfbMs": 4.21,
+            "totalMs": 21.13
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "gzip",
+            "bytes": 8090177,
+            "byteMatch": "stored-gz",
+            "ttfbMs": 4.2,
+            "totalMs": 21.99
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "gzip",
+            "bytes": 8090177,
+            "byteMatch": "stored-gz",
+            "ttfbMs": 4.99,
+            "totalMs": 23.69
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "gzip",
+            "bytes": 8090177,
+            "byteMatch": "stored-gz",
+            "ttfbMs": 4.89,
+            "totalMs": 25.05
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "gzip",
+            "bytes": 8090177,
+            "byteMatch": "stored-gz",
+            "ttfbMs": 5.5,
+            "totalMs": 25.17
+          }
+        ]
+      },
+      "errors": 0
+    },
+    {
+      "id": "wasm-duckdb-eh-CfdE9-rk.wasm-identity",
+      "group": "wasm",
+      "method": "GET",
+      "path": "/assets/duckdb-eh-CfdE9-rk.wasm",
+      "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+      "requestAcceptEncoding": null,
+      "note": "Accept-Encoding omitted. serveCompressedWasm picks the stored file from this header.",
+      "expectedStatuses": [
+        200
+      ],
+      "stored": {
+        "brBytes": 5452859,
+        "gzBytes": 8090177,
+        "rawBytes": 35913747
+      },
+      "processCold": false,
+      "pageCounted": false,
+      "cold": {
+        "status": 200,
+        "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+        "redirects": [],
+        "contentType": "application/wasm",
+        "contentEncoding": "identity",
+        "bytes": 35913747,
+        "byteMatch": "raw",
+        "ttfbMs": 5.91,
+        "totalMs": 135.65
+      },
+      "steady": {
+        "status": 200,
+        "contentType": "application/wasm",
+        "contentEncoding": "identity",
+        "byteMatch": "raw",
+        "bytes": {
+          "median": 35913747,
+          "min": 35913747,
+          "max": 35913747,
+          "samples": [
+            35913747,
+            35913747,
+            35913747,
+            35913747,
+            35913747
+          ]
+        },
+        "ttfbMs": {
+          "median": 6.59,
+          "min": 5.93,
+          "max": 7.93,
+          "samples": [
+            5.93,
+            6.59,
+            6.68,
+            7.93,
+            6.19
+          ]
+        },
+        "totalMs": {
+          "median": 134.69,
+          "min": 131.11,
+          "max": 136.16,
+          "samples": [
+            131.11,
+            136.16,
+            132.98,
+            135.56,
+            134.69
+          ]
+        },
+        "samples": [
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "identity",
+            "bytes": 35913747,
+            "byteMatch": "raw",
+            "ttfbMs": 5.93,
+            "totalMs": 131.11
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "identity",
+            "bytes": 35913747,
+            "byteMatch": "raw",
+            "ttfbMs": 6.59,
+            "totalMs": 136.16
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "identity",
+            "bytes": 35913747,
+            "byteMatch": "raw",
+            "ttfbMs": 6.68,
+            "totalMs": 132.98
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "identity",
+            "bytes": 35913747,
+            "byteMatch": "raw",
+            "ttfbMs": 7.93,
+            "totalMs": 135.56
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "identity",
+            "bytes": 35913747,
+            "byteMatch": "raw",
+            "ttfbMs": 6.19,
+            "totalMs": 134.69
+          }
+        ]
+      },
+      "errors": 0
+    },
+    {
+      "id": "wasm-duckdb-eh-CfdE9-rk.wasm-chrome",
+      "group": "wasm",
+      "method": "GET",
+      "path": "/assets/duckdb-eh-CfdE9-rk.wasm",
+      "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+      "requestAcceptEncoding": "gzip, deflate, br, zstd",
+      "note": "Accept-Encoding lists gzip before br, the order current Chrome sends. Local miniflare can recompress this. It is not an edge measurement.",
+      "expectedStatuses": [
+        200
+      ],
+      "stored": {
+        "brBytes": 5452859,
+        "gzBytes": 8090177,
+        "rawBytes": 35913747
+      },
+      "processCold": false,
+      "pageCounted": false,
+      "cold": {
+        "status": 200,
+        "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+        "redirects": [],
+        "contentType": "application/wasm",
+        "contentEncoding": "gzip",
+        "bytes": 8128896,
+        "byteMatch": "other",
+        "ttfbMs": 6.86,
+        "totalMs": 567.4
+      },
+      "steady": {
+        "status": 200,
+        "contentType": "application/wasm",
+        "contentEncoding": "gzip",
+        "byteMatch": "other",
+        "bytes": {
+          "median": 8128896,
+          "min": 8128896,
+          "max": 8128896,
+          "samples": [
+            8128896,
+            8128896,
+            8128896,
+            8128896,
+            8128896
+          ]
+        },
+        "ttfbMs": {
+          "median": 4.21,
+          "min": 3.97,
+          "max": 5.61,
+          "samples": [
+            4.17,
+            5,
+            3.97,
+            4.21,
+            5.61
+          ]
+        },
+        "totalMs": {
+          "median": 565.09,
+          "min": 557.18,
+          "max": 567.16,
+          "samples": [
+            557.18,
+            557.86,
+            567.16,
+            565.24,
+            565.09
+          ]
+        },
+        "samples": [
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "gzip",
+            "bytes": 8128896,
+            "byteMatch": "other",
+            "ttfbMs": 4.17,
+            "totalMs": 557.18
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "gzip",
+            "bytes": 8128896,
+            "byteMatch": "other",
+            "ttfbMs": 5,
+            "totalMs": 557.86
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "gzip",
+            "bytes": 8128896,
+            "byteMatch": "other",
+            "ttfbMs": 3.97,
+            "totalMs": 567.16
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "gzip",
+            "bytes": 8128896,
+            "byteMatch": "other",
+            "ttfbMs": 4.21,
+            "totalMs": 565.24
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-eh-CfdE9-rk.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "gzip",
+            "bytes": 8128896,
+            "byteMatch": "other",
+            "ttfbMs": 5.61,
+            "totalMs": 565.09
+          }
+        ]
+      },
+      "errors": 0
+    },
+    {
+      "id": "wasm-duckdb-mvp-DQDXaYzB.wasm-br",
+      "group": "wasm",
+      "method": "GET",
+      "path": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+      "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+      "requestAcceptEncoding": "br",
+      "note": "Accept-Encoding br. serveCompressedWasm picks the stored file from this header.",
+      "expectedStatuses": [
+        200
+      ],
+      "stored": {
+        "brBytes": 6157534,
+        "gzBytes": 9215786,
+        "rawBytes": 41325187
+      },
+      "processCold": false,
+      "pageCounted": false,
+      "cold": {
+        "status": 200,
+        "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+        "redirects": [],
+        "contentType": "application/wasm",
+        "contentEncoding": "br",
+        "bytes": 6157534,
+        "byteMatch": "stored-br",
+        "ttfbMs": 3.95,
+        "totalMs": 18.56
+      },
+      "steady": {
+        "status": 200,
+        "contentType": "application/wasm",
+        "contentEncoding": "br",
+        "byteMatch": "stored-br",
+        "bytes": {
+          "median": 6157534,
+          "min": 6157534,
+          "max": 6157534,
+          "samples": [
+            6157534,
+            6157534,
+            6157534,
+            6157534,
+            6157534
+          ]
+        },
+        "ttfbMs": {
+          "median": 4.27,
+          "min": 3.89,
+          "max": 5.13,
+          "samples": [
+            3.92,
+            5.13,
+            4.85,
+            3.89,
+            4.27
+          ]
+        },
+        "totalMs": {
+          "median": 19.18,
+          "min": 18.09,
+          "max": 22.04,
+          "samples": [
+            18.09,
+            21.8,
+            19.12,
+            19.18,
+            22.04
+          ]
+        },
+        "samples": [
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "br",
+            "bytes": 6157534,
+            "byteMatch": "stored-br",
+            "ttfbMs": 3.92,
+            "totalMs": 18.09
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "br",
+            "bytes": 6157534,
+            "byteMatch": "stored-br",
+            "ttfbMs": 5.13,
+            "totalMs": 21.8
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "br",
+            "bytes": 6157534,
+            "byteMatch": "stored-br",
+            "ttfbMs": 4.85,
+            "totalMs": 19.12
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "br",
+            "bytes": 6157534,
+            "byteMatch": "stored-br",
+            "ttfbMs": 3.89,
+            "totalMs": 19.18
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "br",
+            "bytes": 6157534,
+            "byteMatch": "stored-br",
+            "ttfbMs": 4.27,
+            "totalMs": 22.04
+          }
+        ]
+      },
+      "errors": 0
+    },
+    {
+      "id": "wasm-duckdb-mvp-DQDXaYzB.wasm-gzip",
+      "group": "wasm",
+      "method": "GET",
+      "path": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+      "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+      "requestAcceptEncoding": "gzip",
+      "note": "Accept-Encoding gzip. serveCompressedWasm picks the stored file from this header.",
+      "expectedStatuses": [
+        200
+      ],
+      "stored": {
+        "brBytes": 6157534,
+        "gzBytes": 9215786,
+        "rawBytes": 41325187
+      },
+      "processCold": false,
+      "pageCounted": false,
+      "cold": {
+        "status": 200,
+        "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+        "redirects": [],
+        "contentType": "application/wasm",
+        "contentEncoding": "gzip",
+        "bytes": 9215786,
+        "byteMatch": "stored-gz",
+        "ttfbMs": 5.6,
+        "totalMs": 24.06
+      },
+      "steady": {
+        "status": 200,
+        "contentType": "application/wasm",
+        "contentEncoding": "gzip",
+        "byteMatch": "stored-gz",
+        "bytes": {
+          "median": 9215786,
+          "min": 9215786,
+          "max": 9215786,
+          "samples": [
+            9215786,
+            9215786,
+            9215786,
+            9215786,
+            9215786
+          ]
+        },
+        "ttfbMs": {
+          "median": 5.23,
+          "min": 3.87,
+          "max": 5.92,
+          "samples": [
+            3.87,
+            5.23,
+            4.22,
+            5.92,
+            5.56
+          ]
+        },
+        "totalMs": {
+          "median": 26.94,
+          "min": 24.27,
+          "max": 27.23,
+          "samples": [
+            24.27,
+            27.23,
+            25.7,
+            26.94,
+            26.97
+          ]
+        },
+        "samples": [
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "gzip",
+            "bytes": 9215786,
+            "byteMatch": "stored-gz",
+            "ttfbMs": 3.87,
+            "totalMs": 24.27
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "gzip",
+            "bytes": 9215786,
+            "byteMatch": "stored-gz",
+            "ttfbMs": 5.23,
+            "totalMs": 27.23
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "gzip",
+            "bytes": 9215786,
+            "byteMatch": "stored-gz",
+            "ttfbMs": 4.22,
+            "totalMs": 25.7
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "gzip",
+            "bytes": 9215786,
+            "byteMatch": "stored-gz",
+            "ttfbMs": 5.92,
+            "totalMs": 26.94
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "gzip",
+            "bytes": 9215786,
+            "byteMatch": "stored-gz",
+            "ttfbMs": 5.56,
+            "totalMs": 26.97
+          }
+        ]
+      },
+      "errors": 0
+    },
+    {
+      "id": "wasm-duckdb-mvp-DQDXaYzB.wasm-identity",
+      "group": "wasm",
+      "method": "GET",
+      "path": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+      "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+      "requestAcceptEncoding": null,
+      "note": "Accept-Encoding omitted. serveCompressedWasm picks the stored file from this header.",
+      "expectedStatuses": [
+        200
+      ],
+      "stored": {
+        "brBytes": 6157534,
+        "gzBytes": 9215786,
+        "rawBytes": 41325187
+      },
+      "processCold": false,
+      "pageCounted": false,
+      "cold": {
+        "status": 200,
+        "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+        "redirects": [],
+        "contentType": "application/wasm",
+        "contentEncoding": "identity",
+        "bytes": 41325187,
+        "byteMatch": "raw",
+        "ttfbMs": 6.36,
+        "totalMs": 158.98
+      },
+      "steady": {
+        "status": 200,
+        "contentType": "application/wasm",
+        "contentEncoding": "identity",
+        "byteMatch": "raw",
+        "bytes": {
+          "median": 41325187,
+          "min": 41325187,
+          "max": 41325187,
+          "samples": [
+            41325187,
+            41325187,
+            41325187,
+            41325187,
+            41325187
+          ]
+        },
+        "ttfbMs": {
+          "median": 7.29,
+          "min": 6.5,
+          "max": 7.87,
+          "samples": [
+            6.87,
+            7.29,
+            7.87,
+            6.5,
+            7.53
+          ]
+        },
+        "totalMs": {
+          "median": 150.67,
+          "min": 149.93,
+          "max": 157.6,
+          "samples": [
+            157.6,
+            150.67,
+            149.93,
+            151.4,
+            150.63
+          ]
+        },
+        "samples": [
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "identity",
+            "bytes": 41325187,
+            "byteMatch": "raw",
+            "ttfbMs": 6.87,
+            "totalMs": 157.6
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "identity",
+            "bytes": 41325187,
+            "byteMatch": "raw",
+            "ttfbMs": 7.29,
+            "totalMs": 150.67
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "identity",
+            "bytes": 41325187,
+            "byteMatch": "raw",
+            "ttfbMs": 7.87,
+            "totalMs": 149.93
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "identity",
+            "bytes": 41325187,
+            "byteMatch": "raw",
+            "ttfbMs": 6.5,
+            "totalMs": 151.4
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "identity",
+            "bytes": 41325187,
+            "byteMatch": "raw",
+            "ttfbMs": 7.53,
+            "totalMs": 150.63
+          }
+        ]
+      },
+      "errors": 0
+    },
+    {
+      "id": "wasm-duckdb-mvp-DQDXaYzB.wasm-chrome",
+      "group": "wasm",
+      "method": "GET",
+      "path": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+      "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+      "requestAcceptEncoding": "gzip, deflate, br, zstd",
+      "note": "Accept-Encoding lists gzip before br, the order current Chrome sends. Local miniflare can recompress this. It is not an edge measurement.",
+      "expectedStatuses": [
+        200
+      ],
+      "stored": {
+        "brBytes": 6157534,
+        "gzBytes": 9215786,
+        "rawBytes": 41325187
+      },
+      "processCold": false,
+      "pageCounted": false,
+      "cold": {
+        "status": 200,
+        "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+        "redirects": [],
+        "contentType": "application/wasm",
+        "contentEncoding": "gzip",
+        "bytes": 9265593,
+        "byteMatch": "other",
+        "ttfbMs": 6.49,
+        "totalMs": 676.98
+      },
+      "steady": {
+        "status": 200,
+        "contentType": "application/wasm",
+        "contentEncoding": "gzip",
+        "byteMatch": "other",
+        "bytes": {
+          "median": 9265593,
+          "min": 9265593,
+          "max": 9265593,
+          "samples": [
+            9265593,
+            9265593,
+            9265593,
+            9265593,
+            9265593
+          ]
+        },
+        "ttfbMs": {
+          "median": 4.22,
+          "min": 4.01,
+          "max": 5.12,
+          "samples": [
+            4.1,
+            4.01,
+            4.28,
+            5.12,
+            4.22
+          ]
+        },
+        "totalMs": {
+          "median": 669.26,
+          "min": 666.8,
+          "max": 672.7,
+          "samples": [
+            672.04,
+            672.7,
+            666.8,
+            668.1,
+            669.26
+          ]
+        },
+        "samples": [
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "gzip",
+            "bytes": 9265593,
+            "byteMatch": "other",
+            "ttfbMs": 4.1,
+            "totalMs": 672.04
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "gzip",
+            "bytes": 9265593,
+            "byteMatch": "other",
+            "ttfbMs": 4.01,
+            "totalMs": 672.7
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "gzip",
+            "bytes": 9265593,
+            "byteMatch": "other",
+            "ttfbMs": 4.28,
+            "totalMs": 666.8
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "gzip",
+            "bytes": 9265593,
+            "byteMatch": "other",
+            "ttfbMs": 5.12,
+            "totalMs": 668.1
+          },
+          {
+            "status": 200,
+            "finalPath": "/assets/duckdb-mvp-DQDXaYzB.wasm",
+            "redirects": [],
+            "contentType": "application/wasm",
+            "contentEncoding": "gzip",
+            "bytes": 9265593,
+            "byteMatch": "other",
+            "ttfbMs": 4.22,
+            "totalMs": 669.26
+          }
+        ]
+      },
+      "errors": 0
+    },
+    {
+      "id": "api-config",
+      "group": "api",
+      "method": "GET",
+      "path": "/api/config",
+      "finalPath": "/api/config",
+      "requestAcceptEncoding": null,
+      "note": "Public config. No credentials. The auth middleware still constructs Better Auth.",
+      "expectedStatuses": [
+        200
+      ],
+      "stored": null,
+      "processCold": false,
+      "pageCounted": false,
+      "cold": {
+        "status": 200,
+        "finalPath": "/api/config",
+        "redirects": [],
+        "contentType": "application/json",
+        "contentEncoding": "identity",
+        "bytes": 51,
+        "byteMatch": null,
+        "ttfbMs": 21.54,
+        "totalMs": 21.76
+      },
+      "steady": {
+        "status": 200,
+        "contentType": "application/json",
+        "contentEncoding": "identity",
+        "byteMatch": null,
+        "bytes": {
+          "median": 51,
+          "min": 51,
+          "max": 51,
+          "samples": [
+            51,
+            51,
+            51,
+            51,
+            51
+          ]
+        },
+        "ttfbMs": {
+          "median": 8.26,
+          "min": 7.43,
+          "max": 9.22,
+          "samples": [
+            9.22,
+            7.43,
+            7.88,
+            8.82,
+            8.26
+          ]
+        },
+        "totalMs": {
+          "median": 8.35,
+          "min": 7.51,
+          "max": 9.35,
+          "samples": [
+            9.35,
+            7.51,
+            7.97,
+            8.91,
+            8.35
+          ]
+        },
+        "samples": [
+          {
+            "status": 200,
+            "finalPath": "/api/config",
+            "redirects": [],
+            "contentType": "application/json",
+            "contentEncoding": "identity",
+            "bytes": 51,
+            "byteMatch": null,
+            "ttfbMs": 9.22,
+            "totalMs": 9.35
+          },
+          {
+            "status": 200,
+            "finalPath": "/api/config",
+            "redirects": [],
+            "contentType": "application/json",
+            "contentEncoding": "identity",
+            "bytes": 51,
+            "byteMatch": null,
+            "ttfbMs": 7.43,
+            "totalMs": 7.51
+          },
+          {
+            "status": 200,
+            "finalPath": "/api/config",
+            "redirects": [],
+            "contentType": "application/json",
+            "contentEncoding": "identity",
+            "bytes": 51,
+            "byteMatch": null,
+            "ttfbMs": 7.88,
+            "totalMs": 7.97
+          },
+          {
+            "status": 200,
+            "finalPath": "/api/config",
+            "redirects": [],
+            "contentType": "application/json",
+            "contentEncoding": "identity",
+            "bytes": 51,
+            "byteMatch": null,
+            "ttfbMs": 8.82,
+            "totalMs": 8.91
+          },
+          {
+            "status": 200,
+            "finalPath": "/api/config",
+            "redirects": [],
+            "contentType": "application/json",
+            "contentEncoding": "identity",
+            "bytes": 51,
+            "byteMatch": null,
+            "ttfbMs": 8.26,
+            "totalMs": 8.35
+          }
+        ]
+      },
+      "errors": 0
+    },
+    {
+      "id": "api-workspace-unauth",
+      "group": "unauth",
+      "method": "GET",
+      "path": "/api/workspaces/perf-local",
+      "finalPath": "/api/workspaces/perf-local",
+      "requestAcceptEncoding": null,
+      "note": "No session cookie. Expected 403 from the local session check. No remote call.",
+      "expectedStatuses": [
+        403
+      ],
+      "stored": null,
+      "processCold": false,
+      "pageCounted": false,
+      "cold": {
+        "status": 403,
+        "finalPath": "/api/workspaces/perf-local",
+        "redirects": [],
+        "contentType": "application/json",
+        "contentEncoding": "identity",
+        "bytes": 26,
+        "byteMatch": null,
+        "ttfbMs": 21.01,
+        "totalMs": 21.12
+      },
+      "steady": {
+        "status": 403,
+        "contentType": "application/json",
+        "contentEncoding": "identity",
+        "byteMatch": null,
+        "bytes": {
+          "median": 26,
+          "min": 26,
+          "max": 26,
+          "samples": [
+            26,
+            26,
+            26,
+            26,
+            26
+          ]
+        },
+        "ttfbMs": {
+          "median": 14.56,
+          "min": 14.18,
+          "max": 15.96,
+          "samples": [
+            15.96,
+            14.56,
+            14.63,
+            14.18,
+            14.38
+          ]
+        },
+        "totalMs": {
+          "median": 14.65,
+          "min": 14.27,
+          "max": 16.08,
+          "samples": [
+            16.08,
+            14.65,
+            14.74,
+            14.27,
+            14.49
+          ]
+        },
+        "samples": [
+          {
+            "status": 403,
+            "finalPath": "/api/workspaces/perf-local",
+            "redirects": [],
+            "contentType": "application/json",
+            "contentEncoding": "identity",
+            "bytes": 26,
+            "byteMatch": null,
+            "ttfbMs": 15.96,
+            "totalMs": 16.08
+          },
+          {
+            "status": 403,
+            "finalPath": "/api/workspaces/perf-local",
+            "redirects": [],
+            "contentType": "application/json",
+            "contentEncoding": "identity",
+            "bytes": 26,
+            "byteMatch": null,
+            "ttfbMs": 14.56,
+            "totalMs": 14.65
+          },
+          {
+            "status": 403,
+            "finalPath": "/api/workspaces/perf-local",
+            "redirects": [],
+            "contentType": "application/json",
+            "contentEncoding": "identity",
+            "bytes": 26,
+            "byteMatch": null,
+            "ttfbMs": 14.63,
+            "totalMs": 14.74
+          },
+          {
+            "status": 403,
+            "finalPath": "/api/workspaces/perf-local",
+            "redirects": [],
+            "contentType": "application/json",
+            "contentEncoding": "identity",
+            "bytes": 26,
+            "byteMatch": null,
+            "ttfbMs": 14.18,
+            "totalMs": 14.27
+          },
+          {
+            "status": 403,
+            "finalPath": "/api/workspaces/perf-local",
+            "redirects": [],
+            "contentType": "application/json",
+            "contentEncoding": "identity",
+            "bytes": 26,
+            "byteMatch": null,
+            "ttfbMs": 14.38,
+            "totalMs": 14.49
+          }
+        ]
+      },
+      "errors": 0
+    },
+    {
+      "id": "api-workspace-post-unauth",
+      "group": "unauth",
+      "method": "POST",
+      "path": "/api/workspaces/perf-local/setups",
+      "finalPath": "/api/workspaces/perf-local/setups",
+      "requestAcceptEncoding": null,
+      "note": "No Origin header. Expected 403 before a save. No remote call.",
+      "expectedStatuses": [
+        403
+      ],
+      "stored": null,
+      "processCold": false,
+      "pageCounted": false,
+      "cold": {
+        "status": 403,
+        "finalPath": "/api/workspaces/perf-local/setups",
+        "redirects": [],
+        "contentType": "application/json",
+        "contentEncoding": "identity",
+        "bytes": 46,
+        "byteMatch": null,
+        "ttfbMs": 7.39,
+        "totalMs": 7.49
+      },
+      "steady": {
+        "status": 403,
+        "contentType": "application/json",
+        "contentEncoding": "identity",
+        "byteMatch": null,
+        "bytes": {
+          "median": 46,
+          "min": 46,
+          "max": 46,
+          "samples": [
+            46,
+            46,
+            46,
+            46,
+            46
+          ]
+        },
+        "ttfbMs": {
+          "median": 8.47,
+          "min": 6.83,
+          "max": 10.28,
+          "samples": [
+            6.83,
+            8.47,
+            9.03,
+            10.28,
+            8.37
+          ]
+        },
+        "totalMs": {
+          "median": 8.59,
+          "min": 6.92,
+          "max": 10.46,
+          "samples": [
+            6.92,
+            8.59,
+            9.13,
+            10.46,
+            8.46
+          ]
+        },
+        "samples": [
+          {
+            "status": 403,
+            "finalPath": "/api/workspaces/perf-local/setups",
+            "redirects": [],
+            "contentType": "application/json",
+            "contentEncoding": "identity",
+            "bytes": 46,
+            "byteMatch": null,
+            "ttfbMs": 6.83,
+            "totalMs": 6.92
+          },
+          {
+            "status": 403,
+            "finalPath": "/api/workspaces/perf-local/setups",
+            "redirects": [],
+            "contentType": "application/json",
+            "contentEncoding": "identity",
+            "bytes": 46,
+            "byteMatch": null,
+            "ttfbMs": 8.47,
+            "totalMs": 8.59
+          },
+          {
+            "status": 403,
+            "finalPath": "/api/workspaces/perf-local/setups",
+            "redirects": [],
+            "contentType": "application/json",
+            "contentEncoding": "identity",
+            "bytes": 46,
+            "byteMatch": null,
+            "ttfbMs": 9.03,
+            "totalMs": 9.13
+          },
+          {
+            "status": 403,
+            "finalPath": "/api/workspaces/perf-local/setups",
+            "redirects": [],
+            "contentType": "application/json",
+            "contentEncoding": "identity",
+            "bytes": 46,
+            "byteMatch": null,
+            "ttfbMs": 10.28,
+            "totalMs": 10.46
+          },
+          {
+            "status": 403,
+            "finalPath": "/api/workspaces/perf-local/setups",
+            "redirects": [],
+            "contentType": "application/json",
+            "contentEncoding": "identity",
+            "bytes": 46,
+            "byteMatch": null,
+            "ttfbMs": 8.37,
+            "totalMs": 8.46
+          }
+        ]
+      },
+      "errors": 0
+    },
+    {
+      "id": "api-paddle-unauth",
+      "group": "unauth",
+      "method": "POST",
+      "path": "/api/paddle/webhook",
+      "finalPath": "/api/paddle/webhook",
+      "requestAcceptEncoding": null,
+      "note": "Body {} and no Paddle-Signature. Expected 401. Paddle is not called. The webhook secret is unset in this run.",
+      "expectedStatuses": [
+        401
+      ],
+      "stored": null,
+      "processCold": false,
+      "pageCounted": false,
+      "cold": {
+        "status": 401,
+        "finalPath": "/api/paddle/webhook",
+        "redirects": [],
+        "contentType": "application/json",
+        "contentEncoding": "identity",
+        "bytes": 26,
+        "byteMatch": null,
+        "ttfbMs": 7.37,
+        "totalMs": 7.45
+      },
+      "steady": {
+        "status": 401,
+        "contentType": "application/json",
+        "contentEncoding": "identity",
+        "byteMatch": null,
+        "bytes": {
+          "median": 26,
+          "min": 26,
+          "max": 26,
+          "samples": [
+            26,
+            26,
+            26,
+            26,
+            26
+          ]
+        },
+        "ttfbMs": {
+          "median": 7.6,
+          "min": 6.95,
+          "max": 8.26,
+          "samples": [
+            7.59,
+            8.26,
+            7.76,
+            7.6,
+            6.95
+          ]
+        },
+        "totalMs": {
+          "median": 7.68,
+          "min": 7.02,
+          "max": 8.38,
+          "samples": [
+            7.68,
+            8.38,
+            7.85,
+            7.67,
+            7.02
+          ]
+        },
+        "samples": [
+          {
+            "status": 401,
+            "finalPath": "/api/paddle/webhook",
+            "redirects": [],
+            "contentType": "application/json",
+            "contentEncoding": "identity",
+            "bytes": 26,
+            "byteMatch": null,
+            "ttfbMs": 7.59,
+            "totalMs": 7.68
+          },
+          {
+            "status": 401,
+            "finalPath": "/api/paddle/webhook",
+            "redirects": [],
+            "contentType": "application/json",
+            "contentEncoding": "identity",
+            "bytes": 26,
+            "byteMatch": null,
+            "ttfbMs": 8.26,
+            "totalMs": 8.38
+          },
+          {
+            "status": 401,
+            "finalPath": "/api/paddle/webhook",
+            "redirects": [],
+            "contentType": "application/json",
+            "contentEncoding": "identity",
+            "bytes": 26,
+            "byteMatch": null,
+            "ttfbMs": 7.76,
+            "totalMs": 7.85
+          },
+          {
+            "status": 401,
+            "finalPath": "/api/paddle/webhook",
+            "redirects": [],
+            "contentType": "application/json",
+            "contentEncoding": "identity",
+            "bytes": 26,
+            "byteMatch": null,
+            "ttfbMs": 7.6,
+            "totalMs": 7.67
+          },
+          {
+            "status": 401,
+            "finalPath": "/api/paddle/webhook",
+            "redirects": [],
+            "contentType": "application/json",
+            "contentEncoding": "identity",
+            "bytes": 26,
+            "byteMatch": null,
+            "ttfbMs": 6.95,
+            "totalMs": 7.02
+          }
+        ]
+      },
+      "errors": 0
+    },
+    {
+      "id": "api-commentary-unauth",
+      "group": "unauth",
+      "method": "POST",
+      "path": "/api/commentary",
+      "finalPath": "/api/commentary",
+      "requestAcceptEncoding": null,
+      "note": "Body {} and no session. Expected 403. The model is not called. ANTHROPIC_API_KEY is unset in this run, so the handler returns before a session read.",
+      "expectedStatuses": [
+        403
+      ],
+      "stored": null,
+      "processCold": false,
+      "pageCounted": false,
+      "cold": {
+        "status": 403,
+        "finalPath": "/api/commentary",
+        "redirects": [],
+        "contentType": "application/json; charset=utf-8",
+        "contentEncoding": "identity",
+        "bytes": 84,
+        "byteMatch": null,
+        "ttfbMs": 8.06,
+        "totalMs": 8.2
+      },
+      "steady": {
+        "status": 403,
+        "contentType": "application/json; charset=utf-8",
+        "contentEncoding": "identity",
+        "byteMatch": null,
+        "bytes": {
+          "median": 84,
+          "min": 84,
+          "max": 84,
+          "samples": [
+            84,
+            84,
+            84,
+            84,
+            84
+          ]
+        },
+        "ttfbMs": {
+          "median": 8.25,
+          "min": 7.02,
+          "max": 10.38,
+          "samples": [
+            8.07,
+            9.63,
+            10.38,
+            8.25,
+            7.02
+          ]
+        },
+        "totalMs": {
+          "median": 8.34,
+          "min": 7.1,
+          "max": 10.51,
+          "samples": [
+            8.17,
+            9.75,
+            10.51,
+            8.34,
+            7.1
+          ]
+        },
+        "samples": [
+          {
+            "status": 403,
+            "finalPath": "/api/commentary",
+            "redirects": [],
+            "contentType": "application/json; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 84,
+            "byteMatch": null,
+            "ttfbMs": 8.07,
+            "totalMs": 8.17
+          },
+          {
+            "status": 403,
+            "finalPath": "/api/commentary",
+            "redirects": [],
+            "contentType": "application/json; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 84,
+            "byteMatch": null,
+            "ttfbMs": 9.63,
+            "totalMs": 9.75
+          },
+          {
+            "status": 403,
+            "finalPath": "/api/commentary",
+            "redirects": [],
+            "contentType": "application/json; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 84,
+            "byteMatch": null,
+            "ttfbMs": 10.38,
+            "totalMs": 10.51
+          },
+          {
+            "status": 403,
+            "finalPath": "/api/commentary",
+            "redirects": [],
+            "contentType": "application/json; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 84,
+            "byteMatch": null,
+            "ttfbMs": 8.25,
+            "totalMs": 8.34
+          },
+          {
+            "status": 403,
+            "finalPath": "/api/commentary",
+            "redirects": [],
+            "contentType": "application/json; charset=utf-8",
+            "contentEncoding": "identity",
+            "bytes": 84,
+            "byteMatch": null,
+            "ttfbMs": 7.02,
+            "totalMs": 7.1
+          }
+        ]
+      },
+      "errors": 0
+    }
+  ],
+  "vetting": {
+    "requestErrors": 0,
+    "unexpectedStatuses": 0,
+    "routes": 17,
+    "pageCountsRecorded": true
+  }
+}

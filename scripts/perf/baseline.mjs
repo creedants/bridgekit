@@ -42,7 +42,7 @@ const BRIDGE = {
 const CSV_COLUMNS = ["year", "customer", "design", "coating", "photochromic", "polar", "material", "finish_type", "jobs", "sales"];
 const CSV_DIR = "/tmp/bridgekit-perf";
 
-// DuckDB starts on the first file, not at page load. The interactive mark stops at the empty tool.
+// The mark fires when the empty tool is ready. DuckDB opens after the load event, on an idle callback, unless Save-Data is on. A pick delay waits after this mark.
 const INTERACTIVE_WATCH = `
 window.__interactiveMs = null;
 (function watch() {
@@ -80,8 +80,17 @@ function sampleCount() {
   return count;
 }
 
+function pickDelayMs() {
+  const raw = option("--pick-delay");
+  if (raw === undefined) return 0;
+  if (!/^\d+$/.test(raw)) die("--pick-delay needs a non-negative integer number of milliseconds");
+  const delay = Number(raw);
+  if (delay > 120_000) die("--pick-delay must be at most 120000 milliseconds");
+  return delay;
+}
+
 function assertFullRun(out, count) {
-  const partial = process.argv.includes("--skip-build") || option("--only") || count !== 5;
+  const partial = process.argv.includes("--skip-build") || option("--only") || count !== 5 || pickDelayMs() !== 0;
   if (partial && resolve(root, out) === defaultOut) {
     die("A partial run cannot write perf/baseline.json. Pass --out to another path.");
   }
@@ -625,7 +634,7 @@ function resourcePath(name) {
   return new URL(name).pathname;
 }
 
-async function oneBrowser(chromePort, origin, csvPath, rows, hosted) {
+async function oneBrowser(chromePort, origin, csvPath, rows, hosted, pickDelay) {
   if (await portInUse(chromePort)) die(`debug port ${chromePort} is already in use`);
   hosted.takeHits();
   const browser = await open(chromePort);
@@ -635,6 +644,8 @@ async function oneBrowser(chromePort, origin, csvPath, rows, hosted) {
     await browser.send("Page.navigate", { url: `${origin}/app/` });
     const interactiveMs = await waitInteractive(browser);
     const coldHits = hosted.takeHits();
+    // The page's idle DuckDB open runs during this wait. file-to-bridge starts afterwards.
+    if (pickDelay > 0) await new Promise((resolve) => setTimeout(resolve, pickDelay));
     const wallStart = performance.now();
     const loaded = await loadFile(browser, csvPath, rows);
     const fileHits = hosted.takeHits();
@@ -677,7 +688,7 @@ function matchEngine(sample, engineSize) {
   return priorOk && currentOk && effectsOk;
 }
 
-async function timeBrowser(engineSizes, distPort, count, hosted) {
+async function timeBrowser(engineSizes, distPort, count, hosted, pickDelay) {
   process.setMaxListeners(32);
   const chromePort = await freePort();
   const origin = `http://127.0.0.1:${distPort}`;
@@ -685,7 +696,7 @@ async function timeBrowser(engineSizes, distPort, count, hosted) {
   let chromium = "";
   const discarded = [];
   console.error(`browser warmup ${browserSizes[0].name}`);
-  const warmup = await oneBrowser(chromePort, origin, join(CSV_DIR, `${browserSizes[0].rows}.csv`), browserSizes[0].rows, hosted);
+  const warmup = await oneBrowser(chromePort, origin, join(CSV_DIR, `${browserSizes[0].rows}.csv`), browserSizes[0].rows, hosted, pickDelay);
   chromium = warmup.chromium;
   discarded.push({ name: browserSizes[0].name, rows: browserSizes[0].rows, ...warmup, resources: undefined });
   console.error(`  discarded warmup total ${warmup.totalMs}ms interactive ${warmup.interactiveMs}ms`);
@@ -696,7 +707,7 @@ async function timeBrowser(engineSizes, distPort, count, hosted) {
     const samples = [];
     for (let i = 0; i < count; i++) {
       console.error(`browser ${size.name} sample ${i + 1}/${count}`);
-      const sample = await oneBrowser(chromePort, origin, join(CSV_DIR, `${size.rows}.csv`), size.rows, hosted);
+      const sample = await oneBrowser(chromePort, origin, join(CSV_DIR, `${size.rows}.csv`), size.rows, hosted, pickDelay);
       chromium = sample.chromium || chromium;
       const engineSize = engineSizes.find((item) => item.name === size.name);
       if (!matchEngine(sample, engineSize)) {
@@ -806,6 +817,7 @@ function printSummary(report) {
   }
   const pad = (value, width) => String(value).padStart(width);
   console.log("");
+  console.log(`pick delay ${report.pickDelayMs ?? 0} ms, outside file-to-bridge`);
   console.log("metric".padEnd(42) + pad("median", 12) + pad("min", 12) + pad("max", 12) + pad("n", 6) + "  unit");
   for (const row of rows) {
     console.log(
@@ -835,6 +847,7 @@ async function main() {
   if (!existsSync(join(root, "src", "engine.ts"))) die("Run this from the repository root");
   const atStart = machineInfo();
   const count = sampleCount();
+  const pickDelay = pickDelayMs();
   const only = option("--only");
   const out = resolve(root, option("--out") ?? defaultOut);
   assertFullRun(out, count);
@@ -862,7 +875,7 @@ async function main() {
     const distPort = await freePort();
     hosted = await startServer(dist, distPort);
     try {
-      const timed = await timeBrowser(engineSizes, distPort, count, hosted);
+      const timed = await timeBrowser(engineSizes, distPort, count, hosted, pickDelay);
       const sets = downloadSets(timed.cold);
       const toolPage = bytesFor(build.assets, sets.firstLoad);
       const duckdbOnFirstFile = bytesFor(build.assets, sets.duckdb);
@@ -879,6 +892,7 @@ async function main() {
         origin: `http://127.0.0.1:${distPort}/app/`,
         cacheControl: "no-store",
         contentEncoding: "identity",
+        pickDelayMs: pickDelay,
         freshProfile: true,
         discardedWarmup: timed.discardedWarmup,
         wasmRequestedBeforeInteractive: wasmDuringCold,
@@ -900,9 +914,10 @@ async function main() {
     ok: true,
     capturedAt: new Date().toISOString(),
     definitions: {
-      interactiveMs: "Time until the tool page shows the heading Load a sales file and an enabled file input that accepts csv. DuckDB starts later, when a file is chosen.",
-      fileToBridgeMs: "Wall time from just before the file input is set until the bridge table and the KPI row are on screen. Includes DuckDB startup, the CSV read, attribute setup, and the calculation.",
-      parseMs: "From the file mark until the setup panel is on screen and the status text is empty. Includes DuckDB startup and the CSV read.",
+      interactiveMs: "Time until the tool page shows the heading Load a sales file and an enabled file input that accepts csv. The page opens DuckDB after the load event, on an idle callback, unless Save-Data is on. This mark does not wait for that open.",
+      fileToBridgeMs: "Wall time from just before the file input is set until the bridge table and the KPI row are on screen. Includes any DuckDB startup still unfinished, the CSV read, attribute setup, and the calculation.",
+      parseMs: "From the file mark until the setup panel is on screen and the status text is empty. Includes any DuckDB startup still unfinished and the CSV read.",
+      pickDelayMs: "Milliseconds the harness waits after the interactive mark before it sets the file. The wait is outside file-to-bridge. Zero matches the historical run. A non-zero value is a partial run.",
       configureMs: "From parse until Calculate bridge is enabled. The script sets year, jobs, sales, and the four attributes used by the Node bridge.",
       calculateMs: "From the Calculate bridge click until the bridge table is on screen.",
       generateMs: "createSyntheticSales on one DuckDB connection, after one discarded warm-up. This is the in-app sample-data path, not a user CSV.",
@@ -912,13 +927,14 @@ async function main() {
       gzipBytes: "zlib gzip at the default level.",
       brotliBytes: `zlib brotli quality ${BROTLI_QUALITY}.`,
       toolPage: "Dist files the local server saw by the time the harness observed the interactive mark. The page sets the mark and the harness polls for it, so a request in that gap is included.",
-      duckdbOnFirstFile: "DuckDB wasm and worker files requested after the interactive mark, during the first file.",
-      cloudflareBuild: "npm run build:cloudflare is a different bundle. It sets VITE_PAGE_COUNTS, VITE_WORKSPACES, and VITE_AI_COMMENTARY, then replaces each wasm file with a gzip copy. This script does not run it.",
+      duckdbOnFirstFile: "DuckDB wasm and worker files requested after the interactive mark. The window includes a nonzero pick delay and the first file. An idle open that finishes before the mark is counted in toolPage instead.",
+      cloudflareBuild: "npm run build:cloudflare is a different bundle. It sets VITE_PAGE_COUNTS, VITE_WORKSPACES, and VITE_AI_COMMENTARY, then stores a Brotli copy and a gzip copy of each wasm file and deletes the original. This script does not run it.",
     },
     git: gitInfo(),
     machine: { ...atStart, chromium: browser?.chromium ?? chrome.stdout.trim(), loadAvgAtEnd: loadavg() },
     sampleCount: count,
     warmupDiscarded: WARMUP,
+    pickDelayMs: pickDelay,
     build,
     engine: engineSizes
       ? {
