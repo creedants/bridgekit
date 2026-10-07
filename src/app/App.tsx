@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { dataCheck, runBridge, type BridgeConfig } from "../engine.ts";
 import { summarize } from "../summary.ts";
 import { createSyntheticSales } from "../synth.ts";
@@ -28,24 +28,116 @@ import { SetupPanel } from "./SetupPanel.tsx";
 // Pro workspaces exist only in builds with VITE_WORKSPACES=1; elsewhere the code is left out.
 const WorkspacePanel = import.meta.env.VITE_WORKSPACES === "1" ? lazy(() => import("./Workspace.tsx")) : null;
 
-type ResultsModule = typeof import("./Results.tsx");
-let resultsLoad: Promise<ResultsModule> | null = null;
-let LoadedResults: ResultsModule["Results"] | null = null;
+type ResultsView = (props: {
+  run: Run;
+  query: () => Promise<BrowserDatabase["query"]>;
+}) => ReactNode;
 
-function loadResults(): Promise<ResultsModule> {
+let resultsLoad: Promise<void> | null = null;
+let LoadedResults: ResultsView | null = null;
+// A failed import("./Results.tsx") stays failed for that URL. Later attempts use another URL.
+let staticImportFailed = false;
+
+const RESULTS_FAILURE = {
+  network: "Could not load the results view. Check your connection, then choose Calculate bridge again.",
+  gone: "Reload the page to start again.",
+};
+
+class ResultsUnavailable extends Error {
+  constructor(kind: keyof typeof RESULTS_FAILURE) {
+    super(RESULTS_FAILURE[kind]);
+  }
+}
+
+function loadResults(): Promise<void> {
   if (resultsLoad) return resultsLoad;
-  const attempt = import("./Results.tsx").then(
-    (mod) => {
-      LoadedResults = mod.Results;
-      return mod;
-    },
+  const reading = staticImportFailed ? importRetriedResults() : importStaticResults();
+  const attempt = reading.then(
+    () => undefined,
     (error: unknown) => {
+      staticImportFailed = true;
       if (resultsLoad === attempt) resultsLoad = null;
-      throw error;
+      if (error instanceof ResultsUnavailable) throw error;
+      throw new ResultsUnavailable("network");
     },
   );
   resultsLoad = attempt;
   return attempt;
+}
+
+async function importStaticResults(): Promise<void> {
+  const mod = await import("./Results.tsx");
+  const component: unknown = mod.Results;
+  if (!isResultsView(component)) throw new ResultsUnavailable("gone");
+  LoadedResults = mod.Results;
+}
+
+async function importRetriedResults(): Promise<void> {
+  const chunkUrl = resultsChunkUrl();
+  if (chunkUrl === null) throw new ResultsUnavailable("gone");
+  const retryUrl = chunkUrl + "?retry=" + Date.now();
+  let response: Response;
+  try {
+    response = await fetch(retryUrl, { cache: "no-store" });
+  } catch {
+    throw new ResultsUnavailable("network");
+  }
+  const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+  if (!response.ok || contentType.includes("text/html") || !isJavaScriptContentType(contentType)) {
+    throw new ResultsUnavailable("gone");
+  }
+  if (await bodyStartsWithMarkup(response)) throw new ResultsUnavailable("gone");
+  const mod: unknown = await import(/* @vite-ignore */ retryUrl);
+  const component = resultsExport(mod);
+  if (!isResultsView(component)) throw new ResultsUnavailable("gone");
+  LoadedResults = component;
+}
+
+const RESULTS_CHUNK_PATH = /^\/assets\/Results-[A-Za-z0-9_-]+\.js$/;
+
+function resultsChunkUrl(): string | null {
+  for (const link of document.querySelectorAll('link[rel="modulepreload"]')) {
+    if (!(link instanceof HTMLLinkElement)) continue;
+    let parsed: URL;
+    try {
+      parsed = new URL(link.href);
+    } catch {
+      continue;
+    }
+    if (parsed.origin !== location.origin) continue;
+    if (!RESULTS_CHUNK_PATH.test(parsed.pathname)) continue;
+    return parsed.origin + parsed.pathname;
+  }
+  return null;
+}
+
+function isJavaScriptContentType(contentType: string): boolean {
+  const mediaType = contentType.split(";", 1)[0]?.trim() ?? "";
+  return mediaType === "text/javascript" || mediaType === "application/javascript";
+}
+
+async function bodyStartsWithMarkup(response: Response): Promise<boolean> {
+  const body = response.body;
+  if (body === null) return false;
+  const reader = body.getReader();
+  try {
+    const chunk = await reader.read();
+    const bytes = chunk.value;
+    if (bytes === undefined || bytes.length === 0) return false;
+    return new TextDecoder().decode(bytes.subarray(0, 64)).trimStart().startsWith("<");
+  } finally {
+    void reader.cancel().catch(() => {});
+  }
+}
+
+function resultsExport(mod: unknown): unknown {
+  if (typeof mod !== "object" || mod === null) return undefined;
+  if (!("Results" in mod)) return undefined;
+  return mod.Results;
+}
+
+function isResultsView(value: unknown): value is ResultsView {
+  return typeof value === "function";
 }
 
 function prefetchResults(): void {
@@ -452,6 +544,7 @@ export function App() {
               <p className="notice">The setup changed since this bridge was calculated. Calculate again to update it.</p>
             )}
             {run && LoadedResults ? (
+              // LoadedResults is a module binding. React does not track it, so loadResults assigns it before setRun.
               <LoadedResults key={run.id} run={run} query={query} />
             ) : !run ? (
               <div>
