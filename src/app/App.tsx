@@ -144,6 +144,43 @@ function prefetchResults(): void {
   void loadResults().catch(() => {});
 }
 
+// The DOM lib in this toolchain does not declare Network Information.
+// Read the live property and accept only a boolean true.
+function networkSaveData(): boolean {
+  const host: unknown = navigator;
+  if (typeof host !== "object" || host === null || !("connection" in host)) return false;
+  const connection = host.connection;
+  if (typeof connection !== "object" || connection === null || !("saveData" in connection)) return false;
+  return connection.saveData === true;
+}
+
+function prefetchResultsWhenIdle(): () => void {
+  if (networkSaveData()) return () => {};
+  let cancelled = false;
+  let idleId: number | undefined;
+  let timerId: number | undefined;
+  const queuePrefetch = () => {
+    if (cancelled) return;
+    timerId = window.setTimeout(prefetchResults, 150);
+  };
+  const whenIdle = () => {
+    if (cancelled) return;
+    if (typeof window.requestIdleCallback === "function") {
+      idleId = window.requestIdleCallback(queuePrefetch, { timeout: 2000 });
+      return;
+    }
+    timerId = window.setTimeout(queuePrefetch, 2000);
+  };
+  if (document.readyState === "complete") whenIdle();
+  else window.addEventListener("load", whenIdle, { once: true });
+  return () => {
+    cancelled = true;
+    window.removeEventListener("load", whenIdle);
+    if (idleId !== undefined) window.cancelIdleCallback(idleId);
+    if (timerId !== undefined) window.clearTimeout(timerId);
+  };
+}
+
 const SAMPLE_ROWS = 1_000_000;
 const MAX_SAMPLE_ROWS = 5_000_000;
 
@@ -324,6 +361,9 @@ export function App() {
       saveSetup(columns, setup);
       setNotice("");
     });
+
+  // main.tsx calls warmBrowserDatabase before this effect, so the database listener is first.
+  useEffect(() => prefetchResultsWhenIdle(), []);
 
   // A link to /app/?sample opens the tool with the sample already calculated.
   const autoRun = useRef(new URLSearchParams(location.search).has("sample"));
