@@ -7,7 +7,7 @@ import { exportExcel } from "./exportExcel.ts";
 import { download } from "./files.ts";
 import { whole } from "./format.ts";
 import { distinctCounts, findRollups } from "./profile.ts";
-import { Results, type Run } from "./Results.tsx";
+import type { Run } from "./Results.tsx";
 import {
   guessSetup,
   isRemembering,
@@ -27,6 +27,30 @@ import { SetupPanel } from "./SetupPanel.tsx";
 
 // Pro workspaces exist only in builds with VITE_WORKSPACES=1; elsewhere the code is left out.
 const WorkspacePanel = import.meta.env.VITE_WORKSPACES === "1" ? lazy(() => import("./Workspace.tsx")) : null;
+
+type ResultsModule = typeof import("./Results.tsx");
+let resultsLoad: Promise<ResultsModule> | null = null;
+let LoadedResults: ResultsModule["Results"] | null = null;
+
+function loadResults(): Promise<ResultsModule> {
+  if (resultsLoad) return resultsLoad;
+  const attempt = import("./Results.tsx").then(
+    (mod) => {
+      LoadedResults = mod.Results;
+      return mod;
+    },
+    (error: unknown) => {
+      if (resultsLoad === attempt) resultsLoad = null;
+      throw error;
+    },
+  );
+  resultsLoad = attempt;
+  return attempt;
+}
+
+function prefetchResults(): void {
+  void loadResults().catch(() => {});
+}
 
 const SAMPLE_ROWS = 1_000_000;
 const MAX_SAMPLE_ROWS = 5_000_000;
@@ -128,17 +152,21 @@ export function App() {
       .catch(() => {});
   }
 
-  const loadSample = () =>
-    task("Generating sample data…", async () => {
+  const loadSample = () => {
+    prefetchResults();
+    return task("Generating sample data…", async () => {
       await createSyntheticSales(await query(), sampleRows(), TABLE);
       await afterLoad("Sample data (made-up lens sales)", SAMPLE_SETUP);
     });
+  };
 
-  const loadFile = (file: File) =>
-    task(`Reading ${file.name}…`, async () => {
+  const loadFile = (file: File) => {
+    prefetchResults();
+    return task(`Reading ${file.name}…`, async () => {
       await (await db()).loadFile(file, TABLE);
       await afterLoad(file.name);
     });
+  };
 
   // Rebuild the filtered view and the period list whenever they could change.
   const viewKey = setup ? JSON.stringify([setup.periodColumn, setup.grain, setup.filters, source]) : "";
@@ -173,7 +201,7 @@ export function App() {
   const calculate = () =>
     task("Calculating…", async () => {
       if (!setup) return;
-      const q = await query();
+      const [q] = await Promise.all([query(), loadResults()]);
       const config: BridgeConfig = {
         table: VIEW,
         periodColumn: PERIOD,
@@ -423,9 +451,9 @@ export function App() {
             {run && run.signature !== signature && (
               <p className="notice">The setup changed since this bridge was calculated. Calculate again to update it.</p>
             )}
-            {run ? (
-              <Results key={run.id} run={run} query={query} />
-            ) : (
+            {run && LoadedResults ? (
+              <LoadedResults key={run.id} run={run} query={query} />
+            ) : !run ? (
               <div>
                 <p className="hint">
                   First rows of the file. Set up the bridge on the left, then choose Calculate bridge (Ctrl+Enter).
@@ -449,7 +477,7 @@ export function App() {
                   </table>
                 </div>
               </div>
-            )}
+            ) : null}
           </main>
         </div>
       )}
