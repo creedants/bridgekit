@@ -35,7 +35,7 @@ type ResultsView = (props: {
 
 let resultsLoad: Promise<void> | null = null;
 let LoadedResults: ResultsView | null = null;
-// A failed import("./Results.tsx") stays failed for that URL. Later attempts use another URL.
+// A failed import("./Results.tsx") stays failed for that URL.
 let staticImportFailed = false;
 
 const RESULTS_FAILURE = {
@@ -145,7 +145,6 @@ function prefetchResults(): void {
 }
 
 // The DOM lib in this toolchain does not declare Network Information.
-// Read the live property and accept only a boolean true.
 function networkSaveData(): boolean {
   const host: unknown = navigator;
   if (typeof host !== "object" || host === null || !("connection" in host)) return false;
@@ -362,7 +361,6 @@ export function App() {
       setNotice("");
     });
 
-  // main.tsx calls warmBrowserDatabase before this effect, so the database listener is first.
   useEffect(() => prefetchResultsWhenIdle(), []);
 
   // A link to /app/?sample opens the tool with the sample already calculated.
