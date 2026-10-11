@@ -46,6 +46,7 @@ const BUILDS = {
     secrets: [],
     prepare: () => [],
     command: () => [bin("vite"), "preview", "--host", "127.0.0.1", "--port", "4173", "--strictPort"],
+    policies: 1, // the meta tag
   },
   wrangler: {
     origin: `http://127.0.0.1:${devPort()}`,
@@ -56,6 +57,7 @@ const BUILDS = {
     secrets: ["BETTER_AUTH_SECRET"],
     prepare: (dir) => [[bin("wrangler"), "d1", "migrations", "apply", "bridgekit", "--local", ...local(dir)]],
     command: (dir) => [bin("wrangler"), "dev", "--port", devPort(), "--ip", "127.0.0.1", ...local(dir)],
+    policies: 2, // the meta tag, and the header from public/_headers
   },
 };
 
@@ -188,87 +190,88 @@ function leak({ url, method, hasBody, blocked }, origin, { devServer }) {
 
 const blob = (source) => `URL.createObjectURL(new Blob([${JSON.stringify(source)}], { type: "text/javascript" }))`;
 
-// The page asks last. Chrome answers a command on a session after the events that session already reported, so when
-// the page's ask returns, everything the page tried during the control is in the record.
 const PROVEN = {
   worker: (script) => `new Promise((done) => { window.__canary = new Worker(${blob(`${script}.then(() => postMessage(1));`)}); window.__canary.onmessage = () => done(); setTimeout(done, 10000); })`,
   shared_worker: (script) => `new Promise((done) => { window.__canaryShared = new SharedWorker(${blob(`const asked = ${script}; onconnect = (e) => asked.then(() => e.ports[0].postMessage(1));`)}); window.__canaryShared.port.onmessage = () => done(); setTimeout(done, 10000); })`,
   page: (script) => script,
 };
 
-/** @typedef {{ from: string, how: "fetch" | "XMLHttpRequest", url: string, network: number, violations: number }} Ask */
+/** @typedef {import("./cdp.mjs").Recording} Recording */
 
 /**
- * Each attempt goes to this machine's debugging port: another origin, and nothing leaves the machine even with no policy.
- * @returns {Promise<Ask[]>} the attempts it verified, which the closing checks exempt
+ * What one control attempt must leave in a finished record, on a page that enforces `policies` policies.
+ * Written here. Never read back from a run.
  */
-async function canary(browser, origin, { hasPolicy }) {
+const CONTROL = {
+  // Chromium refuses a fetch() the policy blocks before it becomes a request, so only the policy reports it.
+  fetch: (policies) => ({ records: policies ? 0 : 1, blocked: null, reports: policies }),
+  XMLHttpRequest: (policies) => ({ records: 1, blocked: policies ? "csp" : null, reports: policies }),
+  // Sent to this origin while the document is left. The policy allows that, so it is one request on every build.
+  sendBeacon: () => ({ records: 1, blocked: null, reports: 0 }),
+  keepalive: () => ({ records: 1, blocked: null, reports: 0 }),
+};
+
+/** @typedef {{ from: string, how: keyof typeof CONTROL, url: string }} Ask */
+
+/** @returns {Ask[]} */
+function asks(origin) {
   const port = `http://127.0.0.1:${DEBUG_PORT}`;
-  const asks = Object.keys(PROVEN).flatMap((from) => ["fetch", "XMLHttpRequest"].map((how) => ({ from, how, url: `${port}/json/version?${from}-${how}`, network: 0, violations: 0 })));
+  const cross = Object.keys(PROVEN).flatMap((from) => ["fetch", "XMLHttpRequest"].map((how) => ({ from, how, url: `${port}/json/version?${from}-${how}` })));
+  const leave = ["sendBeacon", "keepalive"].map((how) => ({ from: "page", how, url: `${origin}/app/?control-${how}` }));
+  return [...cross, ...leave];
+}
+
+/** The pagehide listener for the two leave attempts. Both go to this origin, which the policy allows. */
+function onLeave(origin) {
+  const beacon = `${origin}/app/?control-sendBeacon`;
+  const keep = `${origin}/app/?control-keepalive`;
+  return `addEventListener("pagehide", () => { navigator.sendBeacon(${JSON.stringify(beacon)}, "x"); fetch(${JSON.stringify(keep)}, { method: "POST", body: "x", keepalive: true }); })`;
+}
+
+/** Loads /app/, makes every attempt in asks(), and says whether the document declares a policy. */
+async function ask(browser, origin) {
+  await browser.goto(`${origin}/app/`);
   // fetch() and the engine's own way of asking, a synchronous XMLHttpRequest. Both are issued before the first await.
   const script = (from) => {
-    const fetchUrl = asks.find((ask) => ask.from === from && ask.how === "fetch").url;
-    const xhrUrl = asks.find((ask) => ask.from === from && ask.how === "XMLHttpRequest").url;
+    const fetchUrl = asks(origin).find((item) => item.from === from && item.how === "fetch").url;
+    const xhrUrl = asks(origin).find((item) => item.from === from && item.how === "XMLHttpRequest").url;
     return `(async () => { const tried = fetch(${JSON.stringify(fetchUrl)}).catch(() => {}); try { const ask = new XMLHttpRequest(); ask.open("GET", ${JSON.stringify(xhrUrl)}, false); ask.send(); } catch {} await tried; })()`;
   };
   for (const from of Object.keys(PROVEN)) await browser.evalJs(PROVEN[from](script(from)));
-  const count = (list, from, url) => list.filter((entry) => entry.from === from && entry.url === url).length;
-  // Chromium refuses a fetch() the policy blocks before it becomes a request, so only the policy reports it.
-  // One attempt is reported once for each policy enforced on the page. The synchronous request is one network record either way.
-  const problem = () => {
-    for (const from of Object.keys(PROVEN)) {
-      const fetchAsk = asks.find((ask) => ask.from === from && ask.how === "fetch");
-      const xhrAsk = asks.find((ask) => ask.from === from && ask.how === "XMLHttpRequest");
-      const xhrRecords = browser.network.filter((record) => record.from === from && record.url === xhrAsk.url);
-      const fetchRecords = browser.network.filter((record) => record.from === from && record.url === fetchAsk.url);
-      const xhrReports = count(browser.violations, from, xhrAsk.url);
-      const fetchReports = count(browser.violations, from, fetchAsk.url);
-      if (xhrRecords.length !== 1) return `${xhrRecords.length} records of the ${from}'s XMLHttpRequest exist`;
-      if (!leak(xhrRecords[0], origin, { devServer: false })) return `the request check did not flag the ${from}'s XMLHttpRequest`;
-      if (hasPolicy && xhrRecords[0].blocked !== "csp") return `the ${from}'s XMLHttpRequest was not blocked by the policy (blocked: ${xhrRecords[0].blocked})`;
-      if (hasPolicy) {
-        if (fetchRecords.length !== 0) return `${fetchRecords.length} records of the ${from}'s fetch exist`;
-        if (xhrReports < 1 || fetchReports !== xhrReports) return `the ${from}'s fetch has ${fetchReports} policy reports and its XMLHttpRequest has ${xhrReports}`;
-      } else {
-        if (fetchRecords.length !== 1) return `${fetchRecords.length} records of the ${from}'s fetch exist`;
-        if (!leak(fetchRecords[0], origin, { devServer: false })) return `the request check did not flag the ${from}'s fetch`;
-        if (fetchReports !== 0 || xhrReports !== 0) return `the ${from} reported a policy violation on a server with no policy`;
-      }
-    }
-    return null;
-  };
-  let signature = "";
-  let stable = 0;
-  for (let i = 0; i < 30 && stable < 2; i++) {
-    const why = problem();
-    const now = asks.map((ask) => `${count(browser.network, ask.from, ask.url)}:${count(browser.violations, ask.from, ask.url)}`).join(",");
-    if (why || now !== signature) stable = 0;
-    else stable += 1;
-    signature = now;
-    if (!why && stable >= 2) break;
-    await sleep(100);
-  }
-  const why = problem();
-  if (why || stable < 2) fail(`canary: a ${Object.keys(PROVEN).join(", a ")} each asked ${port} by fetch and by XMLHttpRequest, and ${why ?? "the report count was still changing"}, so a request to another host could go unseen`);
-  console.log(`ok  canary: a worker, a shared worker and the page each asked ${port} by fetch and by XMLHttpRequest, and each attempt was ${hasPolicy ? "refused by the policy and reported" : "recorded and flagged"}`);
-  return asks.map((ask) => ({ ...ask, network: count(browser.network, ask.from, ask.url), violations: count(browser.violations, ask.from, ask.url) }));
+  await browser.evalJs(onLeave(origin));
+  return browser.evalJs(`!!document.querySelector('meta[http-equiv="Content-Security-Policy"]')`);
 }
 
-/** @param {Target} target */
-async function run(browser, origin, target, rows) {
-  console.log(`browser: ${(await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/version`)).json()).Browser}`);
-  // Installed before any page script, so a violation while the page starts is seen. A worker's violations never
-  // reach the document; those come from browser.violations.
-  await browser.send("Page.enable");
-  await browser.send("Page.addScriptToEvaluateOnNewDocument", { source: "window.__violations = []; document.addEventListener('securitypolicyviolation', (e) => window.__violations.push(e.violatedDirective + ' ' + e.blockedURI));" });
-  const pageViolations = [];
-  const collect = async () => pageViolations.push(...(await browser.evalJs("window.__violations ?? []")));
-  const visit = async (url) => { await collect(); await browser.goto(url); };
+/**
+ * Why this record does not prove the recorder, or null.
+ * @param {Recording} record
+ * @param {string} origin
+ * @param {number} policies
+ * @returns {string | null}
+ */
+function proves(record, origin, policies) {
+  for (const item of asks(origin)) {
+    const expect = CONTROL[item.how](policies);
+    const records = record.network.filter((entry) => entry.url === item.url);
+    const reports = record.violations.filter((entry) => entry.url === item.url);
+    const leave = item.how === "sendBeacon" || item.how === "keepalive";
+    if (records.length !== expect.records) return `${records.length} records of the ${item.from}'s ${item.how}, expected ${expect.records}. The record has ${record.network.map((entry) => `${entry.from} ${entry.method} ${entry.url}`).join("; ")}`;
+    for (const entry of records) {
+      if (!leak(entry, origin, { devServer: false })) return `the request check did not flag the ${item.from}'s ${item.how}`;
+      if (entry.blocked !== expect.blocked) return `the ${item.from}'s ${item.how} has blocked ${entry.blocked}, expected ${expect.blocked}`;
+      if (!leave && entry.from !== item.from) return `the ${item.from}'s ${item.how} was recorded from ${entry.from}`;
+    }
+    if (reports.length !== expect.reports) return `${reports.length} policy reports of the ${item.from}'s ${item.how}, expected ${expect.reports} (${reports.map((entry) => `${entry.from} ${entry.directive} ${entry.url}`).join("; ")})`;
+  }
+  return null;
+}
 
+async function drive(browser, origin, rows) {
+  console.log(`browser: ${(await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/version`)).json()).Browser}`);
   await browser.size(1360, 1000);
   const started = Date.now();
   const sample = `${origin}/app/?sample${rows ? "=" + rows : ""}`;
-  await visit(sample);
+  await browser.goto(sample);
   await browser.waitFor("!!document.querySelector('.kpis')", 600).catch((error) => fail(`the sample at ${sample} did not load and calculate within 150 s (${error.message})`));
   console.log(`sample loaded and calculated in ${Date.now() - started} ms`);
 
@@ -311,11 +314,10 @@ async function run(browser, origin, target, rows) {
   if (exported.error || exported.bytes < 10_000) fail(`Excel export: ${exported.error ?? "no file"}`);
   console.log(`ok  Excel export (${exported.bytes} bytes in ${exported.ms} ms)`);
 
-  await visit(`${origin}/app/`);
+  await browser.goto(`${origin}/app/`);
   await browser.send("DOM.enable");
   const { root } = await browser.send("DOM.getDocument");
   const { nodeId } = await browser.send("DOM.querySelector", { nodeId: root.nodeId, selector: "input[type=file][accept*=csv]" });
-  const before = browser.network.length;
   await browser.send("DOM.setFileInputFiles", { nodeId, files: [new URL("../public/sample-sales.csv", import.meta.url).pathname] });
   await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent");
   await browser.evalJs(`T.set(document.querySelector('select[aria-label="Add attribute"]'), 'design')`);
@@ -327,8 +329,6 @@ async function run(browser, origin, target, rows) {
   await browser.evalJs("T.btn('Calculate bridge').click()");
   await browser.waitFor("!!document.querySelector('.kpis')");
   await browser.sleep(1500);
-
-  const afterFile = browser.network.length - before;
 
   const selected = await browser.evalJs("document.querySelector('.values input:checked').closest('label').textContent.trim()");
   const stored = JSON.parse(
@@ -366,7 +366,7 @@ async function run(browser, origin, target, rows) {
   console.log("ok  remember setup (default): stores the column mapping only");
 
   const loadCsv = async () => {
-    await visit(`${origin}/app/`);
+    await browser.goto(`${origin}/app/`);
     const { root } = await browser.send("DOM.getDocument");
     const { nodeId } = await browser.send("DOM.querySelector", { nodeId: root.nodeId, selector: "input[type=file][accept*=csv]" });
     await browser.send("DOM.setFileInputFiles", { nodeId, files: [new URL("../public/sample-sales.csv", import.meta.url).pathname] });
@@ -397,66 +397,71 @@ async function run(browser, origin, target, rows) {
   await loadCsv();
   if (!(await browser.evalJs(`!${rememberBox}.checked && localStorage.length === 1`))) fail("remembering turned itself back on after a reload");
   console.log("ok  remember setup: staying off survives a reload");
+}
 
-  const hasPolicy = await browser.evalJs(`!!document.querySelector('meta[http-equiv="Content-Security-Policy"]')`);
-  const devServer = target.kind === "url" && !hasPolicy;
-  if (!hasPolicy && !devServer) fail(`${origin}/app/ carries no content security policy, and a built site must`);
-  if (devServer) console.log(`note: ${origin} sends no content security policy (a dev server). Run npm run build && npm run smoke:preview for the full check.`);
-
-  const asks = await canary(browser, origin, { hasPolicy });
-  // The wait lets a refusal that is already in flight arrive. It exempts nothing.
-  await sleep(300);
-  await collect();
-
-  const countOf = (list, from, url) => list.filter((entry) => entry.from === from && entry.url === url).length;
-  // A control URL is exempt only while its live count is still the count canary verified.
-  const exempt = (list, entry) => asks.some((ask) => {
-    if (ask.from !== entry.from || ask.url !== entry.url) return false;
-    const verified = list === browser.violations ? ask.violations : ask.network;
-    return verified > 0 && countOf(list, ask.from, ask.url) === verified;
+/**
+ * Every rule that decides pass or fail, over the whole record.
+ * @param {Recording} record
+ * @param {string} origin
+ * @param {{ devServer: boolean }} opts
+ * @returns {{ failures: string[], notes: string[] }}
+ */
+function judge(record, origin, { devServer }) {
+  const failures = [];
+  const notes = [];
+  const leaks = record.network.flatMap((entry) => {
+    const why = leak(entry, origin, { devServer });
+    return why ? [`[${entry.from}] ${entry.method} ${entry.url} (${why})`] : [];
   });
-
-  const network = browser.network.filter((entry) => !exempt(browser.network, entry));
-  const leaks = network.flatMap((r) => { const why = leak(r, origin, { devServer }); return why ? [`[${r.from}] ${r.method} ${r.url} (${why})`] : []; });
-  if (leaks.length) fail(`requests that could carry data: ${leaks.slice(0, 5).join("; ")}`);
-  const bySource = [...new Set(network.map((r) => r.from))].map((from) => `${network.filter((r) => r.from === from).length} ${from}`);
-  console.log(`ok  network: ${network.length} requests (${bySource.join(", ")}), all GET to ${origin}; ${afterFile} after the file was loaded`);
-
-  const pageControl = new Set(asks.filter((ask) => ask.from === "page").map((ask) => ask.url));
-  // A page-listener entry is exempt only when its blocked URI is a verified page control URL.
-  const pageRefused = pageViolations.flatMap((text) => {
-    const split = text.indexOf(" ");
-    const url = split === -1 ? "" : text.slice(split + 1);
-    if (pageControl.has(url)) return [];
-    return [{ from: "page", directive: split === -1 ? text : text.slice(0, split), url }];
-  });
-  const audited = browser.violations.filter((entry) => !exempt(browser.violations, entry));
-  const refused = [...pageRefused, ...audited];
-  if (refused.length) fail(`content policy violations: ${[...new Set(refused.map((v) => `[${v.from}] ${v.directive} ${v.url}`))].join("; ")}`);
-  console.log("ok  policy: no violation from the page or a worker");
-
-  const unproven = browser.askers.filter((asker) => !Object.hasOwn(PROVEN, asker.kind));
-  if (unproven.length) fail(`a ${unproven[0].kind} ran (${unproven[0].url}), and the control proves only that ${Object.keys(PROVEN).join(", ")} requests are seen`);
-
-  const by = (from, file) => network.find((r) => r.from === from && URL.canParse(r.url) && file.test(new URL(r.url).pathname));
+  if (leaks.length) failures.push(`requests that could carry data: ${leaks.slice(0, 5).join("; ")}`);
+  else {
+    const bySource = [...new Set(record.network.map((entry) => entry.from))].map((from) => `${record.network.filter((entry) => entry.from === from).length} ${from}`);
+    notes.push(`ok  network: ${record.network.length} requests (${bySource.join(", ")}), all GET to ${origin}`);
+  }
+  if (record.violations.length) failures.push(`content policy violations: ${[...new Set(record.violations.map((entry) => `[${entry.from}] ${entry.directive} ${entry.url}`))].join("; ")}`);
+  else notes.push("ok  policy: no violation from the page or a worker");
+  const unproven = record.askers.filter((asker) => !Object.hasOwn(PROVEN, asker.kind));
+  if (unproven.length) failures.push(`a ${unproven[0].kind} ran (${unproven[0].url}), and the control proves only that ${Object.keys(PROVEN).join(", ")} requests are seen`);
+  const by = (from, file) => record.network.find((entry) => entry.from === from && URL.canParse(entry.url) && file.test(new URL(entry.url).pathname));
   const seen = [by("page", /^\/app\/$/), by("worker", /\/duckdb-browser-[^/]*\.worker[^/]*\.js$/), by("worker", /\/duckdb-[^/]*\.wasm$/)];
-  if (!seen.every(Boolean)) fail("the page's request for /app/ and the database worker's requests for its script and its wasm were not all recorded, so the request check did not see the application");
-  console.log(`ok  recorded: ${seen.map((r) => new URL(r.url).pathname).join(", ")}`);
+  if (!seen.every(Boolean)) failures.push("the page's request for /app/ and the database worker's requests for its script and its wasm were not all recorded, so the request check did not see the application");
+  else notes.push(`ok  recorded: ${seen.map((entry) => new URL(entry.url).pathname).join(", ")}`);
+  return { failures, notes };
+}
+
+/** Opens a recording browser, runs `steps`, and returns the record after the browser has exited. */
+async function recorded(steps) {
+  const browser = await open(DEBUG_PORT, { chromium: CHROMIUM, record: true });
+  try {
+    const result = await steps(browser);
+    return { result, record: await browser.finish() };
+  } finally {
+    await browser.close();
+  }
 }
 
 const { target, rows } = parseTarget(process.argv.slice(2));
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => process.exit(1));
 const failures = [];
-let server = null, browser = null;
+let server = null;
 try {
   server = await serve(target);
+  const origin = server.origin;
   console.log(`starting ${CHROMIUM}${process.env.CHROMIUM ? "" : " from PATH (set CHROMIUM to start another browser)"}`);
-  browser = await open(DEBUG_PORT, { chromium: CHROMIUM, record: true });
-  await run(browser, server.origin, target, rows);
+  const control = await recorded((browser) => ask(browser, origin));
+  const policies = target.kind === "url" ? Number(control.result) : BUILDS[target.kind].policies;
+  if (!control.result && target.kind !== "url") fail(`${origin}/app/ carries no content security policy, and a built site must`);
+  if (policies === 0) console.log(`note: ${origin} sends no content security policy (a dev server). Run npm run build && npm run smoke:preview for the full check.`);
+  const unproven = proves(control.record, origin, policies);
+  if (unproven) fail(`canary: ${unproven}, so a request to another host could go unseen`);
+  console.log(`ok  canary: a worker, a shared worker and the page each asked http://127.0.0.1:${DEBUG_PORT} by fetch and by XMLHttpRequest, and each attempt was ${policies ? "refused by the policy and reported" : "recorded and flagged"}`);
+  const app = await recorded((browser) => drive(browser, origin, rows));
+  const judged = judge(app.record, origin, { devServer: policies === 0 });
+  for (const note of judged.notes) console.log(note);
+  if (judged.failures.length) fail(judged.failures.join("\n"));
 } catch (error) {
   failures.push(error);
 } finally {
-  await browser?.close();
   await server?.stop().catch((error) => failures.push(error));
 }
 if (failures.length) {
