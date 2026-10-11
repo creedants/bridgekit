@@ -43,12 +43,34 @@ export function guessSetup(columns: Column[]): Setup {
   const find = (pattern: RegExp, among: Column[]) => among.find((c) => pattern.test(c.name))?.name ?? "";
   const numeric = columns.filter((c) => isNumeric(c.type));
   const date = columns.find((c) => isDate(c.type));
-  const salesColumn = find(/net/i, numeric) || find(/sales|revenue|amount|value/i, numeric);
-  const grossColumn = find(/gross|list/i, numeric);
+  const words = (name: string) =>
+    name
+      .split(/[^A-Za-z0-9]+/)
+      .filter((part) => part !== "")
+      .flatMap((part) => part.split(/(?<=[a-z0-9])(?=[A-Z])/))
+      .map((word) => word.toLowerCase());
+  const unitWords = new Set(["unit", "units"]);
+  const priceWords = new Set(["price", "cost", "rate"]);
+  const noteWords = new Set(["note", "notes", "comment", "comments"]);
+  const across = (left: string, right: string) =>
+    (unitWords.has(left) && priceWords.has(right)) || (priceWords.has(left) && unitWords.has(right));
+  const isUnitPrice = (name: string) => {
+    const parts = words(name);
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (across(parts[i], parts[i + 1])) return true;
+      if (parts[i + 1] === "per" && across(parts[i], parts[i + 2] ?? "")) return true;
+    }
+    return false;
+  };
+  const isTrailingNote = (name: string) => noteWords.has(words(name).at(-1) ?? "");
+  const withoutNotes = numeric.filter((column) => !isTrailingNote(column.name));
+  const unitsCandidates = withoutNotes.filter((column) => !isUnitPrice(column.name));
+  const salesColumn = find(/net/i, withoutNotes) || find(/sales|revenue|amount|value/i, withoutNotes);
+  const grossColumn = find(/gross|list/i, withoutNotes);
   return {
     periodColumn: date?.name ?? find(/year|period|month|quarter|date/i, columns),
     grain: date ? "year" : "value",
-    unitsColumn: find(/unit|qty|quant|jobs|volume|pieces/i, numeric),
+    unitsColumn: find(/unit|qty|quant|jobs|volume|pieces/i, unitsCandidates),
     salesColumn,
     grossColumn: grossColumn && grossColumn !== salesColumn ? grossColumn : undefined,
     levels: [],
