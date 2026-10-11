@@ -150,8 +150,8 @@ app.all("/api/*", (c) => c.json({ error: "Not found." }, 404));
 
 app.get("/assets/*", async (c) => serveCompressedWasm(c.req.raw, c.env.ASSETS));
 
-/** The asset layer redirects these four names to the same file without `.html`. */
-const HTML_PAGE = new Set(["/guide.html", "/method.html", "/privacy.html", "/price-volume-mix-analysis.html"]);
+/** The asset layer redirects these names to the same file without `.html`. */
+const HTML_PAGE = new Set(["/guide.html", "/method.html", "/privacy.html", "/price-volume-mix-analysis.html", "/grouping-level.html"]);
 
 async function pageResponse(request: Request, assets: Fetcher): Promise<Response> {
   const url = new URL(request.url);

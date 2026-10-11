@@ -71,6 +71,7 @@ export default defineConfig(({ mode }) => {
           guide: resolve(import.meta.dirname, "guide.html"),
           privacy: resolve(import.meta.dirname, "privacy.html"),
           article: resolve(import.meta.dirname, "price-volume-mix-analysis.html"),
+          groupingLevel: resolve(import.meta.dirname, "grouping-level.html"),
           app: resolve(import.meta.dirname, "app/index.html"),
           ...(env.VITE_WORKSPACES === "1" ? { pay: resolve(import.meta.dirname, "pay/index.html") } : {}),
         },
