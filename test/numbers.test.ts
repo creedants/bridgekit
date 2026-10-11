@@ -266,7 +266,7 @@ test("three digits after the comma keep today's reading", async () => {
   assert.equal(await decimalCommaNote(query, "tail"), null);
 });
 
-test("a decimal comma after 2000 blank rows still converts", async () => {
+test("a decimal comma after 2000 blank rows stays text", async () => {
   const query = await openDatabase();
   await query(`CREATE TABLE late AS SELECT i, CASE WHEN i < 2000 THEN NULL ELSE '12,50' END AS amount FROM range(2001) t(i) ORDER BY i`);
   await convertFormattedNumbers(query, "late");
