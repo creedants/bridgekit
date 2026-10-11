@@ -190,12 +190,18 @@ export function openBrowserDatabase(): Promise<BrowserDatabase> {
   return opening;
 }
 
+function startFailureForPage(error: unknown): Error {
+  if (error instanceof ChunkUnavailable) return error;
+  console.error(error);
+  return new Error("The database worker did not start");
+}
+
 function openFresh(): Promise<BrowserDatabase> {
   const attempt = instantiateBrowserDatabase().then(
     (database) => database,
     (error: unknown) => {
       if (opening === attempt) opening = undefined;
-      throw error;
+      throw startFailureForPage(error);
     },
   );
   return attempt;
@@ -329,11 +335,7 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
     const startFailed = new Promise<never>((_, reject) => {
       script.worker.addEventListener(
         "error",
-        (event) => {
-          // The browser message names the worker script URL. The page shows one sentence.
-          console.error(event.message);
-          reject(new Error("The database worker did not start"));
-        },
+        (event) => reject(new Error(event.message)),
         { once: true },
       );
     });
