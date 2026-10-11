@@ -1,20 +1,30 @@
 import { spawn } from "node:child_process";
-import { rmSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 export async function open(port = 9340) {
   // A browser already on this port would be reused with whatever it stored, so refuse instead.
   const taken = await fetch(`http://127.0.0.1:${port}/json/version`).then(() => true, () => false);
   if (taken) throw new Error(`Port ${port} is already in use, probably by a browser left from an earlier run. Stop it and try again.`);
   // A fresh profile each run, so nothing a previous run stored affects this one.
-  rmSync(`/tmp/bridgekit-smoke-profile-${port}`, { recursive: true, force: true });
+  const profile = `/tmp/bridgekit-smoke-profile-${port}`;
+  rmSync(profile, { recursive: true, force: true });
+  const bin = process.env.CHROMIUM || "chromium";
+  // A file and not a pipe, so a browser that outlives this process never blocks on a full pipe.
+  const stderrPath = `${profile}.stderr`;
+  const stderr = openSync(stderrPath, "w");
   // Its own process group, so close() stops the browser and not just the launcher.
-  const chrome = spawn("chromium", ["--headless=new", "--disable-gpu", "--hide-scrollbars", `--remote-debugging-port=${port}`, "--window-size=1360,900", `--user-data-dir=/tmp/bridgekit-smoke-profile-${port}`, "about:blank"], { stdio: "ignore", detached: true });
+  const chrome = spawn(bin, ["--headless=new", "--disable-gpu", "--hide-scrollbars", `--remote-debugging-port=${port}`, "--window-size=1360,900", `--user-data-dir=${profile}`, "about:blank"], { stdio: ["ignore", "ignore", stderr], detached: true });
+  closeSync(stderr);
+  let failed = null;
+  chrome.once("error", (e) => { failed ??= `Could not start "${bin}": ${e.message}. Set CHROMIUM to a Chromium or Chrome binary.`; });
+  chrome.once("exit", (code, signal) => { failed ??= `"${bin}" exited (${signal ?? code}) before its debugging port opened. Set CHROMIUM to a Chromium or Chrome binary. Its last output:\n${readFileSync(stderrPath, "utf8").slice(-2000).trim()}`; });
   // Stop it even when a script throws before calling close().
   const stop = () => { try { process.kill(-chrome.pid, "SIGTERM"); } catch {} };
   process.on("exit", stop);
   for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { stop(); process.exit(1); });
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let target;
-  for (let i = 0; i < 40 && !target; i++) { await sleep(250); try { target = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t) => t.type === "page"); } catch {} }
+  for (let i = 0; i < 40 && !target && !failed; i++) { await sleep(250); try { target = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t) => t.type === "page"); } catch {} }
+  if (!target) { stop(); throw new Error(failed ?? `"${bin}" opened no page on debugging port ${port} within 10 s.`); }
   const ws = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((r) => (ws.onopen = r));
   let id = 0; const pending = new Map();
