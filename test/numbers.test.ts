@@ -123,7 +123,7 @@ test("spaces around a decimal comma still convert, and spaces around dollar and 
   assert.equal(await decimalCommaNote(query, "spaced"), ONE);
 });
 
-test("null and whitespace in a decimal-comma column become null", async () => {
+test("null and whitespace beside a decimal comma stay text", async () => {
   const query = await openDatabase();
   await createText(query, "blanks", { amount: [null, "   ", "\t", "12,50"] });
   await convertFormattedNumbers(query, "blanks");
