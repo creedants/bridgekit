@@ -31,7 +31,7 @@ function varcharColumns(described: Record<string, unknown>[]): string[] {
     .map((row) => quotedName(String(row.column_name)));
 }
 
-function parsesWithFormatting(counts: ColumnCounts): boolean {
+function parsesWithFormatting(counts: Pick<ColumnCounts, "present" | "parsed" | "formatted">): boolean {
   return counts.present > 0 && counts.present === counts.parsed && counts.formatted > 0;
 }
 
@@ -43,6 +43,14 @@ function lacksDecimalTail(counts: ColumnCounts): boolean {
   return counts.decimalTail === 0;
 }
 
+function formattingMeasures(column: string, index: number): string {
+  return [
+    `count(${column})::DOUBLE AS n${index}`,
+    `count(${northAmerican(column)})::DOUBLE AS ok${index}`,
+    `count(*) FILTER (WHERE regexp_matches(${column}, '[,$()]'))::DOUBLE AS f${index}`,
+  ].join(", ");
+}
+
 function measures(column: string, index: number): string {
   const blank = `(${column} IS NULL OR regexp_matches(${column}, '^\\s*$'))`;
   const european = `(regexp_matches(trim(${column}), '${GROUPED}') OR regexp_matches(trim(${column}), '${PLAIN}'))`;
@@ -51,10 +59,25 @@ function measures(column: string, index: number): string {
     `count(*) FILTER (WHERE NOT ${blank})::DOUBLE AS nb${index}`,
     `count(*) FILTER (WHERE NOT ${blank} AND ${european})::DOUBLE AS eu${index}`,
     `count(*) FILTER (WHERE ${decimalTail})::DOUBLE AS p${index}`,
-    `count(${column})::DOUBLE AS n${index}`,
-    `count(${northAmerican(column)})::DOUBLE AS ok${index}`,
-    `count(*) FILTER (WHERE regexp_matches(${column}, '[,$()]'))::DOUBLE AS f${index}`,
+    formattingMeasures(column, index),
   ].join(", ");
+}
+
+function formattingFrom(row: Record<string, unknown>, index: number): Pick<ColumnCounts, "present" | "parsed" | "formatted"> {
+  return {
+    present: Number(row[`n${index}`]),
+    parsed: Number(row[`ok${index}`]),
+    formatted: Number(row[`f${index}`]),
+  };
+}
+
+async function countFormatting(
+  query: Query,
+  columns: string[],
+  source: string,
+): Promise<Pick<ColumnCounts, "present" | "parsed" | "formatted">[]> {
+  const [row] = await query(`SELECT ${columns.map(formattingMeasures).join(", ")} FROM ${source}`);
+  return columns.map((_, index) => formattingFrom(row, index));
 }
 
 async function scan(query: Query, columns: string[], source: string): Promise<ColumnCounts[]> {
@@ -63,9 +86,7 @@ async function scan(query: Query, columns: string[], source: string): Promise<Co
     nonBlank: Number(row[`nb${index}`]),
     european: Number(row[`eu${index}`]),
     decimalTail: Number(row[`p${index}`]),
-    present: Number(row[`n${index}`]),
-    parsed: Number(row[`ok${index}`]),
-    formatted: Number(row[`f${index}`]),
+    ...formattingFrom(row, index),
   }));
 }
 
@@ -73,23 +94,17 @@ export async function convertFormattedNumbers(query: Query, table: string): Prom
   const tableName = quotedName(table);
   const columns = varcharColumns(await query(`DESCRIBE ${tableName}`));
   if (columns.length === 0) return;
-  const full = await scan(query, columns, tableName);
-  const formattedCandidates = columns.filter(
-    (_, index) => lacksDecimalTail(full[index]) && parsesWithFormatting(full[index]),
-  );
-  const agreesOnFirstRows = new Set<string>();
-  if (formattedCandidates.length > 0) {
-    const sample = await scan(query, formattedCandidates, `(SELECT * FROM ${tableName} LIMIT ${FIRST_ROWS})`);
-    formattedCandidates.forEach((column, index) => {
-      if (parsesWithFormatting(sample[index])) agreesOnFirstRows.add(column);
-    });
-  }
-  for (const [index, column] of columns.entries()) {
+  const sampled = await countFormatting(query, columns, `(SELECT * FROM ${tableName} LIMIT ${FIRST_ROWS})`);
+  const likely = columns.filter((_, index) => parsesWithFormatting(sampled[index]));
+  if (likely.length === 0) return;
+  const full = await scan(query, likely, tableName);
+  for (const [index, column] of likely.entries()) {
     const counts = full[index];
+    if (!parsesWithFormatting(counts)) continue;
     if (isDecimalComma(counts)) {
       await query(`ALTER TABLE ${tableName} ALTER ${column} TYPE DOUBLE USING ${decimalComma(column)}`);
       await query(`COMMENT ON COLUMN ${tableName}.${column} IS 'decimal comma'`);
-    } else if (lacksDecimalTail(counts) && parsesWithFormatting(counts) && agreesOnFirstRows.has(column)) {
+    } else if (lacksDecimalTail(counts)) {
       await query(`ALTER TABLE ${tableName} ALTER ${column} TYPE DOUBLE USING ${northAmerican(column)}`);
     }
   }
