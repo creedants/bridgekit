@@ -188,7 +188,6 @@ function leak({ url, method, hasBody, blocked }, origin, { devServer }) {
 
 const blob = (source) => `URL.createObjectURL(new Blob([${JSON.stringify(source)}], { type: "text/javascript" }))`;
 
-// The kinds of asker whose requests this test proves it can see, and how the page starts each one running `script`.
 // The page asks last. Chrome answers a command on a session after the events that session already reported, so when
 // the page's ask returns, everything the page tried during the control is in the record.
 const PROVEN = {
@@ -200,8 +199,7 @@ const PROVEN = {
 /** @typedef {{ from: string, how: "fetch" | "XMLHttpRequest", url: string }} Ask */
 
 /**
- * Makes every kind in PROVEN ask this machine's own debugging port: another origin, and nothing leaves the machine
- * even with no policy. Throws unless each attempt left the evidence the closing checks rely on.
+ * Each attempt goes to this machine's debugging port: another origin, and nothing leaves the machine even with no policy.
  * @returns {Promise<Ask[]>} the attempts it verified, which the closing checks exempt
  */
 async function canary(browser, origin, { hasPolicy }) {
