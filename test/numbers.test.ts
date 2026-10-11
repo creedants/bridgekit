@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { test } from "node:test";
 import { convertFormattedNumbers, decimalCommaNote } from "../src/app/numbers.ts";
+import { isNumeric } from "../src/app/setup.ts";
 import { openDatabase } from "../src/duckdb.ts";
 import { runBridge, type Query } from "../src/engine.ts";
 import { createSyntheticSales } from "../src/synth.ts";
@@ -398,11 +399,6 @@ async function convertFormattedNumbersOnMain(query: Query, table: string): Promi
   }
 }
 
-function reportedNumeric(type: unknown): boolean {
-  const name = String(type).toUpperCase();
-  return name === "INT" || name === "DOUBLE" || name === "FLOAT" || name === "REAL" || name.startsWith("DECIMAL");
-}
-
 async function checkPair(query: Query, name: string, build: (table: string) => Promise<void>): Promise<void> {
   const next = `${name}_next`;
   const main = `${name}_main`;
@@ -413,10 +409,10 @@ async function checkPair(query: Query, name: string, build: (table: string) => P
   const nextColumns = await query(`DESCRIBE ${ident(next)}`);
   const mainColumns = await query(`DESCRIBE ${ident(main)}`);
   for (const column of nextColumns) {
-    if (!reportedNumeric(column.column_type)) continue;
+    if (!isNumeric(String(column.column_type))) continue;
     const other = mainColumns.find((row) => row.column_name === column.column_name);
     assert.equal(
-      reportedNumeric(other?.column_type),
+      isNumeric(String(other?.column_type)),
       true,
       `${name}.${String(column.column_name)} is ${String(column.column_type)} and the old cleaner left ${String(other?.column_type)}`,
     );
