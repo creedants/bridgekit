@@ -2,7 +2,13 @@ import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "rea
 import { dataCheck, runBridge, type BridgeConfig } from "../engine.ts";
 import { summarize } from "../summary.ts";
 import { createSyntheticSales } from "../synth.ts";
-import { openBrowserDatabase, type BrowserDatabase } from "./db.ts";
+import {
+  lazyChunk,
+  openBrowserDatabase,
+  scheduleSpeculative,
+  type BrowserDatabase,
+  type ChunkSentences,
+} from "./db.ts";
 import { exportExcel } from "./exportExcel.ts";
 import { download } from "./files.ts";
 import { whole } from "./format.ts";
@@ -33,152 +39,28 @@ type ResultsView = (props: {
   query: () => Promise<BrowserDatabase["query"]>;
 }) => ReactNode;
 
-let resultsLoad: Promise<void> | null = null;
-let LoadedResults: ResultsView | null = null;
-// A failed import("./Results.tsx") stays failed for that URL.
-let staticImportFailed = false;
-
-const RESULTS_FAILURE = {
+const RESULTS_FAILURE: ChunkSentences = {
   network: "Could not load the results view. Check your connection, then choose Calculate bridge again.",
   gone: "Reload the page to start again.",
 };
 
-class ResultsUnavailable extends Error {
-  constructor(kind: keyof typeof RESULTS_FAILURE) {
-    super(RESULTS_FAILURE[kind]);
-  }
+function resultsView(module: unknown): ResultsView | undefined {
+  if (typeof module !== "object" || module === null || !("Results" in module)) return undefined;
+  const component = module.Results;
+  return typeof component === "function" ? (component as ResultsView) : undefined;
 }
 
-function loadResults(): Promise<void> {
-  if (resultsLoad) return resultsLoad;
-  const reading = staticImportFailed ? importRetriedResults() : importStaticResults();
-  const attempt = reading.then(
-    () => undefined,
-    (error: unknown) => {
-      staticImportFailed = true;
-      if (resultsLoad === attempt) resultsLoad = null;
-      if (error instanceof ResultsUnavailable) throw error;
-      throw new ResultsUnavailable("network");
-    },
-  );
-  resultsLoad = attempt;
-  return attempt;
-}
-
-async function importStaticResults(): Promise<void> {
-  const mod = await import("./Results.tsx");
-  const component: unknown = mod.Results;
-  if (!isResultsView(component)) throw new ResultsUnavailable("gone");
-  LoadedResults = mod.Results;
-}
-
-async function importRetriedResults(): Promise<void> {
-  const chunkUrl = resultsChunkUrl();
-  if (chunkUrl === null) throw new ResultsUnavailable("gone");
-  const retryUrl = chunkUrl + "?retry=" + Date.now();
-  let response: Response;
-  try {
-    response = await fetch(retryUrl, { cache: "no-store" });
-  } catch {
-    throw new ResultsUnavailable("network");
-  }
-  const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
-  if (!response.ok || contentType.includes("text/html") || !isJavaScriptContentType(contentType)) {
-    throw new ResultsUnavailable("gone");
-  }
-  if (await bodyStartsWithMarkup(response)) throw new ResultsUnavailable("gone");
-  const mod: unknown = await import(/* @vite-ignore */ retryUrl);
-  const component = resultsExport(mod);
-  if (!isResultsView(component)) throw new ResultsUnavailable("gone");
-  LoadedResults = component;
-}
-
-const RESULTS_CHUNK_PATH = /^\/assets\/Results-[A-Za-z0-9_-]+\.js$/;
-
-function resultsChunkUrl(): string | null {
-  for (const link of document.querySelectorAll('link[rel="modulepreload"]')) {
-    if (!(link instanceof HTMLLinkElement)) continue;
-    let parsed: URL;
-    try {
-      parsed = new URL(link.href);
-    } catch {
-      continue;
-    }
-    if (parsed.origin !== location.origin) continue;
-    if (!RESULTS_CHUNK_PATH.test(parsed.pathname)) continue;
-    return parsed.origin + parsed.pathname;
-  }
-  return null;
-}
-
-function isJavaScriptContentType(contentType: string): boolean {
-  const mediaType = contentType.split(";", 1)[0]?.trim() ?? "";
-  return mediaType === "text/javascript" || mediaType === "application/javascript";
-}
-
-async function bodyStartsWithMarkup(response: Response): Promise<boolean> {
-  const body = response.body;
-  if (body === null) return false;
-  const reader = body.getReader();
-  try {
-    const chunk = await reader.read();
-    const bytes = chunk.value;
-    if (bytes === undefined || bytes.length === 0) return false;
-    return new TextDecoder().decode(bytes.subarray(0, 64)).trimStart().startsWith("<");
-  } finally {
-    void reader.cancel().catch(() => {});
-  }
-}
-
-function resultsExport(mod: unknown): unknown {
-  if (typeof mod !== "object" || mod === null) return undefined;
-  if (!("Results" in mod)) return undefined;
-  return mod.Results;
-}
-
-function isResultsView(value: unknown): value is ResultsView {
-  return typeof value === "function";
-}
+const resultsChunk = lazyChunk({
+  importer: () => import("./Results.tsx"),
+  parse: resultsView,
+  sentences: RESULTS_FAILURE,
+});
 
 function prefetchResults(): void {
-  void loadResults().catch(() => {});
+  void resultsChunk.load().catch(() => {});
 }
 
-// The DOM lib in this toolchain does not declare Network Information.
-function networkSaveData(): boolean {
-  const host: unknown = navigator;
-  if (typeof host !== "object" || host === null || !("connection" in host)) return false;
-  const connection = host.connection;
-  if (typeof connection !== "object" || connection === null || !("saveData" in connection)) return false;
-  return connection.saveData === true;
-}
-
-function prefetchResultsWhenIdle(): () => void {
-  if (networkSaveData()) return () => {};
-  let cancelled = false;
-  let idleId: number | undefined;
-  let timerId: number | undefined;
-  const queuePrefetch = () => {
-    if (cancelled) return;
-    timerId = window.setTimeout(prefetchResults, 150);
-  };
-  const whenIdle = () => {
-    if (cancelled) return;
-    if (typeof window.requestIdleCallback === "function") {
-      idleId = window.requestIdleCallback(queuePrefetch, { timeout: 2000 });
-      return;
-    }
-    timerId = window.setTimeout(queuePrefetch, 2000);
-  };
-  if (document.readyState === "complete") whenIdle();
-  else window.addEventListener("load", whenIdle, { once: true });
-  return () => {
-    cancelled = true;
-    window.removeEventListener("load", whenIdle);
-    if (idleId !== undefined) window.cancelIdleCallback(idleId);
-    if (timerId !== undefined) window.clearTimeout(timerId);
-  };
-}
+const RESULTS_PREFETCH_SETTLE_MS = 150;
 
 const SAMPLE_ROWS = 1_000_000;
 const MAX_SAMPLE_ROWS = 5_000_000;
@@ -329,7 +211,7 @@ export function App() {
   const calculate = () =>
     task("Calculating…", async () => {
       if (!setup) return;
-      const [q] = await Promise.all([query(), loadResults()]);
+      const [q] = await Promise.all([query(), resultsChunk.load()]);
       const config: BridgeConfig = {
         table: VIEW,
         periodColumn: PERIOD,
@@ -361,7 +243,7 @@ export function App() {
       setNotice("");
     });
 
-  useEffect(() => prefetchResultsWhenIdle(), []);
+  useEffect(() => scheduleSpeculative(prefetchResults, RESULTS_PREFETCH_SETTLE_MS), []);
 
   // A link to /app/?sample opens the tool with the sample already calculated.
   const autoRun = useRef(new URLSearchParams(location.search).has("sample"));
@@ -426,6 +308,9 @@ export function App() {
       />
     </label>
   );
+
+  // The loader holds the component, not React state, so calculate awaits the load before setRun.
+  const Results = resultsChunk.loaded;
 
   return (
     <div
@@ -581,9 +466,8 @@ export function App() {
             {run && run.signature !== signature && (
               <p className="notice">The setup changed since this bridge was calculated. Calculate again to update it.</p>
             )}
-            {run && LoadedResults ? (
-              // LoadedResults is a module binding. React does not track it, so loadResults assigns it before setRun.
-              <LoadedResults key={run.id} run={run} query={query} />
+            {run && Results ? (
+              <Results key={run.id} run={run} query={query} />
             ) : !run ? (
               <div>
                 <p className="hint">

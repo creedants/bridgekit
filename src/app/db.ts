@@ -6,6 +6,184 @@ import mvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import type { Query } from "../engine.ts";
 import { toCsv } from "./files.ts";
 
+type ChunkFailure = "network" | "gone";
+
+/** The two sentences a failed chunk can put on screen. */
+export type ChunkSentences = Readonly<Record<ChunkFailure, string>>;
+
+interface ChunkSource<T> {
+  /** Written inline as one literal import(). The retry reads the chunk URL from this function's text. */
+  importer: () => Promise<unknown>;
+  /** Returns undefined when the module is not this chunk. */
+  parse: (module: unknown) => T | undefined;
+}
+
+export interface LazyChunk<T> {
+  /** One shared load per chunk. Rejects only with an Error whose message is one of the two sentences. */
+  load(): Promise<T>;
+  /** The loaded value for code that cannot await, such as a render. */
+  readonly loaded: T | undefined;
+}
+
+type ChunkState<T> =
+  | { phase: "untried" }
+  | { phase: "failed" }
+  | { phase: "loading"; attempt: Promise<T> }
+  | { phase: "loaded"; attempt: Promise<T>; value: T };
+
+type ChunkResult<T> = { value: T } | { failure: ChunkFailure };
+
+/**
+ * A dynamic chunk that recovers from a failed load.
+ * A failed import stays failed for that URL, so every attempt after a failure
+ * imports the same file under a new query string.
+ */
+export function lazyChunk<T>(options: ChunkSource<T> & { sentences: ChunkSentences }): LazyChunk<T> {
+  let state: ChunkState<T> = { phase: "untried" };
+  return {
+    load() {
+      if (state.phase === "loading" || state.phase === "loaded") return state.attempt;
+      const reading = state.phase === "failed" ? retriedChunk(options) : firstChunk(options);
+      const attempt: Promise<T> = reading.then((result) => {
+        if ("failure" in result) {
+          state = { phase: "failed" };
+          // The page prints an error's message as is. This is the only rejection, and it carries no cause.
+          throw new Error(options.sentences[result.failure]);
+        }
+        state = { phase: "loaded", attempt, value: result.value };
+        return result.value;
+      });
+      state = { phase: "loading", attempt };
+      return attempt;
+    },
+    get loaded() {
+      return state.phase === "loaded" ? state.value : undefined;
+    },
+  };
+}
+
+function parsedChunk<T>(source: ChunkSource<T>, module: unknown): ChunkResult<T> {
+  const value = source.parse(module);
+  return value === undefined ? { failure: "gone" } : { value };
+}
+
+// Never rejects. The browser's own message names the asset URL, so it is dropped here.
+async function firstChunk<T>(source: ChunkSource<T>): Promise<ChunkResult<T>> {
+  try {
+    return parsedChunk(source, await source.importer());
+  } catch {
+    return { failure: "network" };
+  }
+}
+
+let retryAttempts = 0;
+
+// Never rejects. The fetch runs first because a host can answer a missing
+// asset with its HTML page and a 200, which an import would report as a
+// network failure. It does not follow a redirect.
+async function retriedChunk<T>(source: ChunkSource<T>): Promise<ChunkResult<T>> {
+  const url = chunkUrl(source.importer);
+  if (url === null) return { failure: "gone" };
+  retryAttempts += 1;
+  const retryUrl = url + "?retry=" + Date.now() + "." + retryAttempts;
+  try {
+    const response = await fetch(retryUrl, { cache: "no-store", redirect: "manual" });
+    const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+    if (!response.ok || contentType.includes("text/html") || !isJavaScriptContentType(contentType)) {
+      return { failure: "gone" };
+    }
+    if (await bodyStartsWithMarkup(response)) return { failure: "gone" };
+    const module: unknown = await import(/* @vite-ignore */ retryUrl);
+    return parsedChunk(source, module);
+  } catch {
+    return { failure: "network" };
+  }
+}
+
+const IMPORT_SPECIFIER = /\bimport\(\s*(["'`])([^"'`\\$]+)\1\s*\)/g;
+const CHUNK_PATH = /^\/assets\/[A-Za-z0-9_.-]+\.js$/;
+
+// The build writes the chunk's file name into the importer as a literal, and
+// a leaf chunk gets no modulepreload link to read it from. Anything but one
+// same-origin /assets file is null, and the retry then makes no request.
+function chunkUrl(importer: () => Promise<unknown>): string | null {
+  const specifiers = [...Function.prototype.toString.call(importer).matchAll(IMPORT_SPECIFIER)];
+  if (specifiers.length !== 1) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(specifiers[0][2], import.meta.url);
+  } catch {
+    return null;
+  }
+  if (parsed.origin !== location.origin) return null;
+  if (!CHUNK_PATH.test(parsed.pathname) || parsed.search !== "" || parsed.hash !== "") return null;
+  return parsed.origin + parsed.pathname;
+}
+
+function isJavaScriptContentType(contentType: string): boolean {
+  const mediaType = contentType.split(";", 1)[0]?.trim() ?? "";
+  return mediaType === "text/javascript" || mediaType === "application/javascript";
+}
+
+async function bodyStartsWithMarkup(response: Response): Promise<boolean> {
+  const body = response.body;
+  if (body === null) return false;
+  const reader = body.getReader();
+  try {
+    const chunk = await reader.read();
+    const bytes = chunk.value;
+    if (bytes === undefined || bytes.length === 0) return false;
+    return new TextDecoder().decode(bytes.subarray(0, 64)).trimStart().startsWith("<");
+  } finally {
+    void reader.cancel().catch(() => {});
+  }
+}
+
+const IDLE_CAP_MS = 2000;
+
+/**
+ * Runs work nobody has asked for yet: after the load event, on an idle
+ * callback, then `settleMs` later. Save-Data schedules nothing.
+ * Returns a cancel.
+ */
+export function scheduleSpeculative(work: () => void, settleMs = 0): () => void {
+  if (networkSaveData()) return () => {};
+  let cancelled = false;
+  let idleId: number | undefined;
+  let timerId: number | undefined;
+  const settle = () => {
+    if (cancelled) return;
+    if (settleMs === 0) work();
+    else timerId = window.setTimeout(work, settleMs);
+  };
+  const whenIdle = () => {
+    if (cancelled) return;
+    if (typeof window.requestIdleCallback === "function") {
+      idleId = window.requestIdleCallback(settle, { timeout: IDLE_CAP_MS });
+      return;
+    }
+    timerId = window.setTimeout(settle, IDLE_CAP_MS);
+  };
+  if (document.readyState === "complete") whenIdle();
+  else window.addEventListener("load", whenIdle, { once: true });
+  return () => {
+    cancelled = true;
+    window.removeEventListener("load", whenIdle);
+    if (idleId !== undefined) window.cancelIdleCallback(idleId);
+    if (timerId !== undefined) window.clearTimeout(timerId);
+  };
+}
+
+// The DOM lib in this toolchain does not declare Network Information.
+// Read the live property and accept only a boolean true.
+function networkSaveData(): boolean {
+  const host: unknown = navigator;
+  if (typeof host !== "object" || host === null || !("connection" in host)) return false;
+  const connection = host.connection;
+  if (typeof connection !== "object" || connection === null || !("saveData" in connection)) return false;
+  return connection.saveData === true;
+}
+
 export interface BrowserDatabase {
   query: Query;
   /** Loads a CSV, Excel or Parquet file into `table` without it leaving the browser. */
@@ -33,37 +211,15 @@ function openFresh(): Promise<BrowserDatabase> {
   return attempt;
 }
 
-const IDLE_CAP_MS = 2000;
-
 /**
  * Opens the shared database after the load event, on an idle callback.
  * Save-Data leaves it closed until a file is chosen.
  * A failure is ignored. The next openBrowserDatabase call tries again.
  */
 export function warmBrowserDatabase(): void {
-  if (networkSaveData()) return;
-  const kick = () => {
+  scheduleSpeculative(() => {
     void openBrowserDatabase().catch(() => {});
-  };
-  const whenIdle = () => {
-    if (typeof window.requestIdleCallback === "function") {
-      window.requestIdleCallback(kick, { timeout: IDLE_CAP_MS });
-      return;
-    }
-    window.setTimeout(kick, IDLE_CAP_MS);
-  };
-  if (document.readyState === "complete") whenIdle();
-  else window.addEventListener("load", whenIdle, { once: true });
-}
-
-// The DOM lib in this toolchain does not declare Network Information.
-// Read the live property and accept only a boolean true.
-function networkSaveData(): boolean {
-  const host: unknown = navigator;
-  if (typeof host !== "object" || host === null || !("connection" in host)) return false;
-  const connection = host.connection;
-  if (typeof connection !== "object" || connection === null || !("saveData" in connection)) return false;
-  return connection.saveData === true;
+  });
 }
 
 // The wasm and worker files are bundled with the app so nothing is fetched
