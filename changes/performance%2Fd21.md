@@ -1,0 +1,1 @@
+- A checkout link with a transaction shows "Checkout is not available right now. Try again later." when the build has no client token. A link with no transaction still says there is no checkout to open.
