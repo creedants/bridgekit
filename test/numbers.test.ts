@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { convertFormattedNumbers, decimalCommaNote } from "../src/app/numbers.ts";
 import { openDatabase } from "../src/duckdb.ts";
-import type { Query } from "../src/engine.ts";
+import { runBridge, type Query } from "../src/engine.ts";
 import { createSyntheticSales } from "../src/synth.ts";
 
 const EURO_FILE = `period;sku;units;net_sales
@@ -14,6 +14,19 @@ const EURO_FILE = `period;sku;units;net_sales
 2025;A;10,00;1.500,00
 2025;B;4,00;15,00
 `;
+
+function productCodeFile(): string {
+  const lines = ["period;product_code;units;net_sales"];
+  for (let i = 0; i < 2000; i++) {
+    const code = i % 4 < 2 ? "001" : "1";
+    const period = i % 2 === 0 ? 2024 : 2025;
+    const units = code === "001" ? (period === 2024 ? 1 : 2) : period === 2024 ? 2 : 1;
+    const price = code === "001" ? (period === 2024 ? 10 : 11) : period === 2024 ? 100 : 90;
+    lines.push(`${period};${code};${units};${units * price}`);
+  }
+  lines.push("2025;01,02;1;50");
+  return `${lines.join("\n")}\n`;
+}
 
 test("a semicolon file of decimal commas loads as decimals", async () => {
   const directory = await mkdtemp("/tmp/bridgekit-comma-");
@@ -114,9 +127,9 @@ test("null and whitespace in a decimal-comma column become null", async () => {
   const query = await openDatabase();
   await createText(query, "blanks", { amount: [null, "   ", "\t", "12,50"] });
   await convertFormattedNumbers(query, "blanks");
-  assert.equal(await columnType(query, "blanks", "amount"), "DOUBLE");
-  expectNumbers(await columnValues(query, "blanks", "amount"), [null, null, null, 12.5]);
-  assert.equal(await decimalCommaNote(query, "blanks"), ONE);
+  assert.equal(await columnType(query, "blanks", "amount"), "VARCHAR");
+  assert.deepEqual(await columnValues(query, "blanks", "amount"), [null, "   ", "\t", "12,50"]);
+  assert.equal(await decimalCommaNote(query, "blanks"), null);
 });
 
 test("north american formatted numbers keep today's readings", async () => {
@@ -257,11 +270,11 @@ test("a decimal comma after 2000 blank rows still converts", async () => {
   const query = await openDatabase();
   await query(`CREATE TABLE late AS SELECT i, CASE WHEN i < 2000 THEN NULL ELSE '12,50' END AS amount FROM range(2001) t(i) ORDER BY i`);
   await convertFormattedNumbers(query, "late");
-  assert.equal(await columnType(query, "late", "amount"), "DOUBLE");
+  assert.equal(await columnType(query, "late", "amount"), "VARCHAR");
   const rows = await query(`SELECT amount FROM late ORDER BY i`);
   assert.equal(rows[0].amount, null);
-  expectNumbers([rows[2000].amount], [12.5]);
-  assert.equal(await decimalCommaNote(query, "late"), ONE);
+  assert.equal(rows[2000].amount, "12,50");
+  assert.equal(await decimalCommaNote(query, "late"), null);
 });
 
 test("a formatted value after 2000 plain codes stays text", async () => {
@@ -301,6 +314,39 @@ test("a decimal comma after 2000 thousands values stays text", async () => {
   assert.equal(await decimalCommaNote(query, "late"), null);
 });
 
+test("a late product code stays text", async () => {
+  const directory = await mkdtemp("/tmp/bridgekit-comma-");
+  const file = path.join(directory, "codes.csv");
+  await writeFile(file, productCodeFile());
+  const query = await openDatabase();
+  await query(`CREATE OR REPLACE TABLE data AS SELECT * FROM read_csv(${sqlText(file)})`);
+  await convertFormattedNumbers(query, "data");
+  assert.equal(await columnType(query, "data", "product_code"), "VARCHAR");
+  const grouped = await query(`SELECT product_code, count(*)::DOUBLE AS n FROM data GROUP BY product_code ORDER BY product_code`);
+  assert.deepEqual(
+    grouped.map((row) => [row.product_code, Number(row.n)]),
+    [
+      ["001", 1000],
+      ["01,02", 1],
+      ["1", 1000],
+    ],
+  );
+  const result = await runBridge(query, {
+    table: "data",
+    periodColumn: "period",
+    prior: 2024,
+    current: 2025,
+    unitsColumn: "units",
+    salesColumn: "net_sales",
+    levels: [{ name: "Product", columns: ["product_code"] }],
+  });
+  assert.equal(result.priorSales, 105000);
+  assert.equal(result.currentSales, 56050);
+  assert.equal(result.effects.find((item) => item.key === "mix_1")?.value, -45000);
+  assert.equal(result.effects.find((item) => item.key === "price")?.value, -4000);
+  assert.equal(result.coverage.find((row) => row.level === 1)?.cells, 2);
+});
+
 test("a second conversion keeps the values and the sentence", async () => {
   const query = await openDatabase();
   await createText(query, "twice", { amount: ["12,50", "1.234,56"] });
@@ -322,6 +368,130 @@ test("replacing the table drops the decimal-comma sentence", async () => {
   assert.equal(await decimalCommaNote(query, "data"), ONE);
   await createSyntheticSales(query, 30, "data");
   assert.equal(await decimalCommaNote(query, "data"), null);
+});
+
+async function convertFormattedNumbersOnMain(query: Query, table: string): Promise<void> {
+  const columns = (await query(`DESCRIBE "${table}"`))
+    .filter((row) => String(row.column_type) === "VARCHAR")
+    .map((row) => `"${String(row.column_name).replaceAll('"', '""')}"`);
+  if (columns.length === 0) return;
+  const cleaned = (c: string) =>
+    `try_cast(regexp_replace(regexp_replace(trim(${c}), '[,$\\s]', '', 'g'), '^\\((.*)\\)$', '-\\1') AS DOUBLE)`;
+  const check = async (candidates: string[], source: string) => {
+    const [counts] = await query(
+      `SELECT ${candidates
+        .map(
+          (c, i) =>
+            `count(${c})::DOUBLE AS n${i}, count(${cleaned(c)})::DOUBLE AS ok${i}, count(*) FILTER (WHERE regexp_matches(${c}, '[,$()]'))::DOUBLE AS f${i}`,
+        )
+        .join(", ")} FROM ${source}`,
+    );
+    return candidates.filter((_, i) => {
+      const n = Number(counts[`n${i}`]);
+      return n > 0 && n === Number(counts[`ok${i}`]) && Number(counts[`f${i}`]) > 0;
+    });
+  };
+  const likely = await check(columns, `(SELECT * FROM "${table}" LIMIT 2000)`);
+  if (likely.length === 0) return;
+  for (const c of await check(likely, `"${table}"`)) {
+    await query(`ALTER TABLE "${table}" ALTER ${c} TYPE DOUBLE USING ${cleaned(c)}`);
+  }
+}
+
+function reportedNumeric(type: unknown): boolean {
+  const name = String(type).toUpperCase();
+  return name === "INT" || name === "DOUBLE" || name === "FLOAT" || name === "REAL" || name.startsWith("DECIMAL");
+}
+
+async function checkPair(query: Query, name: string, build: (table: string) => Promise<void>): Promise<void> {
+  const next = `${name}_next`;
+  const main = `${name}_main`;
+  await build(next);
+  await build(main);
+  await convertFormattedNumbers(query, next);
+  await convertFormattedNumbersOnMain(query, main);
+  const nextColumns = await query(`DESCRIBE ${ident(next)}`);
+  const mainColumns = await query(`DESCRIBE ${ident(main)}`);
+  for (const column of nextColumns) {
+    if (!reportedNumeric(column.column_type)) continue;
+    const other = mainColumns.find((row) => row.column_name === column.column_name);
+    assert.equal(
+      reportedNumeric(other?.column_type),
+      true,
+      `${name}.${String(column.column_name)} is ${String(column.column_type)} and the old cleaner left ${String(other?.column_type)}`,
+    );
+  }
+}
+
+test("a numeric column is numeric under the old number check", async () => {
+  const directory = await mkdtemp("/tmp/bridgekit-comma-");
+  const euroFile = path.join(directory, "euro.csv");
+  const dotsFile = path.join(directory, "dots.csv");
+  const codesFile = path.join(directory, "codes.csv");
+  await writeFile(euroFile, EURO_FILE);
+  await writeFile(dotsFile, "amount\n1.234\n2.500\n");
+  await writeFile(codesFile, productCodeFile());
+  const query = await openDatabase();
+  const textColumns: Record<string, Record<string, (string | null)[]>> = {
+    signed: { amount: ["-12,50", "-1.234,56"] },
+    spaced: { euro: ["  12,50  "], money: ["  $90.00  "], thousands: ["  1,260  "] },
+    blanks: { amount: [null, "   ", "\t", "12,50"] },
+    us: { amount: ["1,260", "$90.00", "(45)", "(1,260)"] },
+    alone: { amount: ["1,234"] },
+    grouped_thousands: { amount: ["0,125", "1,500"] },
+    codes: { sku: ["10023"] },
+    forced: { amount: ["1.234", "2.500"] },
+    grouped_dot: { amount: ["1.234", "12,50"] },
+    short: { amount: ["100", "12,50"] },
+    long: { fifteen: ["1500", "12,50"], thousand: ["1000", "12,50"] },
+    mixed: { amount: ["1.234,56", "1,260.00"] },
+    space_mark: { amount: ["1 234,56"] },
+    currency: { amount: ["€ 12,50"] },
+    parens: { euro: ["(12,50)", "(1.234,56)"], us: ["(45)", "(1,260)"] },
+    tail: { amount: ["1.234,567"] },
+    twice: { amount: ["12,50", "1.234,56"] },
+    data: { amount: ["12,50"] },
+    one_five: { amount: ["1,5", "1,234"] },
+    dollar_comma: { amount: ["$12,50"] },
+    twelve_and_dollar: { amount: ["12,34", "$90.00"] },
+    one_two: { amount: ["1,2", "3,4"] },
+    twelve_pair: { amount: ["12,34", "56,78"] },
+    not_available: { amount: ["12,50", "NA"] },
+    dash: { amount: ["12,50", "-"] },
+    slash_na: { amount: ["12,50", "n/a"] },
+    percent: { amount: ["12,5%"] },
+    many_dots: { amount: ["1.234.567"] },
+    scientific: { amount: ["1e3", "2.5e-2"] },
+    scientific_formatted: { amount: ["1,234e2", "$90e2"] },
+    both_marks: { amount: ["1.234,56", "1,234.56"] },
+    dates: { amount: ["01.02.2025", "02.02.2025"] },
+  };
+  for (const [name, columns] of Object.entries(textColumns)) {
+    await checkPair(query, name, (table) => createText(query, table, columns));
+  }
+  const lateSql: Record<string, string> = {
+    late_blank: "SELECT i, CASE WHEN i < 2000 THEN NULL ELSE '12,50' END AS amount FROM range(2001) t(i) ORDER BY i",
+    late_formatted:
+      "SELECT i, CASE WHEN i < 2000 THEN '10023' ELSE '$90.00' END AS money, CASE WHEN i < 2000 THEN '10023' ELSE '1,260' END AS thousands FROM range(2001) t(i) ORDER BY i",
+    late_thousands: "SELECT i, CASE WHEN i < 2000 THEN '1,260' ELSE '1.234,56' END AS amount FROM range(2001) t(i) ORDER BY i",
+    late_hundred_50: "SELECT CASE WHEN i < 2000 THEN '100' ELSE '12,50' END AS amount FROM range(2001) t(i) ORDER BY i",
+    late_hundred_34: "SELECT CASE WHEN i < 2000 THEN '100' ELSE '12,34' END AS amount FROM range(2001) t(i) ORDER BY i",
+  };
+  for (const [name, select] of Object.entries(lateSql)) {
+    await checkPair(query, name, async (table) => {
+      await query(`CREATE TABLE ${ident(table)} AS ${select}`);
+    });
+  }
+  await checkPair(query, "euro", async (table) => {
+    await query(`CREATE TABLE ${ident(table)} AS SELECT * FROM read_csv(${sqlText(euroFile)}, delim=';', header=true)`);
+  });
+  await checkPair(query, "sniffed", async (table) => {
+    await query(`CREATE TABLE ${ident(table)} AS SELECT * FROM read_csv(${sqlText(dotsFile)}, header=true)`);
+  });
+  await checkPair(query, "product_codes", async (table) => {
+    await query(`CREATE TABLE ${ident(table)} AS SELECT * FROM read_csv(${sqlText(codesFile)})`);
+  });
+  await checkPair(query, "synth", (table) => createSyntheticSales(query, 30, table));
 });
 
 interface WasmConnection {
@@ -361,15 +531,7 @@ function wasmRow(row: unknown): Record<string, unknown> {
 
 test("wasm reads the decimal-comma file and keeps the column comment", async () => {
   const require = createRequire(import.meta.url);
-  let loaded: unknown;
-  try {
-    loaded = require("@duckdb/duckdb-wasm/dist/duckdb-node-blocking.cjs");
-  } catch (error) {
-    const message = error instanceof Error ? error.stack ?? error.message : String(error);
-    await writeFile("/tmp/bridgekit-comma-wasm-error.txt", message);
-    console.error(message);
-    return;
-  }
+  const loaded: unknown = require("@duckdb/duckdb-wasm/dist/duckdb-node-blocking.cjs");
   if (!isWasmModule(loaded)) throw new Error("duckdb-node-blocking.cjs loaded without createDuckDB");
   const dist = path.dirname(require.resolve("@duckdb/duckdb-wasm/dist/duckdb-node-blocking.cjs"));
   const database = await loaded.createDuckDB(
