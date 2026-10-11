@@ -1,4 +1,3 @@
-import * as duckdb from "@duckdb/duckdb-wasm";
 import ehWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url";
 import mvpWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url";
 import ehWasm from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
@@ -292,7 +291,42 @@ importScripts(${JSON.stringify(absolute)});
   }
 }
 
+type DuckDBLibrary = Pick<
+  typeof import("@duckdb/duckdb-wasm"),
+  "selectBundle" | "AsyncDuckDB" | "VoidLogger" | "DuckDBDataProtocol"
+>;
+
+function isDuckDBLibrary(module: unknown): module is DuckDBLibrary {
+  if (typeof module !== "object" || module === null) return false;
+  if (!("selectBundle" in module && "AsyncDuckDB" in module && "VoidLogger" in module && "DuckDBDataProtocol" in module)) {
+    return false;
+  }
+  const protocol = module.DuckDBDataProtocol;
+  return (
+    typeof module.selectBundle === "function" &&
+    typeof module.AsyncDuckDB === "function" &&
+    typeof module.VoidLogger === "function" &&
+    typeof protocol === "object" &&
+    protocol !== null &&
+    "BROWSER_FILEREADER" in protocol &&
+    typeof protocol.BROWSER_FILEREADER === "number"
+  );
+}
+
+const LIBRARY_FAILURE: ChunkSentences = {
+  network: "Could not load the database. Check your connection, then choose your file or the sample data again.",
+  gone: "Reload the page to start again.",
+};
+
+// DuckDB and Arrow load with the first open, not with the page.
+const duckdbChunk = lazyChunk({
+  importer: () => import("@duckdb/duckdb-wasm"),
+  parse: (module) => (isDuckDBLibrary(module) ? module : undefined),
+  sentences: LIBRARY_FAILURE,
+});
+
 async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
+  const duckdb = await duckdbChunk.load();
   const bundle = await duckdb.selectBundle({
     mvp: { mainModule: mvpWasm, mainWorker: mvpWorker },
     eh: { mainModule: ehWasm, mainWorker: ehWorker },
