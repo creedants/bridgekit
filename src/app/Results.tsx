@@ -27,6 +27,8 @@ import { commentary } from "../commentary.ts";
 import { summarize, type BridgeSummary } from "../summary.ts";
 import { download, toCsv, toTsv } from "./files.ts";
 import { percent, price, signedPercent, signedWhole, whole } from "./format.ts";
+import { decimalCommaNote } from "./numbers.ts";
+import { TABLE } from "./setup.ts";
 import { buildReport } from "./report.ts";
 import { Waterfall } from "./Waterfall.tsx";
 
@@ -161,7 +163,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
       {tab === "price" && <PriceChanges run={run} query={props.query} />}
       {tab === "movers" && <Movers run={run} query={props.query} sortBy={sortBy} onSortBy={setSortBy} />}
       {tab === "unmatched" && <Unmatched run={run} query={props.query} />}
-      {tab === "check" && <Check run={run} warnings={warnings} />}
+      {tab === "check" && <Check run={run} warnings={warnings} query={props.query} />}
     </>
   );
 }
@@ -1005,8 +1007,25 @@ function checkWarnings(run: Run): string[] {
   return warnings;
 }
 
-function Check(props: { run: Run; warnings: string[] }) {
+function Check(props: { run: Run; warnings: string[]; query: () => Promise<Query> }) {
   const { check, config, ms } = props.run;
+  const [note, setNote] = useState<string | null>(null);
+  useEffect(() => {
+    let stale = false;
+    setNote(null);
+    props
+      .query()
+      .then((query) => decimalCommaNote(query, TABLE))
+      .then((sentence) => {
+        if (!stale) setNote(sentence);
+      })
+      .catch(() => {
+        if (!stale) setNote(null);
+      });
+    return () => {
+      stale = true;
+    };
+  }, [props.run]);
   const lines: [string, number][] = [
     ["Rows read (after filters)", check.rows],
     [`Rows in ${config.prior}`, check.priorRows],
@@ -1025,6 +1044,7 @@ function Check(props: { run: Run; warnings: string[] }) {
       ) : (
         <ul className="warnings">{props.warnings.map((w) => <li key={w}>{w}</li>)}</ul>
       )}
+      {note ? <p className="hint">{note}</p> : null}
       <table className="narrow">
         <tbody>
           {lines.map(([label, value]) => (
