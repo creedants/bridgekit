@@ -12,6 +12,8 @@
     "demo": "node scripts/demo.ts",
     "typecheck": "tsc --noEmit",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:preview": "node scripts/smoke.mjs --serve preview",
+    "smoke:wrangler": "node scripts/smoke.mjs --serve wrangler",
     "perf": "node scripts/perf/baseline.mjs",
     "perf:worker": "node scripts/perf/worker.mjs",
     "build:cloudflare": "VITE_PAGE_COUNTS=1 VITE_WORKSPACES=1 VITE_AI_COMMENTARY=1 vite build && node scripts/compress-wasm.mjs",
