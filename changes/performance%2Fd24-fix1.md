@@ -1,0 +1,1 @@
+- A decimal comma is read as a number only when the old number check would already have converted that column. A decimal comma that first appears after 2,000 rows stays text. The guide says the comma has one or two digits and that the whole column is written that way.
