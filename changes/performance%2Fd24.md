@@ -1,0 +1,1 @@
+- A text column written with a decimal comma, such as 12,50 or 1.234,56, is stored as a number when the whole column is written that way. A mixed column stays text. Data check states how many columns were converted, and that line is not a warning.
