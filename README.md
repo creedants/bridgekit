@@ -144,11 +144,8 @@ http://localhost:8790. Without an email key, sign-in links are printed in the
 terminal. `npm run smoke -- http://localhost:8790` runs the smoke test against
 it.
 
-To go live: create the D1 database (`wrangler d1 create bridgekit`) and put
-its id in `wrangler.jsonc`, set `BETTER_AUTH_URL` to the real address, add the
-secrets listed there with `wrangler secret put`, build with
-`VITE_PADDLE_CLIENT_TOKEN` (and `VITE_PADDLE_ENVIRONMENT=live` when ready),
-then `npm run cf:deploy`. `npm run stats` prints the page counts.
+To go live, follow [DEPLOY.md](DEPLOY.md). Part 1 puts the free tool and page
+counts on your domain. Part 2 turns on accounts and payments.
 
 ## Layout
 
