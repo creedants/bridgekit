@@ -1,0 +1,1 @@
+- Guessed units skip a column whose words pair unit or units with price, cost, or rate, in either order or with per between them, and guessed units, sales, and gross skip a column whose last word is note, notes, comment, or comments.
