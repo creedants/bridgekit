@@ -1,0 +1,1 @@
+- Adds the article /grouping-level.html, which explains why a coarser grouping level moves mix into the price effect. The figures in its two tables are copied from `npm run demo` and from `npm run demo -- 1000000`. The page is built, served, and counted like the other site pages.
