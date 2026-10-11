@@ -196,7 +196,7 @@ const PROVEN = {
   page: (script) => script,
 };
 
-/** @typedef {{ from: string, how: "fetch" | "XMLHttpRequest", url: string }} Ask */
+/** @typedef {{ from: string, how: "fetch" | "XMLHttpRequest", url: string, network: number, violations: number }} Ask */
 
 /**
  * Each attempt goes to this machine's debugging port: another origin, and nothing leaves the machine even with no policy.
@@ -204,7 +204,7 @@ const PROVEN = {
  */
 async function canary(browser, origin, { hasPolicy }) {
   const port = `http://127.0.0.1:${DEBUG_PORT}`;
-  const asks = Object.keys(PROVEN).flatMap((from) => ["fetch", "XMLHttpRequest"].map((how) => ({ from, how, url: `${port}/json/version?${from}-${how}` })));
+  const asks = Object.keys(PROVEN).flatMap((from) => ["fetch", "XMLHttpRequest"].map((how) => ({ from, how, url: `${port}/json/version?${from}-${how}`, network: 0, violations: 0 })));
   // fetch() and the engine's own way of asking, a synchronous XMLHttpRequest. Both are issued before the first await.
   const script = (from) => {
     const fetchUrl = asks.find((ask) => ask.from === from && ask.how === "fetch").url;
@@ -212,22 +212,46 @@ async function canary(browser, origin, { hasPolicy }) {
     return `(async () => { const tried = fetch(${JSON.stringify(fetchUrl)}).catch(() => {}); try { const ask = new XMLHttpRequest(); ask.open("GET", ${JSON.stringify(xhrUrl)}, false); ask.send(); } catch {} await tried; })()`;
   };
   for (const from of Object.keys(PROVEN)) await browser.evalJs(PROVEN[from](script(from)));
-  const missed = () => {
-    for (const { from, how, url } of asks) {
-      const records = browser.network.filter((record) => record.from === from && record.url === url);
-      // Chromium refuses a fetch() the policy blocks before it becomes a request, so only the policy reports it.
-      const recorded = !hasPolicy || how === "XMLHttpRequest";
-      if (recorded && records.length !== 1) return `${records.length} records of the ${from}'s ${how} exist`;
-      if (recorded && !leak(records[0], origin, { devServer: false })) return `the request check did not flag the ${from}'s ${how}`;
-      if (recorded && hasPolicy && records[0].blocked !== "csp") return `the ${from}'s ${how} was not blocked by the policy (blocked: ${records[0].blocked})`;
-      if (!recorded && !browser.violations.some((violation) => violation.from === from && violation.url === url)) return `the ${from}'s ${how} is not among the policy violations`;
+  const count = (list, from, url) => list.filter((entry) => entry.from === from && entry.url === url).length;
+  // Chromium refuses a fetch() the policy blocks before it becomes a request, so only the policy reports it.
+  // One attempt is reported once for each policy enforced on the page. The synchronous request is one network record either way.
+  const problem = () => {
+    for (const from of Object.keys(PROVEN)) {
+      const fetchAsk = asks.find((ask) => ask.from === from && ask.how === "fetch");
+      const xhrAsk = asks.find((ask) => ask.from === from && ask.how === "XMLHttpRequest");
+      const xhrRecords = browser.network.filter((record) => record.from === from && record.url === xhrAsk.url);
+      const fetchRecords = browser.network.filter((record) => record.from === from && record.url === fetchAsk.url);
+      const xhrReports = count(browser.violations, from, xhrAsk.url);
+      const fetchReports = count(browser.violations, from, fetchAsk.url);
+      if (xhrRecords.length !== 1) return `${xhrRecords.length} records of the ${from}'s XMLHttpRequest exist`;
+      if (!leak(xhrRecords[0], origin, { devServer: false })) return `the request check did not flag the ${from}'s XMLHttpRequest`;
+      if (hasPolicy && xhrRecords[0].blocked !== "csp") return `the ${from}'s XMLHttpRequest was not blocked by the policy (blocked: ${xhrRecords[0].blocked})`;
+      if (hasPolicy) {
+        if (fetchRecords.length !== 0) return `${fetchRecords.length} records of the ${from}'s fetch exist`;
+        if (xhrReports < 1 || fetchReports !== xhrReports) return `the ${from}'s fetch has ${fetchReports} policy reports and its XMLHttpRequest has ${xhrReports}`;
+      } else {
+        if (fetchRecords.length !== 1) return `${fetchRecords.length} records of the ${from}'s fetch exist`;
+        if (!leak(fetchRecords[0], origin, { devServer: false })) return `the request check did not flag the ${from}'s fetch`;
+        if (fetchReports !== 0 || xhrReports !== 0) return `the ${from} reported a policy violation on a server with no policy`;
+      }
     }
     return null;
   };
-  for (let i = 0; i < 30 && missed(); i++) await sleep(100);
-  if (missed()) fail(`canary: a ${Object.keys(PROVEN).join(", a ")} each asked ${port} by fetch and by XMLHttpRequest, and ${missed()}, so a request to another host could go unseen`);
+  let signature = "";
+  let stable = 0;
+  for (let i = 0; i < 30 && stable < 2; i++) {
+    const why = problem();
+    const now = asks.map((ask) => `${count(browser.network, ask.from, ask.url)}:${count(browser.violations, ask.from, ask.url)}`).join(",");
+    if (why || now !== signature) stable = 0;
+    else stable += 1;
+    signature = now;
+    if (!why && stable >= 2) break;
+    await sleep(100);
+  }
+  const why = problem();
+  if (why || stable < 2) fail(`canary: a ${Object.keys(PROVEN).join(", a ")} each asked ${port} by fetch and by XMLHttpRequest, and ${why ?? "the report count was still changing"}, so a request to another host could go unseen`);
   console.log(`ok  canary: a worker, a shared worker and the page each asked ${port} by fetch and by XMLHttpRequest, and each attempt was ${hasPolicy ? "refused by the policy and reported" : "recorded and flagged"}`);
-  return asks;
+  return asks.map((ask) => ({ ...ask, network: count(browser.network, ask.from, ask.url), violations: count(browser.violations, ask.from, ask.url) }));
 }
 
 /** @param {Target} target */
@@ -385,8 +409,12 @@ async function run(browser, origin, target, rows) {
   await collect();
 
   const countOf = (list, from, url) => list.filter((entry) => entry.from === from && entry.url === url).length;
-  // A control URL is exempt only while its live count is still the one record canary verified.
-  const exempt = (list, entry) => asks.some((ask) => ask.from === entry.from && ask.url === entry.url) && countOf(list, entry.from, entry.url) === 1;
+  // A control URL is exempt only while its live count is still the count canary verified.
+  const exempt = (list, entry) => asks.some((ask) => {
+    if (ask.from !== entry.from || ask.url !== entry.url) return false;
+    const verified = list === browser.violations ? ask.violations : ask.network;
+    return verified > 0 && countOf(list, ask.from, ask.url) === verified;
+  });
 
   const network = browser.network.filter((entry) => !exempt(browser.network, entry));
   const leaks = network.flatMap((r) => { const why = leak(r, origin, { devServer }); return why ? [`[${r.from}] ${r.method} ${r.url} (${why})`] : []; });
