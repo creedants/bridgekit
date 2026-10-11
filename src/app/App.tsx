@@ -309,7 +309,6 @@ export function App() {
     </label>
   );
 
-  // The loader holds the component, not React state, so calculate awaits the load before setRun.
   const Results = resultsChunk.loaded;
 
   return (

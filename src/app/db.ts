@@ -7,20 +7,17 @@ import { toCsv } from "./files.ts";
 
 type ChunkFailure = "network" | "gone";
 
-/** The two sentences a failed chunk can put on screen. */
 export type ChunkSentences = Readonly<Record<ChunkFailure, string>>;
 
 interface ChunkSource<T> {
   /** Written inline as one literal import(). The retry reads the chunk URL from this function's text. */
   importer: () => Promise<unknown>;
-  /** Returns undefined when the module is not this chunk. */
   parse: (module: unknown) => T | undefined;
 }
 
 export interface LazyChunk<T> {
   /** One shared load per chunk. Rejects only with an Error whose message is one of the two sentences. */
   load(): Promise<T>;
-  /** The loaded value for code that cannot await, such as a render. */
   readonly loaded: T | undefined;
 }
 
@@ -32,11 +29,9 @@ type ChunkState<T> =
 
 type ChunkResult<T> = { value: T } | { failure: ChunkFailure };
 
-/**
- * A dynamic chunk that recovers from a failed load.
- * A failed import stays failed for that URL, so every attempt after a failure
- * imports the same file under a new query string.
- */
+class ChunkUnavailable extends Error {}
+
+/** A dynamic chunk that recovers from a failed load. */
 export function lazyChunk<T>(options: ChunkSource<T> & { sentences: ChunkSentences }): LazyChunk<T> {
   let state: ChunkState<T> = { phase: "untried" };
   return {
@@ -46,8 +41,7 @@ export function lazyChunk<T>(options: ChunkSource<T> & { sentences: ChunkSentenc
       const attempt: Promise<T> = reading.then((result) => {
         if ("failure" in result) {
           state = { phase: "failed" };
-          // The page prints an error's message as is. This is the only rejection, and it carries no cause.
-          throw new Error(options.sentences[result.failure]);
+          throw new ChunkUnavailable(options.sentences[result.failure]);
         }
         state = { phase: "loaded", attempt, value: result.value };
         return result.value;
@@ -66,7 +60,6 @@ function parsedChunk<T>(source: ChunkSource<T>, module: unknown): ChunkResult<T>
   return value === undefined ? { failure: "gone" } : { value };
 }
 
-// Never rejects. The browser's own message names the asset URL, so it is dropped here.
 async function firstChunk<T>(source: ChunkSource<T>): Promise<ChunkResult<T>> {
   try {
     return parsedChunk(source, await source.importer());
@@ -77,21 +70,14 @@ async function firstChunk<T>(source: ChunkSource<T>): Promise<ChunkResult<T>> {
 
 let retryAttempts = 0;
 
-// Never rejects. The fetch runs first because a host can answer a missing
-// asset with its HTML page and a 200, which an import would report as a
-// network failure. It does not follow a redirect.
+// Chromium keeps a failed import failed for that URL for the life of the page.
 async function retriedChunk<T>(source: ChunkSource<T>): Promise<ChunkResult<T>> {
   const url = chunkUrl(source.importer);
   if (url === null) return { failure: "gone" };
   retryAttempts += 1;
   const retryUrl = url + "?retry=" + Date.now() + "." + retryAttempts;
   try {
-    const response = await fetch(retryUrl, { cache: "no-store", redirect: "manual" });
-    const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
-    if (!response.ok || contentType.includes("text/html") || !isJavaScriptContentType(contentType)) {
-      return { failure: "gone" };
-    }
-    if (await bodyStartsWithMarkup(response)) return { failure: "gone" };
+    if (!(await servedAsJavaScript(retryUrl))) return { failure: "gone" };
     const module: unknown = await import(/* @vite-ignore */ retryUrl);
     return parsedChunk(source, module);
   } catch {
@@ -99,12 +85,18 @@ async function retriedChunk<T>(source: ChunkSource<T>): Promise<ChunkResult<T>> 
   }
 }
 
+async function servedAsJavaScript(url: string): Promise<boolean> {
+  const response = await fetch(url, { cache: "no-store", redirect: "manual" });
+  const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+  if (!response.ok || contentType.includes("text/html") || !isJavaScriptContentType(contentType)) return false;
+  return !(await bodyStartsWithMarkup(response));
+}
+
 const IMPORT_SPECIFIER = /\bimport\(\s*(["'`])([^"'`\\$]+)\1\s*\)/g;
 const CHUNK_PATH = /^\/assets\/[A-Za-z0-9_.-]+\.js$/;
 
 // The build writes the chunk's file name into the importer as a literal, and
-// a leaf chunk gets no modulepreload link to read it from. Anything but one
-// same-origin /assets file is null, and the retry then makes no request.
+// a leaf chunk gets no modulepreload link to read it from.
 function chunkUrl(importer: () => Promise<unknown>): string | null {
   const specifiers = [...Function.prototype.toString.call(importer).matchAll(IMPORT_SPECIFIER)];
   if (specifiers.length !== 1) return null;
@@ -174,7 +166,6 @@ export function scheduleSpeculative(work: () => void, settleMs = 0): () => void 
 }
 
 // The DOM lib in this toolchain does not declare Network Information.
-// Read the live property and accept only a boolean true.
 function networkSaveData(): boolean {
   const host: unknown = navigator;
   if (typeof host !== "object" || host === null || !("connection" in host)) return false;
@@ -318,7 +309,6 @@ const LIBRARY_FAILURE: ChunkSentences = {
   gone: "Reload the page to start again.",
 };
 
-// DuckDB and Arrow load with the first open, not with the page.
 const duckdbChunk = lazyChunk({
   importer: () => import("@duckdb/duckdb-wasm"),
   parse: (module) => (isDuckDBLibrary(module) ? module : undefined),
