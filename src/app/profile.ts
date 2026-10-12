@@ -126,10 +126,11 @@ function nameWords(name: string): string[] {
 }
 
 /**
- * Returns the text columns that look like product attributes, fewest distinct
- * values first with ties in file order. Keeps columns with 2 to 5000 distinct
- * values, drops the used period and measure columns and names with a
- * customer, region, date or id word.
+ * Returns the columns that look like product attributes, fewest distinct
+ * values first with ties in file order. Keeps columns that are neither
+ * numeric nor dates, which includes text and true/false columns, with 2 to
+ * 5000 distinct values, drops the used period and measure columns and names
+ * with a customer, region, date or id word.
  */
 export function suggestAttributes(
   columns: Column[],

@@ -137,7 +137,7 @@ export function SetupPanel(props: {
         >
           Suggest attributes
         </button>
-        <p className="hint">Fills the list with the text columns that have the fewest values.</p>
+        <p className="hint">Fills the list with the columns that look like product attributes, fewest values first.</p>
         <ol className="levels">
           {setup.levels.map((level, i) => (
             <li key={level.columns.join("|")}>

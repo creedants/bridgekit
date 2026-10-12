@@ -256,6 +256,18 @@ test("numeric and date columns are left out", () => {
   assert.deepEqual(suggestAttributes(columns, distinct, new Set()), ["product"]);
 });
 
+test("a true/false column with two values is suggested", () => {
+  const columns: Column[] = [
+    { name: "polar", type: "BOOLEAN" },
+    { name: "product", type: "VARCHAR" },
+  ];
+  const distinct = new Map([
+    ["polar", 2],
+    ["product", 4],
+  ]);
+  assert.deepEqual(suggestAttributes(columns, distinct, new Set()), ["polar", "product"]);
+});
+
 test("customer, region, date and id names are left out", () => {
   const columns: Column[] = [
     { name: "customer", type: "VARCHAR" },

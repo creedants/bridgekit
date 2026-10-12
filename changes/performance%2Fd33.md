@@ -1,1 +1,1 @@
-- The setup panel gains a "Suggest attributes" button that fills the attribute list with the text columns that have the fewest values, fewest first.
+- The setup panel gains a "Suggest attributes" button that fills the attribute list with the columns that look like product attributes, fewest values first.
