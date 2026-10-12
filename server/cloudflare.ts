@@ -25,6 +25,10 @@ export interface Fetcher {
   fetch(input: Request | string, init?: RequestInit): Promise<Response>;
 }
 
+export interface RateLimit {
+  limit(options: { key: string }): Promise<{ success: boolean }>;
+}
+
 export interface ExecutionContext {
   waitUntil(promise: Promise<unknown>): void;
 }

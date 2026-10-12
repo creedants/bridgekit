@@ -33,7 +33,14 @@
   "vars": {
     // Replaced with the real address in production.
     "BETTER_AUTH_URL": "http://localhost:8790"
-  }
+  },
+  "ratelimits": [
+    {
+      "name": "MAGIC_LINK_RATE_LIMIT",
+      "namespace_id": "1001",
+      "simple": { "limit": 3, "period": 60 }
+    }
+  ]
   // Secrets, set with `wrangler secret put NAME` (or .dev.vars locally):
   // BETTER_AUTH_SECRET, ANTHROPIC_API_KEY, RESEND_API_KEY, EMAIL_FROM,
   // MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, GOOGLE_CLIENT_ID,

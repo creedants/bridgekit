@@ -1,4 +1,4 @@
-import type { D1Database, Fetcher } from "./cloudflare.ts";
+import type { D1Database, Fetcher, RateLimit } from "./cloudflare.ts";
 
 /** Bindings and secrets the Worker receives (wrangler.jsonc, `wrangler secret put`, .dev.vars locally). */
 export interface Env {
@@ -22,4 +22,5 @@ export interface Env {
   PADDLE_ENVIRONMENT?: string;
   /** Off unless the value is exactly "on". */
   ACCOUNTS?: string;
+  MAGIC_LINK_RATE_LIMIT?: RateLimit;
 }
