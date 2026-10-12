@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Level, Query } from "../engine.ts";
+import { suggestAttributes } from "./profile.ts";
 import { isDate, isNumeric, quote, TABLE, type Column, type Filter, type Grain, type Setup } from "./setup.ts";
 
 export function SetupPanel(props: {
@@ -27,6 +28,13 @@ export function SetupPanel(props: {
     ...setup.levels.flatMap((l) => l.columns),
   ]);
   const free = columns.filter((c) => !used.has(c.name));
+  const usedNames = new Set(
+    [setup.periodColumn, setup.unitsColumn, setup.salesColumn, setup.grossColumn, setup.costColumn].filter(
+      (name): name is string => typeof name === "string" && name !== "",
+    ),
+  );
+  const distinctByName = new Map(columns.map((column) => [column.name, column.distinct ?? 0]));
+  const suggested = suggestAttributes(columns, distinctByName, usedNames);
   const setLevels = (levels: Level[]) => onChange({ levels });
   const setFilters = (filters: Filter[]) => onChange({ filters });
   const move = (from: number, to: number) => {
@@ -122,6 +130,14 @@ export function SetupPanel(props: {
       <fieldset>
         <legend>Attributes</legend>
         <p className="hint">Most important first. One attribute gives a classic bridge.</p>
+        <button
+          className="quiet"
+          disabled={suggested.length === 0}
+          onClick={() => setLevels(suggested.map((name) => ({ name, columns: [name] })))}
+        >
+          Suggest attributes
+        </button>
+        <p className="hint">Fills the list with the text columns that have the fewest values.</p>
         <ol className="levels">
           {setup.levels.map((level, i) => (
             <li key={level.columns.join("|")}>
