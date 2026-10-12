@@ -21,8 +21,7 @@ function html(body: string): Response {
 type AssetCall = { method: string; pathname: string; search: string; ifNoneMatch: string | null; body: string };
 type AssetPage = Response | ((request: Request) => Response);
 
-function bindings(pages: Record<string, AssetPage>): { env: Env; db: Env["DB"]; calls: AssetCall[] } {
-  const db = testDatabase();
+function bindings(pages: Record<string, AssetPage>, db = testDatabase()): { env: Env; db: Env["DB"]; calls: AssetCall[] } {
   const calls: AssetCall[] = [];
   const assets: Fetcher = {
     async fetch(input) {
@@ -52,12 +51,9 @@ function bindings(pages: Record<string, AssetPage>): { env: Env; db: Env["DB"]; 
   };
 }
 
-async function open(path: string, env: Env, init: RequestInit = {}): Promise<Response> {
-  const headers = new Headers(init.headers);
-  if (!headers.has("user-agent")) headers.set("user-agent", "Mozilla/5.0");
-  if (!headers.has("sec-fetch-dest")) headers.set("sec-fetch-dest", "document");
+async function call(url: string, env: Env, init: RequestInit = {}): Promise<Response> {
   const pending: Promise<unknown>[] = [];
-  const response = await app.fetch(new Request(`http://127.0.0.1:8790${path}`, { ...init, headers }), env, {
+  const response = await app.fetch(new Request(url, init), env, {
     waitUntil(promise) {
       pending.push(promise);
     },
@@ -66,6 +62,13 @@ async function open(path: string, env: Env, init: RequestInit = {}): Promise<Res
   });
   await Promise.all(pending);
   return response;
+}
+
+async function open(path: string, env: Env, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  if (!headers.has("user-agent")) headers.set("user-agent", "Mozilla/5.0");
+  if (!headers.has("sec-fetch-dest")) headers.set("sec-fetch-dest", "document");
+  return call(`http://127.0.0.1:8790${path}`, env, { ...init, headers });
 }
 
 async function views(db: Env["DB"]): Promise<{ path: string; referrer: string; views: number }[]> {
@@ -252,4 +255,155 @@ test("a redirect for a path that is not an html page is returned and not counted
   assert.equal(response.status, 307);
   assert.equal(response.headers.get("location"), "/new");
   assert.deepEqual(await views(db), []);
+});
+
+const HOME = "<!doctype html><title>Home</title>";
+const ORIGIN = "http://127.0.0.1:8790";
+const AUTH_SECRET = "0123456789abcdef0123456789abcdef";
+const SIGN_IN = JSON.stringify({ email: "review@example.invalid", callbackURL: `${ORIGIN}/app/` });
+const ACCOUNT_TABLES = ["verification", "user", "session", "account", "organization", "invitation", "page_views"] as const;
+
+// Better Auth reads pragma_table_info through D1 batch. This stand-in's batch
+// uses run(), which drops rows, and sign-in then answers 500.
+function database(): Env["DB"] {
+  const db = testDatabase();
+  return {
+    prepare: (sql) => db.prepare(sql),
+    batch: (statements) => Promise.all(statements.map((statement) => statement.all())),
+    exec: (sql) => db.exec(sql),
+  };
+}
+
+async function counts(db: Env["DB"]): Promise<Record<(typeof ACCOUNT_TABLES)[number], number>> {
+  const out = { verification: 0, user: 0, session: 0, account: 0, organization: 0, invitation: 0, page_views: 0 };
+  for (const table of ACCOUNT_TABLES) {
+    const row = await db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).first<{ n: number }>();
+    out[table] = row?.n ?? 0;
+  }
+  return out;
+}
+
+async function assertNotFound(response: Response, label: string): Promise<string> {
+  const body = await response.text();
+  assert.equal(response.status, 404, label);
+  assert.deepEqual(JSON.parse(body), { error: "Not found." });
+  return body;
+}
+
+test("accounts stay closed for omitted, empty, ON, and true", async () => {
+  const { env, db } = bindings({ "/": html(HOME) }, database());
+  const base = { ...env, BETTER_AUTH_SECRET: AUTH_SECRET };
+  const methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+  const paths = [
+    "/api/workspaces/perf-local",
+    "/api/auth/sign-in/magic-link",
+    "/api/workspaces/perf-local/checkout",
+    "/api/paddle/webhook",
+    "/api/commentary",
+  ];
+  const variants = [
+    { method: "POST", path: "/api/auth/sign-in/magic-link/" },
+    { method: "POST", path: "/api/auth" },
+    { method: "POST", path: "/api/auth/sign-in/%6Dagic-link" },
+    { method: "POST", path: "/%61pi/auth/sign-in/magic-link" },
+    { method: "POST", path: "/api/auth/sign-in/Magic-Link" },
+    { method: "POST", path: "/api/Auth/sign-in/magic-link" },
+    { method: "GET", path: "/API/auth/sign-in/magic-link" },
+    { method: "POST", path: "/API/auth/sign-in/magic-link" },
+    { method: "POST", path: "/api/auth%2Fsign-in/magic-link" },
+    { method: "POST", path: "/api%2Fauth/sign-in/magic-link" },
+    { method: "GET", path: "/api%2Fauth/sign-in/magic-link" },
+    { method: "POST", path: "/api/commentary/" },
+    { method: "GET", path: "/api/workspaces/perf-local/" },
+    { method: "POST", path: "/api/paddle/webhook/" },
+    { method: "POST", path: "/api/auth//sign-in" },
+    { method: "POST", path: "/api//auth/sign-in/magic-link" },
+  ];
+  for (const accounts of [undefined, "", "ON", "true"] as const) {
+    const current = accounts === undefined ? base : { ...base, ACCOUNTS: accounts };
+    const before = await counts(db);
+    let head: { status: number; body: string } | undefined;
+    for (const method of methods) {
+      for (const path of paths) {
+        const response = await call(`${ORIGIN}${path}`, current, { method });
+        const label = `${method} ${path} with ACCOUNTS ${accounts === undefined ? "omitted" : JSON.stringify(accounts)}`;
+        const body = await assertNotFound(response, label);
+        if (method === "HEAD") {
+          if (!head) {
+            const reference = await call(`${ORIGIN}/api/does-not-exist`, current, { method: "HEAD" });
+            head = { status: reference.status, body: await reference.text() };
+          }
+          assert.equal(response.status, head.status, label);
+          assert.equal(body, head.body, label);
+        }
+      }
+    }
+    for (const variant of variants) {
+      const response = await call(`${ORIGIN}${variant.path}`, current, { method: variant.method });
+      await assertNotFound(response, `${variant.method} ${variant.path}`);
+    }
+    const hosted = await call(`${ORIGIN}/api/auth/sign-in/magic-link`, current, {
+      method: "POST",
+      headers: { host: "other.example", origin: ORIGIN, "content-type": "application/json" },
+      body: SIGN_IN,
+    });
+    await assertNotFound(hosted, "POST magic-link with Host other.example");
+    const otherHost = await call("http://other.example/api/auth/sign-in/magic-link", current, {
+      method: "POST",
+      headers: { origin: ORIGIN, "content-type": "application/json" },
+      body: SIGN_IN,
+    });
+    await assertNotFound(otherHost, "POST magic-link on other.example");
+    assert.deepEqual(await counts(db), before);
+    const configured = {
+      ...current,
+      MICROSOFT_CLIENT_ID: "microsoft",
+      GOOGLE_CLIENT_ID: "google",
+      ANTHROPIC_API_KEY: "anthropic",
+      PADDLE_API_KEY: "paddle",
+      PADDLE_PRICE_ID: "price",
+    };
+    for (const path of ["/api/config", "/api/%63onfig"]) {
+      const response = await call(`${ORIGIN}${path}`, configured);
+      assert.equal(response.status, 200, path);
+      assert.deepEqual(await response.json(), { providers: [], commentary: false, billing: false });
+    }
+  }
+  const page = await open("/", base);
+  assert.equal(page.status, 200);
+  assert.equal(await page.text(), HOME);
+  assert.deepEqual(await views(db), [{ path: "/", referrer: "", views: 1 }]);
+
+  const turnedOn = bindings({ "/": html(HOME) }, database());
+  const on = { ...turnedOn.env, BETTER_AUTH_SECRET: AUTH_SECRET, ACCOUNTS: "on" };
+  const openPage = await open("/", on);
+  assert.equal(openPage.status, 200);
+  assert.equal(await openPage.text(), HOME);
+  assert.deepEqual(await views(turnedOn.db), [{ path: "/", referrer: "", views: 1 }]);
+
+  const workspace = await call(`${ORIGIN}/api/workspaces/perf-local`, on);
+  assert.equal(workspace.status, 403);
+  assert.deepEqual(await workspace.json(), { error: "Sign in first." });
+
+  const webhook = await call(`${ORIGIN}/api/paddle/webhook`, on, { method: "POST", body: "{}" });
+  assert.equal(webhook.status, 401);
+  assert.deepEqual(await webhook.json(), { error: "Bad signature." });
+
+  const signIn = await call(`${ORIGIN}/api/auth/sign-in/magic-link`, on, {
+    method: "POST",
+    headers: { origin: ORIGIN, "content-type": "application/json" },
+    body: SIGN_IN,
+  });
+  assert.equal(signIn.status, 200);
+  assert.deepEqual(await signIn.json(), { status: true });
+  const afterSignIn = await counts(turnedOn.db);
+  assert.equal(afterSignIn.verification, 1);
+  assert.equal(afterSignIn.user, 0);
+  assert.equal(afterSignIn.session, 0);
+
+  const beforeUpper = await views(turnedOn.db);
+  const upper = await call(`${ORIGIN}/API/auth/sign-in/magic-link`, on);
+  assert.equal(upper.status, 500);
+  assert.equal(await upper.text(), "missing");
+  assert.deepEqual(await views(turnedOn.db), beforeUpper);
 });
