@@ -20,3 +20,11 @@ export function toCsv(header: string[], rows: unknown[][]): string {
 export function toTsv(header: string[], rows: unknown[][]): string {
   return [header, ...rows].map((row) => row.map((v) => (v ?? "")).join("\t")).join("\n");
 }
+
+export function toExportCsv(header: string[], rows: unknown[][]): string {
+  return toCsv(header, rows);
+}
+
+export function toExportTsv(header: string[], rows: unknown[][]): string {
+  return toTsv(header, rows);
+}
