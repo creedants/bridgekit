@@ -873,7 +873,10 @@ export async function accountBridge(
 export type PanelStatus = "continuing" | "new" | "lost" | "no_units";
 
 interface PanelFigures {
-  /** The panel's own bridge, or null when its value has nothing to bridge. */
+  /**
+   * The panel's own bridge, or null when its value has nothing to bridge.
+   * A panel's `result.cellsTable` names a table that no longer exists when the call returns.
+   */
   result: BridgeResult | null;
   status: PanelStatus;
   priorSales: number;
@@ -931,27 +934,57 @@ interface Helper {
 let helperSequence = 0;
 
 /**
- * A name for one helper object. The counter cannot repeat between two calls in
- * one page; the random text keeps two module instances apart.
+ * Random text for one helper name. Uses crypto.randomUUID or
+ * crypto.getRandomValues when globalThis.crypto offers them, else Math.random.
  */
-function helperName(kind: string): string {
-  helperSequence += 1;
-  return `bridge_by_${kind}_${helperSequence.toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+function randomText(): string {
+  try {
+    const crypto = (globalThis as unknown as { crypto?: Crypto }).crypto;
+    if (crypto && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID().replaceAll("-", "").slice(0, 8).toLowerCase();
+    }
+    if (crypto && typeof crypto.getRandomValues === "function") {
+      const bytes = new Uint8Array(6);
+      crypto.getRandomValues(bytes);
+      let out = "";
+      for (const byte of bytes) out += byte.toString(16).padStart(2, "0");
+      return out.slice(0, 8);
+    }
+  } catch {
+    // Fall through to Math.random below.
+  }
+  return Math.random().toString(36).slice(2, 10);
 }
 
 /**
- * The first of a few fresh names no table or view holds anywhere. A helper
- * object created under it can never replace one the call did not make.
+ * A candidate name for one helper object. The counter keeps names from one
+ * module apart; the random text makes a repeated counter less likely to meet
+ * another module's name.
  */
-async function unusedName(query: Query, kind: string): Promise<string> {
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    const name = helperName(kind);
-    const [found] = await query(
-      `SELECT count(*)::INTEGER AS n FROM information_schema.tables WHERE table_name = ${literal(name)}`,
-    );
-    if (Number(found.n) === 0) return name;
-  }
-  throw new Error("Could not find an unused name for a temporary object");
+function helperName(kind: string): string {
+  helperSequence += 1;
+  return `bridge_by_${kind}_${helperSequence.toString(36)}_${randomText()}`;
+}
+
+/**
+ * Whether a candidate name is free to claim. It matches no existing table or
+ * view in any letter case, and it matches neither the source table nor the
+ * main cells table in any letter case. A free name can still be taken before
+ * the claim runs.
+ */
+async function isNameFree(query: Query, config: BridgeConfig, name: string): Promise<boolean> {
+  if (name.toLowerCase() === config.table.toLowerCase()) return false;
+  const mainCells = config.cellsTable ?? DEFAULT_CELLS_TABLE;
+  if (name.toLowerCase() === mainCells.toLowerCase()) return false;
+  const [found] = await query(
+    `SELECT count(*)::INTEGER AS n FROM information_schema.tables WHERE lower(table_name) = lower(${literal(name)})`,
+  );
+  return Number(found.n) === 0;
+}
+
+/** Whether a plain creation failed because the name was already taken. */
+function isTaken(error: unknown): boolean {
+  return error instanceof Error && /already exists/i.test(error.message);
 }
 
 /** The column's text form, with null and the empty string as one value. */
@@ -1088,23 +1121,52 @@ export async function bridgeBy(
       values: rest.length,
     });
   }
-  // Each panel bridges a view of its own rows into a cells table of its own,
-  // both named fresh for this call, so the main cells table is written by the
-  // main bridge above and never touched again. Nothing needs a copy or restore.
+  // Each panel bridges a view of its own rows into a cells table of its own.
+  // The main cells table is written by the main bridge above and never
+  // written, replaced or dropped again. A helper name is this call's own only
+  // once a plain creation for it has succeeded; only such names are tracked for cleanup.
   const created: Helper[] = [];
   try {
     const panels: BridgePanel[] = [];
     for (const plan of plans) {
       let result: BridgeResult | null = null;
       if (plan.priorUnits > 0) {
-        const view = await unusedName(query, "panel");
-        await query(
-          `CREATE TEMP VIEW ${ident(view)} AS SELECT * FROM ${ident(config.table)} WHERE ${plan.where}`,
-        );
-        created.push({ type: "VIEW", name: view });
-        const cells = await unusedName(query, "cells");
-        // The name is fresh, so a cells table under it is this call's own.
-        created.push({ type: "TABLE", name: cells });
+        // The plain view creation is the claim. A taken name is retried and
+        // the object in the way is never dropped.
+        let view: string | null = null;
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          const candidate = helperName("panel");
+          if (!(await isNameFree(query, config, candidate))) continue;
+          try {
+            await query(
+              `CREATE TEMP VIEW ${ident(candidate)} AS SELECT * FROM ${ident(config.table)} WHERE ${plan.where}`,
+            );
+            view = candidate;
+            created.push({ type: "VIEW", name: view });
+            break;
+          } catch (error) {
+            if (isTaken(error)) continue;
+            throw error;
+          }
+        }
+        if (view === null) throw new Error("Could not find an unused name for a temporary object");
+        // The plain table creation is the claim; runBridge then replaces this
+        // call's own table. A taken name is retried without dropping the other object.
+        let cells: string | null = null;
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          const candidate = helperName("cells");
+          if (!(await isNameFree(query, config, candidate))) continue;
+          try {
+            await query(`CREATE TEMP TABLE temp.${ident(candidate)} ("claim" INTEGER)`);
+            cells = candidate;
+            created.push({ type: "TABLE", name: cells });
+            break;
+          } catch (error) {
+            if (isTaken(error)) continue;
+            throw error;
+          }
+        }
+        if (cells === null) throw new Error("Could not find an unused name for a temporary object");
         try {
           result = await runBridge(query, { ...config, table: view, cellsTable: cells });
         } catch (error) {
@@ -1136,13 +1198,24 @@ export async function bridgeBy(
     }
     return { column, total, panels, between: betweenEffects(total, panels) };
   } finally {
-    // Drop only what this call made. One failed drop must not skip the others,
-    // and no drop error may replace the error the body threw.
-    for (const helper of created.reverse()) {
+    // Drop only names this call claimed, in reverse order, each in its own
+    // try; a failed drop is tried once more, and no drop error replaces the
+    // body's error or result. A helper whose drop fails twice stays until the
+    // session ends, and a permanent table another statement creates under a
+    // helper name after the claim is outside what the call can prevent.
+    const failed: Helper[] = [];
+    for (const helper of [...created].reverse()) {
       try {
         await query(`DROP ${helper.type} IF EXISTS temp.${ident(helper.name)}`);
       } catch {
-        // The body's error or the call's result stands; a failed drop is neither.
+        failed.push(helper);
+      }
+    }
+    for (const helper of failed) {
+      try {
+        await query(`DROP ${helper.type} IF EXISTS temp.${ident(helper.name)}`);
+      } catch {
+        // The body's error or the call's result stands.
       }
     }
   }

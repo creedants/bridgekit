@@ -269,9 +269,10 @@ test("a value present only in the current period is new and has no bridge", asyn
 });
 
 /**
- * East's premium rows are gone. A panel that holds only those rows prices the
- * lost units at its own prior average of 20, which is also its reference price,
- * so the discontinued line nets to zero and the whole change is volume.
+ * The gone rows are basic, 10 units and 100 sales, so the lost panel's own
+ * average is 10. A panel that holds only those rows prices the lost units at
+ * that average, which is also its reference price, so the discontinued line
+ * nets to zero and the whole change is volume.
  */
 test("a value present only in the prior period is lost and still bridges", async () => {
   const query = await openDatabase();
@@ -704,7 +705,7 @@ test("two overlapping calls keep their own names and drop every helper", async (
   await assertCatalog(query, ["cells_a", "cells_b"]);
 });
 
-test("one failed cleanup drop does not skip the others", async () => {
+test("one refused cleanup drop is retried and nothing remains", async () => {
   const query = await openDatabase();
   await query(`CREATE TABLE t (period VARCHAR, region VARCHAR, design VARCHAR, units INTEGER, sales DOUBLE)`);
   await query(`INSERT INTO t VALUES
@@ -714,24 +715,98 @@ test("one failed cleanup drop does not skip the others", async () => {
 
   let refused: string | null = null;
   const failing: Query = async (sql) => {
-    const match = /^DROP TABLE IF EXISTS temp\."((?:""|[^"])*)"/.exec(sql);
+    const match = /^DROP (?:TABLE|VIEW) IF EXISTS temp\."((?:""|[^"])*)"/.exec(sql);
     if (match && refused === null) {
       refused = match[1].replaceAll('""', '"');
-      throw new Error("the drop was refused");
+      throw new Error("the drop was refused once");
     }
     return query(sql);
   };
   const by = await bridgeBy(failing, config, "region", 1);
 
-  const skipped = refused;
-  assert.ok(skipped, "one drop was refused");
+  assert.ok(refused, "one drop was refused");
   const reference = await bridgeBy(query, config, "region", 1);
   assert.deepEqual(panels(by), panels(reference), "the call still returned its panels");
-  await assertCatalog(query, ["bridge_cells", skipped]);
-  const [left] = await query(
-    `SELECT table_type FROM information_schema.tables WHERE table_catalog = 'temp' AND table_name = ${literal(skipped)}`,
-  );
-  assert.equal(left.table_type, "LOCAL TEMPORARY", "the skipped object is one of this call's cells tables");
+  await assertCatalog(query, ["bridge_cells"]);
+});
+
+test("a drop refused twice leaves exactly one helper but keeps the result", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t (period VARCHAR, region VARCHAR, design VARCHAR, units INTEGER, sales DOUBLE)`);
+  await query(`INSERT INTO t VALUES
+    ('p0', 'a', 'basic', 10, 100), ('p0', 'b', 'basic', 10, 200),
+    ('p1', 'a', 'basic', 12, 130), ('p1', 'b', 'basic', 8, 160)`);
+  const config: BridgeConfig = { ...HAND, table: "t" };
+
+  const attempts = new Map<string, number>();
+  let firstDrop: string | null = null;
+  const failing: Query = async (sql) => {
+    if (sql.startsWith("DROP ")) {
+      if (firstDrop === null) firstDrop = sql;
+      if (sql === firstDrop) {
+        const n = (attempts.get(sql) ?? 0) + 1;
+        attempts.set(sql, n);
+        if (n <= 2) throw new Error("the same drop was refused twice");
+      }
+    }
+    return query(sql);
+  };
+  const by = await bridgeBy(failing, config, "region", 1);
+
+  assert.ok(firstDrop, "a drop was attempted");
+  assert.ok((attempts.get(firstDrop!) ?? 0) >= 2, "the failed drop was tried again");
+  const reference = await bridgeBy(query, config, "region", 1);
+  assert.deepEqual(panels(by), panels(reference), "the call still returned its panels");
+  const left = await temporaryObjects(query);
+  assert.equal(left.length, 2, `one helper remains beside bridge_cells, got ${left}`);
+  assert.ok(left.includes("bridge_cells"), "the main cells remain");
+  const helper = left.find((name) => name !== "bridge_cells")!;
+  assert.ok(helper.startsWith("bridge_by_"), "the remaining object is this call's helper");
+});
+
+test("a drop refused twice during a failing call keeps the body's error", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t (period VARCHAR, region VARCHAR, design VARCHAR, units INTEGER, sales DOUBLE)`);
+  await query(`INSERT INTO t VALUES
+    ('p0', 'a', 'basic', 10, 100), ('p0', 'b', 'basic', 10, 200),
+    ('p1', 'a', 'basic', 12, 130), ('p1', 'b', 'basic', 8, 160)`);
+  const config: BridgeConfig = { ...HAND, table: "t" };
+  await runBridge(query, config);
+  const before = await cellsOf(query, "bridge_cells");
+
+  const body = new Error("original panel body error");
+  let bodySeen = false;
+  const attempts = new Map<string, number>();
+  let firstDrop: string | null = null;
+  const failing: Query = async (sql) => {
+    if (sql.startsWith("SELECT") && sql.includes("AS q0") && !sql.includes(`FROM ${ident(config.table)}`)) {
+      if (!bodySeen) {
+        bodySeen = true;
+        throw body;
+      }
+    }
+    if (sql.startsWith("DROP ")) {
+      if (firstDrop === null) firstDrop = sql;
+      if (sql === firstDrop) {
+        const n = (attempts.get(sql) ?? 0) + 1;
+        attempts.set(sql, n);
+        if (n <= 2) throw new Error("the same drop was refused twice");
+      }
+    }
+    return query(sql);
+  };
+  let thrown: unknown = null;
+  try {
+    await bridgeBy(failing, config, "region", 1);
+  } catch (error) {
+    thrown = error;
+  }
+  assert.equal(thrown, body, "the body's error is the one the caller sees");
+  assert.deepEqual(await cellsOf(query, "bridge_cells"), before, "the main cells are untouched");
+  assert.ok(firstDrop, "a drop was attempted");
+  assert.ok((attempts.get(firstDrop!) ?? 0) >= 2, "the failed drop was tried again");
+  const left = await temporaryObjects(query);
+  assert.equal(left.length, 2, `one helper remains beside bridge_cells, got ${left}`);
 });
 
 test("a throw inside a panel leaves the main cells and no helper object", async () => {
@@ -781,4 +856,311 @@ test("the mix between values sums to the change of the panels with no bridge", a
   near(theirChange, 60, "the unbridged change");
   near(by.between.reduce((sum, effect) => sum + effect.value, 0), theirChange, "the mix sums to the unbridged change");
   await assertCatalog(query, ["bridge_cells"]);
+});
+
+/** Run with crypto hidden so Math.random decides names, restoring both afterwards. */
+async function withPinnedRandom(fn: () => Promise<void>): Promise<void> {
+  const originalRandom = Math.random;
+  const originalCrypto = (globalThis as unknown as { crypto?: unknown }).crypto;
+  let hid = false;
+  try {
+    try {
+      Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: true });
+      hid = true;
+    } catch {
+      (globalThis as unknown as { crypto?: unknown }).crypto = undefined;
+      hid = true;
+    }
+    Math.random = () => 0.5;
+    await fn();
+  } finally {
+    Math.random = originalRandom;
+    if (hid) {
+      try {
+        Object.defineProperty(globalThis, "crypto", { value: originalCrypto, configurable: true });
+      } catch {
+        (globalThis as unknown as { crypto?: unknown }).crypto = originalCrypto;
+      }
+    }
+  }
+}
+
+function candidateFromCheck(sql: string): string | null {
+  const lower = /lower\('((?:''|[^'])*)'\)/i.exec(sql);
+  if (lower) return lower[1].replaceAll("''", "'");
+  const exact = /table_name = '((?:''|[^'])*)'/.exec(sql);
+  if (exact) return exact[1].replaceAll("''", "'");
+  return null;
+}
+
+test("a user's table named like the first cells name in another case survives", async () => {
+  await withPinnedRandom(async () => {
+    // @ts-ignore: fresh module instance resets the helper counter.
+    const fresh: any = await import(`../src/engine.ts?fix2-user`);
+    const query = await openDatabase();
+    await query(`CREATE TABLE t (period VARCHAR, region VARCHAR, design VARCHAR, units INTEGER, sales DOUBLE)`);
+    await query(`INSERT INTO t VALUES
+      ('p0', 'a', 'basic', 10, 100), ('p0', 'b', 'basic', 10, 200),
+      ('p1', 'a', 'basic', 12, 130), ('p1', 'b', 'basic', 8, 160)`);
+    await query(`CREATE TEMP TABLE BRIDGE_BY_CELLS_2_I AS SELECT 123 AS user_data`);
+    const config: BridgeConfig = { ...HAND, table: "t" };
+
+    const by = await fresh.bridgeBy(query, config, "region", 1);
+    assert.ok(by.panels.some((panel: any) => panel.result !== null));
+    assert.deepEqual(await query(`SELECT * FROM "BRIDGE_BY_CELLS_2_I" ORDER BY ALL`), [{ user_data: 123 }]);
+    const reference = await fresh.bridgeBy(query, config, "region", 1);
+    assert.deepEqual(panels(by), panels(reference), "panels are still correct");
+    await assertCatalog(query, ["BRIDGE_BY_CELLS_2_I", "bridge_cells"]);
+  });
+});
+
+test("a main cells name in another case than the first cells name keeps the main cells", async () => {
+  await withPinnedRandom(async () => {
+    // @ts-ignore: fresh module instance resets the helper counter.
+    const fresh: any = await import(`../src/engine.ts?fix2-main`);
+    const query = await openDatabase();
+    await query(`CREATE TABLE t (period VARCHAR, region VARCHAR, design VARCHAR, units INTEGER, sales DOUBLE)`);
+    await query(`INSERT INTO t VALUES
+      ('p0', 'a', 'basic', 10, 100), ('p0', 'b', 'basic', 10, 200),
+      ('p1', 'a', 'basic', 12, 130), ('p1', 'b', 'basic', 8, 160)`);
+    const config: BridgeConfig = { ...HAND, table: "t", cellsTable: "BRIDGE_BY_CELLS_2_I" };
+
+    const by = await fresh.bridgeBy(query, config, "region", 1);
+    assert.ok(by.panels.some((panel: any) => panel.result !== null));
+    const left = await cellsOf(query, "BRIDGE_BY_CELLS_2_I");
+    assert.ok(left.length > 0, "the custom cells table is still there");
+    await fresh.runBridge(query, { ...config, cellsTable: "plain_cells" });
+    assert.deepEqual(left, await cellsOf(query, "plain_cells"), "the custom cells hold the main bridge's cells");
+    await assertCatalog(query, ["BRIDGE_BY_CELLS_2_I", "plain_cells"]);
+  });
+});
+
+test("a source named like the first cells name in another case is left alone", async () => {
+  await withPinnedRandom(async () => {
+    // @ts-ignore: fresh module instance resets the helper counter.
+    const fresh: any = await import(`../src/engine.ts?fix2-source`);
+    const query = await openDatabase();
+    await query(`CREATE TABLE src AS SELECT * FROM (VALUES
+      ('p0', 'a', 'basic', 10, 100.0), ('p0', 'b', 'basic', 10, 200.0),
+      ('p1', 'a', 'basic', 12, 130.0), ('p1', 'b', 'basic', 8, 160.0)) v(period, region, design, units, sales)`);
+    await query(`CREATE TEMP TABLE BRIDGE_BY_CELLS_2_I AS SELECT * FROM src`);
+    const config: BridgeConfig = { ...HAND, table: "BRIDGE_BY_CELLS_2_I" };
+
+    const by = await fresh.bridgeBy(query, config, "region", 1);
+    assert.ok(by.panels.some((panel: any) => panel.result !== null));
+    assert.deepEqual(
+      await query(`SELECT * FROM "BRIDGE_BY_CELLS_2_I" ORDER BY ALL`),
+      await query(`SELECT * FROM src ORDER BY ALL`),
+    );
+    await assertCatalog(query, ["BRIDGE_BY_CELLS_2_I", "bridge_cells"]);
+  });
+});
+
+test("a table created between the check and the claim survives with correct panels", async () => {
+  await withPinnedRandom(async () => {
+    const query = await openDatabase();
+    await query(`CREATE TABLE t (period VARCHAR, region VARCHAR, design VARCHAR, units INTEGER, sales DOUBLE)`);
+    await query(`INSERT INTO t VALUES
+      ('p0', 'a', 'basic', 10, 100), ('p0', 'b', 'basic', 10, 200),
+      ('p1', 'a', 'basic', 12, 130), ('p1', 'b', 'basic', 8, 160)`);
+    const config: BridgeConfig = { ...HAND, table: "t" };
+
+    let inserted: string | null = null;
+    const racing: Query = async (sql) => {
+      const rows = await query(sql);
+      if (inserted === null && sql.includes("table_name") && sql.includes("bridge_by_cells_")) {
+        const candidate = candidateFromCheck(sql);
+        if (candidate) {
+          inserted = candidate;
+          await query(`CREATE TEMP TABLE ${ident(candidate)} AS SELECT 123 AS user_data`);
+        }
+      }
+      return rows;
+    };
+    const by = await bridgeBy(racing, config, "region", 1);
+
+    assert.ok(inserted, "a table was inserted between check and claim");
+    assert.deepEqual(await query(`SELECT * FROM ${ident(inserted!)} ORDER BY ALL`), [{ user_data: 123 }]);
+    const reference = await bridgeBy(query, config, "region", 1);
+    assert.deepEqual(panels(by), panels(reference), "the call still returned correct panels");
+    await assertCatalog(query, ["bridge_cells", inserted!]);
+  });
+});
+
+test("a panel guard that throws before its cells table exists drops nothing it did not create", async () => {
+  await withPinnedRandom(async () => {
+    const query = await openDatabase();
+    await query(`CREATE TABLE t (period VARCHAR, region VARCHAR, design VARCHAR, units INTEGER, sales DOUBLE)`);
+    await query(`INSERT INTO t VALUES
+      ('p0', 'a', 'basic', 10, 100), ('p0', 'b', 'basic', 10, 200),
+      ('p1', 'a', 'basic', 12, 130), ('p1', 'b', 'basic', 8, 160)`);
+    const config: BridgeConfig = { ...HAND, table: "t" };
+    const body = new Error("panel guard failed before cells creation");
+
+    let inserted: string | null = null;
+    const racing: Query = async (sql) => {
+      const rows = await query(sql);
+      if (inserted === null && sql.includes("table_name") && sql.includes("bridge_by_cells_")) {
+        const candidate = candidateFromCheck(sql);
+        if (candidate) {
+          inserted = candidate;
+          await query(`CREATE TEMP TABLE ${ident(candidate)} AS SELECT 123 AS user_data`);
+        }
+      }
+      if (inserted !== null && sql.startsWith("SELECT coalesce(sum(") && sql.includes("bridge_by_panel_")) {
+        throw body;
+      }
+      return rows;
+    };
+    let thrown: unknown = null;
+    try {
+      await bridgeBy(racing, config, "region", 1);
+    } catch (error) {
+      thrown = error;
+    }
+    assert.equal(thrown, body, "the guard's error is the one the caller sees");
+    assert.ok(inserted, "a table was inserted between check and claim");
+    assert.deepEqual(await query(`SELECT * FROM ${ident(inserted!)} ORDER BY ALL`), [{ user_data: 123 }]);
+    await assertCatalog(query, ["bridge_cells", inserted!]);
+  });
+});
+
+test("two engine copies forced to the same cells suffix both return correct panels", async () => {
+  const originalCrypto = (globalThis as unknown as { crypto?: unknown }).crypto;
+  try {
+    try {
+      Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: true });
+    } catch {
+      (globalThis as unknown as { crypto?: unknown }).crypto = undefined;
+    }
+    const moduleUrl = new URL("../src/engine.ts", import.meta.url).href;
+    const a = await import(`${moduleUrl}?fix2=a`);
+    const b = await import(`${moduleUrl}?fix2=b`);
+    const query = await openDatabase();
+    await query(`CREATE TABLE source AS SELECT * FROM (VALUES
+      ('p0','A','P',10,100.0),('p0','B','P',10,200.0),
+      ('p1','A','P',12,132.0),('p1','B','P',8,160.0)) v(period,region,product,units,sales)`);
+    await query(`CREATE TABLE source_b AS SELECT period,region,product,units,sales*2 AS sales FROM source`);
+    const base = {
+      periodColumn: "period",
+      prior: "p0",
+      current: "p1",
+      unitsColumn: "units",
+      salesColumn: "sales",
+      levels: [{ name: "Product", columns: ["product"] }],
+    };
+    const aConfig: BridgeConfig = { ...base, table: "source", cellsTable: "cells_a" };
+    const bConfig: BridgeConfig = { ...base, table: "source_b", cellsTable: "cells_b" };
+
+    let gateResolve: (() => void) | null = null;
+    let gateReached: (() => void) | null = null;
+    const checkGate = new Promise<void>((resolve) => {
+      gateResolve = resolve;
+    });
+    const checkArrived = new Promise<void>((resolve) => {
+      gateReached = resolve;
+    });
+    let aWriteResolve: (() => void) | null = null;
+    let aWriteReached: (() => void) | null = null;
+    const aWriteGate = new Promise<void>((resolve) => {
+      aWriteResolve = resolve;
+    });
+    const aWriteArrived = new Promise<void>((resolve) => {
+      aWriteReached = resolve;
+    });
+    let bWriteResolve: (() => void) | null = null;
+    let bWriteReached: (() => void) | null = null;
+    const bWriteGate = new Promise<void>((resolve) => {
+      bWriteResolve = resolve;
+    });
+    const bWriteArrived = new Promise<void>((resolve) => {
+      bWriteReached = resolve;
+    });
+    let aChecked = false;
+    let aWritten = false;
+    let bWritten = false;
+    const isCellsCheck = (sql: string): boolean => sql.includes("table_name") && sql.includes("bridge_by_cells_");
+    const isCellsWrite = (sql: string): boolean =>
+      sql.includes('"bridge_by_cells_') &&
+      (sql.startsWith('CREATE TEMP TABLE temp.') || sql.startsWith("CREATE OR REPLACE TEMP TABLE"));
+    const qa: Query = async (sql) => {
+      const rows = await query(sql);
+      if (!aChecked && isCellsCheck(sql)) {
+        aChecked = true;
+        gateReached!();
+        await checkGate;
+      }
+      if (!aWritten && isCellsWrite(sql)) {
+        aWritten = true;
+        aWriteReached!();
+        await aWriteGate;
+      }
+      return rows;
+    };
+    const qb: Query = async (sql) => {
+      const rows = await query(sql);
+      if (!bWritten && isCellsWrite(sql)) {
+        bWritten = true;
+        bWriteReached!();
+        await bWriteGate;
+      }
+      return rows;
+    };
+
+    const originalRandom = Math.random;
+    let calls = 0;
+    Math.random = () => [0.125, 0.5, 0.25, 0.5][calls++] ?? 0.75;
+    let pendingA: Promise<unknown> | null = null;
+    let pendingB: Promise<unknown> | null = null;
+    try {
+      pendingA = a.bridgeBy(qa, aConfig, "region").then(
+        (result: unknown) => ({ result }),
+        (error: Error) => ({ error: error.message }),
+      );
+      await checkArrived;
+      pendingB = b.bridgeBy(qb, bConfig, "region").then(
+        (result: unknown) => ({ result }),
+        (error: Error) => ({ error: error.message }),
+      );
+      await bWriteArrived;
+      gateResolve!();
+      await aWriteArrived;
+      bWriteResolve!();
+      const second = (await pendingB) as { result?: { panels: BridgePanel[] } ; error?: string };
+      aWriteResolve!();
+      const first = (await pendingA) as { result?: { panels: BridgePanel[] } ; error?: string };
+      assert.ok(!first.error, `first call kept its error: ${first.error}`);
+      assert.ok(!second.error, `second call kept its error: ${second.error}`);
+      assert.ok(first.result && second.result, "both calls returned panels");
+      for (const [by, factor] of [[first.result!, 1], [second.result!, 2]] as const) {
+        for (const panel of by.panels) {
+          assert.ok(panel.result, "panel has a bridge");
+          near(panel.change, factor * (panel.value === "A" ? 32 : -40), `panel ${panel.value} change times ${factor}`);
+        }
+      }
+      await assertCatalog(query, ["cells_a", "cells_b"]);
+    } finally {
+      Math.random = originalRandom;
+      gateResolve!();
+      aWriteResolve!();
+      bWriteResolve!();
+    }
+  } finally {
+    try {
+      Object.defineProperty(globalThis, "crypto", { value: originalCrypto, configurable: true });
+    } catch {
+      (globalThis as unknown as { crypto?: unknown }).crypto = originalCrypto;
+    }
+  }
+});
+
+test("a plain creation fails for the same name in another letter case", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TEMP TABLE mytable AS SELECT 123 AS user_data`);
+  await assert.rejects(query(`CREATE TEMP TABLE temp."MYTABLE" ("claim" INTEGER)`), /already exists/i);
+  await query(`DROP TABLE IF EXISTS temp."mytable"`);
+  await query(`CREATE TEMP VIEW myview AS SELECT 123 AS user_data`);
+  await assert.rejects(query(`CREATE TEMP TABLE temp."MYVIEW" ("claim" INTEGER)`), /already exists/i);
+  await assert.rejects(query(`CREATE TEMP VIEW "MYVIEW" AS SELECT 1 AS x`), /already exists/i);
+  await assertCatalog(query, ["myview"]);
 });
