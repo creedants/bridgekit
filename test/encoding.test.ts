@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { decodeCsvBuffer, ENCODING_SENTENCE, isValidUtf8, type DecodedCsv } from "../src/app/encoding.ts";
+import { decodeCsvBuffer, ENCODING_SENTENCE, isUtf8Prefix, isValidUtf8, type DecodedCsv } from "../src/app/encoding.ts";
 
 const utf8 = (text: string) => new TextEncoder().encode(text);
 
@@ -16,6 +16,10 @@ function utf16(text: string, littleEndian: boolean): Uint8Array {
 
 const BOM_UTF16_LE = [0xff, 0xfe];
 const BOM_UTF16_BE = [0xfe, 0xff];
+const BOM_UTF8 = [0xef, 0xbb, 0xbf];
+
+// Pinned as a literal so rewording the sentence fails here too.
+const SENTENCE = "This file's text encoding could not be read. Save it as CSV UTF-8.";
 
 function joined(...parts: Uint8Array[]): Uint8Array {
   const total = parts.reduce((sum, part) => sum + part.length, 0);
@@ -110,6 +114,42 @@ test("UTF-16 without a byte-order mark shows the plain sentence", () => {
   }
 });
 
+test("a marked UTF-16 file with an unpaired high surrogate shows the plain sentence", () => {
+  for (const littleEndian of [true, false]) {
+    const bytes = joined(Uint8Array.from(littleEndian ? BOM_UTF16_LE : BOM_UTF16_BE), utf16("period,product\n2025,Caf\uD800\n", littleEndian));
+    assert.throws(() => decodeCsvBuffer(bytes), { message: SENTENCE });
+  }
+});
+
+test("a marked UTF-16 file with an odd byte count shows the plain sentence", () => {
+  for (const littleEndian of [true, false]) {
+    const marked = joined(Uint8Array.from(littleEndian ? BOM_UTF16_LE : BOM_UTF16_BE), utf16("period,product\n2025,Café\n", littleEndian));
+    assert.throws(() => decodeCsvBuffer(marked.subarray(0, marked.length - 1)), { message: SENTENCE });
+  }
+});
+
+test("a UTF-8 mark on bytes that are not UTF-8 shows the plain sentence", () => {
+  const bytes = joined(Uint8Array.from(BOM_UTF8), windows1252("period,product\n2025,Café\n"));
+  assert.throws(() => decodeCsvBuffer(bytes), { message: SENTENCE });
+});
+
+test("a UTF-8 mark on valid UTF-8 is handled as the original file", () => {
+  const bytes = joined(Uint8Array.from(BOM_UTF8), utf8("period,product\n2025,Café\n"));
+  assert.deepEqual(asUtf8(decodeCsvBuffer(bytes)), bytes);
+});
+
+test("the five bytes Windows-1252 leaves undefined show the plain sentence", () => {
+  for (const byte of [0x81, 0x8d, 0x8f, 0x90, 0x9d]) {
+    const bytes = joined(utf8("period,product\n2025,Caf"), Uint8Array.from([byte]), utf8("\n"));
+    assert.throws(() => decodeCsvBuffer(bytes), { message: SENTENCE }, `byte ${byte.toString(16)}`);
+  }
+});
+
+test("valid UTF-8 holding those control characters is handed over unchanged", () => {
+  const bytes = utf8("period,product\n2025,Caf\u0081\u008d\u008f\u0090\u009d\n");
+  assert.deepEqual(asUtf8(decodeCsvBuffer(bytes)), bytes);
+});
+
 test("binary junk shows the plain sentence", () => {
   assert.throws(() => decodeCsvBuffer(Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), {
     message: ENCODING_SENTENCE,
@@ -131,4 +171,32 @@ test("isValidUtf8 tells a truncated multi-byte tail from junk", () => {
   assert.equal(isValidUtf8(utf8("Café")), true);
   assert.equal(isValidUtf8(Uint8Array.from([0x43, 0x61, 0x66, 0xc3])), false);
   assert.equal(isValidUtf8(Uint8Array.from([0xc3, 0xa9])), true);
+});
+
+test("isUtf8Prefix allows a prefix that stops inside a character", () => {
+  // The prefix is bytes 0 to 65,535, so the lead byte of é sits at 65,535 and
+  // its continuation at 65,536. The whole file is valid UTF-8.
+  const boundary = joined(utf8("a".repeat(65535)), utf8("é"), utf8("period,product,units,sales\n2025,P2,10,100\n"));
+  const prefix = boundary.subarray(0, 65536);
+  assert.equal(isValidUtf8(prefix), false);
+  assert.equal(isUtf8Prefix(prefix), true);
+  assert.equal(isUtf8Prefix(boundary), true);
+});
+
+test("isUtf8Prefix still refuses a prefix that holds an invalid sequence", () => {
+  assert.equal(isUtf8Prefix(Uint8Array.from([0x41, 0xff, 0x42])), false);
+  assert.equal(isUtf8Prefix(Uint8Array.from([0x43, 0x61, 0x66, 0xc3, 0x28])), false);
+  const damaged = joined(utf8("a".repeat(65535)), Uint8Array.from([0xff]), utf8("x"));
+  assert.equal(isUtf8Prefix(damaged.subarray(0, 65536)), false);
+});
+
+test("isUtf8Prefix keeps no decoder state between files", () => {
+  const boundary = joined(utf8("a".repeat(65535)), utf8("é"));
+  const prefix = boundary.subarray(0, 65536);
+  assert.equal(isUtf8Prefix(Uint8Array.from([0xff])), false);
+  assert.equal(isUtf8Prefix(prefix), true);
+  assert.equal(isUtf8Prefix(Uint8Array.from([0xc3, 0x28])), false);
+  assert.equal(isUtf8Prefix(prefix), true);
+  assert.equal(isUtf8Prefix(Uint8Array.from([0x69, 0xe2, 0x82])), true);
+  assert.equal(isUtf8Prefix(Uint8Array.from([0x41])), true);
 });
