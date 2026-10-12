@@ -1,5 +1,6 @@
 import type { BridgeSummary } from "../summary.ts";
 import type { Setup } from "./setup.ts";
+import { noteConfig, notePlan, noteSignedOut, noteUser, noteWorkspaces } from "./useConfig.ts";
 
 /**
  * Calls to the site's own server for Pro workspaces (server/worker.ts). Only
@@ -66,11 +67,19 @@ async function call<T>(path: string, init?: { method?: string; body?: unknown })
   return body as T;
 }
 
-export const getConfig = () => call<Config>("/api/config");
+// Anything read from the deployment or the session is written to the shared
+// note book (src/app/useConfig.ts), so the Workspace panel stays the only
+// reader and no second call is made.
+export const getConfig = async (): Promise<Config> => {
+  const found = await call<Config>("/api/config");
+  noteConfig(found);
+  return found;
+};
 
 export async function getUser(): Promise<User | null> {
-  const session = await call<{ user: User } | null>("/api/auth/get-session");
-  return session?.user ?? null;
+  const found = await call<{ user: User } | null>("/api/auth/get-session");
+  noteUser(found?.user ?? null);
+  return found?.user ?? null;
 }
 
 const back = () => location.pathname + location.search;
@@ -83,17 +92,28 @@ export async function providerSignIn(provider: "microsoft" | "google"): Promise<
   location.href = url;
 }
 
-export const signOut = () => call("/api/auth/sign-out", { body: {} });
+export const signOut = async () => {
+  await call("/api/auth/sign-out", { body: {} });
+  noteSignedOut();
+};
 export const deleteAccount = () => call("/api/auth/delete-user", { body: {} });
 
-export const listWorkspaces = () => call<Workspace[]>("/api/auth/organization/list");
+export const listWorkspaces = async (): Promise<Workspace[]> => {
+  const found = await call<Workspace[]>("/api/auth/organization/list");
+  noteWorkspaces(found);
+  return found;
+};
 
 export const createWorkspace = (name: string) =>
   call<Workspace>("/api/auth/organization/create", {
     body: { name, slug: `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}-${crypto.randomUUID().slice(0, 8)}` },
   });
 
-export const getPlan = (id: string) => call<{ role: string; plan: Plan }>(`/api/workspaces/${id}`);
+export const getPlan = async (id: string): Promise<{ role: string; plan: Plan }> => {
+  const found = await call<{ role: string; plan: Plan }>(`/api/workspaces/${id}`);
+  notePlan(id, found.plan);
+  return found;
+};
 
 export const getMembers = (id: string) =>
   call<{ members: Member[]; invitations: Invitation[] }>(`/api/auth/organization/get-full-organization?organizationId=${encodeURIComponent(id)}`);
