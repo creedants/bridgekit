@@ -22,9 +22,21 @@ export function toTsv(header: string[], rows: unknown[][]): string {
 }
 
 export function toExportCsv(header: string[], rows: unknown[][]): string {
-  return toCsv(header, rows);
+  const field = (value: unknown) => {
+    if (value === null || value === undefined) return "";
+    const text = String(value);
+    const prefixed = typeof value === "number" || !/^[=+\-@\t\r]/.test(text) ? text : `'${text}`;
+    return /[",\r\n]/.test(prefixed) ? `"${prefixed.replaceAll('"', '""')}"` : prefixed;
+  };
+  return [header, ...rows].map((row) => row.map(field).join(",")).join("\n");
 }
 
 export function toExportTsv(header: string[], rows: unknown[][]): string {
-  return toTsv(header, rows);
+  const field = (value: unknown) => {
+    if (value === null || value === undefined) return "";
+    const text = String(value);
+    const prefixed = typeof value === "number" || !/^[=+\-@\t\r]/.test(text) ? text : `'${text}`;
+    return /[\t\r\n]/.test(prefixed) ? `"${prefixed.replaceAll('"', '""')}"` : prefixed;
+  };
+  return [header, ...rows].map((row) => row.map(field).join("\t")).join("\n");
 }

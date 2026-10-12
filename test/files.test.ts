@@ -59,7 +59,7 @@ test("export writers neutralise formula text and the upload writers do not", () 
   cell("a\nb", 'h\n"a\nb"', 'h\n"a\nb"', 'h\n"a\nb"', "h\na\nb");
   cell("abc\n=1+1", 'h\n"abc\n=1+1"', 'h\n"abc\n=1+1"', 'h\n"abc\n=1+1"', "h\nabc\n=1+1");
   cell("abc\t=1+1", "h\nabc\t=1+1", 'h\n"abc\t=1+1"', "h\nabc\t=1+1", "h\nabc\t=1+1");
-  cell('a\t"b', 'h\na\t"b', 'h\n"a\t""b"', 'h\na\t"b', 'h\na\t"b');
+  cell('a\t"b', 'h\n"a\t""b"', 'h\n"a\t""b"', 'h\n"a\t""b"', 'h\na\t"b');
   unchanged(-12.5, "h\n-12.5");
   cell("-12.5", "h\n'-12.5", "h\n'-12.5", "h\n-12.5", "h\n-12.5");
   unchanged(NaN, "h\nNaN");
