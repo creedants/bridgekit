@@ -3,7 +3,7 @@ import mvpWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url
 import ehWasm from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
 import mvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import type { Query } from "../engine.ts";
-import { decodeCsvBuffer, ENCODING_SENTENCE, isValidUtf8 } from "./encoding.ts";
+import { decodeCsvBuffer, ENCODING_SENTENCE, isUtf8Prefix } from "./encoding.ts";
 import { toCsv } from "./files.ts";
 import { convertFormattedNumbers } from "./numbers.ts";
 
@@ -183,8 +183,9 @@ export interface BrowserDatabase {
 }
 
 // A UTF-8 file is handed to the database as its own bytes, so this is the most
-// that is read up front. Only a file whose prefix is not UTF-8 (a Windows-1252
-// or UTF-16 export) is read in full, to tell its encoding from its whole text.
+// that is read up front, and a prefix may stop between two bytes of one
+// character. A prefix that is not UTF-8 (a Windows-1252 or UTF-16 export) is
+// read in full, to tell its encoding from its whole text.
 const CSV_PREFIX_BYTES = 65536;
 
 // read_csv only reads UTF-8. When a file that passed the prefix check turns out
@@ -382,7 +383,7 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
         } else {
           const prefix = new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer());
           const continues = prefix.byteLength < file.size;
-          if (continues && isValidUtf8(prefix)) {
+          if (continues && isUtf8Prefix(prefix)) {
             await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
           } else {
             const decision = decodeCsvBuffer(continues ? new Uint8Array(await file.arrayBuffer()) : prefix);
