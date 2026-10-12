@@ -12,6 +12,7 @@ const ORIGIN = "http://127.0.0.1:8790";
 const CLIENT = "192.0.2.10";
 const FORWARDED = "198.51.100.24";
 const TOO_MANY = { message: "Too many requests. Please try again later." };
+const JSON_ONLY = { message: "Content-Type must be application/json." };
 
 type LimitCall = { key: string; success: boolean };
 type LimiterConfig = { name: string; namespace_id: string; simple: { limit: number; period: number } };
@@ -228,6 +229,44 @@ async function limited(): Promise<void> {
   });
 }
 
+async function jsonx(): Promise<void> {
+  const limit = readLimiter().simple.limit;
+  const calls: LimitCall[] = [];
+  await withWorker(limiter(limit, calls), async (env, db, lines, urls) => {
+    const accepted = [];
+    for (let index = 0; index < limit; index += 1) {
+      const response = await signIn(env, validBody(`json${index}@example.invalid`), jsonHeaders({ "cf-connecting-ip": CLIENT }));
+      accepted.push({ status: response.status, body: await response.json() });
+    }
+    const before = { rows: await countRows(db, "verification"), emails: emailCount(lines) };
+    const refused = await signIn(
+      env,
+      validBody("jsonx@example.invalid"),
+      jsonHeaders({ "cf-connecting-ip": CLIENT, "content-type": "application/jsonx" }),
+    );
+    assert.deepEqual(
+      {
+        accepted,
+        refusal: { status: refused.status, body: await refused.json() },
+        calls,
+        rows: await countRows(db, "verification"),
+        emails: emailCount(lines),
+      },
+      {
+        accepted: Array.from({ length: limit }, () => ({ status: 200, body: { status: true } })),
+        refusal: { status: 415, body: JSON_ONLY },
+        calls: Array.from({ length: limit }, () => ({ key: CLIENT, success: true })),
+        rows: before.rows,
+        emails: before.emails,
+      },
+    );
+    assert.equal(before.rows, limit);
+    assert.equal(before.emails, limit);
+    await assertNoRateLimitTable(db);
+    assertQuiet(lines, urls, [CLIENT]);
+  });
+}
+
 async function rejected(): Promise<void> {
   const calls: LimitCall[] = [];
   await withWorker(limiter(readLimiter().simple.limit, calls), async (env, db, lines, urls) => {
@@ -343,6 +382,7 @@ function runIsolated(name: string): void {
 
 const isolated = process.env.BRIDGEKIT_RATE_LIMIT_CASE;
 if (isolated === "limited") test("the configured number of sign-in links is the limit", limited);
+else if (isolated === "jsonx") test("application/jsonx does not send a sign-in email", jsonx);
 else if (isolated === "rejected") test("a rejected sign-in address does not spend a link", rejected);
 else if (isolated === "missing-ip") test("a sign-in with no client address is refused", missingIp);
 else if (isolated === "unbound") test("sign-in has no limit when the binding is absent", unbound);
@@ -352,6 +392,7 @@ else {
     readLimiter();
   });
   test("the configured number of sign-in links is the limit", () => runIsolated("limited"));
+  test("application/jsonx does not send a sign-in email", () => runIsolated("jsonx"));
   test("a rejected sign-in address does not spend a link", () => runIsolated("rejected"));
   test("a sign-in with no client address is refused", () => runIsolated("missing-ip"));
   test("sign-in has no limit when the binding is absent", () => runIsolated("unbound"));
