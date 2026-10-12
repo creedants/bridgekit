@@ -5,7 +5,7 @@ import { createAuth, limitMagicLinkSignIn, type Auth } from "./auth.ts";
 import type { ExecutionContext, Fetcher } from "./cloudflare.ts";
 import { handleCommentary } from "./commentary.ts";
 import { countPageView, pageView } from "./counts.ts";
-import { canSendEmail } from "./email.ts";
+import { canSendEmail, EMAIL_NOT_SET_UP } from "./email.ts";
 import type { Env } from "./env.ts";
 import { createCheckout, parseSubscriptionEvent, verifyPaddleSignature, type PaddleEnvironment } from "./paddle.ts";
 import {
@@ -77,7 +77,34 @@ open.use("/api/workspaces/*", async (c, next) => {
   await next();
 });
 
+/**
+ * The Better Auth routes whose only way to answer is to put an email in front
+ * of someone: the magic-link sign-in and the workspace invitation, which is
+ * also how a resend is sent. Both are POST.
+ */
+const EMAIL_ROUTES = new Set(["/api/auth/sign-in/magic-link", "/api/auth/organization/invite-member"]);
+
+/**
+ * Refuses a request that can only be answered by sending an email when this
+ * deployment cannot send one, before Better Auth sees it.
+ *
+ * The sign-in route would answer the failure itself, because it awaits the
+ * send. The invitation route does not: Better Auth runs that send in a
+ * background helper, catches the thrown error and logs it, and then answers
+ * 200 with a pending invitation nobody can act on. So the refusal happens here
+ * and no invitation row is written.
+ */
+function emailRefusal(env: Env, request: Request): Response | null {
+  if (request.method !== "POST") return null;
+  const pathname = new URL(request.url).pathname;
+  if (!EMAIL_ROUTES.has(pathname)) return null;
+  if (canSendEmail(env)) return null;
+  return Response.json({ message: EMAIL_NOT_SET_UP }, { status: 503 });
+}
+
 open.on(["GET", "POST"], "/api/auth/*", async (c) => {
+  const unavailable = emailRefusal(c.env, c.req.raw);
+  if (unavailable) return unavailable;
   const refusal = await limitMagicLinkSignIn(c.req.raw, c.env.MAGIC_LINK_RATE_LIMIT);
   if (refusal) return refusal;
   return c.get("auth").handler(c.req.raw);
