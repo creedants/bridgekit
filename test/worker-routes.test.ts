@@ -421,12 +421,13 @@ test("accounts stay closed unless ACCOUNTS is on", async () => {
     headers: { origin: ORIGIN, "content-type": "application/json" },
     body: SIGN_IN,
   });
-  // No mail key and no LOCAL_EMAIL_LOG, so the send fails. Better Auth answers
-  // the failure with one sentence, and the verification row is still written.
+  // No mail key and no LOCAL_EMAIL_LOG, so the request is refused before
+  // Better Auth runs. No verification row is written and the allowance is not
+  // charged.
   assert.equal(signIn.status, 503);
   assert.deepEqual(await signIn.json(), { message: EMAIL_NOT_SET_UP });
   const afterSignIn = await counts(turnedOn.db, await applicationTables(turnedOn.db));
-  assert.equal(afterSignIn.verification, 1);
+  assert.equal(afterSignIn.verification, 0);
   assert.equal(afterSignIn.user, 0);
   assert.equal(afterSignIn.session, 0);
 
@@ -453,4 +454,193 @@ test("the config reports whether an email can be sent", async () => {
     ...without,
     email: true,
   });
+});
+
+const OWNER = "owner@example.invalid";
+const INVITED = "invited@example.invalid";
+
+type Sent = { url: string; init: RequestInit };
+
+/** Records every console line and every fetch, without printing or sending. */
+function record(): { lines: string[]; sent: Sent[]; restore(): void } {
+  const lines: string[] = [];
+  const sent: Sent[] = [];
+  const previous = { debug: console.debug, info: console.info, log: console.log, warn: console.warn, error: console.error };
+  for (const method of ["debug", "info", "log", "warn", "error"] as const) {
+    console[method] = (...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "));
+    };
+  }
+  const original = globalThis.fetch;
+  globalThis.fetch = async (input: Request | string | URL, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : input instanceof URL ? input.href : String(input);
+    sent.push({ url, init: init ?? {} });
+    if (url !== "https://api.resend.com/emails") return original(input, init);
+    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  };
+  return {
+    lines,
+    sent,
+    restore() {
+      Object.assign(console, previous);
+      globalThis.fetch = original;
+    },
+  };
+}
+
+/** An environment over one database, varying only the mail fields. */
+function mailEnv(db: Env["DB"], fields: Partial<Env>): Env {
+  return {
+    ASSETS: {
+      async fetch() {
+        return new Response("missing", { status: 500 });
+      },
+    },
+    DB: db,
+    BETTER_AUTH_URL: ORIGIN,
+    BETTER_AUTH_SECRET: AUTH_SECRET,
+    ACCOUNTS: "on",
+    ...fields,
+  };
+}
+
+/** Signs an owner in through the real magic-link flow and opens a workspace. */
+async function session(): Promise<{ db: Env["DB"]; cookie: string; workspaceId: string }> {
+  const db = database();
+  const env = mailEnv(db, { LOCAL_EMAIL_LOG: "on" });
+  const recorded = record();
+  try {
+    const signIn = await call(`${ORIGIN}/api/auth/sign-in/magic-link`, env, {
+      method: "POST",
+      headers: { origin: ORIGIN, "content-type": "application/json" },
+      body: JSON.stringify({ email: OWNER, callbackURL: `${ORIGIN}/app/` }),
+    });
+    assert.equal(signIn.status, 200, await signIn.text());
+    const link = recorded.lines.join("\n").match(/http:\/\/127\.0\.0\.1:8790\/api\/auth\/magic-link\/verify\?\S+/)?.[0];
+    assert.ok(link, "the sign-in link was not written to the log");
+    const verified = await call(link, env, { headers: { origin: ORIGIN } });
+    assert.equal(verified.status, 302, await verified.text());
+    const cookie = verified.headers
+      .getSetCookie()
+      .map((entry) => entry.split(";")[0])
+      .join("; ");
+    assert.notEqual(cookie, "", "the verification set no session cookie");
+    const created = await call(`${ORIGIN}/api/auth/organization/create`, env, {
+      method: "POST",
+      headers: { origin: ORIGIN, "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "Mail test", slug: "mail-test" }),
+    });
+    const createdBody = await created.text();
+    assert.equal(created.status, 200, createdBody);
+    return { db, cookie, workspaceId: (JSON.parse(createdBody) as { id: string }).id };
+  } finally {
+    recorded.restore();
+  }
+}
+
+async function invite(env: Env, cookie: string, workspaceId: string, body: Record<string, unknown>): Promise<Response> {
+  return call(`${ORIGIN}/api/auth/organization/invite-member`, env, {
+    method: "POST",
+    headers: { origin: ORIGIN, "content-type": "application/json", cookie },
+    body: JSON.stringify({ email: INVITED, role: "member", organizationId: workspaceId, ...body }),
+  });
+}
+
+async function invitationRow(db: Env["DB"]): Promise<{ count: number; expiresAt: string | Date } | null> {
+  const row = await db.prepare("SELECT COUNT(*) AS count, MAX(expiresAt) AS expiresAt FROM invitation").first<{ count: number; expiresAt: string | Date }>();
+  assert.ok(row);
+  return row.count === 0 ? null : row;
+}
+
+function assertNoAddressOrLink(lines: string[]): void {
+  for (const line of lines) {
+    assert.equal(line.includes(INVITED), false, `the log held the invited address: ${line}`);
+    assert.equal(line.includes(OWNER), false, `the log held the inviter address: ${line}`);
+    assert.equal(line.includes("invitation="), false, `the log held the invitation link: ${line}`);
+  }
+}
+
+test("an invitation is refused when no email can be sent", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, {});
+  const recorded = record();
+  let response: Response;
+  try {
+    response = await invite(env, cookie, workspaceId, {});
+  } finally {
+    recorded.restore();
+  }
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { message: EMAIL_NOT_SET_UP });
+  assert.equal(await invitationRow(db), null, "the refused invitation wrote a row");
+  assertNoAddressOrLink(recorded.lines);
+  assert.deepEqual(
+    recorded.sent.filter((entry) => entry.url === "https://api.resend.com/emails"),
+    [],
+  );
+});
+
+test("a resent invitation is refused and leaves the invitation row alone", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const logged = mailEnv(db, { LOCAL_EMAIL_LOG: "on" });
+  const first = await invite(logged, cookie, workspaceId, {});
+  assert.equal(first.status, 200, await first.text());
+  const before = await invitationRow(db);
+  assert.ok(before);
+
+  const env = mailEnv(db, {});
+  const recorded = record();
+  let response: Response;
+  try {
+    response = await invite(env, cookie, workspaceId, { resend: true });
+  } finally {
+    recorded.restore();
+  }
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { message: EMAIL_NOT_SET_UP });
+  assert.deepEqual(await invitationRow(db), before, "the refused resend changed the invitation row");
+  assertNoAddressOrLink(recorded.lines);
+});
+
+test("an invitation is logged when the local email log is exactly on", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, { LOCAL_EMAIL_LOG: "on" });
+  const recorded = record();
+  let sent: Response;
+  try {
+    sent = await invite(env, cookie, workspaceId, {});
+  } finally {
+    recorded.restore();
+  }
+  const body = await sent.text();
+  assert.equal(sent.status, 200, body);
+  assert.equal((JSON.parse(body) as { status: string }).status, "pending");
+  assert.ok(await invitationRow(db), "the accepted invitation wrote no row");
+  const mail = recorded.lines.filter((line) => line.includes("[email]"));
+  assert.equal(mail.length, 1);
+  assert.equal(mail[0].includes(`to ${INVITED}`), true, mail[0]);
+  assert.equal(mail[0].includes("/app/?invitation="), true, mail[0]);
+  assert.deepEqual(recorded.sent, []);
+});
+
+test("an invitation goes to the provider when a key and a sender are set", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, { RESEND_API_KEY: "re_test_key", EMAIL_FROM: "no-reply@example.invalid" });
+  const recorded = record();
+  let sent: Response;
+  try {
+    sent = await invite(env, cookie, workspaceId, {});
+  } finally {
+    recorded.restore();
+  }
+  const body = await sent.text();
+  assert.equal(sent.status, 200, body);
+  assert.equal(recorded.lines.length, 0, recorded.lines.join("\n"));
+  assert.deepEqual(recorded.sent.map((entry) => entry.url), ["https://api.resend.com/emails"]);
+  assert.deepEqual(recorded.sent[0].init.headers, { authorization: "Bearer re_test_key", "content-type": "application/json" });
+  const mail = JSON.parse(String(recorded.sent[0].init.body)) as { from: string; to: string; text: string };
+  assert.equal(mail.from, "no-reply@example.invalid");
+  assert.equal(mail.to, INVITED);
+  assert.equal(mail.text.includes("/app/?invitation="), true, mail.text);
+  assert.ok(await invitationRow(db), "the accepted invitation wrote no row");
 });
