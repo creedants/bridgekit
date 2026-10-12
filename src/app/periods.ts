@@ -11,8 +11,9 @@ export interface PeriodList {
 const PLAIN_NUMBER_SOURCE = String.raw`^-?\d+(\.\d+)?$`;
 /**
  * A column is numeric only when every value is a plain number of at most this
- * many digits. That keeps the DOUBLE order finite (below 10^15) and free of
- * ties, because two distinct values that fit always land on different doubles.
+ * many digits. That keeps every DOUBLE cast finite, below 10^15. Labels with
+ * unequal numbers order by value. Labels with equal numbers, such as `1`,
+ * `1.0` and `01`, stay separate periods and order by their original string.
  */
 const MAX_DIGITS = 15;
 
