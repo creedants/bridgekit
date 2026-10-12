@@ -1,0 +1,2 @@
+- A CSV whose bytes are damaged or contradict the encoding they declare shows the sentence instead of loading with wrong characters. A byte-order-marked UTF-16 file with an unpaired surrogate or an odd byte count, a file with a UTF-8 mark on bytes that are not UTF-8, and the five byte values Windows-1252 leaves undefined all take it.
+- A UTF-8 file whose characters straddle the 65,536-byte prefix is handed to the database as its own bytes, as before. Only a prefix that fails the prefix check is read in full to classify it.
