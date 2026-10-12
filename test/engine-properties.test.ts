@@ -84,6 +84,16 @@ function dataset(seed: number): Dataset {
     const discount = cell.discount + (period === CURRENT ? 0.05 : 0);
     return { period, keys: cell.keys, units, sales, gross: quarter(sales / (1 - discount)), cost: quarter(units * cell.unitCost) };
   });
+  if (rows.length !== 20 && rows.length !== 500) {
+    rows.push({
+      period: PRIOR,
+      keys: Object.fromEntries(columns.map((column) => [column, `${column}-0`])),
+      units: -1,
+      sales: -8,
+      gross: -8,
+      cost: 0,
+    });
+  }
 
   const priorUnits = rows.reduce((sum, row) => sum + (row.period === PRIOR ? row.units ?? 0 : 0), 0);
   assert.ok(priorUnits >= MIN_PRIOR_UNITS, `seed ${seed}: the generator made ${priorUnits} prior units, fewer than ${MIN_PRIOR_UNITS}`);
@@ -115,6 +125,19 @@ const FEATURES: Record<string, (data: Dataset) => boolean> = {
   "over 300 rows": (data) => data.rows.length > 300,
   "20 rows": (data) => data.rows.length === 20,
   "500 rows": (data) => data.rows.length === 500,
+  "a cell with negative prior units and no current units": (data) => {
+    const columns = data.levels.flatMap((level) => level.columns);
+    const units = new Map<string, { prior: number; current: number }>();
+    for (const row of data.rows) {
+      if (!hasUnits(row)) continue;
+      const id = keyId(columns, (column) => row.keys[column]);
+      const cell = units.get(id) ?? { prior: 0, current: 0 };
+      if (row.period === PRIOR) cell.prior += row.units;
+      else cell.current += row.units;
+      units.set(id, cell);
+    }
+    return [...units.values()].some((cell) => cell.prior < 0 && cell.current === 0);
+  },
 };
 
 const FEATURE_MIN: Record<string, number> = {
@@ -224,20 +247,6 @@ function keysContract(run: Run): void {
   assert.ok(likeForLikeKeys(run).length > 0, `${run.label}: the like-for-like set is empty`);
 }
 
-async function cellsReconcile(query: Query, run: Run): Promise<void> {
-  const cells = await query(`SELECT * FROM ${ident(run.result.cellsTable)}`);
-  assert.ok(cells.length > 0, `${run.label}: the cells table is empty`);
-  const keys = run.config.levels.flatMap((level) => level.columns);
-  const checked = cells.map((cell) => {
-    const actual = sum(run.result.effects.map((e) => numeric(cell[e.key])));
-    const expected = numeric(cell.s1) + numeric(cell.z1) - numeric(cell.s0) - numeric(cell.z0);
-    const gap = Math.abs(actual - expected);
-    return { cell: JSON.stringify(Object.fromEntries(keys.map((key) => [key, cell[key]]))), actual, expected, gap: Number.isNaN(gap) ? Infinity : gap };
-  });
-  const worst = checked.reduce((a, b) => (b.gap > a.gap ? b : a));
-  close(worst.actual, worst.expected, `${run.label}: effects of cell ${worst.cell} against its change`);
-}
-
 function totalsReconcile(run: Run, data: Dataset): void {
   close(run.result.priorSales, rowTotal(data, PRIOR), `${run.label}: prior total against the generated rows`);
   close(run.result.currentSales, rowTotal(data, CURRENT), `${run.label}: current total against the generated rows`);
@@ -287,14 +296,6 @@ function hasUnits(row: Row): row is Row & { units: number } {
 function measureFlags(config: BridgeConfig): { cost: boolean; gross: boolean } {
   const cost = config.costColumn !== undefined;
   return { cost, gross: !cost && config.grossColumn !== undefined };
-}
-
-function continuing(fact: CellFacts): boolean {
-  return fact.q0 > 0 && fact.q1 !== 0;
-}
-
-function rated(fact: CellFacts, full: boolean): boolean {
-  return full ? continuing(fact) : fact.q0 > 0;
 }
 
 function keyId(columns: readonly string[], valueAt: (column: string) => string | null): string {
@@ -440,134 +441,173 @@ function checkCells(run: Run, joined: JoinedCell[]): void {
   }
 }
 
-function checkNoUnits(run: Run, joined: JoinedCell[], facts: CellFacts[]): void {
-  closeColumn(run.label, "no_units", pairs(run.label, joined, "no_units", (fact) => fact.z1 - fact.z0));
-  close(valueOf(run, "no_units"), sum(facts.map((fact) => fact.z1 - fact.z0)), `${run.label}: no_units against the generated rows`);
+interface Population {
+  facts: readonly CellFacts[];
+  levels: readonly Level[];
+  mode: Mode;
+  cost: boolean;
+  gross: boolean;
+  label: string;
 }
 
-function priorRate(facts: CellFacts[], full: boolean): { quantity: number; rate: number | null } {
-  let quantity = 0;
-  let sales = 0;
-  for (const fact of facts) {
-    if (full && !continuing(fact)) continue;
-    quantity += fact.q0;
-    sales += fact.s0;
-  }
-  return { quantity, rate: quantity > 0 ? sales / quantity : null };
+interface PrefixTotals {
+  priorQuantity: number;
+  priorSales: number;
+  currentQuantity: number;
 }
 
-function volumeAmount(fact: CellFacts, full: boolean, rate: number | null): number {
-  if (rate === null) return 0;
-  if (full && !continuing(fact)) return 0;
-  return (fact.q1 - fact.q0) * rate;
+interface CellAmounts {
+  effects: Readonly<Record<string, number>>;
+  refs: readonly (number | null)[];
 }
 
-function checkVolume(run: Run, joined: JoinedCell[], facts: CellFacts[]): number | null {
-  const full = run.config.newAndDiscontinued === "full";
-  const prior = priorRate(facts, full);
-  if (!full) {
-    assert.ok(prior.quantity > 0, `${run.label}: difference mode scope quantity expected to be positive, got ${prior.quantity}`);
-  }
-  closeColumn(run.label, "volume", pairs(run.label, joined, "volume", (fact) => volumeAmount(fact, full, prior.rate)));
-  return prior.rate;
-}
-
-function likeForLikePrice(fact: CellFacts, full: boolean): number {
-  if (!rated(fact, full)) return 0;
-  return fact.s1 - (fact.q1 * fact.s0) / fact.q0;
-}
-
-function listPrice(fact: CellFacts, full: boolean): number {
-  if (!(rated(fact, full) && fact.g0 !== 0 && fact.q0 > 0 && fact.q1 !== 0)) return 0;
-  return (fact.g1 - (fact.q1 * fact.g0) / fact.q0) * (fact.s0 / fact.g0);
-}
-
-function discountAmount(fact: CellFacts, full: boolean): number {
-  const price = likeForLikePrice(fact, full);
-  const list = listPrice(fact, full);
-  const splits = rated(fact, full) && fact.g0 !== 0 && fact.q0 > 0 && fact.q1 !== 0;
-  if (!splits) return price - list;
-  if (fact.g1 === 0) {
-    // Current gross is zero, so the discount formula divides by it. The two lines add up to price.
-    return price - list;
-  }
-  return fact.q1 * (fact.g1 / fact.q1) * (fact.s1 / fact.g1 - fact.s0 / fact.g0);
-}
-
-function sellingPrice(fact: CellFacts, full: boolean): number {
-  if (!rated(fact, full)) return 0;
-  return fact.rs1 - (fact.q1 * fact.rs0) / fact.q0;
-}
-
-function checkPrices(run: Run, joined: JoinedCell[]): void {
-  const full = run.config.newAndDiscontinued === "full";
-  const { cost, gross } = measureFlags(run.config);
-  closeColumn(run.label, "price", pairs(run.label, joined, "price", (fact) => likeForLikePrice(fact, full)));
-  if (gross) {
-    closeColumn(run.label, "price_list", pairs(run.label, joined, "price_list", (fact) => listPrice(fact, full)));
-    closeColumn(run.label, "price_discount", pairs(run.label, joined, "price_discount", (fact) => discountAmount(fact, full)));
-  }
-  if (cost) {
-    closeColumn(run.label, "price_sales", pairs(run.label, joined, "price_sales", (fact) => sellingPrice(fact, full)));
-    closeColumn(run.label, "cost_rate", pairs(run.label, joined, "cost_rate", (fact) => likeForLikePrice(fact, full) - sellingPrice(fact, full)));
-  }
-}
-
-function groupPrices(facts: CellFacts[], levels: Level[], full: boolean): Map<string, number | null>[] {
-  return levels.map((_, index) => {
-    const columns = levels.slice(0, index + 1).flatMap((level) => level.columns);
-    const totals = new Map<string, { quantity: number; sales: number }>();
+function effectsFor(population: Population): (fact: CellFacts) => CellAmounts {
+  const { facts, levels, mode, cost, gross, label } = population;
+  const full = mode === "full";
+  const continuing = (fact: CellFacts): boolean => fact.q0 > 0 && fact.q1 !== 0;
+  const inScope = (fact: CellFacts): boolean => !full || continuing(fact);
+  const prefixColumns = levels.map((_, index) => levels.slice(0, index + 1).flatMap((level) => level.columns));
+  const prefixes = prefixColumns.map((columns) => {
+    const totals = new Map<string, PrefixTotals>();
     for (const fact of facts) {
       const id = keyId(columns, (column) => fact.key[column]);
-      const bucket = totals.get(id) ?? { quantity: 0, sales: 0 };
-      if (!full || continuing(fact)) {
-        bucket.quantity += fact.q0;
-        bucket.sales += fact.s0;
+      let bucket = totals.get(id);
+      if (!bucket) {
+        bucket = { priorQuantity: 0, priorSales: 0, currentQuantity: 0 };
+        totals.set(id, bucket);
       }
-      totals.set(id, bucket);
+      bucket.currentQuantity += fact.q1;
+      if (inScope(fact)) {
+        bucket.priorQuantity += fact.q0;
+        bucket.priorSales += fact.s0;
+      }
     }
-    const prices = new Map<string, number | null>();
-    for (const [id, bucket] of totals) prices.set(id, bucket.quantity > 0 ? bucket.sales / bucket.quantity : null);
-    return prices;
+    return totals;
   });
-}
 
-function referenceAt(label: string, fact: CellFacts, levels: Level[], prices: Map<string, number | null>[], rate: number | null, depth: number): number | null {
-  for (let level = depth; level >= 1; level--) {
-    const columns = levels.slice(0, level).flatMap((item) => item.columns);
-    const price = prices[level - 1].get(keyId(columns, (column) => fact.key[column]));
-    if (price === undefined) {
-      throw new assert.AssertionError({
-        message: `${label}: expected a group price at level ${level} for cell ${JSON.stringify(fact.key)}`,
-        actual: undefined,
-        expected: "group price",
-      });
+  let scopedQuantity = 0;
+  let scopedSales = 0;
+  for (const fact of facts) {
+    if (!inScope(fact)) continue;
+    scopedQuantity += fact.q0;
+    scopedSales += fact.s0;
+  }
+  if (!full) {
+    assert.ok(scopedQuantity > 0, `${label}: difference mode scope quantity expected to be positive, got ${scopedQuantity}`);
+  }
+  const overall: number | null = scopedQuantity > 0 ? scopedSales / scopedQuantity : null;
+
+  return (fact) => {
+    const refs: (number | null)[] = [overall];
+    const currentQuantity: number[] = [];
+    for (let j = 0; j < prefixColumns.length; j++) {
+      const bucket = prefixes[j].get(keyId(prefixColumns[j], (column) => fact.key[column]));
+      if (!bucket) {
+        throw new assert.AssertionError({
+          message: `${label}: expected a prefix at level ${j + 1} for cell ${JSON.stringify(fact.key)}`,
+          actual: undefined,
+          expected: "prefix",
+        });
+      }
+      currentQuantity.push(bucket.currentQuantity);
+      const own = bucket.priorQuantity > 0 ? bucket.priorSales / bucket.priorQuantity : null;
+      refs.push(own ?? refs[j]);
     }
-    if (price !== null) return price;
-  }
-  return rate;
+
+    let surviving = 0;
+    if (!full) {
+      for (let level = currentQuantity.length; level >= 1; level--) {
+        if (currentQuantity[level - 1] > 0) {
+          surviving = level;
+          break;
+        }
+      }
+    }
+
+    const delta = fact.q1 - fact.q0;
+    const matched = fact.q0 > 0;
+    const continues = continuing(fact);
+    const rated = full ? continues : matched;
+    const rateK = refs[refs.length - 1];
+    const rest = rateK === null ? 0 : fact.s1 - fact.s0 - delta * rateK;
+    const effects: Record<string, number> = {
+      volume: (!full || continues) && refs[0] !== null ? delta * refs[0] : 0,
+    };
+    for (let j = 1; j <= levels.length; j++) {
+      const finer = refs[j];
+      const coarser = refs[j - 1];
+      const allocated = full ? continues : surviving >= j;
+      effects[`mix_${j}`] = allocated && finer !== null && coarser !== null ? delta * (finer - coarser) : 0;
+    }
+    effects.price = (full ? continues : matched) && rateK !== null ? rest : 0;
+    if (full) {
+      const stopped = fact.q1 === 0 && fact.q0 !== 0;
+      effects.new_config = fact.q0 <= 0 && !stopped ? fact.s1 - fact.s0 : 0;
+      effects.discontinued = stopped ? fact.s1 - fact.s0 : 0;
+    } else {
+      const survivingRate = refs[surviving];
+      effects.new_config = matched ? 0 : rest;
+      effects.discontinued = rateK !== null && survivingRate !== null ? delta * (rateK - survivingRate) : 0;
+    }
+    effects.no_units = fact.z1 - fact.z0;
+    if (gross) {
+      const listApplies = rated && fact.g0 !== 0 && fact.q0 > 0 && fact.q1 !== 0;
+      const list = listApplies ? (fact.g1 - (fact.q1 * fact.g0) / fact.q0) * (fact.s0 / fact.g0) : 0;
+      effects.price_list = list;
+      effects.price_discount = effects.price - list;
+    }
+    if (cost) {
+      const selling = rated ? fact.rs1 - (fact.q1 * fact.rs0) / fact.q0 : 0;
+      effects.price_sales = selling;
+      effects.cost_rate = effects.price - selling;
+    }
+    return { effects, refs };
+  };
 }
 
-function checkRefs(run: Run, joined: JoinedCell[], facts: CellFacts[], rate: number | null): void {
-  const full = run.config.newAndDiscontinued === "full";
-  const levels = run.config.levels;
-  const prices = groupPrices(facts, levels, full);
-  for (let depth = 0; depth <= levels.length; depth++) {
-    const column = `ref_${depth}`;
-    closeNullableColumn(
-      run.label,
-      column,
-      joined.map((row) => ({
-        cell: row.id,
-        actual: readNullable(row.cell, column, run.label),
-        expected: depth === 0 ? rate : referenceAt(run.label, row.fact, levels, prices, rate, depth),
-      })),
-    );
+function checkCellEffects(run: Run, joined: JoinedCell[], amountsAt: (fact: CellFacts) => CellAmounts): void {
+  assert.ok(joined.length > 0, `${run.label}: the cells table is empty`);
+  const columns = Object.keys(amountsAt(joined[0].fact).effects);
+  for (const column of columns) {
+    closeColumn(run.label, column, pairs(run.label, joined, column, (fact) => amountsAt(fact).effects[column]));
   }
 }
 
-async function drillGroups(query: Query, run: Run, data: Dataset, cells: Record<string, unknown>[]): Promise<void> {
-  const columnsToSum = ["q0", "q1", "s0", "s1", "z0", "z1", ...run.result.effects.map((effect) => effect.key)];
+function checkEffectTotals(run: Run, facts: readonly CellFacts[], amountsAt: (fact: CellFacts) => CellAmounts): void {
+  for (const effect of run.result.effects) {
+    const expected = sum(facts.map((fact) => {
+      const effects = amountsAt(fact).effects;
+      if (!Object.hasOwn(effects, effect.key)) {
+        throw new assert.AssertionError({
+          message: `${run.label}: ${effect.key} has no expected amount`,
+          actual: undefined,
+          expected: effect.key,
+        });
+      }
+      return effects[effect.key];
+    }));
+    close(valueOf(run, effect.key), expected, `${run.label}: ${effect.key} against the generated rows`);
+  }
+}
+
+function checkRefs(run: Run, joined: JoinedCell[], amountsAt: (fact: CellFacts) => CellAmounts): void {
+  for (let depth = 0; depth <= run.config.levels.length; depth++) {
+    closeNullableColumn(run.label, `ref_${depth}`, joined.map((row) => ({
+      cell: row.id,
+      actual: readNullable(row.cell, `ref_${depth}`, run.label),
+      expected: amountsAt(row.fact).refs[depth] ?? null,
+    })));
+  }
+}
+
+async function checkDrill(
+  query: Query,
+  run: Run,
+  data: Dataset,
+  facts: readonly CellFacts[],
+  amountsAt: (fact: CellFacts) => CellAmounts,
+): Promise<void> {
+  const effectKeys = Object.keys(amountsAt(facts[0]).effects);
   for (const level of run.config.levels) {
     const columns = level.columns;
     const returned = await drill(query, run.config, { columns, limit: data.rows.length });
@@ -576,15 +616,25 @@ async function drillGroups(query: Query, run: Run, data: Dataset, cells: Record<
         assert.ok(Object.hasOwn(row, column), `${run.label}: drill by ${level.name} expected column ${column}`);
       }
     }
-    const groups = new Map<string, Record<string, number>>();
-    for (const cell of cells) {
-      const id = keyId(columns, (column) => textKey(cell[column], run.label, column));
+    const groups = new Map<string, { raw: Record<string, number>; effects: Record<string, number> }>();
+    for (const fact of facts) {
+      const id = keyId(columns, (column) => fact.key[column]);
       let group = groups.get(id);
       if (!group) {
-        group = Object.fromEntries(columnsToSum.map((column) => [column, 0]));
+        group = {
+          raw: { q0: 0, q1: 0, s0: 0, s1: 0, z0: 0, z1: 0 },
+          effects: Object.fromEntries(effectKeys.map((key) => [key, 0])),
+        };
         groups.set(id, group);
       }
-      for (const column of columnsToSum) group[column] += readNumber(cell, column, run.label);
+      group.raw.q0 += fact.q0;
+      group.raw.q1 += fact.q1;
+      group.raw.s0 += fact.s0;
+      group.raw.s1 += fact.s1;
+      group.raw.z0 += fact.z0;
+      group.raw.z1 += fact.z1;
+      const amounts = amountsAt(fact).effects;
+      for (const key of effectKeys) group.effects[key] += amounts[key];
     }
     const returnedIds = returned.map((row) => keyId(columns, (column) => textKey(row[column], run.label, column)));
     assert.equal(returned.length, groups.size, `${run.label}: drill by ${level.name} expected ${groups.size} groups, got ${returned.length}`);
@@ -592,15 +642,17 @@ async function drillGroups(query: Query, run: Run, data: Dataset, cells: Record<
     for (const id of groups.keys()) {
       assert.ok(returnedIds.includes(id), `${run.label}: drill by ${level.name} expected group ${id}`);
     }
-    for (const column of columnsToSum) {
-      closeColumn(
-        run.label,
-        `${column} drilled by ${level.name}`,
-        returned.map((row) => {
-          const id = keyId(columns, (key) => textKey(row[key], run.label, key));
-          return { cell: id, actual: readNumber(row, column, run.label), expected: groups.get(id)?.[column] ?? Number.NaN };
-        }),
-      );
+    for (const column of ["q0", "q1", "s0", "s1", "z0", "z1"] as const) {
+      closeColumn(run.label, `${column} drilled by ${level.name}`, returned.map((row) => {
+        const id = keyId(columns, (key) => textKey(row[key], run.label, key));
+        return { cell: id, actual: readNumber(row, column, run.label), expected: groups.get(id)?.raw[column] ?? Number.NaN };
+      }));
+    }
+    for (const column of effectKeys) {
+      closeColumn(run.label, `${column} drilled by ${level.name}`, returned.map((row) => {
+        const id = keyId(columns, (key) => textKey(row[key], run.label, key));
+        return { cell: id, actual: readNumber(row, column, run.label), expected: groups.get(id)?.effects[column] ?? Number.NaN };
+      }));
     }
   }
 }
@@ -616,19 +668,19 @@ suite("bridge properties on seeded datasets", { concurrency: true }, () => {
       for (const mode of MODES) {
         for (const order of ORDERS) {
           const run = runs[mode][order];
-          await cellsReconcile(query, run);
           totalsReconcile(run, data);
           keysContract(run);
           const cells = await query(`SELECT * FROM ${ident(run.result.cellsTable)}`);
           const columns = run.config.levels.flatMap((level) => level.columns);
           const facts = cellFacts(data, columns, run.config);
           const joined = joinCells(run, cells, facts);
+          const { cost, gross } = measureFlags(run.config);
+          const amountsAt = effectsFor({ facts, levels: run.config.levels, mode, cost, gross, label: run.label });
           checkCells(run, joined);
-          checkNoUnits(run, joined, facts);
-          const rate = checkVolume(run, joined, facts);
-          checkPrices(run, joined);
-          await drillGroups(query, run, data, cells);
-          checkRefs(run, joined, facts, rate);
+          checkCellEffects(run, joined, amountsAt);
+          checkEffectTotals(run, facts, amountsAt);
+          await checkDrill(query, run, data, facts, amountsAt);
+          checkRefs(run, joined, amountsAt);
         }
         orderInvariant(runs[mode].given, runs[mode].permuted);
       }
