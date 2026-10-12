@@ -13,6 +13,7 @@ import { exportExcel } from "./exportExcel.ts";
 import { download } from "./files.ts";
 import { whole } from "./format.ts";
 import { distinctCounts, findRollups } from "./profile.ts";
+import { loadPeriodList, type PeriodSort } from "./periods.ts";
 import type { Run } from "./Results.tsx";
 import {
   guessSetup,
@@ -114,6 +115,7 @@ export function App() {
   const [columns, setColumns] = useState<Column[]>([]);
   const [setup, setSetup] = useState<Setup | null>(null);
   const [periods, setPeriods] = useState<string[]>([]);
+  const [periodSort, setPeriodSort] = useState<PeriodSort>("text");
   const [prior, setPrior] = useState("");
   const [current, setCurrent] = useState("");
   const [remember, setRemember] = useState(isRemembering);
@@ -183,19 +185,18 @@ export function App() {
   useEffect(() => {
     if (!setup?.periodColumn) {
       setPeriods([]);
+      setPeriodSort("text");
       return;
     }
     let stale = false;
     task("Reading periods…", async () => {
       const q = await query();
       await q(viewSql(setup));
-      const rows = await q(
-        `SELECT DISTINCT ${quote(PERIOD)} AS p FROM ${quote(VIEW)}
-         WHERE ${quote(PERIOD)} IS NOT NULL ORDER BY 1 DESC LIMIT 200`,
-      );
+      const list = await loadPeriodList(q, quote(PERIOD), quote(VIEW));
       if (stale) return;
-      const values = rows.map((row) => String(row.p)).reverse();
+      const values = [...list.values];
       setPeriods(values);
+      setPeriodSort(list.sort);
       setCurrent((value) => (values.includes(value) ? value : (values.at(-1) ?? "")));
       setPrior((value) => (values.includes(value) ? value : (values.at(-2) ?? "")));
     });
@@ -234,6 +235,7 @@ export function App() {
         check,
         ms,
         periods,
+        periodSort,
         textColumns: columns.filter((c) => !/INT|DOUBLE|DECIMAL|FLOAT|REAL|DATE|TIMESTAMP/i.test(c.type)).map((c) => c.name),
         description: describeSetup(setup, prior, current, source),
         id: Date.now(),

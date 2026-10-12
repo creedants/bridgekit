@@ -28,6 +28,7 @@ import { summarize, type BridgeSummary } from "../summary.ts";
 import { download, toExportCsv, toExportTsv } from "./files.ts";
 import { percent, price, signedPercent, signedWhole, whole } from "./format.ts";
 import { decimalCommaNote } from "./numbers.ts";
+import { comparePeriods, type PeriodSort } from "./periods.ts";
 import { TABLE } from "./setup.ts";
 import { buildReport } from "./report.ts";
 import { Waterfall } from "./Waterfall.tsx";
@@ -35,8 +36,10 @@ import { Waterfall } from "./Waterfall.tsx";
 export interface Run {
   /** Text columns of the loaded file, for views that group by any column. */
   textColumns: string[];
-  /** Every period in the data, oldest first, for the trend view. */
+  /** Every period in the loaded window, oldest first, for the trend view. */
   periods: string[];
+  /** Decision over every distinct period, including values the window dropped. */
+  periodSort: PeriodSort;
   /** Human-readable lines describing the setup, for exports. */
   description: string[];
   config: BridgeConfig;
@@ -377,7 +380,7 @@ function Accounts(props: { run: Run; query: () => Promise<Query> }) {
 const MAX_TREND_PERIODS = 13;
 
 function Trend(props: { run: Run; query: () => Promise<Query> }) {
-  const periods = props.run.periods.slice(-MAX_TREND_PERIODS);
+  const periods = props.run.periods.slice(-MAX_TREND_PERIODS).toSorted(comparePeriods(props.run.periodSort));
   const [steps, setSteps] = useState<TrendStep[] | null>(null);
   useEffect(() => {
     if (periods.length < 3) return;

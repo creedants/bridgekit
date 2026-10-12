@@ -1,0 +1,1 @@
+- Period values that are all plain numbers, such as months 8, 9, and 10, are listed and stepped in numeric order. Any other period text keeps the previous order.
