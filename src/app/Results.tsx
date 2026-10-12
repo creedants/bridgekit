@@ -30,6 +30,7 @@ import { percent, price, signedPercent, signedWhole, whole } from "./format.ts";
 import { decimalCommaNote } from "./numbers.ts";
 import { trendPeriods } from "./periods.ts";
 import { TABLE } from "./setup.ts";
+import { useCommentaryOffer } from "./useConfig.ts";
 import { buildReport } from "./report.ts";
 import { Waterfall } from "./Waterfall.tsx";
 
@@ -211,18 +212,30 @@ function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<
       </div>
       {paragraphs.map((p) => <p key={p}>{p}</p>)}
       <p className="hint">Written from fixed sentence patterns, so the same bridge always gives the same text.</p>
-      {import.meta.env.VITE_AI_COMMENTARY === "1" && (
-        <AiCommentary key={JSON.stringify(summarize(props.result, props.run.config))} summary={summarize(props.result, props.run.config)} />
-      )}
+      <AiOffer summary={summarize(props.result, props.run.config)} />
     </div>
   );
 }
 
 /**
+ * A signed-in person with no Pro plan read sees the heading and the hint with
+ * no button; the full panel, with the button, needs a plan read as Pro. The
+ * offer comes from the calls the Workspace panel already makes, so the
+ * decision adds no request to any /api/ path.
+ */
+function AiOffer(props: { summary: BridgeSummary }) {
+  const offer = useCommentaryOffer();
+  if (offer === "hidden") return null;
+  return <AiCommentary key={JSON.stringify(props.summary)} summary={props.summary} offer={offer} />;
+}
+
+/**
  * Opt-in: nothing is sent until the user presses the button, and what is sent
  * is the summary shown in the panel, which holds totals and names only.
+ * "hint" shows the explanation with no button, for a signed-in person without
+ * Pro; "button" shows today's panel.
  */
-function AiCommentary(props: { summary: BridgeSummary }) {
+function AiCommentary(props: { summary: BridgeSummary; offer: "hint" | "button" }) {
   const [state, setState] = useState<
     { status: "idle" } | { status: "busy" } | { status: "done"; paragraphs: string[] } | { status: "error"; message: string }
   >({ status: "idle" });
@@ -246,7 +259,7 @@ function AiCommentary(props: { summary: BridgeSummary }) {
     <div className="ai">
       <div className="toolbar">
         <h3>AI commentary (optional)</h3>
-        {state.status === "done" && (
+        {props.offer === "button" && state.status === "done" && (
           <span className="actions">
             <button
               onClick={async () => {
@@ -260,16 +273,18 @@ function AiCommentary(props: { summary: BridgeSummary }) {
           </span>
         )}
       </div>
-      {state.status === "done" ? (
+      {props.offer === "hint" ? (
+        <p className="hint">A longer commentary written by Anthropic&rsquo;s Claude.</p>
+      ) : state.status === "done" ? (
         <>
           {state.paragraphs.map((p) => <p key={p}>{p}</p>)}
-          <p className="hint">Written by an AI model (Anthropic’s Claude). Check each figure against the bridge before you use it.</p>
+          <p className="hint">Written by an AI model (Anthropic&rsquo;s Claude). Check each figure against the bridge before you use it.</p>
         </>
       ) : (
         <>
           <p className="hint">
-            A longer commentary written by Anthropic’s Claude. Pressing the button sends the bridge totals below to
-            Bridgekit’s server, which passes them to Anthropic. No rows are sent, and no values from your data such as
+            A longer commentary written by Anthropic&rsquo;s Claude. Pressing the button sends the bridge totals below to
+            Bridgekit&rsquo;s server, which passes them to Anthropic. No rows are sent, and no values from your data such as
             customer or product names. Nothing is sent until you press it.
           </p>
           <details>
