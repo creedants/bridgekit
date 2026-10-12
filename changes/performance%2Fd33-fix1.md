@@ -1,0 +1,1 @@
+- The "Suggest attributes" wording is corrected to match the function, which keeps columns that are neither numeric nor dates: the hint now reads that the button fills the list with the columns that look like product attributes, fewest values first.

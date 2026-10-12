@@ -53,6 +53,103 @@ export async function distinctCounts(query: Query, columns: Column[]): Promise<M
   return new Map(columns.map((c, i) => [c.name, Number(row[`c${i}`])]));
 }
 
+// A column name looks like a customer, region, date or id column when any
+// word in it is one of these, where a word is a part split on
+// non-alphanumerics and camelCase boundaries, lowercased.
+const NON_ATTRIBUTE_WORDS = new Set([
+  "customer",
+  "customers",
+  "client",
+  "clients",
+  "account",
+  "accounts",
+  "region",
+  "regions",
+  "country",
+  "countries",
+  "state",
+  "states",
+  "province",
+  "provinces",
+  "city",
+  "cities",
+  "town",
+  "towns",
+  "zip",
+  "postal",
+  "territory",
+  "territories",
+  "district",
+  "districts",
+  "county",
+  "counties",
+  "store",
+  "stores",
+  "branch",
+  "branches",
+  "location",
+  "locations",
+  "date",
+  "dates",
+  "time",
+  "times",
+  "year",
+  "years",
+  "month",
+  "months",
+  "quarter",
+  "quarters",
+  "period",
+  "periods",
+  "day",
+  "days",
+  "week",
+  "weeks",
+  "id",
+  "ids",
+  "key",
+  "keys",
+  "code",
+  "codes",
+  "uuid",
+  "guid",
+  "number",
+  "numbers",
+]);
+
+function nameWords(name: string): string[] {
+  return name
+    .split(/[^A-Za-z0-9]+/)
+    .filter((part) => part !== "")
+    .flatMap((part) => part.split(/(?<=[a-z0-9])(?=[A-Z])/))
+    .map((word) => word.toLowerCase());
+}
+
+/**
+ * Returns the columns that look like product attributes, fewest distinct
+ * values first with ties in file order. Keeps columns that are neither
+ * numeric nor dates, which includes text and true/false columns, with 2 to
+ * 5000 distinct values, drops the used period and measure columns and names
+ * with a customer, region, date or id word.
+ */
+export function suggestAttributes(
+  columns: Column[],
+  distinct: Map<string, number>,
+  used: ReadonlySet<string>,
+): string[] {
+  const scored: { name: string; n: number; index: number }[] = [];
+  columns.forEach((column, index) => {
+    if (used.has(column.name)) return;
+    if (isNumeric(column.type) || isDate(column.type)) return;
+    const n = distinct.get(column.name) ?? 0;
+    if (n < 2 || n > MAX_DISTINCT) return;
+    if (nameWords(column.name).some((word) => NON_ATTRIBUTE_WORDS.has(word))) return;
+    scored.push({ name: column.name, n, index });
+  });
+  scored.sort((a, b) => (a.n === b.n ? a.index - b.index : a.n - b.n));
+  return scored.map((entry) => entry.name);
+}
+
 /**
  * Finds columns that roll up into one another, such as product > family >
  * category, by checking that each value of the finer column sits under one

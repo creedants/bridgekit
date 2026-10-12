@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { distinctCounts, findRollups } from "../src/app/profile.ts";
-import { quote, type Column } from "../src/app/setup.ts";
+import { distinctCounts, findRollups, suggestAttributes } from "../src/app/profile.ts";
+import { guessSetup, quote, type Column } from "../src/app/setup.ts";
 import { openDatabase } from "../src/duckdb.ts";
 import type { Query } from "../src/engine.ts";
 import { createSyntheticSales } from "../src/synth.ts";
@@ -195,4 +195,125 @@ test("a hierarchy larger than the sample still reports the full chain", async ()
     await findRollups(query, columns, distinct),
     await legacyRollups(query, columns, distinct),
   );
+});
+
+function usedOf(columns: Column[]): Set<string> {
+  const setup = guessSetup(columns);
+  return new Set(
+    [setup.periodColumn, setup.unitsColumn, setup.salesColumn, setup.grossColumn, setup.costColumn].filter(
+      (name): name is string => typeof name === "string" && name !== "",
+    ),
+  );
+}
+
+test("the sample file suggests six attributes, fewest values first, and not customer", async () => {
+  const query = await openDatabase();
+  const file = new URL("../public/sample-sales.csv", import.meta.url).pathname;
+  await query(`CREATE TABLE data AS SELECT * FROM read_csv('${file.replaceAll("'", "''")}', header=true)`);
+  const columns = await columnsOf(query);
+  const distinct = await distinctCounts(query, columns);
+  assert.equal(distinct.get("design"), 60);
+  assert.equal(distinct.get("coating"), 12);
+  assert.equal(distinct.get("material"), 8);
+  assert.equal(distinct.get("photochromic"), 3);
+  assert.equal(distinct.get("polar"), 2);
+  assert.equal(distinct.get("finish_type"), 2);
+  assert.equal(distinct.get("customer"), 399);
+  const suggested = suggestAttributes(columns, distinct, usedOf(columns));
+  assert.deepEqual(suggested, ["polar", "finish_type", "photochromic", "material", "coating", "design"]);
+  assert.equal(suggested.includes("customer"), false);
+});
+
+test("columns with one or more than 5000 distinct values are left out", () => {
+  const columns: Column[] = [
+    { name: "single", type: "VARCHAR" },
+    { name: "pair", type: "VARCHAR" },
+    { name: "limit", type: "VARCHAR" },
+    { name: "huge", type: "VARCHAR" },
+  ];
+  const distinct = new Map([
+    ["single", 1],
+    ["pair", 2],
+    ["limit", 5000],
+    ["huge", 5001],
+  ]);
+  assert.deepEqual(suggestAttributes(columns, distinct, new Set()), ["pair", "limit"]);
+});
+
+test("numeric and date columns are left out", () => {
+  const columns: Column[] = [
+    { name: "qty", type: "BIGINT" },
+    { name: "amount", type: "DOUBLE" },
+    { name: "ordered", type: "DATE" },
+    { name: "product", type: "VARCHAR" },
+  ];
+  const distinct = new Map([
+    ["qty", 4],
+    ["amount", 4],
+    ["ordered", 4],
+    ["product", 4],
+  ]);
+  assert.deepEqual(suggestAttributes(columns, distinct, new Set()), ["product"]);
+});
+
+test("a true/false column with two values is suggested", () => {
+  const columns: Column[] = [
+    { name: "polar", type: "BOOLEAN" },
+    { name: "product", type: "VARCHAR" },
+  ];
+  const distinct = new Map([
+    ["polar", 2],
+    ["product", 4],
+  ]);
+  assert.deepEqual(suggestAttributes(columns, distinct, new Set()), ["polar", "product"]);
+});
+
+test("customer, region, date and id names are left out", () => {
+  const columns: Column[] = [
+    { name: "customer", type: "VARCHAR" },
+    { name: "customer_id", type: "VARCHAR" },
+    { name: "region", type: "VARCHAR" },
+    { name: "country", type: "VARCHAR" },
+    { name: "order_date", type: "VARCHAR" },
+    { name: "orderDate", type: "VARCHAR" },
+    { name: "order_id", type: "VARCHAR" },
+    { name: "id", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+  ];
+  const distinct = new Map(columns.map((column) => [column.name, 10]));
+  assert.deepEqual(suggestAttributes(columns, distinct, new Set()), ["product"]);
+});
+
+test("used period and measure columns are left out", () => {
+  const columns: Column[] = [
+    { name: "year", type: "VARCHAR" },
+    { name: "jobs", type: "VARCHAR" },
+    { name: "sales", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+  ];
+  const distinct = new Map([
+    ["year", 4],
+    ["jobs", 4],
+    ["sales", 4],
+    ["product", 4],
+  ]);
+  assert.deepEqual(suggestAttributes(columns, distinct, new Set(["year", "jobs", "sales"])), ["product"]);
+});
+
+test("ties keep file order", () => {
+  const columns: Column[] = [
+    { name: "beta", type: "VARCHAR" },
+    { name: "alpha", type: "VARCHAR" },
+    { name: "gamma", type: "VARCHAR" },
+  ];
+  const distinct = new Map([
+    ["beta", 5],
+    ["alpha", 5],
+    ["gamma", 3],
+  ]);
+  assert.deepEqual(suggestAttributes(columns, distinct, new Set()), ["gamma", "beta", "alpha"]);
+});
+
+test("an empty profile returns an empty list", () => {
+  assert.deepEqual(suggestAttributes([], new Map(), new Set()), []);
 });
