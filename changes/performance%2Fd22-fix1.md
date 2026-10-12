@@ -1,0 +1,1 @@
+- Downloaded CSV files and copied tables prefix a text cell that starts with =, +, -, @, a tab, or a carriage return with an apostrophe, and quote a cell that contains a carriage return, a line feed, or, in a copied table, a tab. Numbers, including negatives, are unchanged. Uploads still use the original writer.

@@ -25,7 +25,7 @@ import {
 } from "../engine.ts";
 import { commentary } from "../commentary.ts";
 import { summarize, type BridgeSummary } from "../summary.ts";
-import { download, toCsv, toTsv } from "./files.ts";
+import { download, toExportCsv, toExportTsv } from "./files.ts";
 import { percent, price, signedPercent, signedWhole, whole } from "./format.ts";
 import { decimalCommaNote } from "./numbers.ts";
 import { TABLE } from "./setup.ts";
@@ -748,14 +748,14 @@ function TableActions(props: { name: string; header: string[]; rows: () => unkno
     <span className="actions">
       <button
         onClick={async () => {
-          await navigator.clipboard.writeText(toTsv(props.header, props.rows()));
+          await navigator.clipboard.writeText(toExportTsv(props.header, props.rows()));
           setCopied(true);
           setTimeout(() => setCopied(false), 1500);
         }}
       >
         {copied ? "Copied" : "Copy"}
       </button>
-      <button onClick={() => download(props.name, toCsv(props.header, props.rows()), "text/csv")}>CSV</button>
+      <button onClick={() => download(props.name, toExportCsv(props.header, props.rows()), "text/csv")}>CSV</button>
     </span>
   );
 }
@@ -792,7 +792,7 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
     const all = await drill(await props.query(), config, {
       columns: group.columns, filters, sortBy: props.sortBy, search, limit: 500_000,
     });
-    download("movers.csv", toCsv(header, all.map(exportRow)), "text/csv");
+    download("movers.csv", toExportCsv(header, all.map(exportRow)), "text/csv");
   };
 
   const mixOf = (row: Record<string, unknown>) =>
