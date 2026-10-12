@@ -875,7 +875,8 @@ export type PanelStatus = "continuing" | "new" | "lost" | "no_units";
 interface PanelFigures {
   /**
    * The panel's own bridge, or null when its value has nothing to bridge.
-   * A panel's `result.cellsTable` names a table that no longer exists when the call returns.
+   * The table a panel's `result.cellsTable` names is normally dropped before
+   * the call returns, so callers must not rely on it existing.
    */
   result: BridgeResult | null;
   status: PanelStatus;

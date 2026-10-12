@@ -1,0 +1,1 @@
+- Corrects the change notes and the `BridgePanel` result comment so each says only what `bridgeBy` guarantees about helper names, the catalog check and cleanup.
