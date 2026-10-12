@@ -80,9 +80,16 @@ open.use("/api/workspaces/*", async (c, next) => {
 /**
  * The Better Auth routes whose only way to answer is to put an email in front
  * of someone: the magic-link sign-in and the workspace invitation, which is
- * also how a resend is sent. Both are POST.
+ * also how a resend is sent. Both are POST. Better Auth serves them wherever
+ * its base path sits under this Worker's /api/auth handler, because a
+ * BETTER_AUTH_URL that carries a path keeps it (better-auth's withPath
+ * returns the URL unchanged when it already has a pathname, and its router
+ * takes the basePath from new URL(baseURL).pathname). These are therefore
+ * matched as the end of the request path, not at two fixed addresses: every
+ * path Better Auth serves one of them at ends with one of these, and no other
+ * route it serves ends with either.
  */
-const EMAIL_ROUTES = new Set(["/api/auth/sign-in/magic-link", "/api/auth/organization/invite-member"]);
+const EMAIL_ROUTES = ["/sign-in/magic-link", "/organization/invite-member"];
 
 /**
  * Refuses a request that can only be answered by sending an email when this
@@ -92,12 +99,14 @@ const EMAIL_ROUTES = new Set(["/api/auth/sign-in/magic-link", "/api/auth/organiz
  * send. The invitation route does not: Better Auth runs that send in a
  * background helper, catches the thrown error and logs it, and then answers
  * 200 with a pending invitation nobody can act on. So the refusal happens here
- * and no invitation row is written.
+ * and no invitation row is written. A path Better Auth would answer 404 is
+ * refused as well, which is the cost of never letting a route it serves
+ * through.
  */
 function emailRefusal(env: Env, request: Request): Response | null {
   if (request.method !== "POST") return null;
   const pathname = new URL(request.url).pathname;
-  if (!EMAIL_ROUTES.has(pathname)) return null;
+  if (!EMAIL_ROUTES.some((route) => pathname.endsWith(route))) return null;
   if (canSendEmail(env)) return null;
   return Response.json({ message: EMAIL_NOT_SET_UP }, { status: 503 });
 }
