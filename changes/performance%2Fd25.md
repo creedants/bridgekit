@@ -1,1 +1,1 @@
-- Account, workspace, checkout, Paddle webhook, and commentary routes answer 404 {"error":"Not found."} unless ACCOUNTS is the exact string on. /api/config then reports no providers, no commentary, and no billing.
+- A canonical /api path the Worker receives answers 404 {"error":"Not found."} for accounts, workspaces, checkout, the Paddle webhook, and commentary unless ACCOUNTS is the exact string on. GET /api/config reports providers, commentary, and billing off.
