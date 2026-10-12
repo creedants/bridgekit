@@ -171,6 +171,7 @@ npm run cf:deploy
 - Source: `migrations/0001_page_views.sql:2` has `CREATE TABLE page_views`.
 - Source: `migrations/0002_auth.sql:2` has `create table "user"`.
 - Source: `migrations/0003_workspaces.sql:4` has `CREATE TABLE subscription`.
+- Source: `migrations/0004_workspace_limits.sql:2` has `CREATE TRIGGER workspace_owner_limit`. The file adds three triggers and no rows, so `wrangler d1 migrations apply` applies it to a database that already holds workspaces at or over the limits without touching them.
 - Not verified: whether a second apply of the same migrations is a no-op.
 - Worked: the command ends without an error, and `npx wrangler deployments list` shows a deployment from this run.
 
@@ -610,6 +611,7 @@ npm run cf:deploy
 - Source: `migrations/0001_page_views.sql:2` has `CREATE TABLE page_views`.
 - Source: `migrations/0002_auth.sql:2` has `create table "user"`.
 - Source: `migrations/0003_workspaces.sql:4` has `CREATE TABLE subscription`.
+- Source: `migrations/0004_workspace_limits.sql:2` has `CREATE TRIGGER workspace_owner_limit`. The file adds three triggers and no rows, so `wrangler d1 migrations apply` applies it to a database that already holds workspaces at or over the limits without touching them.
 - Not verified: whether a second apply of the same migrations is a no-op.
 - Worked: the command ends without an error, and `curl -s -o /dev/null -w '%{http_code}\n' https://<domain>/pay/` prints 200.
 
