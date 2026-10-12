@@ -1,0 +1,1 @@
+- The setup panel gains a "Suggest attributes" button that fills the attribute list with the text columns that have the fewest values, fewest first.
