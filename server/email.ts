@@ -6,7 +6,7 @@ function localEmailLog(value: string | undefined): boolean {
   return value === "on";
 }
 
-/** The one sentence a sign-in or invitation answers with when no email can be sent. */
+/** The one sentence a refused sign-in or invitation answers with. */
 export const EMAIL_NOT_SET_UP = "Email is not set up on this server.";
 
 /**
@@ -16,9 +16,12 @@ export const EMAIL_NOT_SET_UP = "Email is not set up on this server.";
  * sign-in or invitation that never reaches the user and instead of leaving the
  * link in the Worker log.
  *
- * The failure is Better Auth's own SERVICE_UNAVAILABLE error because the only
- * callers are its magic-link and invitation hooks, and its router turns that
- * into a plain answer. A plain Error would come back as an empty 500.
+ * The Worker refuses a request that needs an email before Better Auth runs, so
+ * this failure is the backstop. Better Auth's magic-link route awaits the send
+ * and answers the thrown APIError with the sentence above as a plain 503. Its
+ * invitation route runs the send in a background helper that catches the
+ * rejection, logs it, and answers 200 with a pending invitation, so a plain
+ * Error and an APIError both disappear there.
  */
 export async function sendEmail(env: Env, to: string, subject: string, text: string): Promise<void> {
   if (!env.RESEND_API_KEY || !env.EMAIL_FROM) {
