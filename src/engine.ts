@@ -905,6 +905,7 @@ interface PanelPool {
   currentSales: number;
 }
 
+/** One value's units and sales, from the census. */
 interface PanelRow extends PanelPool {
   value: string | null;
 }
