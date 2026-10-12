@@ -115,10 +115,10 @@ Run:
 VITE_PAGE_COUNTS=1 VITE_WORKSPACES=0 VITE_AI_COMMENTARY=0 npx vite build && node scripts/compress-wasm.mjs
 ```
 
-- Derived from: `package.json:17` has `VITE_PAGE_COUNTS=1 VITE_WORKSPACES=1 VITE_AI_COMMENTARY=1 vite build && node scripts/compress-wasm.mjs`. The command above keeps page counts and sets the other two flags to 0. No npm script builds that combination. It was not run.
+- Derived from: `package.json:17` has `VITE_PAGE_COUNTS=1 VITE_WORKSPACES=1 VITE_AI_COMMENTARY=1 vite build && node scripts/compress-wasm.mjs`. The command above keeps page counts. It sets the other two flags to 0. No npm script builds that combination. The author's session ran this command locally. `ls dist/pay` failed. The raw wasm count was 0. `dist/index.html` had `No tracking scripts.` once. `dist/index.html` had `No cookies, no accounts.` once. `dist/index.html` had `sign in for Pro` zero times. The reviewer's session ran the same command locally, including a repeat. Both runs exited 0. The Worked checks matched. The reviewer's Node was v26.7.0. The author's report records no Node version. Node 24 was not installed in the reviewer's session. Neither session deployed.
 - Source: `wrangler.jsonc:2` has `npm run build:cloudflare`. That line tells you to run the script in `package.json`, and that script turns AI commentary on. This step does not follow that line.
 - Source: `package.json:9` has `"build": "vite build"`.
-- Derived from: `index.html:231` has `No analytics.`, `No tracking scripts.`. `scripts/feature-blocks.ts:4` has `kept only when it applies`. `npm run build` does not set `VITE_PAGE_COUNTS`, so the home page would keep `No analytics.` while the server counts page loads. It was not run.
+- Derived from: `index.html:231` has `No analytics.`, `No tracking scripts.`. `scripts/feature-blocks.ts:4` has `kept only when it applies`. `npm run build` does not set `VITE_PAGE_COUNTS`. The home page would keep `No analytics.` while the server counts page loads. The author's session ran `npm run build`. The reviewer's session ran `npm run build`. That run exited 0. Neither report records a reading of the home page after that build. Whether that page keeps `No analytics.` was not checked.
 - Source: `vite.config.ts:60` has `VITE_PAGE_COUNTS === "1"`.
 - Source: `vite.config.ts:76` has `VITE_WORKSPACES === "1"`, `pay/index.html`.
 - Source: `scripts/compress-wasm.mjs:30` has `rmSync(file)`.
@@ -216,7 +216,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://<domain>/pay/
 ```
 
 - Source: `index.html:231` has `No tracking scripts.`, `No cookies or accounts unless you sign in for Pro.`
-- Derived from: `vite.config.ts:76` has `pay/index.html`. `wrangler.jsonc:13` has `"not_found_handling": "404-page"`. The Part 1 build has no pay page, so the address is not found. It was not run.
+- Derived from: `vite.config.ts:76` has `pay/index.html`. `wrangler.jsonc:13` has `"not_found_handling": "404-page"`. The Part 1 build has no pay page. The address is not found. The author's session saw this on a local Part 1 Worker. The home page had `No tracking scripts.` once. The home page had `sign in for Pro` zero times. `GET /pay/` returned 404. The reviewer's session ran the three commands in this step against `http://127.0.0.1:8790`. The first command printed 1. The second command printed 0. The third command printed 404. Neither session sent the requests to the live domain.
 - Worked: the three commands print 1, then 0, then 404.
 
 ### 1.14 Check the tool
@@ -306,7 +306,7 @@ Dashboard (not verified): Cloudflare > Workers & Pages > Plans.
 
 ### 2.2 Confirm the site address
 
-Do: Confirm `BETTER_AUTH_URL` is still `https://<domain>`, with no path and no trailing slash. The host is the host you will use in step 2.9. Do not edit the value.
+Do: Confirm `BETTER_AUTH_URL` is still `https://<domain>`, with no path and no trailing slash. The host is the host you will use in step 2.10. Do not edit the value.
 
 Run:
 ```sh
@@ -406,11 +406,20 @@ npx wrangler secret put PADDLE_PRICE_ID
 - Not verified: Paddle's default quantity limit for a price.
 - Worked: `npx wrangler secret list` prints `PADDLE_PRICE_ID`.
 
-### 2.9 Point the default payment link at the pay page
+### 2.9 Get the website approved
 
-Do: Set the default payment link to `https://<domain>/pay/` with the final slash. Use the same host as `BETTER_AUTH_URL` from step 1.5.
+Do: Ask Paddle to approve `<domain>`. Wait until Paddle lists `<domain>` as approved.
 
-Paddle's default-link guide places website approval before this link. Whether the dashboard accepts the link while approval is pending is not verified.
+Dashboard (not verified): Paddle > My account > Settings > Website approval.
+
+- Source: `server/paddle.ts:190` has `domain approved in Paddle (Website approval)`.
+- Source: `server/paddle.ts:219` has `Check the default payment link is set and approved.`
+- Not verified: how long approval takes, and what Paddle asks for. Nobody entered an account. Paddle's guide names this screen and places approval before the default payment link, at [Set your default payment link](https://developer.paddle.com/build/transactions/default-payment-link).
+- Worked: Paddle lists `<domain>` as approved.
+
+### 2.10 Point the default payment link at the pay page
+
+Do: Set the default payment link to `https://<domain>/pay/` with the final slash. Use the same host as `BETTER_AUTH_URL` from step 1.5. Run this only after step 2.9 has the result in its Worked line.
 
 Dashboard (not verified): Paddle > Checkout > Checkout configuration.
 ```text
@@ -424,20 +433,10 @@ https://<domain>/pay/
 - Source: `src/pay/pay.ts:48` has `successUrl`, `/app/?subscribed=1`.
 - Source: `src/app/Workspace.tsx:56` has `if (!signedIn) return`.
 - Not verified: that a session cookie set on one host is absent on another host. That is the browser, not this repo. Nobody entered an account. The guide is [Set your default payment link](https://developer.paddle.com/build/transactions/default-payment-link).
+- Not verified: whether the dashboard accepts the link while approval is pending. Nobody entered an account to try that save.
 - Worked: Paddle shows the saved link. This proves it is set, not that it is right.
 - If this is wrong you will see: the payment link is not on `/pay/`. Subscribe opens another page of the site with `?_ptxn=` in the address. No checkout appears, and nothing reports an error.
 - If this is wrong you will see: the success URL is the pay page host plus `/app/?subscribed=1`. On another host the buyer is signed out, `if (!signedIn) return` runs, and the thank-you line does not.
-
-### 2.10 Get the website approved
-
-Do: Ask Paddle to approve `<domain>`.
-
-Dashboard (not verified): Paddle > My account > Settings > Website approval.
-
-- Source: `server/paddle.ts:190` has `domain approved in Paddle (Website approval)`.
-- Source: `server/paddle.ts:219` has `Check the default payment link is set and approved.`
-- Not verified: how long approval takes, and what Paddle asks for. Nobody entered an account. The same guide names this screen, at [Set your default payment link](https://developer.paddle.com/build/transactions/default-payment-link).
-- Worked: Paddle lists `<domain>` as approved. Later steps do not wait for that. Step 2.20 does.
 
 ### 2.11 Add the webhook and its nine events
 
@@ -554,7 +553,7 @@ Run:
 VITE_PAGE_COUNTS=1 VITE_WORKSPACES=1 VITE_AI_COMMENTARY=0 VITE_PADDLE_CLIENT_TOKEN=<client-token> VITE_PADDLE_ENVIRONMENT=live npx vite build && node scripts/compress-wasm.mjs
 ```
 
-- Derived from: `package.json:17` has `VITE_PAGE_COUNTS=1 VITE_WORKSPACES=1 VITE_AI_COMMENTARY=1 vite build && node scripts/compress-wasm.mjs`. `package.json:17` has `VITE_AI_COMMENTARY=1`. `package.json:17` lacks `VITE_PADDLE`. The command above sets AI commentary to 0 and adds the two Paddle variables. No npm script sets those variables. It was not run.
+- Derived from: `package.json:17` has `VITE_PAGE_COUNTS=1 VITE_WORKSPACES=1 VITE_AI_COMMENTARY=1 vite build && node scripts/compress-wasm.mjs`. `package.json:17` has `VITE_AI_COMMENTARY=1`. `package.json:17` lacks `VITE_PADDLE`. The command above sets AI commentary to 0. It adds the two Paddle variables. No npm script sets those variables. The author's session ran this command locally with a stand-in client token. `dist/pay/index.html` existed. The stand-in token was in one dist file. The `sign in for Pro` count was 1. The `No tracking scripts.` count was 1. The raw wasm count was 0. The reviewer's session ran the same command locally with a different stand-in token. The command exited 0. The Worked checks passed. Neither session deployed. Neither session used a live Paddle client token.
 - Source: `src/pay/pay.ts:37` has `import.meta.env.VITE_PADDLE_CLIENT_TOKEN`.
 - Source: `src/pay/pay.ts:12` has `There is no checkout to open. Start from the Workspace panel in the tool.`
 - Source: `src/pay/pay.ts:47` has `VITE_PADDLE_ENVIRONMENT !== "live"`.
@@ -595,7 +594,7 @@ curl -sS -w '\n%{http_code}\n' -X POST 'https://<domain>/api/auth/sign-in/magic-
 - Source: `server/worker.ts:37-38` has `value === "on"`.
 - Source: `server/worker.ts:56` has `CLOSED_CONFIG`.
 - Source: `src/app/account.ts:79` has `status: boolean`, `/api/auth/sign-in/magic-link`.
-- Not verified: this repo does not contain the body `{"status":true}`. A local Worker with `ACCOUNTS` set to `on` returned that body in the D25 review. This session did not send the request.
+- Not verified: this repo does not contain the body `{"status":true}`. A local Worker with `ACCOUNTS` set to `on` returned that body in the D25 review. The author's session sent this step's two requests to a local Part 2 Worker with `ACCOUNTS` set to `on`. Config had `billing` true. Sign-in returned 200 `{"status":true}`. The reviewer's session ran the same two commands on a local Worker. Config had `billing` true. Sign-in returned 200 `{"status":true}`. Neither session sent the requests to the live domain. The reviewer's session entered no Paddle account. The reviewer's session entered no Cloudflare account. The reviewer's session entered no Resend account. The author's report records no deploy. The author's report records no secret upload.
 - Worked: `providers` is empty, `commentary` is false, and `billing` is true. The sign-in status is 200 and the body is `{"status":true}`.
 - If `ACCOUNTS` is missing or is any other value, the sign-in status is 404 and the body is `{"error":"Not found."}`. Config still has no providers, `commentary` false, and `billing` false, even when the Paddle secrets are set.
 
