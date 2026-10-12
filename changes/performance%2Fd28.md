@@ -1,0 +1,1 @@
+- DEPLOY.md now tells the owner to confirm MAGIC_LINK_RATE_LIMIT before the Part 2 deploy, the limit is approximate, and privacy.html still says the IP address is used in memory.
