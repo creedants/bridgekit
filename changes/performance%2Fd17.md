@@ -1,0 +1,1 @@
+- A seeded test now fails when reconciliation breaks, when volume or like-for-like price changes with the level order, or when the two new-and-discontinued modes disagree on the total change.

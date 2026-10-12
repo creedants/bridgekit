@@ -1,0 +1,1 @@
+- The seeded test now checks each price key, each drill group, cell units and sales, the no-units line, the list, discount, price, and cost splits, and the fallback reference price against the generated rows.
