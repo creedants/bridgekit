@@ -1,5 +1,5 @@
 import { betterAuth, type BetterAuthOptions } from "better-auth";
-import { APIError } from "better-auth/api";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { magicLink, organization } from "better-auth/plugins";
 import type { RateLimit } from "./cloudflare.ts";
 import { sendEmail } from "./email.ts";
@@ -7,12 +7,32 @@ import type { Env } from "./env.ts";
 import { deleteSoleWorkspaces, freeSeats, MAX_WORKSPACES_PER_USER, workspaceCount } from "./workspace.ts";
 
 const AUTH_BASE_PATH = "/api/auth";
+const INVITE_MEMBER = "/organization/invite-member";
 
 const signInMagicLink = magicLink({
   sendMagicLink() {
     throw new Error("schema lookup");
   },
 }).endpoints.signInMagicLink;
+
+// The plugin's own resend branch reuses a live invitation: it updates the row's
+// expiry and sends the email without calling beforeCreateInvitation. This runs
+// before the route, so a refusal leaves the row and its expiry exactly as they
+// were.
+const limitInvitations = createAuthMiddleware(async (ctx) => {
+  if (ctx.path !== INVITE_MEMBER) return;
+  const body = ctx.body as { resend?: unknown; organizationId?: unknown; email?: unknown } | undefined;
+  if (!body?.resend || typeof body.organizationId !== "string" || typeof body.email !== "string") return;
+  const database = ctx.context.options.database as unknown as Parameters<typeof freeSeats>[0];
+  // A re-sent invitation already holds its seat, so it does not take another.
+  const row = await database
+    .prepare(`SELECT id FROM invitation WHERE organizationId = ? AND email = ? AND status = 'pending' AND datetime(expiresAt) > datetime('now')`)
+    .bind(body.organizationId, body.email.toLowerCase())
+    .first<{ id: string }>();
+  if (!row) return;
+  if ((await freeSeats(database, body.organizationId, new Date(), row.id)) > 0) return;
+  throw new APIError("FORBIDDEN", { message: "This workspace has no free seat, so cancel a pending invitation or add seats." });
+});
 
 function tooManyRequests(): Response {
   return Response.json({ message: "Too many requests. Please try again later." }, { status: 429 });
@@ -51,6 +71,11 @@ export function authOptions(env: Env, seatsFor: (workspaceId: string) => Promise
         [signInMagicLink.path]: () => false,
       },
     },
+    hooks: {
+      // Scope the seat check to the invitation route, where the plugin's hooks
+      // do not reach every path that sends email.
+      before: limitInvitations,
+    },
     account: { accountLinking: { enabled: true, trustedProviders: ["microsoft", "google"] } },
     user: { deleteUser: { enabled: true, beforeDelete: (user) => deleteSoleWorkspaces(env.DB, user.id) } },
     plugins: [
@@ -63,13 +88,27 @@ export function authOptions(env: Env, seatsFor: (workspaceId: string) => Promise
         // A workspace holds as many members as it has paid seats; one (the owner) before it subscribes.
         membershipLimit: (_user, workspace) => seatsFor(workspace.id),
         invitationExpiresIn: 7 * 24 * 60 * 60,
-        // The plugin's own hooks run before the row is written and before the
-        // invitation email, so a refusal leaves neither behind.
+        // The hooks below run before the row is written and before the
+        // invitation email, so a refusal leaves neither behind. The triggers in
+        // migrations/0004 hold the same limits against two writes that arrive
+        // at the same moment, and afterCreateOrganization and
+        // sendInvitationEmail turn their undo into the same sentences.
         organizationHooks: {
           beforeCreateOrganization: async ({ user }) => {
             if ((await workspaceCount(env.DB, user.id)) >= MAX_WORKSPACES_PER_USER) {
               throw new APIError("FORBIDDEN", {
-                message: `You can have up to ${MAX_WORKSPACES_PER_USER} workspaces, so delete one before creating another.`,
+                message: `You can own up to ${MAX_WORKSPACES_PER_USER} workspaces, so delete one before creating another.`,
+              });
+            }
+          },
+          // Two creates at the same moment both pass the check above and both
+          // write. The trigger in migrations/0004 undoes the second one, so the
+          // workspace it wrote a row for is gone by the time this hook runs and
+          // the request answers with the ordinary refusal.
+          afterCreateOrganization: async ({ organization }) => {
+            if (!(await env.DB.prepare(`SELECT id FROM organization WHERE id = ?`).bind(organization.id).first())) {
+              throw new APIError("FORBIDDEN", {
+                message: `You can own up to ${MAX_WORKSPACES_PER_USER} workspaces, so delete one before creating another.`,
               });
             }
           },
@@ -79,13 +118,22 @@ export function authOptions(env: Env, seatsFor: (workspaceId: string) => Promise
             }
           },
         },
-        sendInvitationEmail: ({ email, organization: workspace, inviter, id }) =>
-          sendEmail(
+        sendInvitationEmail: async ({ email, organization: workspace, inviter, id }) => {
+          // The resend path sends without asking beforeCreateInvitation, and two
+          // invitations at the same moment both pass it. The triggers in
+          // migrations/0004 undo those writes, so the seat the invitation was
+          // given is either held by someone else or already gone, and sending
+          // now would mail an address with nowhere to land.
+          if ((await freeSeats(env.DB, workspace.id, new Date(), id)) <= 0) {
+            throw new APIError("FORBIDDEN", { message: "This workspace has no free seat, so cancel a pending invitation or add seats." });
+          }
+          return sendEmail(
             env,
             email,
             `${inviter.user.name || inviter.user.email} invited you to a Bridgekit workspace`,
             `You have been invited to the workspace "${workspace.name}".\n\nTo accept, sign in with this email address and open:\n${env.BETTER_AUTH_URL}/app/?invitation=${id}\n\nThe invitation expires in 7 days.`,
-          ),
+          );
+        },
       }),
     ],
   } satisfies BetterAuthOptions;
