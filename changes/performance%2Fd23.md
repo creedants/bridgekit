@@ -1,0 +1,1 @@
+- DEPLOY.md is the launch how-to. Part 1 is the free tool with page counts. Part 2 is accounts and payments.

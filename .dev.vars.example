@@ -8,7 +8,10 @@ MICROSOFT_CLIENT_ID=
 MICROSOFT_CLIENT_SECRET=
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
+# This is the Worker switch, distinct from VITE_PADDLE_ENVIRONMENT. The wrangler secrets comment omits this name.
 PADDLE_ENVIRONMENT=sandbox
 PADDLE_API_KEY=
 PADDLE_WEBHOOK_SECRET=
 PADDLE_PRICE_ID=
+# Exact value "on" enables sign-in, workspaces, checkout, the Paddle webhook and commentary. Any other value leaves those routes off.
+ACCOUNTS=on
