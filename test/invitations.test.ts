@@ -834,3 +834,30 @@ test("deleting a workspace frees the owner's count", async () => {
     logs.restore();
   }
 });
+
+test("a failed session read does not stop sign-out from clearing the cookie", async () => {
+  const logs = captureConsole();
+  try {
+    const store = pausingDatabase();
+    const env = bindings(store.db);
+    const client = "198.51.100.40";
+    const cookie = await signIn(env, logs.lines, "owner@example.com", client);
+    store.pause(async (sql) => {
+      if (/from "session"/i.test(sql)) throw new Error("injected session read failure");
+    });
+    const response = await call(`${ORIGIN}/api/auth/sign-out`, env, {
+      method: "POST",
+      headers: headers(client, cookie),
+      body: "{}",
+    });
+    store.pause(undefined);
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(
+      response.headers.getSetCookie().some((entry) => /Max-Age=0/i.test(entry)),
+      true,
+      "sign-out cleared the session cookie",
+    );
+  } finally {
+    logs.restore();
+  }
+});
