@@ -1,9 +1,10 @@
 import { betterAuth, type BetterAuthOptions } from "better-auth";
+import { APIError } from "better-auth/api";
 import { magicLink, organization } from "better-auth/plugins";
 import type { RateLimit } from "./cloudflare.ts";
 import { sendEmail } from "./email.ts";
 import type { Env } from "./env.ts";
-import { deleteSoleWorkspaces } from "./workspace.ts";
+import { deleteSoleWorkspaces, freeSeats, MAX_WORKSPACES_PER_USER, workspaceCount } from "./workspace.ts";
 
 const AUTH_BASE_PATH = "/api/auth";
 
@@ -62,6 +63,22 @@ export function authOptions(env: Env, seatsFor: (workspaceId: string) => Promise
         // A workspace holds as many members as it has paid seats; one (the owner) before it subscribes.
         membershipLimit: (_user, workspace) => seatsFor(workspace.id),
         invitationExpiresIn: 7 * 24 * 60 * 60,
+        // The plugin's own hooks run before the row is written and before the
+        // invitation email, so a refusal leaves neither behind.
+        organizationHooks: {
+          beforeCreateOrganization: async ({ user }) => {
+            if ((await workspaceCount(env.DB, user.id)) >= MAX_WORKSPACES_PER_USER) {
+              throw new APIError("FORBIDDEN", {
+                message: `You can have up to ${MAX_WORKSPACES_PER_USER} workspaces, so delete one before creating another.`,
+              });
+            }
+          },
+          beforeCreateInvitation: async ({ organization: workspace }) => {
+            if ((await freeSeats(env.DB, workspace.id)) <= 0) {
+              throw new APIError("FORBIDDEN", { message: "This workspace has no free seat, so cancel a pending invitation or add seats." });
+            }
+          },
+        },
         sendInvitationEmail: ({ email, organization: workspace, inviter, id }) =>
           sendEmail(
             env,

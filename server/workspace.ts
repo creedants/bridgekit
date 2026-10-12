@@ -34,6 +34,34 @@ export async function plan(db: D1Database, workspaceId: string, now = new Date()
   return { pro, status: row.status, seats: pro ? row.seats : 1, currentPeriodEnd: row.currentPeriodEnd };
 }
 
+/**
+ * The most workspaces one account may hold. This is an abuse bound, not a plan
+ * feature: it stops a free account from creating workspaces without limit.
+ */
+export const MAX_WORKSPACES_PER_USER = 3;
+
+/** The workspaces the account belongs to. Deleting one lowers this. */
+export async function workspaceCount(db: D1Database, userId: string): Promise<number> {
+  const row = await db.prepare(`SELECT COUNT(*) AS n FROM member WHERE userId = ?`).bind(userId).first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+/**
+ * Paid seats still open for new invitations. Current members and live pending
+ * invitations each hold a seat, so an owner cannot queue more invitations than
+ * the workspace has seats. A cancelled or expired invitation holds none.
+ */
+export async function freeSeats(db: D1Database, workspaceId: string, now = new Date()): Promise<number> {
+  const { seats } = await plan(db, workspaceId, now);
+  const members = await db.prepare(`SELECT COUNT(*) AS n FROM member WHERE organizationId = ?`).bind(workspaceId).first<{ n: number }>();
+  const { results } = await db
+    .prepare(`SELECT expiresAt FROM invitation WHERE organizationId = ? AND status = 'pending'`)
+    .bind(workspaceId)
+    .all<{ expiresAt: string }>();
+  const pending = results.filter((invitation) => new Date(invitation.expiresAt) > now).length;
+  return seats - (members?.n ?? 0) - pending;
+}
+
 /** The member's role, or a 404 that does not reveal whether the workspace exists. */
 export async function membership(db: D1Database, userId: string, workspaceId: string): Promise<string> {
   const row = await db
