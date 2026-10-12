@@ -72,6 +72,7 @@ function bindings(db: Env["DB"], rateLimit: RateLimit | undefined): Env {
     BETTER_AUTH_URL: ORIGIN,
     BETTER_AUTH_SECRET: "0122456789abcdef0122456789abcdef",
     ACCOUNTS: "on",
+    LOCAL_EMAIL_LOG: "on",
   };
   if (rateLimit) env.MAGIC_LINK_RATE_LIMIT = rateLimit;
   return env;
