@@ -20,4 +20,6 @@ export interface Env {
   PADDLE_PRICE_ID?: string;
   /** "sandbox" (default) or "live". */
   PADDLE_ENVIRONMENT?: string;
+  /** Off unless the value is exactly "on". */
+  ACCOUNTS?: string;
 }

@@ -1,0 +1,1 @@
+- A canonical /api path the Worker receives answers 404 {"error":"Not found."} for accounts, workspaces, checkout, the Paddle webhook, and commentary unless ACCOUNTS is the exact string on. GET /api/config reports providers, commentary, and billing off.

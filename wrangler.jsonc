@@ -27,6 +27,9 @@
     }
   ],
   "dev": { "port": 8790, "ip": "127.0.0.1" },
+  // ACCOUNTS is a Worker variable. Account, workspace, payment, and commentary
+  // routes run only when its value is the exact string on. This file does not
+  // set it. Missing, empty, and any other value leave those routes off.
   "vars": {
     // Replaced with the real address in production.
     "BETTER_AUTH_URL": "http://localhost:8790"
