@@ -20,4 +20,6 @@ export interface Env {
   PADDLE_PRICE_ID?: string;
   /** "sandbox" (default) or "live". */
   PADDLE_ENVIRONMENT?: string;
+  /** Account routes. Off unless this is exactly "on". Page tests omit it. wrangler.jsonc does not set it. */
+  ACCOUNTS?: string;
 }

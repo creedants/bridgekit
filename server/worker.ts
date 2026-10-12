@@ -1,4 +1,5 @@
-import { Hono, type Context } from "hono";
+import { Hono, type Context, type ExecutionContext as HonoExecutionContext } from "hono";
+import { getPath } from "hono/utils/url";
 import { serveCompressedWasm } from "./assets.ts";
 import { createAuth, type Auth } from "./auth.ts";
 import type { ExecutionContext, Fetcher } from "./cloudflare.ts";
@@ -32,9 +33,35 @@ import {
  */
 
 type App = { Bindings: Env; Variables: { auth: Auth } };
-const app = new Hono<App>();
 
-app.use("/api/*", async (c, next) => {
+function accountsEnabled(value: string | undefined): boolean {
+  return value === "on";
+}
+
+function gatedApiPath(pathname: string): boolean {
+  const recognized = pathname.replace(/%2F/gi, "/");
+  const segments = recognized.split("/");
+  if (segments[1]?.toLowerCase() !== "api") return false;
+  const feature = segments[2]?.toLowerCase();
+  return feature === "auth" || feature === "workspaces" || feature === "paddle" || feature === "commentary";
+}
+
+const CLOSED_CONFIG = { providers: [] as string[], commentary: false, billing: false };
+
+function notFound(): Response {
+  return Response.json({ error: "Not found." }, { status: 404 });
+}
+
+function closedApiResponse(method: string, pathname: string): Response | null {
+  if (method === "GET" && pathname === "/api/config") return Response.json(CLOSED_CONFIG);
+  if (gatedApiPath(pathname)) return notFound();
+  if (pathname === "/api" || pathname.startsWith("/api/")) return notFound();
+  return null;
+}
+
+const open = new Hono<App>();
+
+open.use("/api/*", async (c, next) => {
   c.set("auth", createAuth(c.env, async (workspaceId) => (await plan(c.env.DB, workspaceId)).seats));
   await next();
 });
@@ -42,14 +69,14 @@ app.use("/api/*", async (c, next) => {
 // Changes must come from the site itself. The session cookie is already
 // SameSite=Lax, which stops most cross-site requests; this is a second check.
 // (Better Auth checks the origin on its own routes.)
-app.use("/api/workspaces/*", async (c, next) => {
+open.use("/api/workspaces/*", async (c, next) => {
   if (c.req.method !== "GET" && c.req.header("origin") !== new URL(c.env.BETTER_AUTH_URL).origin) {
     return c.json({ error: "Requests must come from this site." }, 403);
   }
   await next();
 });
 
-app.on(["GET", "POST"], "/api/auth/*", (c) => c.get("auth").handler(c.req.raw));
+open.on(["GET", "POST"], "/api/auth/*", (c) => c.get("auth").handler(c.req.raw));
 
 async function userId(c: Context<App>): Promise<string> {
   const session = await c.get("auth").api.getSession({ headers: c.req.raw.headers });
@@ -65,14 +92,14 @@ async function json(c: Context<App>): Promise<unknown> {
   }
 }
 
-app.onError((error, c) => {
+open.onError((error, c) => {
   if (error instanceof WorkspaceError) return c.json({ error: error.message }, error.status);
   console.error(error);
   return c.json({ error: "Something went wrong on the server." }, 500);
 });
 
 /** What this deployment offers, so the tool only shows what works. */
-app.get("/api/config", (c) =>
+open.get("/api/config", (c) =>
   c.json({
     providers: [
       ...(c.env.MICROSOFT_CLIENT_ID ? ["microsoft"] : []),
@@ -83,33 +110,33 @@ app.get("/api/config", (c) =>
   }),
 );
 
-app.get("/api/workspaces/:id", async (c) => {
+open.get("/api/workspaces/:id", async (c) => {
   const id = c.req.param("id");
   const role = await membership(c.env.DB, await userId(c), id);
   return c.json({ role, plan: await plan(c.env.DB, id) });
 });
 
-app.get("/api/workspaces/:id/setups", async (c) =>
+open.get("/api/workspaces/:id/setups", async (c) =>
   c.json(await listSetups(c.env.DB, await userId(c), c.req.param("id"), c.req.queries("column") ?? [])),
 );
-app.post("/api/workspaces/:id/setups", async (c) =>
+open.post("/api/workspaces/:id/setups", async (c) =>
   c.json(await saveSetup(c.env.DB, await userId(c), c.req.param("id"), await json(c)), 201),
 );
-app.delete("/api/workspaces/:id/setups/:item", async (c) => {
+open.delete("/api/workspaces/:id/setups/:item", async (c) => {
   await deleteSaved(c.env.DB, await userId(c), c.req.param("id"), "setup", c.req.param("item"));
   return c.body(null, 204);
 });
 
-app.get("/api/workspaces/:id/bridges", async (c) => c.json(await listBridges(c.env.DB, await userId(c), c.req.param("id"))));
-app.post("/api/workspaces/:id/bridges", async (c) =>
+open.get("/api/workspaces/:id/bridges", async (c) => c.json(await listBridges(c.env.DB, await userId(c), c.req.param("id"))));
+open.post("/api/workspaces/:id/bridges", async (c) =>
   c.json(await saveBridge(c.env.DB, await userId(c), c.req.param("id"), await json(c)), 201),
 );
-app.delete("/api/workspaces/:id/bridges/:item", async (c) => {
+open.delete("/api/workspaces/:id/bridges/:item", async (c) => {
   await deleteSaved(c.env.DB, await userId(c), c.req.param("id"), "bridge", c.req.param("item"));
   return c.body(null, 204);
 });
 
-app.post("/api/workspaces/:id/checkout", async (c) => {
+open.post("/api/workspaces/:id/checkout", async (c) => {
   const id = c.req.param("id");
   const role = await membership(c.env.DB, await userId(c), id);
   if (role !== "owner" && role !== "admin") throw new WorkspaceError(403, "Only a workspace owner or admin can subscribe.");
@@ -125,7 +152,7 @@ app.post("/api/workspaces/:id/checkout", async (c) => {
   return c.json({ checkoutUrl: checkout.checkoutUrl });
 });
 
-app.post("/api/paddle/webhook", async (c) => {
+open.post("/api/paddle/webhook", async (c) => {
   const raw = await c.req.text();
   if (!c.env.PADDLE_WEBHOOK_SECRET || !(await verifyPaddleSignature(raw, c.req.header("paddle-signature") ?? null, c.env.PADDLE_WEBHOOK_SECRET))) {
     return c.json({ error: "Bad signature." }, 401);
@@ -135,7 +162,7 @@ app.post("/api/paddle/webhook", async (c) => {
   return c.json({ result: change ? await applySubscription(c.env.DB, change) : "ignored" });
 });
 
-app.post("/api/commentary", (c) =>
+open.post("/api/commentary", (c) =>
   handleCommentary(c.req.raw, {
     apiKey: c.env.ANTHROPIC_API_KEY ?? "",
     authorize: async () => {
@@ -146,9 +173,9 @@ app.post("/api/commentary", (c) =>
   }),
 );
 
-app.all("/api/*", (c) => c.json({ error: "Not found." }, 404));
+open.all("/api/*", (c) => c.json({ error: "Not found." }, 404));
 
-app.get("/assets/*", async (c) => serveCompressedWasm(c.req.raw, c.env.ASSETS));
+open.get("/assets/*", async (c) => serveCompressedWasm(c.req.raw, c.env.ASSETS));
 
 /** The asset layer redirects these names to the same file without `.html`. */
 const HTML_PAGE = new Set(["/guide.html", "/method.html", "/privacy.html", "/price-volume-mix-analysis.html", "/grouping-level.html"]);
@@ -160,7 +187,7 @@ async function pageResponse(request: Request, assets: Fetcher): Promise<Response
   return assets.fetch(new Request(url, request));
 }
 
-app.get("*", async (c) => {
+open.get("*", async (c) => {
   const response = await pageResponse(c.req.raw, c.env.ASSETS);
   const view = pageView(c.req.raw, response);
   if (view) {
@@ -172,7 +199,16 @@ app.get("*", async (c) => {
 });
 
 for (const pathname of HTML_PAGE) {
-  app.all(pathname.slice(0, -".html".length), (c) => c.env.ASSETS.fetch(c.req.raw));
+  open.all(pathname.slice(0, -".html".length), (c) => c.env.ASSETS.fetch(c.req.raw));
 }
 
-export default app;
+const worker = {
+  fetch(request: Request, env: Env, ctx: HonoExecutionContext): Response | Promise<Response> {
+    const closed = closedApiResponse(request.method, getPath(request));
+    // closedApiResponse returns null for a page, so this does not read ACCOUNTS, and createAuth does not run.
+    if (closed !== null && !accountsEnabled(env.ACCOUNTS)) return closed;
+    return open.fetch(request, env, ctx);
+  },
+};
+
+export default worker;
