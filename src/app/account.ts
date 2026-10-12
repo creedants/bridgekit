@@ -1,6 +1,16 @@
 import type { BridgeSummary } from "../summary.ts";
 import type { Setup } from "./setup.ts";
-import { noteConfig, notePlan, noteSignedOut, noteUser, noteWorkspaces } from "./useConfig.ts";
+import {
+  beginRead,
+  noteConfig,
+  notePlan,
+  notePlanUnknown,
+  noteSignedOut,
+  noteUser,
+  noteUserUnknown,
+  noteWorkspaces,
+  noteWorkspacesUnknown,
+} from "./useConfig.ts";
 
 /**
  * Calls to the site's own server for Pro workspaces (server/worker.ts). Only
@@ -69,7 +79,9 @@ async function call<T>(path: string, init?: { method?: string; body?: unknown })
 
 // Anything read from the deployment or the session is written to the shared
 // note book (src/app/useConfig.ts), so the Workspace panel stays the only
-// reader and no second call is made.
+// reader and no second call is made. A read keeps its session number, so an
+// answer that belongs to an earlier person writes nothing, and a read that
+// fails hands back what it would have replaced.
 export const getConfig = async (): Promise<Config> => {
   const found = await call<Config>("/api/config");
   noteConfig(found);
@@ -77,9 +89,15 @@ export const getConfig = async (): Promise<Config> => {
 };
 
 export async function getUser(): Promise<User | null> {
-  const found = await call<{ user: User } | null>("/api/auth/get-session");
-  noteUser(found?.user ?? null);
-  return found?.user ?? null;
+  const session = beginRead();
+  try {
+    const found = await call<{ user: User } | null>("/api/auth/get-session");
+    noteUser(found?.user ?? null, session);
+    return found?.user ?? null;
+  } catch (error) {
+    noteUserUnknown(session);
+    throw error;
+  }
 }
 
 const back = () => location.pathname + location.search;
@@ -96,12 +114,21 @@ export const signOut = async () => {
   await call("/api/auth/sign-out", { body: {} });
   noteSignedOut();
 };
-export const deleteAccount = () => call("/api/auth/delete-user", { body: {} });
+export const deleteAccount = async () => {
+  await call("/api/auth/delete-user", { body: {} });
+  noteSignedOut();
+};
 
 export const listWorkspaces = async (): Promise<Workspace[]> => {
-  const found = await call<Workspace[]>("/api/auth/organization/list");
-  noteWorkspaces(found);
-  return found;
+  const session = beginRead();
+  try {
+    const found = await call<Workspace[]>("/api/auth/organization/list");
+    noteWorkspaces(found, session);
+    return found;
+  } catch (error) {
+    noteWorkspacesUnknown(session);
+    throw error;
+  }
 };
 
 export const createWorkspace = (name: string) =>
@@ -110,9 +137,15 @@ export const createWorkspace = (name: string) =>
   });
 
 export const getPlan = async (id: string): Promise<{ role: string; plan: Plan }> => {
-  const found = await call<{ role: string; plan: Plan }>(`/api/workspaces/${id}`);
-  notePlan(id, found.plan);
-  return found;
+  const session = beginRead();
+  try {
+    const found = await call<{ role: string; plan: Plan }>(`/api/workspaces/${id}`);
+    notePlan(id, found.plan, session);
+    return found;
+  } catch (error) {
+    notePlanUnknown(id, session);
+    throw error;
+  }
 };
 
 export const getMembers = (id: string) =>
