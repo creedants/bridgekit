@@ -575,7 +575,7 @@ The Configuration section of [Rate Limiting](https://developers.cloudflare.com/w
 
 Step 2.1 moves the account to Workers Paid. It does not say that this binding is included.
 
-After step 2.18, step 2.20 sends four sign-in requests for one valid address from one connection within a minute. The fourth answers 429, and no fourth email arrives. If the binding is missing, sign-in works with no limit.
+After step 2.18, step 2.20 sends four sign-in requests for one valid address from one connection within a minute. Once Cloudflare's count has caught up, the four answer 200, 200, 200, 429 and three emails arrive. Four 200 answers are inconclusive, not proof that the binding is missing. The Locality and Accuracy sections of [Rate Limiting](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) say the count is per location and eventually consistent, so a request can pass before the cached count reaches it. Step 2.20 bounds the run and says what to do when it stays inconclusive.
 
 Run:
 ```sh
@@ -588,13 +588,14 @@ grep -n -A 4 '"ratelimits"' wrangler.jsonc
 - Source: `server/env.ts:25` has `MAGIC_LINK_RATE_LIMIT?: RateLimit`.
 - Derived from: `server/worker.ts:37-38` has `value === "on"`. `server/worker.ts:80` has `limitMagicLinkSignIn`. `server/worker.ts:211-212` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`. Part 1 returns the closed response and does not call `limitMagicLinkSignIn`. It was not run.
 - Source: `server/auth.ts:89` has `if (rateLimit === undefined) return null`.
+- Source: `server/auth.ts:49-51` has `customRules: {`, `[signInMagicLink.path]: () => false`. The library's own limit for this route is off, so a missing binding leaves sign-in unlimited.
 - Not verified: which plan includes the binding. The [Limits](https://developers.cloudflare.com/workers/platform/limits/) page does not name it. The [Pricing](https://developers.cloudflare.com/workers/platform/pricing/) page does not name it.
 - Not verified: a way to list the `namespace_id` values other Workers in this account already use.
 - Not verified: what you see when two Workers share a `namespace_id`. The Configuration section, cited above, says they share counters.
 - Not verified: how far a live count can differ from 3.
 - Not verified: whether a deploy fails when the plan omits this binding. The `ratelimits` entry is in the file step 1.10 deploys.
 - Worked: the command prints `MAGIC_LINK_RATE_LIMIT`, `"namespace_id"` with `"1001"` or the string you wrote, `"limit": 3`, and `"period": 60`.
-- If this is wrong you will see: step 2.20's fourth request still sends mail. That is what a missing binding looks like. One extra success can also happen while the count is still catching up.
+- If this is wrong you will see: a 429 before the fourth valid request in step 2.20. Four 200 answers are not the whole evidence. They are inconclusive, because the count is per location and eventually consistent. Follow step 2.20's bounded repeat, then its next action, before treating the binding as absent. A missing binding lets every request through, however many you send.
 
 ### 2.18 Deploy
 
@@ -652,6 +653,8 @@ https://<domain>/app/
 Do: Check the sign-in limit from one connection.
 Do: Wait until a minute has passed with no successful sign-in from this connection.
 Do: Run the three commands below from that same connection.
+Do: Time the four valid requests together. A run that takes longer than the 60 second window proves nothing, so discard it and wait out another quiet minute first.
+Do: Repeat the timed run up to three times, and stop once the fourth valid request answers 429. Three is this runbook's own bound. Cloudflare documents no guaranteed number of attempts or delay before a count catches up.
 Do: Leave `not-an-email` as it is.
 Do: In the last command, put your own address in place of `review@example.invalid`.
 
@@ -683,9 +686,12 @@ done
 - Source: `server/auth.ts:88` has `if (result.issues) return null`.
 - Source: `server/auth.ts:16-17` has `Too many requests. Please try again later.`
 - Source: `server/auth.ts:90` has `cf-connecting-ip`.
-- Not verified: that a minute with no successful sign-in clears the counter. Step 2.17 cites the Accuracy section.
-- Worked: the `text/plain` request prints 415 and `Content-Type must be application/json.` The first of the four valid requests prints 200, so the three `not-an-email` requests did not use the limit. The fourth valid request prints 429 and `Too many requests. Please try again later.` Three emails for your address arrive. A fourth email does not.
-- If this is wrong you will see: a 429 before the fourth valid request. Wait out one more quiet minute and send the four valid requests again. If no email arrives for the first valid request, the address in those four requests is not your own. If all four valid requests answer 200 and a fourth email arrives, sign-in is running with no limit. That is what a missing binding looks like. One extra success can also happen while the count is still catching up.
+- Source: `test/rate-limit.test.ts:551` has `{ status: 400, body: LIBRARY_EMAIL }`.
+- Source: `test/rate-limit.test.ts:557` has `calls: [{ key: CLIENT, success: true }]`.
+- Not verified: that a minute with no successful sign-in clears the counter, and how many attempts a real count needs. Step 2.17 cites the Accuracy section.
+- Worked: the `text/plain` request prints 415 and `Content-Type must be application/json.` All three `not-an-email` requests print 400 and send no mail, so they fail validation and do not reach the limit. Once the count has caught up, the four valid requests answer 200, 200, 200, 429 and three emails for your address arrive; a fourth email does not. The pass rests on the whole run, the three 400 answers with no mail and the fourth valid request's 429, not on the first valid request's 200 alone.
+- If this is wrong you will see: a 429 before the fourth valid request. Wait out one more quiet minute and send the four valid requests again. All four valid requests answering 200 is inconclusive, not proof that the binding is missing, because the count is per location and eventually consistent. Repeat the timed run as above, then do the next action if it stays inconclusive. If no email arrives for the first valid request, the email check is incomplete. Confirm the address you typed is your own, then recheck the HTTP result, steps 2.4 through 2.6, and mail delivery. A missing first email does not show that the address belongs to someone else.
+- Not verified: that the Cloudflare dashboard or a read-only command names a deployed Worker's rate limit binding. The Monitoring section, cited in step 2.17, says rate limiting bindings are not visible in the Cloudflare dashboard, so the dashboard does not settle it. As the next action, run the read-only `npx wrangler versions list`, then `npx wrangler versions view <version-id>` for the deployed version, and look for the `ratelimits` entry. Whether that output names the `ratelimits` binding is not verified. This repo did not run either command.
 
 ### 2.21 Check that Subscribe opens the checkout
 
