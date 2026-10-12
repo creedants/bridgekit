@@ -16,12 +16,13 @@ export const EMAIL_NOT_SET_UP = "Email is not set up on this server.";
  * sign-in or invitation that never reaches the user and instead of leaving the
  * link in the Worker log.
  *
- * The Worker refuses a request that needs an email before Better Auth runs, so
- * this failure is the backstop. Better Auth's magic-link route awaits the send
- * and answers the thrown APIError with the sentence above as a plain 503. Its
- * invitation route runs the send in a background helper that catches the
- * rejection, logs it, and answers 200 with a pending invitation, so a plain
- * Error and an APIError both disappear there.
+ * The Worker refuses every request it forwards to Better Auth on a route that
+ * needs an email before Better Auth runs, so this failure is the backstop.
+ * Better Auth's magic-link route awaits the send and answers the thrown
+ * APIError with the sentence above as a plain 503. Its invitation route runs
+ * the send in a background helper that catches the rejection, logs it, and
+ * answers 200 with a pending invitation, so a plain Error and an APIError both
+ * disappear there.
  */
 export async function sendEmail(env: Env, to: string, subject: string, text: string): Promise<void> {
   if (!env.RESEND_API_KEY || !env.EMAIL_FROM) {

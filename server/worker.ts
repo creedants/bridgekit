@@ -85,9 +85,9 @@ open.use("/api/workspaces/*", async (c, next) => {
  * BETTER_AUTH_URL that carries a path keeps it (better-auth's withPath
  * returns the URL unchanged when it already has a pathname, and its router
  * takes the basePath from new URL(baseURL).pathname). These are therefore
- * matched as the end of the request path, not at two fixed addresses: every
- * path Better Auth serves one of them at ends with one of these, and no other
- * route it serves ends with either.
+ * matched as the end of the request path, not at two fixed addresses: a
+ * request Better Auth answers on either route arrives here with a path that
+ * ends with one of them, and no other route it serves ends with either.
  */
 const EMAIL_ROUTES = ["/sign-in/magic-link", "/organization/invite-member"];
 
