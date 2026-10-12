@@ -113,8 +113,8 @@ const refused = (): Reply => () => json({ error: "Review simulated read failure.
 
 const user = { id: "u", email: "u@example.invalid", name: "U" };
 const other = { id: "v", email: "v@example.invalid", name: "V" };
-// A known end time ahead of the read, so the record's own clock is before it
-// and the tests below decide what happens as the clock moves on.
+// A known end time ahead of the time of the read, so it counts as Pro now and
+// the tests below decide what happens once the time of the read is past it.
 const cancelEnd = new Date(Date.now() + 86_400_000).toISOString();
 const canceledPlan = { pro: true, status: "canceled", seats: 1, currentPeriodEnd: cancelEnd };
 // A cancelled period far enough away that a browser timer cannot hold the wait.

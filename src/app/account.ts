@@ -81,8 +81,10 @@ async function call<T>(path: string, init?: { method?: string; body?: unknown })
 // note book (src/app/useConfig.ts), so the Workspace panel stays the only
 // reader and no second call is made. A read takes a ticket from the note book
 // before it starts, so an answer that belongs to an earlier person, or to an
-// earlier read of the same fact, writes nothing, and a read that fails hands
-// back what it would have replaced.
+// earlier read of the same fact, writes nothing. A session, workspace-list or
+// plan read that fails hands back what it would have replaced; a config read
+// has no failure writer, so a failed config read leaves the earlier config in
+// place.
 export const getConfig = async (): Promise<Config> => {
   const ticket = beginRead("config");
   const found = await call<Config>("/api/config");
