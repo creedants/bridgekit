@@ -140,7 +140,7 @@ const signIn = async (workspaces: { id: string; name: string; plan: unknown }[])
 };
 
 /** The same routes again, with one answer changed or held back. */
-const reanswer = (workspaces: { id: string; name: string; plan: unknown }[], over: Record<string, Reply>): void => {
+const reanswer = (workspaces: { id: string; name: string; plan: unknown }[], over: Record<string, unknown>): void => {
   const routes: Record<string, unknown> = {
     "/api/config": keyed,
     "/api/auth/get-session": { user },

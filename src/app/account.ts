@@ -79,23 +79,25 @@ async function call<T>(path: string, init?: { method?: string; body?: unknown })
 
 // Anything read from the deployment or the session is written to the shared
 // note book (src/app/useConfig.ts), so the Workspace panel stays the only
-// reader and no second call is made. A read keeps its session number, so an
-// answer that belongs to an earlier person writes nothing, and a read that
-// fails hands back what it would have replaced.
+// reader and no second call is made. A read takes a ticket from the note book
+// before it starts, so an answer that belongs to an earlier person, or to an
+// earlier read of the same fact, writes nothing, and a read that fails hands
+// back what it would have replaced.
 export const getConfig = async (): Promise<Config> => {
+  const ticket = beginRead("config");
   const found = await call<Config>("/api/config");
-  noteConfig(found);
+  noteConfig(found, ticket);
   return found;
 };
 
 export async function getUser(): Promise<User | null> {
-  const session = beginRead();
+  const ticket = beginRead("session");
   try {
     const found = await call<{ user: User } | null>("/api/auth/get-session");
-    noteUser(found?.user ?? null, session);
+    noteUser(found?.user ?? null, ticket);
     return found?.user ?? null;
   } catch (error) {
-    noteUserUnknown(session);
+    noteUserUnknown(ticket);
     throw error;
   }
 }
@@ -120,13 +122,13 @@ export const deleteAccount = async () => {
 };
 
 export const listWorkspaces = async (): Promise<Workspace[]> => {
-  const session = beginRead();
+  const ticket = beginRead("workspaces");
   try {
     const found = await call<Workspace[]>("/api/auth/organization/list");
-    noteWorkspaces(found, session);
+    noteWorkspaces(found, ticket);
     return found;
   } catch (error) {
-    noteWorkspacesUnknown(session);
+    noteWorkspacesUnknown(ticket);
     throw error;
   }
 };
@@ -137,13 +139,13 @@ export const createWorkspace = (name: string) =>
   });
 
 export const getPlan = async (id: string): Promise<{ role: string; plan: Plan }> => {
-  const session = beginRead();
+  const ticket = beginRead(`plan/${id}`);
   try {
     const found = await call<{ role: string; plan: Plan }>(`/api/workspaces/${id}`);
-    notePlan(id, found.plan, session);
+    notePlan(id, found.plan, ticket);
     return found;
   } catch (error) {
-    notePlanUnknown(id, session);
+    notePlanUnknown(id, ticket);
     throw error;
   }
 };

@@ -218,9 +218,9 @@ function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<
 }
 
 /**
- * The panel is shown only to people who can use it: this build has the flag,
- * the deployment has a commentary key, and the person is signed in with Pro.
- * The offer comes from the calls the Workspace panel already makes, so the
+ * A signed-in person with no Pro plan read sees the heading and the hint with
+ * no button; the full panel, with the button, needs a plan read as Pro. The
+ * offer comes from the calls the Workspace panel already makes, so the
  * decision adds no request to any /api/ path.
  */
 function AiOffer(props: { summary: BridgeSummary }) {
