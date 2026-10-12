@@ -3,6 +3,7 @@ import mvpWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url
 import ehWasm from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
 import mvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import type { Query } from "../engine.ts";
+import { decodeCsvBuffer, ENCODING_SENTENCE, isValidUtf8 } from "./encoding.ts";
 import { toCsv } from "./files.ts";
 import { convertFormattedNumbers } from "./numbers.ts";
 
@@ -179,6 +180,23 @@ export interface BrowserDatabase {
   query: Query;
   /** Loads a CSV, Excel or Parquet file into `table` without it leaving the browser. */
   loadFile(file: File, table: string): Promise<void>;
+}
+
+// A UTF-8 file is handed to the database as its own bytes, so this is the most
+// that is read up front. Only a file whose prefix is not UTF-8 (a Windows-1252
+// or UTF-16 export) is read in full, to tell its encoding from its whole text.
+const CSV_PREFIX_BYTES = 65536;
+
+// read_csv only reads UTF-8. When a file that passed the prefix check turns out
+// to hold bytes that are not UTF-8, the database's own message names exactly
+// this failure, and the one sentence replaces it. Any other database error is
+// shown as it is.
+function csvEncodingFailure(error: unknown): unknown {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("Invalid unicode (byte sequence mismatch)") && message.includes("This file is not utf-8 encoded")) {
+    return new Error(ENCODING_SENTENCE);
+  }
+  return error;
 }
 
 // One open per page. A rejection clears it so the next call can try again.
@@ -359,11 +377,25 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
         const registered = isParquet ? "upload.parquet" : "upload.csv";
         if (isExcel) {
           await db.registerFileText(registered, await firstSheetAsCsv(file));
-        } else {
+        } else if (isParquet) {
           await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+        } else {
+          const prefix = new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer());
+          const continues = prefix.byteLength < file.size;
+          if (continues && isValidUtf8(prefix)) {
+            await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+          } else {
+            const decision = decodeCsvBuffer(continues ? new Uint8Array(await file.arrayBuffer()) : prefix);
+            if (decision.kind === "utf8") await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+            else await db.registerFileText(registered, decision.text);
+          }
         }
         const reader = isParquet ? `read_parquet('${registered}')` : `read_csv('${registered}')`;
-        await query(`CREATE OR REPLACE TABLE "${table}" AS SELECT * FROM ${reader}`);
+        try {
+          await query(`CREATE OR REPLACE TABLE "${table}" AS SELECT * FROM ${reader}`);
+        } catch (error) {
+          throw csvEncodingFailure(error);
+        }
         await convertFormattedNumbers(query, table);
       },
     };
