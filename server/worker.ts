@@ -5,6 +5,7 @@ import { createAuth, limitMagicLinkSignIn, type Auth } from "./auth.ts";
 import type { ExecutionContext, Fetcher } from "./cloudflare.ts";
 import { handleCommentary } from "./commentary.ts";
 import { countPageView, pageView } from "./counts.ts";
+import { canSendEmail } from "./email.ts";
 import type { Env } from "./env.ts";
 import { createCheckout, parseSubscriptionEvent, verifyPaddleSignature, type PaddleEnvironment } from "./paddle.ts";
 import {
@@ -46,7 +47,7 @@ function gatedApiPath(pathname: string): boolean {
   return feature === "auth" || feature === "workspaces" || feature === "paddle" || feature === "commentary";
 }
 
-const CLOSED_CONFIG = { providers: [] as string[], commentary: false, billing: false };
+const CLOSED_CONFIG = { providers: [] as string[], email: false, commentary: false, billing: false };
 
 function notFound(): Response {
   return Response.json({ error: "Not found." }, { status: 404 });
@@ -109,6 +110,7 @@ open.get("/api/config", (c) =>
       ...(c.env.MICROSOFT_CLIENT_ID ? ["microsoft"] : []),
       ...(c.env.GOOGLE_CLIENT_ID ? ["google"] : []),
     ],
+    email: canSendEmail(c.env),
     commentary: Boolean(c.env.ANTHROPIC_API_KEY),
     billing: Boolean(c.env.PADDLE_API_KEY && c.env.PADDLE_PRICE_ID),
   }),

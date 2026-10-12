@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { APIError } from "better-auth";
 import { test } from "node:test";
 import type { Fetcher } from "../server/cloudflare.ts";
+import { EMAIL_NOT_SET_UP } from "../server/email.ts";
 import type { Env } from "../server/env.ts";
 import { sendEmail } from "../server/email.ts";
 import { testDatabase } from "./support/d1.ts";
@@ -99,7 +101,11 @@ test("a key and a sender still send when the local log is on", async () => {
 test("a sender with no key is not sent and not logged", async () => {
   const log = captureLog();
   try {
-    await assert.rejects(sendEmail(mailEnv({ EMAIL_FROM: "no-reply@example.invalid" }), TO, SUBJECT, TEXT));
+    await assert.rejects(sendEmail(mailEnv({ EMAIL_FROM: "no-reply@example.invalid" }), TO, SUBJECT, TEXT), (error: unknown) => {
+      assert.ok(error instanceof APIError);
+      assert.equal(error.message, EMAIL_NOT_SET_UP);
+      return true;
+    });
   } finally {
     log.restore();
   }
@@ -129,7 +135,9 @@ test("no key and a local log that is not exactly on throws and logs nothing", as
       log.restore();
     }
     assert.ok(thrown instanceof Error, `${label} did not throw`);
-    assert.equal(thrown.message, "Email is not set up on this server.");
+    assert.ok(thrown instanceof APIError, `${label} did not throw an APIError`);
+    assert.equal(thrown.statusCode, 503);
+    assert.equal(thrown.message, EMAIL_NOT_SET_UP);
     assert.deepEqual(log.lines, [], label);
     assertNoSecretLeaked(log.lines, label);
   }

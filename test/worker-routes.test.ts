@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Fetcher } from "../server/cloudflare.ts";
+import { EMAIL_NOT_SET_UP } from "../server/email.ts";
 import type { Env } from "../server/env.ts";
 import app from "../server/worker.ts";
 import { testDatabase } from "./support/d1.ts";
@@ -385,7 +386,7 @@ test("accounts stay closed unless ACCOUNTS is on", async () => {
     for (const path of ["/api/config", "/api/%63onfig"]) {
       const response = await call(`${ORIGIN}${path}`, env);
       assert.equal(response.status, 200, `${path} with ACCOUNTS ${accountsLabel}`);
-      assert.deepEqual(await response.json(), { providers: [], commentary: false, billing: false });
+      assert.deepEqual(await response.json(), { providers: [], email: false, commentary: false, billing: false });
     }
     assert.deepEqual(await counts(counted, tables), before);
   }
@@ -420,8 +421,10 @@ test("accounts stay closed unless ACCOUNTS is on", async () => {
     headers: { origin: ORIGIN, "content-type": "application/json" },
     body: SIGN_IN,
   });
-  assert.equal(signIn.status, 200);
-  assert.deepEqual(await signIn.json(), { status: true });
+  // No mail key and no LOCAL_EMAIL_LOG, so the send fails. Better Auth answers
+  // the failure with one sentence, and the verification row is still written.
+  assert.equal(signIn.status, 503);
+  assert.deepEqual(await signIn.json(), { message: EMAIL_NOT_SET_UP });
   const afterSignIn = await counts(turnedOn.db, await applicationTables(turnedOn.db));
   assert.equal(afterSignIn.verification, 1);
   assert.equal(afterSignIn.user, 0);
@@ -432,4 +435,22 @@ test("accounts stay closed unless ACCOUNTS is on", async () => {
   assert.equal(upper.status, 500);
   assert.equal(await upper.text(), "missing");
   assert.deepEqual(await views(turnedOn.db), beforeUpper);
+});
+
+test("the config reports whether an email can be sent", async () => {
+  const { env } = bindings({ "/": html(HOME) });
+  const turnedOn = { ...env, ACCOUNTS: "on" };
+  const config = async (fields: Partial<Env>): Promise<unknown> => (await call(`${ORIGIN}/api/config`, { ...turnedOn, ...fields })).json();
+  const without = { providers: [], email: false, commentary: false, billing: false };
+  assert.deepEqual(await config({}), without);
+  assert.deepEqual(await config({ LOCAL_EMAIL_LOG: "on" }), { ...without, email: true });
+  assert.deepEqual(await config({ LOCAL_EMAIL_LOG: "true" }), without);
+  assert.deepEqual(await config({ LOCAL_EMAIL_LOG: " on" }), without);
+  assert.deepEqual(await config({ RESEND_API_KEY: "re_test_key" }), without);
+  assert.deepEqual(await config({ EMAIL_FROM: "no-reply@example.invalid" }), without);
+  assert.deepEqual(await config({ RESEND_API_KEY: "re_test_key", EMAIL_FROM: "no-reply@example.invalid" }), { ...without, email: true });
+  assert.deepEqual(await config({ RESEND_API_KEY: "re_test_key", EMAIL_FROM: "no-reply@example.invalid", LOCAL_EMAIL_LOG: "on" }), {
+    ...without,
+    email: true,
+  });
 });
