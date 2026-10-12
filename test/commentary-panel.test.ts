@@ -11,7 +11,6 @@ const state = (over: Partial<CommentaryState> = {}): CommentaryState => ({
   user: undefined,
   workspaces: null,
   plans: {},
-  clock: Date.parse("2026-10-12T00:00:00.000Z"),
   ...over,
 });
 
@@ -118,6 +117,9 @@ const other = { id: "v", email: "v@example.invalid", name: "V" };
 // and the tests below decide what happens as the clock moves on.
 const cancelEnd = new Date(Date.now() + 86_400_000).toISOString();
 const canceledPlan = { pro: true, status: "canceled", seats: 1, currentPeriodEnd: cancelEnd };
+// A cancelled period far enough away that a browser timer cannot hold the wait.
+const farEnd = new Date(Date.now() + 30 * 86_400_000).toISOString();
+const farCanceledPlan = { pro: true, status: "canceled", seats: 1, currentPeriodEnd: farEnd };
 
 const offer = (): "hidden" | "hint" | "button" =>
   commentaryPanel(true, commentarySnapshot().config, commentaryPro(commentarySnapshot()));
@@ -135,6 +137,17 @@ const signIn = async (workspaces: { id: string; name: string; plan: unknown }[])
   await api.getConfig();
   await api.getUser();
   await api.listWorkspaces();
+};
+
+/** The same routes again, with one answer changed or held back. */
+const reanswer = (workspaces: { id: string; name: string; plan: unknown }[], over: Record<string, Reply>): void => {
+  const routes: Record<string, unknown> = {
+    "/api/config": keyed,
+    "/api/auth/get-session": { user },
+    "/api/auth/organization/list": workspaces.map((w) => ({ id: w.id, name: w.name })),
+  };
+  for (const w of workspaces) routes[`/api/workspaces/${w.id}`] = { role: "owner", plan: w.plan };
+  answer({ ...routes, ...over });
 };
 
 /** Opening a workspace reads its plan. */
@@ -218,10 +231,10 @@ test("a cancelled plan stops counting as Pro at its end time", async () => {
   assert.equal(offer(), "button");
   const seeded = commentarySnapshot();
   const end = Date.parse(cancelEnd);
-  assert.equal(commentaryPro({ ...seeded, clock: end - 1 }), "pro");
-  assert.equal(commentaryPanel(true, keyed, commentaryPro({ ...seeded, clock: end - 1 })), "button");
-  assert.equal(commentaryPro({ ...seeded, clock: end }), "free");
-  assert.equal(commentaryPanel(true, keyed, commentaryPro({ ...seeded, clock: end })), "hint");
+  assert.equal(commentaryPro(seeded, end - 1), "pro");
+  assert.equal(commentaryPanel(true, keyed, commentaryPro(seeded, end - 1)), "button");
+  assert.equal(commentaryPro(seeded, end), "free");
+  assert.equal(commentaryPanel(true, keyed, commentaryPro(seeded, end)), "hint");
 });
 
 test("the client's end-time rule is the server's rule", async () => {
@@ -244,9 +257,130 @@ test("the client's end-time rule is the server's rule", async () => {
         user: { id: "u", email: "a@b.c", name: "A" },
         workspaces: [{ id: "w", name: "W" }],
         plans: { w: { pro: true, status, seats: 1, currentPeriodEnd } },
-        clock: now.getTime(),
       }),
+      now.getTime(),
     );
     assert.equal(read === "pro", hasPro(status as "active", currentPeriodEnd, now), `${status} at ${now.toISOString()}`);
+  }
+});
+
+// The five defects the second review found. Each one is a way an out-of-date
+// answer still puts the button on screen.
+
+test("an earlier plan answer does not come back after a newer read of it failed", async () => {
+  const workspaces = [{ id: "pro", name: "Pro", plan: proPlan }];
+  await signIn(workspaces);
+  const earlier = pending();
+  reanswer(workspaces, { "/api/workspaces/pro": earlier.reply });
+  const started = openWorkspace("pro");
+  reanswer(workspaces, { "/api/workspaces/pro": refused() });
+  await assert.rejects(() => openWorkspace("pro"));
+  assert.equal(offer(), "hidden");
+  earlier.land({ role: "owner", plan: proPlan });
+  await started;
+  assert.equal(offer(), "hidden");
+});
+
+test("an earlier plan answer does not overwrite a newer read of the same plan", async () => {
+  const workspaces = [{ id: "pro", name: "Pro", plan: proPlan }];
+  await signIn(workspaces);
+  const earlier = pending();
+  reanswer(workspaces, { "/api/workspaces/pro": earlier.reply });
+  const started = openWorkspace("pro");
+  reanswer(workspaces, { "/api/workspaces/pro": { role: "owner", plan: freePlan } });
+  await openWorkspace("pro");
+  assert.equal(offer(), "hint");
+  earlier.land({ role: "owner", plan: proPlan });
+  await started;
+  assert.equal(offer(), "hint");
+});
+
+test("a failed session read takes the last person's facts before the next person signs in", async () => {
+  const workspaces = [{ id: "pro", name: "Pro", plan: proPlan }];
+  await signIn(workspaces);
+  await openWorkspace("pro");
+  assert.equal(offer(), "button");
+  reanswer(workspaces, { "/api/auth/get-session": refused() });
+  await assert.rejects(() => api.getUser());
+  reanswer(workspaces, { "/api/auth/get-session": { user: other } });
+  await api.getUser();
+  assert.equal(commentarySnapshot().user?.id, "v");
+  assert.deepEqual(commentarySnapshot().workspaces, null);
+  assert.deepEqual(commentarySnapshot().plans, {});
+  assert.equal(offer(), "hidden");
+});
+
+test("a plan answer still in flight across a failed session read writes nothing", async () => {
+  const workspaces = [{ id: "pro", name: "Pro", plan: proPlan }];
+  await signIn(workspaces);
+  const late = pending();
+  reanswer(workspaces, { "/api/workspaces/pro": late.reply });
+  const started = openWorkspace("pro");
+  reanswer(workspaces, { "/api/auth/get-session": refused() });
+  await assert.rejects(() => api.getUser());
+  reanswer(workspaces, { "/api/auth/get-session": { user: other } });
+  await api.getUser();
+  late.land({ role: "owner", plan: proPlan });
+  await started;
+  assert.deepEqual(commentarySnapshot().plans, {});
+  assert.equal(offer(), "hidden");
+});
+
+test("a cancelled end far in the future still gets a timer the browser can hold", async () => {
+  const { expiryTimer, TIMER_MAX } = await import("../src/app/useConfig.ts");
+  const workspaces = [{ id: "pro", name: "Pro", plan: farCanceledPlan }];
+  await signIn(workspaces);
+  await openWorkspace("pro");
+  assert.equal(offer(), "button");
+  const seeded = commentarySnapshot();
+  const at = Date.parse(farEnd);
+  const start = Date.now();
+  let now = start;
+  const armed: { delay: number; fire: () => void }[] = [];
+  let judged = 0;
+  const stop = expiryTimer(
+    at,
+    () => now,
+    (delay, fire) => {
+      assert.ok(delay <= TIMER_MAX, `a delay of ${delay} is past what a browser timer holds`);
+      armed.push({ delay, fire });
+      return () => {};
+    },
+    () => {
+      judged += 1;
+    },
+  );
+  assert.equal(armed.length, 1);
+  assert.equal(armed[0].delay, TIMER_MAX);
+  // The end is thirty days away, so the first fire comes early and arms again.
+  now = start + armed[0].delay;
+  armed[0].fire();
+  assert.equal(armed.length, 2);
+  assert.equal(armed[1].delay, at - now);
+  assert.equal(judged, 1);
+  // Once the clock passes the end nothing is armed and the answer has no button.
+  now = at + 1;
+  armed[1].fire();
+  assert.equal(armed.length, 2);
+  assert.equal(judged, 2);
+  assert.equal(commentaryPro(seeded, now), "free");
+  assert.equal(commentaryPanel(true, keyed, commentaryPro(seeded, now)), "hint");
+  stop();
+});
+
+test("the decision is judged against the time it is read, not the last write", async () => {
+  const workspaces = [{ id: "pro", name: "Pro", plan: canceledPlan }];
+  await signIn(workspaces);
+  await openWorkspace("pro");
+  assert.equal(offer(), "button");
+  const seeded = commentarySnapshot();
+  const end = Date.parse(cancelEnd);
+  const realNow = Date.now;
+  try {
+    Date.now = () => end + 1;
+    assert.equal(commentaryPro(seeded), "free");
+    assert.equal(commentaryPanel(true, keyed, commentaryPro(seeded)), "hint");
+  } finally {
+    Date.now = realNow;
   }
 });
