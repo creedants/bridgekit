@@ -1,123 +1,171 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { comparePeriods, distinctPeriodSort, loadPeriodList, type PeriodSort } from "../src/app/periods.ts";
+import { loadPeriodList, trendPeriods } from "../src/app/periods.ts";
 import { openDatabase } from "../src/duckdb.ts";
+import { trend, type BridgeConfig } from "../src/engine.ts";
 
-function ordered(values: readonly string[], sort: PeriodSort): string[] {
-  return values.slice().toSorted(comparePeriods(sort));
-}
-
-test("months 8, 9, and 10 sort as numbers", () => {
-  assert.equal(distinctPeriodSort(["10", "8", "9"]), "numeric");
-  assert.deepEqual(ordered(["10", "8", "9"], "numeric"), ["8", "9", "10"]);
-});
-
-test("four-digit years keep the same order as text", () => {
-  const years = ["2026", "2024", "2025"];
-  assert.equal(distinctPeriodSort(years), "numeric");
-  assert.deepEqual(ordered(years, "numeric"), ["2024", "2025", "2026"]);
-  assert.deepEqual(ordered(years, "text"), ["2024", "2025", "2026"]);
-});
-
-test("same-width leading zeros keep the same order as text", () => {
-  const values = ["11", "01", "10", "02"];
-  assert.equal(distinctPeriodSort(values), "numeric");
-  assert.deepEqual(ordered(values, "numeric"), ["01", "02", "10", "11"]);
-  assert.deepEqual(ordered(values, "text"), ["01", "02", "10", "11"]);
-});
-
-test("mixed-width leading zeros sort by the number, then the original string", () => {
-  assert.deepEqual(ordered(["10", "9", "8", "09"], "numeric"), ["8", "09", "9", "10"]);
-  assert.deepEqual(ordered(["1.0", "01", "1", "-3", "-10"], "numeric"), ["-10", "-3", "01", "1", "1.0"]);
-});
-
-test("negative numbers and decimals sort by the number", () => {
-  assert.deepEqual(ordered(["4", "-3", "-20", "-10"], "numeric"), ["-20", "-10", "-3", "4"]);
-  assert.deepEqual(ordered(["10", "1.5", "9.5", "1.25"], "numeric"), ["1.25", "1.5", "9.5", "10"]);
-  assert.deepEqual(ordered(["1.5", "1.10"], "numeric"), ["1.10", "1.5"]);
-});
-
-test("integers past 2^53 that collapse to one number break by the original string", () => {
-  const values = ["9007199254740993", "9007199254740992"];
-  assert.equal(distinctPeriodSort(values), "numeric");
-  assert.deepEqual(ordered(values, "numeric"), ["9007199254740992", "9007199254740993"]);
-});
-
-test("quarter labels, prefixed labels, and month names stay in text order", () => {
-  assert.equal(distinctPeriodSort(["Q3", "Q1", "Q4", "Q2"]), "text");
-  assert.deepEqual(ordered(["Q3", "Q1", "Q4", "Q2"], "text"), ["Q1", "Q2", "Q3", "Q4"]);
-
-  assert.equal(distinctPeriodSort(["2025-Q2", "2024-Q4", "2025-Q1"]), "text");
-  assert.deepEqual(ordered(["2025-Q2", "2024-Q4", "2025-Q1"], "text"), ["2024-Q4", "2025-Q1", "2025-Q2"]);
-
-  const prefixed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "P11", "P12"];
-  assert.equal(distinctPeriodSort(prefixed), "text");
-  assert.deepEqual(ordered(prefixed, "text"), ["P1", "P10", "P11", "P12", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9"]);
-
-  const names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  assert.equal(distinctPeriodSort(names), "text");
-  assert.deepEqual(ordered(names, "text"), ["Apr", "Aug", "Dec", "Feb", "Jan", "Jul", "Jun", "Mar", "May", "Nov", "Oct", "Sep"]);
-});
-
-test("date grains and year-to-date labels stay in text order", () => {
-  assert.equal(distinctPeriodSort(["2025-10", "2025-03", "2025-09"]), "text");
-  assert.deepEqual(ordered(["2025-10", "2025-03", "2025-09"], "text"), ["2025-03", "2025-09", "2025-10"]);
-  assert.equal(distinctPeriodSort(["2025 YTD", "2024 YTD"]), "text");
-  assert.deepEqual(ordered(["2025 YTD", "2024 YTD"], "text"), ["2024 YTD", "2025 YTD"]);
-});
-
-test("a mix of numbers and text, including forms that only look numeric, stays in text order", () => {
-  assert.equal(distinctPeriodSort(["10", "8", "9", "Q1"]), "text");
-  assert.deepEqual(ordered(["10", "8", "9", "Q1"], "text"), ["10", "8", "9", "Q1"]);
-  for (const alien of [" 8", "8 ", "1,000", "1e2", "+8", "1.", ".5"]) {
-    assert.equal(distinctPeriodSort(["10", "8", alien]), "text");
-  }
-  assert.deepEqual(ordered(["10", "1,000", "8"], "text"), ["1,000", "10", "8"]);
-});
-
-async function load(values: readonly string[]) {
+/** The period list is the only order; these tests read it from DuckDB. */
+async function loadOnly(values: readonly string[]) {
   const query = await openDatabase();
   await query("SET threads = 1");
   await query("CREATE TABLE periods (p VARCHAR)");
   if (values.length > 0) {
-    const list = values.map((value) => `('${value.replaceAll("'", "''")}')`).join(", ");
-    await query(`INSERT INTO periods VALUES ${list}`);
+    const rows = values.map((value) => `('${value.replaceAll("'", "''")}')`).join(", ");
+    await query(`INSERT INTO periods VALUES ${rows}`);
   }
   return loadPeriodList(query, '"p"', '"periods"');
 }
 
-test("the database list orders months 8, 9, and 10 as numbers", async () => {
-  const list = await load(["10", "8", "9"]);
+/** Same path the tool takes: list the periods, then bridge each consecutive pair. */
+async function trendFor(periods: readonly string[], sales: readonly number[]) {
+  const query = await openDatabase();
+  await query("SET threads = 1");
+  await query("CREATE TABLE sales (period VARCHAR, product VARCHAR, units BIGINT, sales DOUBLE)");
+  const rows = periods.map((p, i) => `('${p.replaceAll("'", "''")}', 'P', 1, ${sales[i]})`).join(", ");
+  await query(`INSERT INTO sales VALUES ${rows}`);
+  const list = await loadPeriodList(query, '"period"', '"sales"');
+  const ordered = trendPeriods(list.values, 13);
+  const config: BridgeConfig = {
+    table: "sales", periodColumn: "period",
+    prior: ordered.at(-2) ?? "", current: ordered.at(-1) ?? "",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+  };
+  return { list, ordered, steps: await trend(query, config, ordered) };
+}
+
+test("months 8, 9, and 10 list, default, and step as numbers", async () => {
+  const query = await openDatabase();
+  await query("SET threads = 1");
+  await query("CREATE TABLE sales (period VARCHAR, product VARCHAR, units BIGINT, sales DOUBLE)");
+  await query(`INSERT INTO sales VALUES ('8', 'P', 1, 100), ('9', 'P', 1, 300), ('10', 'P', 1, 660)`);
+  const list = await loadPeriodList(query, '"period"', '"sales"');
   assert.equal(list.sort, "numeric");
   assert.deepEqual(list.values, ["8", "9", "10"]);
+  assert.deepEqual(list.values.slice(-2), ["9", "10"]);
+  const ordered = trendPeriods(list.values, 13);
+  const steps = await trend(query, {
+    table: "sales", periodColumn: "period", prior: "9", current: "10",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+  }, ordered);
+  assert.deepEqual(steps.map((s) => [s.prior, s.current]), [["8", "9"], ["9", "10"]]);
+  assert.deepEqual(steps.map((s) => s.currentSales - s.priorSales), [200, 360]);
 });
 
-test("the database list keeps text order when one value is not a plain number", async () => {
-  const list = await load(["10", "8", "9", "Q1"]);
+test("Unicode period text keeps the order the list query returns", async () => {
+  // The emoji is a supplementary character, so DuckDB's UTF-8 order and
+  // JavaScript's UTF-16 order disagree. Nothing in the page may re-sort it.
+  const { list, ordered, steps } = await trendFor(["A", "\uFF3A", "\u{1F600}"], [100, 200, 300]);
   assert.equal(list.sort, "text");
-  assert.deepEqual(list.values, ["10", "8", "9", "Q1"]);
+  assert.deepEqual(list.values, ["A", "\uFF3A", "\u{1F600}"]);
+  assert.deepEqual(ordered, ["A", "\uFF3A", "\u{1F600}"]);
+  assert.deepEqual(steps.map((s) => [s.prior, s.current]), [["A", "\uFF3A"], ["\uFF3A", "\u{1F600}"]]);
+  assert.deepEqual(steps.map((s) => s.currentSales - s.priorSales), [100, 100]);
+});
+
+test("plain digit strings past fifteen digits keep the text order", async () => {
+  // Both long strings cast to Infinity as a DOUBLE; the column must stay text.
+  const H = "1" + "0".repeat(309);
+  const M = "2" + "0".repeat(308);
+  const { list } = await trendFor(["0008", "9", H, M], [80, 100, 200, 300]);
+  assert.equal(list.sort, "text");
+  assert.deepEqual(list.values, ["0008", H, M, "9"]);
+});
+
+test("a column is numeric at fifteen digits and text at sixteen", async () => {
+  const numeric = await loadOnly(["1", "999999999999999"]);
+  assert.equal(numeric.sort, "numeric");
+  assert.deepEqual(numeric.values, ["1", "999999999999999"]);
+
+  const text = await loadOnly(["1", "9999999999999999"]);
+  assert.equal(text.sort, "text");
+  assert.deepEqual(text.values, ["1", "9999999999999999"]);
+});
+
+test("precision ties keep the order the whole column had as text", async () => {
+  // Both sets are past 2^53, so the DOUBLE cast collapses each pair. The
+  // column falls back to text order, which is origin/main's order.
+  const negatives = await loadOnly(["-9007199254740993", "-9007199254740992", "1"]);
+  assert.equal(negatives.sort, "text");
+  assert.deepEqual(negatives.values, ["-9007199254740992", "-9007199254740993", "1"]);
+
+  const widths = await loadOnly(["1", "9999999999999999", "10000000000000000"]);
+  assert.equal(widths.sort, "text");
+  assert.deepEqual(widths.values, ["1", "10000000000000000", "9999999999999999"]);
+});
+
+test("same-width leading zeros keep the same order as text", async () => {
+  const list = await loadOnly(["11", "01", "10", "02"]);
+  assert.equal(list.sort, "numeric");
+  assert.deepEqual(list.values, ["01", "02", "10", "11"]);
+});
+
+test("mixed-width leading zeros sort by the number, then the original string", async () => {
+  assert.deepEqual((await loadOnly(["10", "9", "8", "09"])).values, ["8", "09", "9", "10"]);
+  assert.deepEqual((await loadOnly(["1.0", "01", "1", "-3", "-10"])).values, ["-10", "-3", "01", "1", "1.0"]);
+});
+
+test("negative numbers and decimals sort by the number", async () => {
+  assert.deepEqual((await loadOnly(["4", "-3", "-20", "-10"])).values, ["-20", "-10", "-3", "4"]);
+  assert.deepEqual((await loadOnly(["10", "1.5", "9.5", "1.25"])).values, ["1.25", "1.5", "9.5", "10"]);
+  assert.deepEqual((await loadOnly(["1.5", "1.10"])).values, ["1.10", "1.5"]);
+});
+
+test("quarter labels, prefixed labels, and month names stay in text order", async () => {
+  const quarters = await loadOnly(["Q3", "Q1", "Q4", "Q2"]);
+  assert.equal(quarters.sort, "text");
+  assert.deepEqual(quarters.values, ["Q1", "Q2", "Q3", "Q4"]);
+
+  const isoQuarters = await loadOnly(["2025-Q2", "2024-Q4", "2025-Q1"]);
+  assert.equal(isoQuarters.sort, "text");
+  assert.deepEqual(isoQuarters.values, ["2024-Q4", "2025-Q1", "2025-Q2"]);
+
+  const prefixed = await loadOnly(["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "P11", "P12"]);
+  assert.equal(prefixed.sort, "text");
+  assert.deepEqual(prefixed.values, ["P1", "P10", "P11", "P12", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9"]);
+
+  const names = await loadOnly(["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]);
+  assert.equal(names.sort, "text");
+  assert.deepEqual(names.values, ["Apr", "Aug", "Dec", "Feb", "Jan", "Jul", "Jun", "Mar", "May", "Nov", "Oct", "Sep"]);
+});
+
+test("date grains and year-to-date labels stay in text order", async () => {
+  const isoMonths = await loadOnly(["2025-10", "2025-03", "2025-09"]);
+  assert.equal(isoMonths.sort, "text");
+  assert.deepEqual(isoMonths.values, ["2025-03", "2025-09", "2025-10"]);
+
+  const ytd = await loadOnly(["2025 YTD", "2024 YTD"]);
+  assert.equal(ytd.sort, "text");
+  assert.deepEqual(ytd.values, ["2024 YTD", "2025 YTD"]);
+});
+
+test("a mix of numbers and text, including forms that only look numeric, stays in text order", async () => {
+  const mixed = await loadOnly(["10", "8", "9", "Q1"]);
+  assert.equal(mixed.sort, "text");
+  assert.deepEqual(mixed.values, ["10", "8", "9", "Q1"]);
+
+  for (const alien of [" 8", "8 ", "1,000", "1e2", "+8", "1.", ".5"]) {
+    assert.equal((await loadOnly(["10", "8", alien])).sort, "text", `${JSON.stringify(alien)} is not a plain number`);
+  }
+  assert.deepEqual((await loadOnly(["10", "1,000", "8"])).values, ["1,000", "10", "8"]);
+  const newline = await loadOnly(["10", "8\n", "9"]);
+  assert.equal(newline.sort, "text");
+  assert.deepEqual(newline.values, ["10", "8\n", "9"]);
 });
 
 test("an empty period list is text", async () => {
-  const list = await load([]);
+  const list = await loadOnly([]);
   assert.equal(list.sort, "text");
   assert.deepEqual(list.values, []);
 });
 
-test("integers that collapse in IEEE-754 keep the string tie-break in the database", async () => {
-  const list = await load(["9007199254740993", "1", "9007199254740992"]);
-  assert.equal(list.sort, "numeric");
-  assert.deepEqual(list.values, ["1", "9007199254740992", "9007199254740993"]);
-});
-
 test("a capped window keeps the text decision made over the values it dropped", async () => {
   const values = ["#note", ...Array.from({ length: 250 }, (_, index) => String(index + 1))];
-  const list = await load(values);
+  const list = await loadOnly(values);
   assert.equal(list.values.length, 200);
   assert.equal(list.values.includes("#note"), false);
   assert.equal(list.values[0], "144");
   assert.equal(list.values.at(-1), "99");
   assert.equal(list.sort, "text");
-  assert.deepEqual(list.values.slice().toSorted(comparePeriods(list.sort)), [...list.values]);
-  assert.equal(distinctPeriodSort(list.values), "numeric");
 });
