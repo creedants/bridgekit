@@ -81,8 +81,8 @@ Edit: `wrangler.jsonc:35`
 
 - Source: `wrangler.jsonc:35` has `"BETTER_AUTH_URL"`.
 - Source: `wrangler.jsonc:34` has `Replaced with the real address in production.`
-- Source: `server/auth.ts:19` has `trustedOrigins: [env.BETTER_AUTH_URL]`.
-- Source: `server/auth.ts:53` has `${env.BETTER_AUTH_URL}/app/?invitation=${id}`.
+- Source: `server/auth.ts:32` has `trustedOrigins: [env.BETTER_AUTH_URL]`.
+- Source: `server/auth.ts:70` has `${env.BETTER_AUTH_URL}/app/?invitation=${id}`.
 - Source: `server/env.ts:8` has `BETTER_AUTH_URL: string`.
 - Worked: `grep -n BETTER_AUTH_URL wrangler.jsonc` prints one line, and that line contains `"BETTER_AUTH_URL": "https://<domain>"`.
 
@@ -138,7 +138,7 @@ npx wrangler secret put BETTER_AUTH_SECRET
 
 - Source: `server/env.ts:9` has `BETTER_AUTH_SECRET: string`.
 - Source: `.dev.vars.example:3` has `at-least-32-chars`.
-- Source: `wrangler.jsonc:37` has `wrangler secret put NAME`.
+- Source: `wrangler.jsonc:44` has `wrangler secret put NAME`.
 - Source: `package.json:41` has `"wrangler": "^4.147.0"`.
 - Not verified: the remote prompt, creating the draft Worker, and the retry. This session did not run secret put or deploy.
 - Worked: `npx wrangler secret list` prints `BETTER_AUTH_SECRET`.
@@ -201,7 +201,7 @@ curl -sS -w '\n%{http_code}\n' -X POST 'https://<domain>/api/auth/sign-in/magic-
 - Source: `server/worker.ts:49` has `providers: [] as string[]`, `commentary: false`, `billing: false`.
 - Source: `server/worker.ts:55-56` has `function closedApiResponse`, `pathname === "/api/config"`, `CLOSED_CONFIG`.
 - Source: `server/worker.ts:52` has `{ error: "Not found." }`, `status: 404`.
-- Source: `server/worker.ts:207-208` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`.
+- Source: `server/worker.ts:211-212` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`.
 - Worked: the config body has no providers, `commentary` is false, and `billing` is false. The sign-in body is `{"error":"Not found."}` and the status is 404.
 
 ### 1.13 Check the home page and the pay address
@@ -243,7 +243,7 @@ https://<domain>/
 ```
 
 - Source: `server/counts.ts:11` has `headless|curl|wget`.
-- Source: `server/worker.ts:195` has `countPageView(`.
+- Source: `server/worker.ts:199` has `countPageView(`.
 - Source: `package.json:20` has `SELECT day, path, referrer, views FROM page_views`.
 - Worked: `npm run stats` prints a row whose path is `/`.
 
@@ -271,14 +271,14 @@ Account, workspace, checkout, webhook, and commentary routes are off because `AC
 - Source: `server/worker.ts:49` has `CLOSED_CONFIG`.
 - Source: `server/worker.ts:55-58` has `closedApiResponse`, `gatedApiPath`, `notFound()`.
 - Source: `server/worker.ts:65` has `createAuth(c.env`.
-- Source: `server/worker.ts:207-209` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`, `open.fetch`.
+- Source: `server/worker.ts:211-213` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`, `open.fetch`.
 - Source: `wrangler.jsonc:30-32` has `ACCOUNTS is a Worker variable`, `This file does not`, `set it`.
 - Source: `src/app/App.tsx:34` has `elsewhere the code is left out`.
 - Source: `src/app/App.tsx:35` has `import.meta.env.VITE_WORKSPACES === "1"`.
 
 `worker.fetch` returns the closed response before `open.fetch` when accounts are off. `createAuth` is on the open app, so that return does not call it. A gated path returns 404 and `{"error":"Not found."}`. It does not write a verification row, because the auth handler does not run.
 
-- Derived from: `server/worker.ts:65` has `createAuth(c.env`. `server/worker.ts:207-209` has `return closed`, `open.fetch`. The verification write is not a line in this return. It was not run.
+- Derived from: `server/worker.ts:65` has `createAuth(c.env`. `server/worker.ts:212-213` has `return closed`, `open.fetch`. The verification write is not a line in this return. It was not run.
 
 A path whose first segment is `api` in another letter case does not match `run_worker_first`. `/API/auth/sign-in/magic-link` is that kind of path. A local wrangler measurement returned the site's HTML 404 page for GET and 405 with an empty body for POST. That path never reaches an account route. The measurement is the local one. It was not a live zone.
 
@@ -314,9 +314,9 @@ grep -n BETTER_AUTH_URL wrangler.jsonc
 ```
 
 - Source: `wrangler.jsonc:35` has `"BETTER_AUTH_URL"`.
-- Source: `server/auth.ts:19` has `trustedOrigins: [env.BETTER_AUTH_URL]`.
+- Source: `server/auth.ts:32` has `trustedOrigins: [env.BETTER_AUTH_URL]`.
 - Source: `server/worker.ts:73-74` has `new URL(c.env.BETTER_AUTH_URL).origin`, `Requests must come from this site.`
-- Source: `server/auth.ts:53` has `${env.BETTER_AUTH_URL}/app/?invitation=${id}`.
+- Source: `server/auth.ts:70` has `${env.BETTER_AUTH_URL}/app/?invitation=${id}`.
 - Not verified: what the sign-in routes answer when the address is outside `trustedOrigins`. That code is not in this repo.
 - Worked: the printed line contains `"BETTER_AUTH_URL": "https://<domain>"`. This proves it is set, not that it is right.
 - If this is wrong you will see: trustedOrigins is this address. Saving, deleting, and Subscribe answer `Requests must come from this site.` An invitation link is this address joined to `/app/?invitation=`, and a trailing slash puts a second slash before `app`.
@@ -402,7 +402,7 @@ npx wrangler secret put PADDLE_PRICE_ID
 - Source: `server/paddle.ts:198` has `quantity: options.seats`.
 - Source: `src/app/Workspace.tsx:252` has `max={200}`.
 - Source: `index.html:281` has `per user per month`.
-- Source: `server/worker.ts:160-162` has `c.env.PADDLE_PRICE_ID ? [c.env.PADDLE_PRICE_ID] : undefined`, `"ignored"`.
+- Source: `server/worker.ts:164-166` has `c.env.PADDLE_PRICE_ID ? [c.env.PADDLE_PRICE_ID] : undefined`, `"ignored"`.
 - Not verified: Paddle's default quantity limit for a price.
 - Worked: `npx wrangler secret list` prints `PADDLE_PRICE_ID`.
 
@@ -457,7 +457,7 @@ Dashboard (not verified): Paddle > Developer Tools > Notifications > New destina
 https://<domain>/api/paddle/webhook
 ```
 
-- Source: `server/worker.ts:155` has `"/api/paddle/webhook"`.
+- Source: `server/worker.ts:159` has `"/api/paddle/webhook"`.
 - Source: `server/paddle.ts:77-85` has `subscription.created`, `subscription.activated`, `subscription.updated`, `subscription.trialing`, `subscription.past_due`, `subscription.paused`, `subscription.resumed`, `subscription.canceled`, `subscription.imported`.
 - Source: `server/paddle.ts:112` has `!SUBSCRIPTION_EVENTS.includes(body.event_type)) return null`.
 - Source: `server/paddle.ts:156-159` has `case "active":`, `return true`.
@@ -477,7 +477,7 @@ npx wrangler secret put PADDLE_WEBHOOK_SECRET
 ```
 
 - Source: `server/env.ts:19` has `PADDLE_WEBHOOK_SECRET?: string`.
-- Source: `server/worker.ts:157-158` has `!c.env.PADDLE_WEBHOOK_SECRET`, `Bad signature.`
+- Source: `server/worker.ts:161-162` has `!c.env.PADDLE_WEBHOOK_SECRET`, `Bad signature.`
 - Worked: `npx wrangler secret list` prints `PADDLE_WEBHOOK_SECRET`.
 
 ### 2.13 Store the Paddle API key
@@ -492,8 +492,8 @@ npx wrangler secret put PADDLE_API_KEY
 - Source: `server/env.ts:18` has `PADDLE_API_KEY?: string`.
 - Source: `server/paddle.ts:203-205` has `doFetch`, `/transactions`, `method: "POST"`.
 - Derived from: `server/paddle.ts:213` has `Paddle returned ${response.status} when creating a transaction.` A 403 makes that throw `Paddle returned 403 when creating a transaction.` It was not run.
-- Source: `server/worker.ts:97-98` has `console.error(error)`, `Something went wrong on the server.`
-- Source: `server/worker.ts:143` has `Subscriptions are not set up yet.`
+- Source: `server/worker.ts:101-102` has `console.error(error)`, `Something went wrong on the server.`
+- Source: `server/worker.ts:147` has `Subscriptions are not set up yet.`
 - Not verified: the permission name is not in this repo. Paddle's transaction reference requires `transaction.write` at [Create a transaction](https://developer.paddle.com/api-reference/transactions/create-transaction). Paddle's authentication reference says a key without the permission returns 403, at [Authentication](https://developer.paddle.com/api-reference/about/authentication). Nobody entered an account.
 - Worked: `npx wrangler secret list` prints `PADDLE_API_KEY`. This proves the name is present, not that the key can create a transaction.
 - If this is wrong you will see: Subscribe answers 500 and `Something went wrong on the server.`
@@ -511,9 +511,9 @@ npx wrangler secret put PADDLE_ENVIRONMENT
 
 - Source: `server/env.ts:22` has `PADDLE_ENVIRONMENT?: string`.
 - Source: `server/env.ts:21` has `"sandbox" (default) or "live"`.
-- Source: `wrangler.jsonc:37-40` has `wrangler secret put NAME`. `wrangler.jsonc:37-40` lacks `PADDLE_ENVIRONMENT`.
+- Source: `wrangler.jsonc:44-47` has `wrangler secret put NAME`. `wrangler.jsonc:44-47` lacks `PADDLE_ENVIRONMENT`.
 - Source: `.dev.vars.example:11` has `Worker switch`, `VITE_PADDLE_ENVIRONMENT`.
-- Source: `server/worker.ts:147` has `c.env.PADDLE_ENVIRONMENT === "live" ? "live" : "sandbox"`.
+- Source: `server/worker.ts:151` has `c.env.PADDLE_ENVIRONMENT === "live" ? "live" : "sandbox"`.
 - Source: `server/paddle.ts:19-20` has `https://sandbox-api.paddle.com`, `https://api.paddle.com`.
 - Source: `src/pay/pay.ts:47` has `VITE_PADDLE_ENVIRONMENT !== "live"`.
 - Derived from: `server/paddle.ts:204` has `PADDLE_API[options.environment]`. Any value other than `live` sends the key from step 2.13 to the sandbox host. It was not run.
@@ -533,11 +533,11 @@ Dashboard (not verified): Paddle > My account > Settings > Authentication > Clie
 
 ## Names that stay unset
 
-The Part 2 build keeps `VITE_AI_COMMENTARY` at 0, so the commentary button stays hidden, and `ANTHROPIC_API_KEY` stays unset. `src/app/Results.tsx:213` has `import.meta.env.VITE_AI_COMMENTARY === "1"`. `server/worker.ts:169` has `if (!c.env.ANTHROPIC_API_KEY) return false`.
+The Part 2 build keeps `VITE_AI_COMMENTARY` at 0, so the commentary button stays hidden, and `ANTHROPIC_API_KEY` stays unset. `src/app/Results.tsx:213` has `import.meta.env.VITE_AI_COMMENTARY === "1"`. `server/worker.ts:173` has `if (!c.env.ANTHROPIC_API_KEY) return false`.
 
 - Leave unset: `ANTHROPIC_API_KEY`
 
-Microsoft and Google stay unset. A client id alone would add that provider to the sign-in button, and registration runs only when both the id and the secret are set. `server/worker.ts:105-106` has `c.env.MICROSOFT_CLIENT_ID ? ["microsoft"]`, `c.env.GOOGLE_CLIENT_ID ? ["google"]`. `server/auth.ts:23` has `env.MICROSOFT_CLIENT_ID && env.MICROSOFT_CLIENT_SECRET`. `server/auth.ts:26` has `env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET`.
+Microsoft and Google stay unset. A client id alone would add that provider to the sign-in button, and registration runs only when both the id and the secret are set. `server/worker.ts:109-110` has `c.env.MICROSOFT_CLIENT_ID ? ["microsoft"]`, `c.env.GOOGLE_CLIENT_ID ? ["google"]`. `server/auth.ts:36` has `env.MICROSOFT_CLIENT_ID && env.MICROSOFT_CLIENT_SECRET`. `server/auth.ts:39` has `env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET`.
 
 - Leave unset: `MICROSOFT_CLIENT_ID`
 - Leave unset: `MICROSOFT_CLIENT_SECRET`
@@ -590,7 +590,7 @@ curl -sS -w '\n%{http_code}\n' -X POST 'https://<domain>/api/auth/sign-in/magic-
   --data '{"email":"review@example.invalid","callbackURL":"https://<domain>/app/"}'
 ```
 
-- Source: `server/worker.ts:108-109` has `commentary: Boolean(c.env.ANTHROPIC_API_KEY)`, `billing: Boolean(c.env.PADDLE_API_KEY && c.env.PADDLE_PRICE_ID)`.
+- Source: `server/worker.ts:112-113` has `commentary: Boolean(c.env.ANTHROPIC_API_KEY)`, `billing: Boolean(c.env.PADDLE_API_KEY && c.env.PADDLE_PRICE_ID)`.
 - Source: `server/worker.ts:37-38` has `value === "on"`.
 - Source: `server/worker.ts:56` has `CLOSED_CONFIG`.
 - Source: `src/app/account.ts:79` has `status: boolean`, `/api/auth/sign-in/magic-link`.
@@ -610,8 +610,8 @@ https://<domain>/app/
 - Source: `src/app/Workspace.tsx:86` has `return <SignIn`.
 - Source: `src/app/Workspace.tsx:211-212` has `<fieldset className="team">`, `<legend>Workspace</legend>`.
 - Source: `src/app/Workspace.tsx:218` has `Check your email for a sign-in link.`
-- Derived from: `server/auth.ts:16-17` has `baseURL: env.BETTER_AUTH_URL`, `basePath: "/api/auth"`. The link is built from those two. It was not run.
-- Source: `server/auth.ts:40` has `expiresIn: 15 * 60`.
+- Derived from: `server/auth.ts:29` has `baseURL: env.BETTER_AUTH_URL`. `server/auth.ts:30` has `basePath: AUTH_BASE_PATH`. `server/auth.ts:8` has `AUTH_BASE_PATH = "/api/auth"`. The link is built from the base URL and that path. It was not run.
+- Source: `server/auth.ts:57` has `expiresIn: 15 * 60`.
 - Worked: mail from the address in step 2.6 arrives, its link starts with `https://<domain>/api/auth/`, and the link signs you in.
 
 ### 2.20 Check that Subscribe opens the checkout
