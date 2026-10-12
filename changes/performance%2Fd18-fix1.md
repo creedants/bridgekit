@@ -1,0 +1,1 @@
+- Magic-link sign-in uses the Cloudflare rate limit binding, 3 requests per 60 seconds, keyed only by CF-Connecting-IP. A mistyped address does not count. A missing address is refused. Nothing is written to D1 for the limit. Cloudflare's limiter is approximate and counted per location. Sustained sending from one client is refused. The fourth request is not refused in every case.

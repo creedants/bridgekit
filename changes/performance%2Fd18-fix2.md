@@ -1,0 +1,1 @@
+- A sign-in email request whose media type is not application/json is refused before the library sees it. The refusal is not counted.

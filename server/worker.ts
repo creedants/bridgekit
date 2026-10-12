@@ -1,7 +1,7 @@
 import { Hono, type Context, type ExecutionContext as HonoExecutionContext } from "hono";
 import { getPath } from "hono/utils/url";
 import { serveCompressedWasm } from "./assets.ts";
-import { createAuth, type Auth } from "./auth.ts";
+import { createAuth, limitMagicLinkSignIn, type Auth } from "./auth.ts";
 import type { ExecutionContext, Fetcher } from "./cloudflare.ts";
 import { handleCommentary } from "./commentary.ts";
 import { countPageView, pageView } from "./counts.ts";
@@ -76,7 +76,11 @@ open.use("/api/workspaces/*", async (c, next) => {
   await next();
 });
 
-open.on(["GET", "POST"], "/api/auth/*", (c) => c.get("auth").handler(c.req.raw));
+open.on(["GET", "POST"], "/api/auth/*", async (c) => {
+  const refusal = await limitMagicLinkSignIn(c.req.raw, c.env.MAGIC_LINK_RATE_LIMIT);
+  if (refusal) return refusal;
+  return c.get("auth").handler(c.req.raw);
+});
 
 async function userId(c: Context<App>): Promise<string> {
   const session = await c.get("auth").api.getSession({ headers: c.req.raw.headers });
