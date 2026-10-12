@@ -114,7 +114,9 @@ const refused = (): Reply => () => json({ error: "Review simulated read failure.
 
 const user = { id: "u", email: "u@example.invalid", name: "U" };
 const other = { id: "v", email: "v@example.invalid", name: "V" };
-const cancelEnd = "2026-10-12T12:00:00.000Z";
+// A known end time ahead of the read, so the record's own clock is before it
+// and the tests below decide what happens as the clock moves on.
+const cancelEnd = new Date(Date.now() + 86_400_000).toISOString();
 const canceledPlan = { pro: true, status: "canceled", seats: 1, currentPeriodEnd: cancelEnd };
 
 const offer = (): "hidden" | "hint" | "button" =>
