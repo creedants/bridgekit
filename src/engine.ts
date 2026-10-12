@@ -893,7 +893,12 @@ export interface BridgeBy {
   total: BridgeResult;
   /** The value bridges, largest absolute change first, with the combined panel last. */
   panels: BridgePanel[];
-  /** One entry per effect of `total`, same key, label and order. */
+  /**
+   * One entry per effect of `total`, same key, label and order: the main
+   * bridge's figure minus the sum of that effect over the panels that have a
+   * bridge. Its sum is zero only when every panel has a bridge; otherwise it
+   * sums to the change of the panels whose `result` is null.
+   */
   between: Effect[];
 }
 
@@ -917,8 +922,37 @@ type PanelPlan = PanelPool &
     | { combined: true; value: null; values: number; where: string }
   );
 
-const PANEL_VIEW = "bridge_by_panel";
-const PANEL_HOLD = "bridge_by_hold";
+/** One temporary object this call created, and how to drop it. */
+interface Helper {
+  type: "VIEW" | "TABLE";
+  name: string;
+}
+
+let helperSequence = 0;
+
+/**
+ * A name for one helper object. The counter cannot repeat between two calls in
+ * one page; the random text keeps two module instances apart.
+ */
+function helperName(kind: string): string {
+  helperSequence += 1;
+  return `bridge_by_${kind}_${helperSequence.toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * The first of a few fresh names no table or view holds anywhere. A helper
+ * object created under it can never replace one the call did not make.
+ */
+async function unusedName(query: Query, kind: string): Promise<string> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const name = helperName(kind);
+    const [found] = await query(
+      `SELECT count(*)::INTEGER AS n FROM information_schema.tables WHERE table_name = ${literal(name)}`,
+    );
+    if (Number(found.n) === 0) return name;
+  }
+  throw new Error("Could not find an unused name for a temporary object");
+}
 
 /** The column's text form, with null and the empty string as one value. */
 function collapsedValue(column: string): string {
@@ -1001,7 +1035,13 @@ function panelStatus(pool: PanelPool): PanelStatus {
   return pool.currentUnits > 0 || pool.currentSales !== 0 ? "continuing" : "lost";
 }
 
-/** What the panels leave of each effect of the main bridge. */
+/**
+ * What the panels leave of each effect of the main bridge: the main bridge's
+ * figure minus the sum of that effect over the panels that have a bridge. A
+ * panel with no result adds nothing, so the entries sum to zero only when every
+ * panel has a bridge; otherwise they sum to the change of the resultless
+ * panels. No effect figure is altered to force zero.
+ */
 function betweenEffects(total: BridgeResult, panels: BridgePanel[]): Effect[] {
   return total.effects.map((effect) => ({
     ...effect,
@@ -1029,7 +1069,6 @@ export async function bridgeBy(
 ): Promise<BridgeBy> {
   const count = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : 1;
   const total = await runBridge(query, config);
-  const cellsTable = config.cellsTable ?? DEFAULT_CELLS_TABLE;
   const rows = (await census(query, config, column)).sort(byChange);
   const leaders = rows.slice(0, count);
   const rest = rows.slice(count);
@@ -1049,18 +1088,25 @@ export async function bridgeBy(
       values: rest.length,
     });
   }
+  // Each panel bridges a view of its own rows into a cells table of its own,
+  // both named fresh for this call, so the main cells table is written by the
+  // main bridge above and never touched again. Nothing needs a copy or restore.
+  const created: Helper[] = [];
   try {
-    // Every panel writes the main cells table, so hold the main cells while they run.
-    await query(`CREATE OR REPLACE TEMP TABLE temp.${ident(PANEL_HOLD)} AS SELECT * FROM ${ident(cellsTable)}`);
     const panels: BridgePanel[] = [];
     for (const plan of plans) {
       let result: BridgeResult | null = null;
       if (plan.priorUnits > 0) {
+        const view = await unusedName(query, "panel");
         await query(
-          `CREATE OR REPLACE TEMP VIEW ${ident(PANEL_VIEW)} AS SELECT * FROM ${ident(config.table)} WHERE ${plan.where}`,
+          `CREATE TEMP VIEW ${ident(view)} AS SELECT * FROM ${ident(config.table)} WHERE ${plan.where}`,
         );
+        created.push({ type: "VIEW", name: view });
+        const cells = await unusedName(query, "cells");
+        // The name is fresh, so a cells table under it is this call's own.
+        created.push({ type: "TABLE", name: cells });
         try {
-          result = await runBridge(query, { ...config, table: PANEL_VIEW });
+          result = await runBridge(query, { ...config, table: view, cellsTable: cells });
         } catch (error) {
           // The census has already decided this panel has prior units.
           if (!(error instanceof Error) || !error.message.startsWith("No units found for prior period")) throw error;
@@ -1090,8 +1136,14 @@ export async function bridgeBy(
     }
     return { column, total, panels, between: betweenEffects(total, panels) };
   } finally {
-    await query(`CREATE OR REPLACE TEMP TABLE ${ident(cellsTable)} AS SELECT * FROM temp.${ident(PANEL_HOLD)}`);
-    await query(`DROP VIEW IF EXISTS temp.${ident(PANEL_VIEW)}`);
-    await query(`DROP TABLE IF EXISTS temp.${ident(PANEL_HOLD)}`);
+    // Drop only what this call made. One failed drop must not skip the others,
+    // and no drop error may replace the error the body threw.
+    for (const helper of created.reverse()) {
+      try {
+        await query(`DROP ${helper.type} IF EXISTS temp.${ident(helper.name)}`);
+      } catch {
+        // The body's error or the call's result stands; a failed drop is neither.
+      }
+    }
   }
 }

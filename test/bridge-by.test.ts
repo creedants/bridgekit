@@ -4,10 +4,12 @@ import { openDatabase } from "../src/duckdb.ts";
 import {
   bridgeBy,
   cellsSql,
+  drill,
   runBridge,
   type BridgeBy,
   type BridgeConfig,
   type BridgePanel,
+  type BridgeResult,
   type Query,
 } from "../src/engine.ts";
 import { createSyntheticSales } from "../src/synth.ts";
@@ -52,6 +54,30 @@ async function temporaryObjects(query: Query): Promise<string[]> {
     `SELECT table_name FROM information_schema.tables WHERE table_catalog = 'temp' ORDER BY table_name`,
   );
   return rows.map((row) => String(row.table_name));
+}
+
+/** Only the named objects may hold the temp catalog; every helper name is gone. */
+async function assertCatalog(query: Query, expected: string[]): Promise<void> {
+  assert.deepEqual(await temporaryObjects(query), [...expected].sort(), "temp catalog");
+}
+
+/** Rows of a cells table, all columns, so two cells tables compare as data. */
+async function cellsOf(query: Query, name: string): Promise<Record<string, unknown>[]> {
+  return query(`SELECT * FROM ${ident(name)} ORDER BY ALL`);
+}
+
+/**
+ * A bridge result without its cells name. A panel writes its own cells table,
+ * named fresh and dropped before the call returns, so its name is not what a
+ * bridge over the same rows returns. Every other field is the bridge itself.
+ */
+function figures(result: BridgeResult): BridgeResult {
+  return { ...result, cellsTable: "" };
+}
+
+/** The same for a whole bridge, so two calls with different cells names compare. */
+function panels(by: BridgeBy): unknown[] {
+  return by.panels.map((panel) => ({ ...panel, result: panel.result ? figures(panel.result) : null }));
 }
 
 /**
@@ -179,8 +205,9 @@ test("a hand-checked table reconciles across values, with the mix between them",
   for (const region of ["East", "North", "South"]) {
     await query(`CREATE OR REPLACE TABLE own AS SELECT * FROM t WHERE region = ${literal(region)}`);
     const own = await runBridge(query, { ...config, table: "own" });
-    assert.deepEqual(panelFor(by, region).result, own, `panel ${region} equals its own bridge`);
+    assert.deepEqual(figures(panelFor(by, region).result!), figures(own), `panel ${region} equals its own bridge`);
   }
+  await assertCatalog(query, ["bridge_cells"]);
 });
 
 test("synthetic sales reconcile by customer and by design, and the values with no bridge leave their change on the mix line", async () => {
@@ -214,6 +241,7 @@ test("synthetic sales reconcile by customer and by design, and the values with n
     );
     assert.ok(combinedPanel(by).values > 1, `${column} combines several values`);
   }
+  await assertCatalog(query, ["bridge_cells"]);
 });
 
 test("a value present only in the current period is new and has no bridge", async () => {
@@ -237,6 +265,7 @@ test("a value present only in the current period is new and has no bridge", asyn
   // The new value's cells join the basic cell of the bridge, so it shows as volume and price there.
   near(by.total.effects.find((e) => e.key === "new_config")!.value, 0);
   near(by.total.effects.reduce((sum, e) => sum + e.value, 0), 70);
+  await assertCatalog(query, ["bridge_cells"]);
 });
 
 /**
@@ -264,9 +293,10 @@ test("a value present only in the prior period is lost and still bridges", async
 
   await query(`CREATE TABLE own AS SELECT * FROM t WHERE region = 'gone'`);
   const own = await runBridge(query, { ...config, table: "own" });
-  assert.deepEqual(gone.result, own);
+  assert.deepEqual(figures(gone.result!), figures(own));
   const [cells] = await query(`SELECT count(*)::INTEGER AS other FROM "bridge_cells" WHERE status <> 'discontinued'`);
   assert.equal(cells.other, 0, "every cell of a lost value is discontinued");
+  await assertCatalog(query, ["bridge_cells"]);
 });
 
 test("values whose rows have no units in a period have no bridge", async () => {
@@ -299,6 +329,7 @@ test("values whose rows have no units in a period have no bridge", async () => {
   assertReconciles(by);
   near(by.total.effects.find((e) => e.key === "no_units")!.value, -35);
   near(by.total.effects.reduce((sum, e) => sum + e.value, 0), 123 - 140);
+  await assertCatalog(query, ["bridge_cells"]);
 });
 
 test("null and the empty string are one value of the picked column", async () => {
@@ -318,9 +349,10 @@ test("null and the empty string are one value of the picked column", async () =>
   assert.equal(blank.status, "continuing");
   near(blank.priorSales, 150, "null and empty string sales add up");
   near(blank.change, 30);
-  assert.deepEqual(blank.result, await runBridge(query, config));
+  assert.deepEqual(figures(blank.result!), figures(await runBridge(query, config)));
   assert.ok(by.panels.every((panel) => !panel.combined));
   near(by.between.reduce((sum, e) => sum + e.value, 0), 0);
+  await assertCatalog(query, ["bridge_cells"]);
 });
 
 test("fewer values than the limit leaves no combined panel", async () => {
@@ -335,6 +367,7 @@ test("fewer values than the limit leaves no combined panel", async () => {
   assert.deepEqual(by.panels.map((panel) => panel.value), ["b", "a"]);
   assert.ok(by.panels.every((panel) => panel.combined === false && panel.values === 1));
   assertReconciles(by);
+  await assertCatalog(query, ["bridge_cells"]);
 });
 
 test("one more value than the limit adds a combined panel for the tail", async () => {
@@ -359,9 +392,10 @@ test("one more value than the limit adds a combined panel for the tail", async (
   near(combined.currentSales, 110);
   near(combined.change, 10);
   await query(`CREATE TABLE own AS SELECT * FROM t WHERE region = 'a'`);
-  assert.deepEqual(combined.result, await runBridge(query, { ...config, table: "own" }));
+  assert.deepEqual(figures(combined.result!), figures(await runBridge(query, { ...config, table: "own" })));
   assertReconciles(by);
   near(by.total.effects.reduce((sum, e) => sum + e.value, 0), -50);
+  await assertCatalog(query, ["bridge_cells"]);
 });
 
 test("a limit below one, or one that is not a whole number, is clamped", async () => {
@@ -384,6 +418,7 @@ test("a limit below one, or one that is not a whole number, is clamped", async (
     if (tail.length > 0) assert.equal(tail[0].values, combined, `limit ${limit} combined values`);
     assertReconciles(by);
   }
+  await assertCatalog(query, ["bridge_cells"]);
 });
 
 test("a column that does not exist throws and leaves nothing behind", async () => {
@@ -451,6 +486,7 @@ test("the picked column can be an attribute, another column, or the period colum
       assertReconciles(by, 1e-6);
     }
   }
+  await assertCatalog(query, ["bridge_cells"]);
 });
 
 test("panels are ordered by absolute change, with the combined panel last", async () => {
@@ -476,9 +512,10 @@ test("panels are ordered by absolute change, with the combined panel last", asyn
   near(combined.currentSales, 290);
   assertReconciles(by);
   near(by.total.effects.reduce((sum, e) => sum + e.value, 0), -10);
+  await assertCatalog(query, ["bridge_cells"]);
 });
 
-test("the main cells table holds the main cells and no temporary object survives the call", async () => {
+test("the main cells table holds the main cells and no helper object survives the call", async () => {
   const query = await openDatabase();
   await query(`CREATE TABLE s (period VARCHAR, region VARCHAR, design VARCHAR, units INTEGER, sales DOUBLE)`);
   await query(`INSERT INTO s VALUES
@@ -487,15 +524,11 @@ test("the main cells table holds the main cells and no temporary object survives
   const config: BridgeConfig = { ...HAND, table: "s", cellsTable: "main_cells" };
 
   await runBridge(query, config);
-  const before = await query(`SELECT * FROM "main_cells" ORDER BY design`);
+  const before = await cellsOf(query, "main_cells");
   const by = await bridgeBy(query, config, "region", 1);
   assert.ok(by.panels.some((panel) => panel.result !== null));
-  assert.deepEqual(await query(`SELECT * FROM "main_cells" ORDER BY design`), before, "the main cells are back");
-
-  const temporary = await temporaryObjects(query);
-  assert.ok(temporary.includes("main_cells"), "the cells table is still a temporary table");
-  assert.ok(!temporary.includes("bridge_by_panel"), "the panel view is gone");
-  assert.ok(!temporary.includes("bridge_by_hold"), "the hold table is gone");
+  assert.deepEqual(await cellsOf(query, "main_cells"), before, "the main cells are untouched");
+  await assertCatalog(query, ["main_cells"]);
 
   let panelGuards = 0;
   const failing: Query = async (sql) => {
@@ -505,16 +538,9 @@ test("the main cells table holds the main cells and no temporary object survives
     }
     return query(sql);
   };
-  await runBridge(query, config);
-  const held = await query(`SELECT * FROM "main_cells" ORDER BY design`);
   await assert.rejects(bridgeBy(failing, config, "region", 1), /second panel bridge is refused/);
-  assert.deepEqual(await query(`SELECT * FROM "main_cells" ORDER BY design`), held, "a failed call still restores the cells");
-  const afterFailure = await temporaryObjects(query);
-  assert.ok(afterFailure.includes("main_cells"));
-  assert.ok(!afterFailure.includes("bridge_by_panel"), "a failed call still drops the view");
-  assert.ok(!afterFailure.includes("bridge_by_hold"), "a failed call still drops the hold table");
-  await assert.rejects(query(`SELECT * FROM temp."bridge_by_panel"`), /does not exist/);
-  await assert.rejects(query(`SELECT * FROM temp."bridge_by_hold"`), /does not exist/);
+  assert.deepEqual(await cellsOf(query, "main_cells"), before, "a failed call still leaves the cells");
+  await assertCatalog(query, ["main_cells"]);
 });
 
 test("the main bridge is an ordinary bridge and the generated SQL is untouched", async () => {
@@ -528,10 +554,231 @@ test("the main bridge is an ordinary bridge and the generated SQL is untouched",
 
   assert.deepEqual(by.total, await runBridge(query, config));
   const sql = cellsSql(config);
-  assert.ok(!sql.includes("bridge_by_panel"), "the cells SQL holds no panel object");
+  assert.ok(!sql.includes("bridge_by_"), "the cells SQL holds no helper object");
   assert.ok(!sql.includes("IS NOT DISTINCT FROM"), "the cells SQL holds no panel predicate");
   for (const region of ["North", "South"]) {
     await query(`CREATE OR REPLACE TABLE own AS SELECT * FROM t WHERE region = ${literal(region)}`);
-    assert.deepEqual(panelFor(by, region).result, await runBridge(query, { ...config, table: "own" }));
+    assert.deepEqual(figures(panelFor(by, region).result!), figures(await runBridge(query, { ...config, table: "own" })));
   }
+  await assertCatalog(query, ["bridge_cells"]);
+});
+
+test("a custom cells name holds the main bridge's cells and survives the call", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t (period VARCHAR, region VARCHAR, design VARCHAR, units INTEGER, sales DOUBLE)`);
+  await query(`INSERT INTO t VALUES
+    ('p0', 'a', 'basic', 10, 100), ('p0', 'b', 'basic', 10, 200),
+    ('p1', 'a', 'basic', 12, 130), ('p1', 'b', 'basic', 8, 160)`);
+  const config: BridgeConfig = { ...HAND, table: "t", cellsTable: "bridge_by_hold" };
+
+  const by = await bridgeBy(query, config, "region");
+  assert.ok(by.panels.some((panel) => panel.result !== null));
+  const left = await cellsOf(query, "bridge_by_hold");
+  assert.ok(left.length > 0, "the custom cells table is still there");
+  await runBridge(query, { ...config, cellsTable: "plain_cells" });
+  assert.deepEqual(left, await cellsOf(query, "plain_cells"), "the custom cells table holds the main bridge's cells");
+  await assertCatalog(query, ["bridge_by_hold", "plain_cells"]);
+});
+
+test("a user's table or view named bridge_by_hold or bridge_by_panel is left alone", async () => {
+  for (const [name, statement] of [
+    ["bridge_by_hold", `CREATE TEMP TABLE bridge_by_hold AS SELECT 123 AS user_data`],
+    ["bridge_by_hold", `CREATE TEMP VIEW bridge_by_hold AS SELECT 123 AS user_data`],
+    ["bridge_by_panel", `CREATE TEMP VIEW bridge_by_panel AS SELECT 123 AS user_data`],
+  ] as const) {
+    const query = await openDatabase();
+    await query(`CREATE TABLE t (period VARCHAR, region VARCHAR, design VARCHAR, units INTEGER, sales DOUBLE)`);
+    await query(`INSERT INTO t VALUES
+      ('p0', 'a', 'basic', 10, 100), ('p0', 'b', 'basic', 10, 200),
+      ('p1', 'a', 'basic', 12, 130), ('p1', 'b', 'basic', 8, 160)`);
+    await query(statement);
+    const config: BridgeConfig = { ...HAND, table: "t" };
+
+    const by = await bridgeBy(query, config, "region");
+    assert.ok(by.panels.some((panel) => panel.result !== null));
+    assert.deepEqual(await query(`SELECT * FROM ${ident(name)} ORDER BY ALL`), [{ user_data: 123 }], `${statement} is unchanged`);
+    await runBridge(query, { ...config, cellsTable: "plain_cells" });
+    assert.deepEqual(await cellsOf(query, "bridge_cells"), await cellsOf(query, "plain_cells"), "the main cells are the main bridge's");
+    await assertCatalog(query, [name, "bridge_cells", "plain_cells"]);
+  }
+});
+
+test("a source named bridge_by_hold or bridge_by_panel bridges each value from its own rows", async () => {
+  for (const name of ["bridge_by_hold", "bridge_by_panel"]) {
+    for (const kind of ["TABLE", "VIEW", "TEMP TABLE", "TEMP VIEW"] as const) {
+      const query = await openDatabase();
+      await query(`CREATE TABLE src AS SELECT * FROM (VALUES
+        ('continuing', 'A', 10, 100.0), ('new', 'A', 12, 132.0),
+        ('continuing', 'B', 10, 200.0), ('new', 'B', 8, 160.0)) v(status, product, q0, s0)`);
+      await query(`CREATE ${kind} ${ident(name)} AS SELECT * FROM src`);
+      const config: BridgeConfig = {
+        table: name,
+        periodColumn: "status",
+        prior: "continuing",
+        current: "new",
+        unitsColumn: "q0",
+        salesColumn: "s0",
+        levels: [{ name: "Product", columns: ["product"] }],
+      };
+      const expected: Record<string, BridgeResult> = {};
+      for (const product of ["A", "B"]) {
+        await query(`CREATE OR REPLACE TABLE own AS SELECT * FROM ${ident(name)} WHERE product = ${literal(product)}`);
+        expected[product] = await runBridge(query, { ...config, table: "own" });
+      }
+      const by = await bridgeBy(query, config, "product");
+      for (const product of ["A", "B"]) {
+        assert.deepEqual(figures(panelFor(by, product).result!), figures(expected[product]), `${kind} source ${name}, panel ${product}`);
+      }
+      assert.deepEqual(
+        await query(`SELECT * FROM ${ident(name)} ORDER BY ALL`),
+        await query(`SELECT * FROM src ORDER BY ALL`),
+        `${kind} source ${name} is unchanged`,
+      );
+      await assertCatalog(query, kind.startsWith("TEMP") ? [name, "bridge_cells"] : ["bridge_cells"]);
+    }
+  }
+});
+
+test("a panel's own cells do not change what drill reads during the call", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t (period VARCHAR, region VARCHAR, design VARCHAR, units INTEGER, sales DOUBLE)`);
+  await query(`INSERT INTO t VALUES
+    ('p0', 'North', 'basic', 10, 100), ('p0', 'South', 'basic', 20, 200),
+    ('p1', 'North', 'basic', 10, 110), ('p1', 'South', 'basic', 26, 260)`);
+  const config: BridgeConfig = { ...HAND, table: "t" };
+
+  const during: { prior?: number; current?: number } = {};
+  let writes = 0;
+  const watching: Query = async (sql) => {
+    const rows = await query(sql);
+    if (sql.startsWith("CREATE OR REPLACE TEMP TABLE") && sql.includes("WITH")) {
+      writes += 1;
+      if (writes === 2) {
+        const groups = await drill(query, config, { columns: ["design"] });
+        during.prior = groups.reduce((sum, group) => sum + Number(group.s0) + Number(group.z0), 0);
+        during.current = groups.reduce((sum, group) => sum + Number(group.s1) + Number(group.z1), 0);
+      }
+    }
+    return rows;
+  };
+  const by = await bridgeBy(watching, config, "region", 1);
+
+  assert.ok(during.prior !== undefined && during.current !== undefined, "the call paused inside a panel");
+  near(during.prior!, by.total.priorSales, "drill's prior sales while a panel runs");
+  near(during.current!, by.total.currentSales, "drill's current sales while a panel runs");
+  await assertCatalog(query, ["bridge_cells"]);
+});
+
+test("two overlapping calls keep their own names and drop every helper", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t (period VARCHAR, region VARCHAR, design VARCHAR, units INTEGER, sales DOUBLE)`);
+  await query(`INSERT INTO t VALUES
+    ('p0', 'a', 'basic', 10, 100), ('p0', 'b', 'basic', 10, 200),
+    ('p1', 'a', 'basic', 12, 130), ('p1', 'b', 'basic', 8, 160)`);
+  const config: BridgeConfig = { ...HAND, table: "t" };
+
+  let first: Promise<BridgeBy> | null = null;
+  let writes = 0;
+  let released = false;
+  const watched: Query = async (sql) => {
+    const rows = await query(sql);
+    if (!released && sql.startsWith("CREATE OR REPLACE TEMP TABLE") && sql.includes("WITH")) {
+      writes += 1;
+      if (writes === 2 && first) {
+        released = true;
+        await first;
+      }
+    }
+    return rows;
+  };
+  const watchedCall = bridgeBy(watched, { ...config, cellsTable: "cells_a" }, "region", 1);
+  const plainCall = bridgeBy(query, { ...config, cellsTable: "cells_b" }, "region", 1);
+  first = plainCall;
+  const [byA, byB] = await Promise.all([watchedCall, plainCall]);
+
+  assert.equal(released, true, "the first call paused for the second");
+  assert.deepEqual(panels(byA), panels(byB), "both calls give the same panels");
+  assert.deepEqual(byA.between, byB.between);
+  assert.deepEqual(figures(byA.total), figures(byB.total));
+  assertReconciles(byA);
+  await assertCatalog(query, ["cells_a", "cells_b"]);
+});
+
+test("one failed cleanup drop does not skip the others", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t (period VARCHAR, region VARCHAR, design VARCHAR, units INTEGER, sales DOUBLE)`);
+  await query(`INSERT INTO t VALUES
+    ('p0', 'a', 'basic', 10, 100), ('p0', 'b', 'basic', 10, 200),
+    ('p1', 'a', 'basic', 12, 130), ('p1', 'b', 'basic', 8, 160)`);
+  const config: BridgeConfig = { ...HAND, table: "t" };
+
+  let refused: string | null = null;
+  const failing: Query = async (sql) => {
+    const match = /^DROP TABLE IF EXISTS temp\."((?:""|[^"])*)"/.exec(sql);
+    if (match && refused === null) {
+      refused = match[1].replaceAll('""', '"');
+      throw new Error("the drop was refused");
+    }
+    return query(sql);
+  };
+  const by = await bridgeBy(failing, config, "region", 1);
+
+  const skipped = refused;
+  assert.ok(skipped, "one drop was refused");
+  const reference = await bridgeBy(query, config, "region", 1);
+  assert.deepEqual(panels(by), panels(reference), "the call still returned its panels");
+  await assertCatalog(query, ["bridge_cells", skipped]);
+  const [left] = await query(
+    `SELECT table_type FROM information_schema.tables WHERE table_catalog = 'temp' AND table_name = ${literal(skipped)}`,
+  );
+  assert.equal(left.table_type, "LOCAL TEMPORARY", "the skipped object is one of this call's cells tables");
+});
+
+test("a throw inside a panel leaves the main cells and no helper object", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t (period VARCHAR, region VARCHAR, design VARCHAR, units INTEGER, sales DOUBLE)`);
+  await query(`INSERT INTO t VALUES
+    ('p0', 'a', 'basic', 10, 100), ('p0', 'b', 'basic', 10, 200),
+    ('p1', 'a', 'basic', 12, 130), ('p1', 'b', 'basic', 8, 160)`);
+  const config: BridgeConfig = { ...HAND, table: "t" };
+
+  await runBridge(query, config);
+  const before = await cellsOf(query, "bridge_cells");
+  const failing: Query = async (sql) => {
+    if (sql.startsWith("CREATE OR REPLACE TEMP TABLE") && sql.includes("WITH") && !sql.includes(ident("bridge_cells"))) {
+      throw new Error("the panel cells were refused");
+    }
+    return query(sql);
+  };
+  await assert.rejects(bridgeBy(failing, config, "region", 1), /the panel cells were refused/);
+  assert.deepEqual(await cellsOf(query, "bridge_cells"), before, "the main cells are untouched");
+  await assertCatalog(query, ["bridge_cells"]);
+});
+
+test("the mix between values sums to zero when every panel has a bridge", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t (period VARCHAR, region VARCHAR, design VARCHAR, units INTEGER, sales DOUBLE)`);
+  await query(`INSERT INTO t VALUES
+    ('p0', 'North', 'basic', 10, 100), ('p0', 'South', 'basic', 20, 200),
+    ('p1', 'North', 'basic', 10, 110), ('p1', 'South', 'basic', 26, 260)`);
+  const by = await bridgeBy(query, { ...HAND, table: "t" }, "region");
+
+  assert.ok(by.panels.every((panel) => panel.result !== null), "every panel has a bridge");
+  near(by.between.reduce((sum, effect) => sum + effect.value, 0), 0, "the mix sums to zero");
+  await assertCatalog(query, ["bridge_cells"]);
+});
+
+test("the mix between values sums to the change of the panels with no bridge", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t (period VARCHAR, region VARCHAR, design VARCHAR, units INTEGER, sales DOUBLE)`);
+  await query(`INSERT INTO t VALUES
+    ('p0', 'keep', 'basic', 10, 100), ('p1', 'keep', 'basic', 10, 110), ('p1', 'fresh', 'basic', 5, 60)`);
+  const by = await bridgeBy(query, { ...HAND, table: "t" }, "region");
+
+  const withoutBridge = by.panels.filter((panel) => panel.result === null);
+  assert.ok(withoutBridge.length > 0, "one value has no bridge");
+  const theirChange = withoutBridge.reduce((sum, panel) => sum + panel.change, 0);
+  near(theirChange, 60, "the unbridged change");
+  near(by.between.reduce((sum, effect) => sum + effect.value, 0), theirChange, "the mix sums to the unbridged change");
+  await assertCatalog(query, ["bridge_cells"]);
 });
