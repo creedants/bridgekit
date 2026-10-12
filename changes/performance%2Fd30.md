@@ -1,0 +1,3 @@
+- A sign-in or invitation that needs to send email is refused in the Worker before Better Auth runs, wherever the configured base path places those routes, and it only logs the message when `LOCAL_EMAIL_LOG` is exactly `on`, the same strictness as `ACCOUNTS`. Without a mail key and without that flag the request answers 503 `{"message":"Email is not set up on this server."}`, so a missing secret at launch stops sign-in instead of claiming it worked.
+- `GET /api/config` gains `email`, true with a key and a sender, true with `LOCAL_EMAIL_LOG` on, and false otherwise. A closed deployment reports it false.
+- `scripts/perf/worker.mjs` writes `LOCAL_EMAIL_LOG=on` into the env file it generates, so a local run still writes the sign-in link to its log.

@@ -30,6 +30,11 @@
   // ACCOUNTS is a Worker variable. Account, workspace, payment, and commentary
   // routes run only when its value is the exact string on. This file does not
   // set it. Missing, empty, and any other value leave those routes off.
+  //
+  // LOCAL_EMAIL_LOG is a Worker variable. It is on only when its value is the
+  // exact string on. This file does not set it. Local development sets it, so
+  // with no mail key an email is written to the Worker log. Missing, empty, and
+  // any other value mean a missing mail key is an error.
   "vars": {
     // Replaced with the real address in production.
     "BETTER_AUTH_URL": "http://localhost:8790"

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import type { Fetcher, RateLimit } from "../server/cloudflare.ts";
+import { EMAIL_NOT_SET_UP } from "../server/email.ts";
 import type { Env } from "../server/env.ts";
 import app from "../server/worker.ts";
 import { testDatabase } from "./support/d1.ts";
@@ -60,7 +61,7 @@ function database(): Env["DB"] {
   };
 }
 
-function bindings(db: Env["DB"], rateLimit: RateLimit | undefined): Env {
+function bindings(db: Env["DB"], rateLimit: RateLimit | undefined, mail: "local" | "none" = "local"): Env {
   const assets: Fetcher = {
     async fetch() {
       return new Response("missing", { status: 500 });
@@ -73,6 +74,7 @@ function bindings(db: Env["DB"], rateLimit: RateLimit | undefined): Env {
     BETTER_AUTH_SECRET: "0122456789abcdef0122456789abcdef",
     ACCOUNTS: "on",
   };
+  if (mail === "local") env.LOCAL_EMAIL_LOG = "on";
   if (rateLimit) env.MAGIC_LINK_RATE_LIMIT = rateLimit;
   return env;
 }
@@ -122,6 +124,7 @@ function captureConsole(): { lines: string[]; restore(): void } {
 async function withWorker<T>(
   rateLimit: RateLimit | undefined,
   run: (env: Env, db: Env["DB"], lines: string[], urls: string[]) => Promise<T>,
+  mail: "local" | "none" = "local",
 ): Promise<T> {
   const db = database();
   const logs = captureConsole();
@@ -133,7 +136,7 @@ async function withWorker<T>(
     return original(input, init);
   };
   try {
-    return await run(bindings(db, rateLimit), db, logs.lines, urls);
+    return await run(bindings(db, rateLimit, mail), db, logs.lines, urls);
   } finally {
     globalThis.fetch = original;
     logs.restore();
@@ -661,6 +664,29 @@ async function unbound(): Promise<void> {
   });
 }
 
+async function refusedForNoMail(): Promise<void> {
+  const limit = readLimiter().simple.limit;
+  const calls: LimitCall[] = [];
+  await withWorker(limiter(limit, calls), async (env, db, lines, urls) => {
+    const outcomes = [];
+    for (let index = 0; index <= limit; index += 1) {
+      const response = await signIn(env, validBody(`nomail${index}@example.invalid`), jsonHeaders({ "cf-connecting-ip": CLIENT }));
+      outcomes.push({ status: response.status, body: await response.json() });
+    }
+    assert.deepEqual(
+      { outcomes, calls, rows: await countRows(db, "verification"), emails: emailCount(lines) },
+      {
+        outcomes: Array.from({ length: limit + 1 }, () => ({ status: 503, body: { message: EMAIL_NOT_SET_UP } })),
+        calls: [],
+        rows: 0,
+        emails: 0,
+      },
+    );
+    await assertNoRateLimitTable(db);
+    assertQuiet(lines, urls, [CLIENT]);
+  }, "none");
+}
+
 function withoutSecrets(stdout: string | null, stderr: string | null): string {
   return `${stdout ?? ""}\n${stderr ?? ""}`
     .split("\n")
@@ -678,8 +704,7 @@ function runIsolated(name: string): void {
 }
 
 const isolated = process.env.BRIDGEKIT_RATE_LIMIT_CASE;
-if (isolated === "limited") test("the configured number of sign-in links is the limit", limited);
-else if (isolated === "jsonx") test("application/jsonx does not send a sign-in email", jsonx);
+if (isolated === "limited") test("the configured number of sign-in links is the limit", limited);else if (isolated === "jsonx") test("application/jsonx does not send a sign-in email", jsonx);
 else if (isolated === "json-xml") test("application/json+xml does not send a sign-in email", jsonXml);
 else if (isolated === "get") test("GET sign-in does not send a sign-in email", getSignIn);
 else if (isolated === "put") test("PUT sign-in does not send a sign-in email", putSignIn);
@@ -699,6 +724,7 @@ else if (isolated === "mistyped") test("a mistyped address does not spend a sign
 else if (isolated === "rejected") test("a rejected sign-in address does not spend a link", rejected);
 else if (isolated === "missing-ip") test("a sign-in with no client address is refused", missingIp);
 else if (isolated === "unbound") test("sign-in has no limit when the binding is absent", unbound);
+else if (isolated === "refused-mail") test("a sign-in refused for no email does not spend a limit slot", refusedForNoMail);
 else if (isolated) throw new Error(`unknown rate limit case ${isolated}`);
 else {
   test("wrangler.jsonc declares the magic-link rate limit", () => {
@@ -725,4 +751,5 @@ else {
   test("a rejected sign-in address does not spend a link", () => runIsolated("rejected"));
   test("a sign-in with no client address is refused", () => runIsolated("missing-ip"));
   test("sign-in has no limit when the binding is absent", () => runIsolated("unbound"));
+  test("a sign-in refused for no email does not spend a limit slot", () => runIsolated("refused-mail"));
 }

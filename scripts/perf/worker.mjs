@@ -257,7 +257,7 @@ function writeAuthEnv(dir) {
   authSecret = randomBytes(32).toString("hex");
   const fd = openSync(path, "wx", 0o600);
   try {
-    writeSync(fd, `BETTER_AUTH_SECRET=${authSecret}\nACCOUNTS=on\n`);
+    writeSync(fd, `BETTER_AUTH_SECRET=${authSecret}\nACCOUNTS=on\nLOCAL_EMAIL_LOG=on\n`);
     fchmodSync(fd, 0o600);
   } finally {
     closeSync(fd);
@@ -759,7 +759,7 @@ async function main() {
         cold: "The first request to that route in this process. Only page-home is the first request after wrangler dev becomes ready.",
         steady: `${count} request${count === 1 ? "" : "s"} after one discarded warm-up. The median is the middle sample.`,
         pageCount: "A 200 HTML response from the Worker schedules countPageView. The script then reads local D1 and requires that rise on routes whose final path is the path it requested. A redirect onto a path outside run_worker_first is stored and not required. There is no public route that reads the counts.",
-        authEnv: "Every wrangler command receives a generated file through --env-file. The generated file sets BETTER_AUTH_SECRET and ACCOUNTS=on. The child environment keeps PATH, a private HOME, and the switches that turn off telemetry, error reports, the update banner, and the cf.json fetch. .env, .env.local, and .dev.vars are not read. Commentary, Paddle, and sign-in keys are unset.",
+        authEnv: "Every wrangler command receives a generated file through --env-file. The generated file sets BETTER_AUTH_SECRET, ACCOUNTS=on, and LOCAL_EMAIL_LOG=on, which is what lets a local run write an email to its log instead of failing. The child environment keeps PATH, a private HOME, and the switches that turn off telemetry, error reports, the update banner, and the cf.json fetch. .env, .env.local, and .dev.vars are not read. Commentary, Paddle, and sign-in keys are unset.",
       },
       productionBlindSpots: [
         "The clock is local wrangler dev, which is miniflare on this machine. It is not the Cloudflare edge and it has no edge cache.",

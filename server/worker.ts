@@ -5,6 +5,7 @@ import { createAuth, limitMagicLinkSignIn, type Auth } from "./auth.ts";
 import type { ExecutionContext, Fetcher } from "./cloudflare.ts";
 import { handleCommentary } from "./commentary.ts";
 import { countPageView, pageView } from "./counts.ts";
+import { canSendEmail, EMAIL_NOT_SET_UP } from "./email.ts";
 import type { Env } from "./env.ts";
 import { createCheckout, parseSubscriptionEvent, verifyPaddleSignature, type PaddleEnvironment } from "./paddle.ts";
 import {
@@ -46,7 +47,7 @@ function gatedApiPath(pathname: string): boolean {
   return feature === "auth" || feature === "workspaces" || feature === "paddle" || feature === "commentary";
 }
 
-const CLOSED_CONFIG = { providers: [] as string[], commentary: false, billing: false };
+const CLOSED_CONFIG = { providers: [] as string[], email: false, commentary: false, billing: false };
 
 function notFound(): Response {
   return Response.json({ error: "Not found." }, { status: 404 });
@@ -76,7 +77,43 @@ open.use("/api/workspaces/*", async (c, next) => {
   await next();
 });
 
+/**
+ * The Better Auth routes whose only way to answer is to put an email in front
+ * of someone: the magic-link sign-in and the workspace invitation, which is
+ * also how a resend is sent. Both are POST. Better Auth serves them wherever
+ * its base path sits under this Worker's /api/auth handler, because a
+ * BETTER_AUTH_URL that carries a path keeps it (better-auth's withPath
+ * returns the URL unchanged when it already has a pathname, and its router
+ * takes the basePath from new URL(baseURL).pathname). These are therefore
+ * matched as the end of the request path, not at two fixed addresses: a
+ * request Better Auth answers on either route arrives here with a path that
+ * ends with one of them, and no other route it serves ends with either.
+ */
+const EMAIL_ROUTES = ["/sign-in/magic-link", "/organization/invite-member"];
+
+/**
+ * Refuses a request that can only be answered by sending an email when this
+ * deployment cannot send one, before Better Auth sees it.
+ *
+ * The sign-in route would answer the failure itself, because it awaits the
+ * send. The invitation route does not: Better Auth runs that send in a
+ * background helper, catches the thrown error and logs it, and then answers
+ * 200 with a pending invitation nobody can act on. So the refusal happens here
+ * and no invitation row is written. A path Better Auth would answer 404 is
+ * refused as well, which is the cost of never letting a route it serves
+ * through.
+ */
+function emailRefusal(env: Env, request: Request): Response | null {
+  if (request.method !== "POST") return null;
+  const pathname = new URL(request.url).pathname;
+  if (!EMAIL_ROUTES.some((route) => pathname.endsWith(route))) return null;
+  if (canSendEmail(env)) return null;
+  return Response.json({ message: EMAIL_NOT_SET_UP }, { status: 503 });
+}
+
 open.on(["GET", "POST"], "/api/auth/*", async (c) => {
+  const unavailable = emailRefusal(c.env, c.req.raw);
+  if (unavailable) return unavailable;
   const refusal = await limitMagicLinkSignIn(c.req.raw, c.env.MAGIC_LINK_RATE_LIMIT);
   if (refusal) return refusal;
   return c.get("auth").handler(c.req.raw);
@@ -109,6 +146,7 @@ open.get("/api/config", (c) =>
       ...(c.env.MICROSOFT_CLIENT_ID ? ["microsoft"] : []),
       ...(c.env.GOOGLE_CLIENT_ID ? ["google"] : []),
     ],
+    email: canSendEmail(c.env),
     commentary: Boolean(c.env.ANTHROPIC_API_KEY),
     billing: Boolean(c.env.PADDLE_API_KEY && c.env.PADDLE_PRICE_ID),
   }),
