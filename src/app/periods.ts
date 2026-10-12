@@ -9,29 +9,12 @@ export interface PeriodList {
 
 /** Whole-string plain number: optional minus, digits, and one optional decimal. */
 const PLAIN_NUMBER_SOURCE = String.raw`^-?\d+(\.\d+)?$`;
-const PLAIN_NUMBER = new RegExp(PLAIN_NUMBER_SOURCE);
-
 /**
- * Numeric when every string is a plain number, otherwise text.
- * `distinct` is every distinct period string, not the capped window.
+ * A column is numeric only when every value is a plain number of at most this
+ * many digits. That keeps the DOUBLE order finite (below 10^15) and free of
+ * ties, because two distinct values that fit always land on different doubles.
  */
-export function distinctPeriodSort(distinct: readonly string[]): PeriodSort {
-  return distinct.every((value) => PLAIN_NUMBER.test(value)) ? "numeric" : "text";
-}
-
-/** Comparison for a decision already made. It does not look at sibling values. */
-export function comparePeriods(sort: PeriodSort): (a: string, b: string) => number {
-  if (sort === "text") return byText;
-  if (sort === "numeric") {
-    return (a, b) => {
-      const delta = Number(a) - Number(b);
-      if (Number.isFinite(delta) && delta !== 0) return delta;
-      return byText(a, b);
-    };
-  }
-  const unreachable: never = sort;
-  return unreachable;
-}
+const MAX_DIGITS = 15;
 
 /**
  * `column` and `view` are already quoted identifiers.
@@ -50,7 +33,10 @@ export async function loadPeriodList(
        WHERE ${column} IS NOT NULL
      ),
      decision AS (
-       SELECT bool_and(regexp_matches(p, '${PLAIN_NUMBER_SOURCE}')) AS numeric
+       SELECT bool_and(
+                regexp_matches(p, '${PLAIN_NUMBER_SOURCE}')
+                AND length(regexp_replace(p, '[^0-9]', '', 'g')) <= ${MAX_DIGITS}
+              ) AS numeric
        FROM distinct_periods
      ),
      ranked AS (
@@ -76,8 +62,10 @@ export async function loadPeriodList(
   };
 }
 
-function byText(a: string, b: string): number {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
+/**
+ * The tail of the ordered list: the periods the trend bridges, oldest first.
+ * The list order is the only order, so no comparator runs here.
+ */
+export function trendPeriods(values: readonly string[], max: number): string[] {
+  return values.slice(-max);
 }

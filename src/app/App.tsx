@@ -13,7 +13,7 @@ import { exportExcel } from "./exportExcel.ts";
 import { download } from "./files.ts";
 import { whole } from "./format.ts";
 import { distinctCounts, findRollups } from "./profile.ts";
-import { loadPeriodList, type PeriodSort } from "./periods.ts";
+import { loadPeriodList } from "./periods.ts";
 import type { Run } from "./Results.tsx";
 import {
   guessSetup,
@@ -115,7 +115,6 @@ export function App() {
   const [columns, setColumns] = useState<Column[]>([]);
   const [setup, setSetup] = useState<Setup | null>(null);
   const [periods, setPeriods] = useState<string[]>([]);
-  const [periodSort, setPeriodSort] = useState<PeriodSort>("text");
   const [prior, setPrior] = useState("");
   const [current, setCurrent] = useState("");
   const [remember, setRemember] = useState(isRemembering);
@@ -185,7 +184,6 @@ export function App() {
   useEffect(() => {
     if (!setup?.periodColumn) {
       setPeriods([]);
-      setPeriodSort("text");
       return;
     }
     let stale = false;
@@ -196,7 +194,6 @@ export function App() {
       if (stale) return;
       const values = [...list.values];
       setPeriods(values);
-      setPeriodSort(list.sort);
       setCurrent((value) => (values.includes(value) ? value : (values.at(-1) ?? "")));
       setPrior((value) => (values.includes(value) ? value : (values.at(-2) ?? "")));
     });
@@ -235,7 +232,6 @@ export function App() {
         check,
         ms,
         periods,
-        periodSort,
         textColumns: columns.filter((c) => !/INT|DOUBLE|DECIMAL|FLOAT|REAL|DATE|TIMESTAMP/i.test(c.type)).map((c) => c.name),
         description: describeSetup(setup, prior, current, source),
         id: Date.now(),
