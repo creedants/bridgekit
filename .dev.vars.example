@@ -13,3 +13,5 @@ PADDLE_ENVIRONMENT=sandbox
 PADDLE_API_KEY=
 PADDLE_WEBHOOK_SECRET=
 PADDLE_PRICE_ID=
+# Exact value "on" enables sign-in, workspaces, checkout, the Paddle webhook and commentary. Any other value leaves those routes off.
+ACCOUNTS=on

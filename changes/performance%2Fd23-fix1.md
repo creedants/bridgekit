@@ -1,0 +1,1 @@
+- Part 1 leaves account, workspace, checkout, Paddle webhook, and commentary routes off because ACCOUNTS is unset. Part 2 sets ACCOUNTS to on in wrangler.jsonc vars.

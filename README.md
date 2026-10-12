@@ -140,12 +140,17 @@ the site's own origin:
 To run all of it on this machine with a local database and no Cloudflare
 account: copy `.dev.vars.example` to `.dev.vars`, set `BETTER_AUTH_SECRET`,
 then `npm run build:cloudflare && npm run cf:dev` and open
-http://localhost:8790. Without an email key, sign-in links are printed in the
-terminal. `npm run smoke -- http://localhost:8790` runs the smoke test against
-it.
+http://localhost:8790.
+
+Sign-in, workspaces, checkout, the Paddle webhook, and commentary answer only
+when `ACCOUNTS` is exactly `on`. `.dev.vars` sets that for local work.
+
+Without an email key, sign-in links are printed in the terminal.
+`npm run smoke -- http://localhost:8790` runs the smoke test against it.
 
 To go live, follow [DEPLOY.md](DEPLOY.md). Part 1 puts the free tool and page
-counts on your domain. Part 2 turns on accounts and payments.
+counts on your domain. Part 2 turns on accounts and payments. Enabling accounts
+needs `ACCOUNTS=on` as well as the secrets.
 
 ## Layout
 

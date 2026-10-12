@@ -31,6 +31,8 @@ A non-zero delay is a partial run. During the wait the page may download the Duc
 
 Every wrangler command gets a generated `BETTER_AUTH_SECRET` through `--env-file`, and a child environment that keeps `PATH` and a private home directory. Telemetry, error reports, the update check banner, and the `cf.json` fetch are off. The script does not read `.env`, `.env.local`, or `.dev.vars`, and it does not pass inherited Cloudflare credentials. Commentary, Paddle, and sign-in keys stay unset. Those routes stop at the local refusal.
 
+The generated file also sets `ACCOUNTS=on`, so the route timings still see those routes. `scripts/perf/worker.mjs:260` has `ACCOUNTS=on`.
+
 Each route records the first request, discards one warm-up, then keeps five steady samples. The median is the middle steady sample. The first request is first-hit for that route in one process. Only the home page is the first request after the process starts.
 
 Static pages are `/`, `/app/`, `/guide.html`, and `/method.html`. The site links to the `.html` addresses. Wrangler's default HTML handling answers `/guide.html` and `/method.html` with a 307 to `/guide` and `/method`, then the asset layer serves the HTML. The script follows that redirect, and `totalMs` includes it. `/guide` and `/method` are not in `run_worker_first`, so the Worker never sees those 200s and `page_views` does not rise for them. `/` and `/app/` are served by the Worker, and those counts do rise. `wrangler.jsonc` does not set `html_handling`, so this redirect is the assets default, not a local-only quirk. There is no route that reads the counts. After the samples, the script reads the local D1 `page_views` table and stores how much each final path rose.
