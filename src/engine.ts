@@ -869,3 +869,228 @@ export async function accountBridge(
     };
   });
 }
+
+export type PanelStatus = "continuing" | "new" | "lost" | "no_units";
+
+interface PanelFigures {
+  /** The panel's own bridge, or null when its value has nothing to bridge. */
+  result: BridgeResult | null;
+  status: PanelStatus;
+  priorSales: number;
+  currentSales: number;
+  change: number;
+}
+
+/** A single value, or the one combined remainder. `values` is a count. */
+export type BridgePanel =
+  | (PanelFigures & { combined: false; value: string | null; values: 1 })
+  | (PanelFigures & { combined: true; value: null; values: number });
+
+export interface BridgeBy {
+  /** The column the panels split on. */
+  column: string;
+  /** The ordinary bridge over every row of the table. */
+  total: BridgeResult;
+  /** The value bridges, largest absolute change first, with the combined panel last. */
+  panels: BridgePanel[];
+  /** One entry per effect of `total`, same key, label and order. */
+  between: Effect[];
+}
+
+/** Units and sales of one value, or of the values a combined panel pools. */
+interface PanelPool {
+  priorUnits: number;
+  currentUnits: number;
+  priorSales: number;
+  currentSales: number;
+}
+
+interface PanelRow extends PanelPool {
+  value: string | null;
+}
+
+/** One panel's rows and its filter, decided before any panel bridge runs. */
+type PanelPlan = PanelPool &
+  (
+    | { combined: false; value: string | null; values: 1; where: string }
+    | { combined: true; value: null; values: number; where: string }
+  );
+
+const PANEL_VIEW = "bridge_by_panel";
+const PANEL_HOLD = "bridge_by_hold";
+
+/** The column's text form, with null and the empty string as one value. */
+function collapsedValue(column: string): string {
+  const id = ident(column);
+  return `CASE WHEN ${id} IS NULL OR CAST(${id} AS VARCHAR) = '' THEN NULL ELSE CAST(${id} AS VARCHAR) END`;
+}
+
+/**
+ * Per value of the column, the units and the sales of each period. Sales cover
+ * every row of the period, rows with no units included, because that is what
+ * BridgeResult.priorSales holds.
+ */
+async function census(query: Query, config: BridgeConfig, column: string): Promise<PanelRow[]> {
+  const period = ident(config.periodColumn);
+  const prior = literal(config.prior);
+  const current = literal(config.current);
+  const units = ident(config.unitsColumn);
+  const sales = ident(config.salesColumn);
+  const cost = config.costColumn ? ident(config.costColumn) : null;
+  // The measure cellsSql inlines, so a panel's census figure is the bridge's own.
+  const measure = cost ? `(coalesce(${sales}, 0) - coalesce(${cost}, 0))` : sales;
+  const rows = await query(
+    `SELECT ${collapsedValue(column)} AS value,
+       coalesce(sum(${units}) FILTER (WHERE ${period} = ${prior}), 0)::DOUBLE AS prior_units,
+       coalesce(sum(${units}) FILTER (WHERE ${period} = ${current}), 0)::DOUBLE AS current_units,
+       coalesce(sum(${measure}) FILTER (WHERE ${period} = ${prior}), 0)::DOUBLE AS prior_sales,
+       coalesce(sum(${measure}) FILTER (WHERE ${period} = ${current}), 0)::DOUBLE AS current_sales
+      FROM ${ident(config.table)}
+      WHERE ${period} IN (${prior}, ${current})
+      GROUP BY 1`,
+  );
+  return rows.map((row) => ({
+    value: row.value == null ? null : String(row.value),
+    priorUnits: Number(row.prior_units),
+    currentUnits: Number(row.current_units),
+    priorSales: Number(row.prior_sales),
+    currentSales: Number(row.current_sales),
+  }));
+}
+
+/** Largest absolute change first, ties broken on the value's text. */
+function byChange(a: PanelRow, b: PanelRow): number {
+  const left = Math.abs(a.currentSales - a.priorSales);
+  const right = Math.abs(b.currentSales - b.priorSales);
+  if (left !== right) return right - left;
+  return (a.value ?? "") < (b.value ?? "") ? -1 : 1;
+}
+
+function pooled(rows: PanelPool[]): PanelPool {
+  const pool: PanelPool = { priorUnits: 0, currentUnits: 0, priorSales: 0, currentSales: 0 };
+  for (const row of rows) {
+    pool.priorUnits += row.priorUnits;
+    pool.currentUnits += row.currentUnits;
+    pool.priorSales += row.priorSales;
+    pool.currentSales += row.currentSales;
+  }
+  return pool;
+}
+
+/**
+ * Rows matching one value, or, for the combined panel, every row outside a set
+ * of values. The null bucket is IS NOT DISTINCT FROM NULL, so it holds both the
+ * column's nulls and its empty strings.
+ */
+function panelWhere(column: string, values: (string | null)[], combined: boolean): string {
+  const collapsed = collapsedValue(column);
+  const matched = values.map((value) => `${collapsed} IS NOT DISTINCT FROM ${value === null ? "NULL" : literal(value)}`);
+  return combined ? `NOT (${matched.join(" OR ")})` : matched.join(" OR ");
+}
+
+/**
+ * Pooled prior units decide whether a value has a bridge at all. A value whose
+ * prior period was empty but that now sells is new, and a value that only ever
+ * sold zero-unit rows has no units to bridge either way.
+ */
+function panelStatus(pool: PanelPool): PanelStatus {
+  if (!(pool.priorUnits > 0)) {
+    return pool.currentUnits > 0 && pool.priorSales === 0 ? "new" : "no_units";
+  }
+  return pool.currentUnits > 0 || pool.currentSales !== 0 ? "continuing" : "lost";
+}
+
+/** What the panels leave of each effect of the main bridge. */
+function betweenEffects(total: BridgeResult, panels: BridgePanel[]): Effect[] {
+  return total.effects.map((effect) => ({
+    ...effect,
+    value:
+      effect.value -
+      panels.reduce((sum, panel) => {
+        const own = panel.result?.effects.find((e) => e.key === effect.key);
+        return sum + (own?.value ?? 0);
+      }, 0),
+  }));
+}
+
+/**
+ * The same bridge for every value of one column of the source table, plus the
+ * main bridge those values split. Each panel is an ordinary bridge over that
+ * value's rows alone, so what the panels leave of the main bridge's effects is
+ * the mix between the values. The column can be any column of the table, not
+ * only an attribute of the bridge.
+ */
+export async function bridgeBy(
+  query: Query,
+  config: BridgeConfig,
+  column: string,
+  limit = 12,
+): Promise<BridgeBy> {
+  const count = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : 1;
+  const total = await runBridge(query, config);
+  const cellsTable = config.cellsTable ?? DEFAULT_CELLS_TABLE;
+  const rows = (await census(query, config, column)).sort(byChange);
+  const leaders = rows.slice(0, count);
+  const rest = rows.slice(count);
+  const plans: PanelPlan[] = leaders.map((row) => ({
+    ...row,
+    where: panelWhere(column, [row.value], false),
+    combined: false,
+    values: 1,
+  }));
+  if (rest.length > 0) {
+    // The combined panel holds the values the single panels leave out.
+    plans.push({
+      ...pooled(rest),
+      where: panelWhere(column, leaders.map((row) => row.value), true),
+      combined: true,
+      value: null,
+      values: rest.length,
+    });
+  }
+  try {
+    // Every panel writes the main cells table, so hold the main cells while they run.
+    await query(`CREATE OR REPLACE TEMP TABLE temp.${ident(PANEL_HOLD)} AS SELECT * FROM ${ident(cellsTable)}`);
+    const panels: BridgePanel[] = [];
+    for (const plan of plans) {
+      let result: BridgeResult | null = null;
+      if (plan.priorUnits > 0) {
+        await query(
+          `CREATE OR REPLACE TEMP VIEW ${ident(PANEL_VIEW)} AS SELECT * FROM ${ident(config.table)} WHERE ${plan.where}`,
+        );
+        try {
+          result = await runBridge(query, { ...config, table: PANEL_VIEW });
+        } catch (error) {
+          // The census has already decided this panel has prior units.
+          if (!(error instanceof Error) || !error.message.startsWith("No units found for prior period")) throw error;
+        }
+      }
+      const status = panelStatus(plan);
+      const figures: PanelFigures = result
+        ? {
+            result,
+            status,
+            priorSales: result.priorSales,
+            currentSales: result.currentSales,
+            change: result.currentSales - result.priorSales,
+          }
+        : {
+            result: null,
+            status,
+            priorSales: plan.priorSales,
+            currentSales: plan.currentSales,
+            change: plan.currentSales - plan.priorSales,
+          };
+      panels.push(
+        plan.combined
+          ? { ...figures, combined: true, value: null, values: plan.values }
+          : { ...figures, combined: false, value: plan.value, values: 1 },
+      );
+    }
+    return { column, total, panels, between: betweenEffects(total, panels) };
+  } finally {
+    await query(`CREATE OR REPLACE TEMP TABLE ${ident(cellsTable)} AS SELECT * FROM temp.${ident(PANEL_HOLD)}`);
+    await query(`DROP VIEW IF EXISTS temp.${ident(PANEL_VIEW)}`);
+    await query(`DROP TABLE IF EXISTS temp.${ident(PANEL_HOLD)}`);
+  }
+}
