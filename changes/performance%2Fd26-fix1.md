@@ -1,0 +1,1 @@
+- The period list is ordered once, by the query that reads it. The trend steps that order with no second sort. A period column counts as numbers only when every value is a plain digit string of at most 15 digits, so its values cast to finite, distinct doubles; every other period column keeps the previous text order.
