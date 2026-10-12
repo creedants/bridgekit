@@ -1,8 +1,21 @@
 import { betterAuth, type BetterAuthOptions } from "better-auth";
 import { magicLink, organization } from "better-auth/plugins";
+import type { RateLimit } from "./cloudflare.ts";
 import { sendEmail } from "./email.ts";
 import type { Env } from "./env.ts";
 import { deleteSoleWorkspaces } from "./workspace.ts";
+
+const AUTH_BASE_PATH = "/api/auth";
+
+const signInMagicLink = magicLink({
+  sendMagicLink() {
+    throw new Error("schema lookup");
+  },
+}).endpoints.signInMagicLink;
+
+function tooManyRequests(): Response {
+  return Response.json({ message: "Too many requests. Please try again later." }, { status: 429 });
+}
 
 /**
  * Accounts and team workspaces (Better Auth). A workspace is Better Auth's
@@ -14,7 +27,7 @@ export function authOptions(env: Env, seatsFor: (workspaceId: string) => Promise
   return {
     appName: "Bridgekit",
     baseURL: env.BETTER_AUTH_URL,
-    basePath: "/api/auth",
+    basePath: AUTH_BASE_PATH,
     secret: env.BETTER_AUTH_SECRET,
     trustedOrigins: [env.BETTER_AUTH_URL],
     // Better Auth can report anonymous usage to its authors; keep it off.
@@ -28,11 +41,15 @@ export function authOptions(env: Env, seatsFor: (workspaceId: string) => Promise
         : {}),
     },
     // Sessions would otherwise keep each visitor's IP address and browser.
-    // The IP is still read, in memory only, to slow repeated sign-in attempts.
     databaseHooks: {
       session: { create: { before: async (session) => ({ data: { ...session, ipAddress: "", userAgent: "" } }) } },
     },
-    rateLimit: { enabled: true, customRules: { "/sign-in/magic-link": { window: 60, max: 3 } } },
+    rateLimit: {
+      enabled: true,
+      customRules: {
+        [signInMagicLink.path]: () => false,
+      },
+    },
     account: { accountLinking: { enabled: true, trustedProviders: ["microsoft", "google"] } },
     user: { deleteUser: { enabled: true, beforeDelete: (user) => deleteSoleWorkspaces(env.DB, user.id) } },
     plugins: [
@@ -55,6 +72,30 @@ export function authOptions(env: Env, seatsFor: (workspaceId: string) => Promise
       }),
     ],
   } satisfies BetterAuthOptions;
+}
+
+export async function limitMagicLinkSignIn(request: Request, rateLimit: RateLimit | undefined): Promise<Response | null> {
+  if (request.method !== "POST" || new URL(request.url).pathname !== AUTH_BASE_PATH + signInMagicLink.path) return null;
+  const mediaType = request.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
+  if (mediaType !== "application/json") return null;
+  let parsed: unknown;
+  try {
+    parsed = await request.clone().json();
+  } catch {
+    return null;
+  }
+  const result = await signInMagicLink.options.body["~standard"].validate(parsed);
+  if (result.issues) return null;
+  if (rateLimit === undefined) return null;
+  const key = request.headers.get("cf-connecting-ip");
+  if (key === null || key.trim() === "") return tooManyRequests();
+  try {
+    const { success } = await rateLimit.limit({ key });
+    if (!success) return tooManyRequests();
+  } catch {
+    return tooManyRequests();
+  }
+  return null;
 }
 
 export function createAuth(env: Env, seatsFor: (workspaceId: string) => Promise<number>) {

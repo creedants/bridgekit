@@ -333,7 +333,7 @@ function withoutSecrets(stdout: string | null, stderr: string | null): string {
 }
 
 function runIsolated(name: string): void {
-  const env = { ...process.env, BRIDGEKIT_RATE_LIMIT_CASE: name };
+  const env: NodeJS.ProcessEnv = { ...process.env, BRIDGEKIT_RATE_LIMIT_CASE: name };
   for (const key of Object.keys(env)) {
     if (key.startsWith("NODE_TEST_")) delete env[key];
   }
