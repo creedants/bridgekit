@@ -53,7 +53,7 @@ function bindings(db: Env["DB"]): Env {
       return new Response("missing", { status: 500 });
     },
   };
-  return { ASSETS: assets, DB: db, BETTER_AUTH_URL: ORIGIN, BETTER_AUTH_SECRET: AUTH_SECRET, ACCOUNTS: "on" };
+  return { ASSETS: assets, DB: db, BETTER_AUTH_URL: ORIGIN, BETTER_AUTH_SECRET: AUTH_SECRET, ACCOUNTS: "on", LOCAL_EMAIL_LOG: "on" };
 }
 
 function captureConsole(): { lines: string[]; restore(): void } {
