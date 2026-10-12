@@ -11,14 +11,19 @@ import { createCheckout, parseSubscriptionEvent, verifyPaddleSignature, type Pad
 import {
   applySubscription,
   deleteSaved,
+  invitationHasSeat,
   listBridges,
   listSetups,
   membership,
   plan,
   saveBridge,
   saveSetup,
+  SEAT_LIMIT_SENTENCE,
   userHasPro,
+  WORKSPACE_LIMIT_SENTENCE,
   WorkspaceError,
+  MAX_WORKSPACES_PER_USER,
+  workspaceCount,
 } from "./workspace.ts";
 
 /**
@@ -91,6 +96,14 @@ open.use("/api/workspaces/*", async (c, next) => {
  */
 const EMAIL_ROUTES = ["/sign-in/magic-link", "/organization/invite-member"];
 
+/** The two Better Auth routes that write a workspace or an invitation. */
+const CREATE_WORKSPACE = "/organization/create";
+const INVITE_MEMBER = "/organization/invite-member";
+
+function endsWith(request: Request, route: string): boolean {
+  return new URL(request.url).pathname.endsWith(route);
+}
+
 /**
  * Refuses a request that can only be answered by sending an email when this
  * deployment cannot send one, before Better Auth sees it.
@@ -111,11 +124,81 @@ function emailRefusal(env: Env, request: Request): Response | null {
   return Response.json({ message: EMAIL_NOT_SET_UP }, { status: 503 });
 }
 
+function refused(sentence: string): Response {
+  return Response.json({ message: sentence }, { status: 403 });
+}
+
+/**
+ * Reads the request body without consuming it, so Better Auth still receives
+ * the request it came in on.
+ */
+async function body(request: Request): Promise<unknown> {
+  try {
+    return await request.clone().json();
+  } catch {
+    return undefined;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Refuses a workspace creation or an invitation before Better Auth runs, with
+ * the same two sentences Better Auth would answer with.
+ *
+ * The Worker asks, because Better Auth's invitation route sends the email from
+ * a background helper that catches whatever the hooks throw and then answers
+ * 200: a refusal raised inside the plugin cannot produce the plain 403 the
+ * request owes its caller. server/auth.ts still holds the same two checks for
+ * callers that reach the plugin directly, and the triggers in
+ * migrations/0004_workspace_limits.sql refuse a losing write that both checks
+ * have already let through.
+ *
+ * The invitation route resolves the workspace from the body's organizationId
+ * and, without one, from the session's active workspace. This mirrors that,
+ * and a re-send is counted the way the route counts it: it reuses the live
+ * pending invitation, which already holds its seat.
+ */
+async function limitsRefusal(auth: Auth, env: Env, request: Request): Promise<Response | null> {
+  if (request.method !== "POST") return null;
+  const session = await auth.api.getSession({ headers: request.headers });
+  if (!session) return null;
+  if (endsWith(request, CREATE_WORKSPACE)) {
+    if ((await workspaceCount(env.DB, session.user.id)) >= MAX_WORKSPACES_PER_USER) return refused(WORKSPACE_LIMIT_SENTENCE);
+    return null;
+  }
+  if (!endsWith(request, INVITE_MEMBER)) return null;
+  const parsed = await body(request);
+  if (!isRecord(parsed)) return null;
+  const organizationId = typeof parsed.organizationId === "string" && parsed.organizationId ? parsed.organizationId : session.session.activeOrganizationId;
+  if (!organizationId) return null;
+  if (!(await invitationHasSeat(env.DB, organizationId, parsed))) return refused(SEAT_LIMIT_SENTENCE);
+  return null;
+}
+
+/**
+ * Translates the refusal a database trigger in
+ * migrations/0004_workspace_limits.sql raises into the sentence the request
+ * owes its caller. Two invitations for the last seat both pass
+ * limitsRefusal, and the database refuses the one that would take a seat
+ * already taken. Better Auth surfaces that error rather than answering it,
+ * because a database error is not one of its own, and the request has written
+ * no row and sent no email.
+ */
+function translation(error: unknown): Response | null {
+  if (error instanceof Error && error.message.includes(SEAT_LIMIT_SENTENCE)) return refused(SEAT_LIMIT_SENTENCE);
+  return null;
+}
+
 open.on(["GET", "POST"], "/api/auth/*", async (c) => {
   const unavailable = emailRefusal(c.env, c.req.raw);
   if (unavailable) return unavailable;
   const refusal = await limitMagicLinkSignIn(c.req.raw, c.env.MAGIC_LINK_RATE_LIMIT);
   if (refusal) return refusal;
+  const limited = await limitsRefusal(c.get("auth"), c.env, c.req.raw);
+  if (limited) return limited;
   return c.get("auth").handler(c.req.raw);
 });
 
@@ -134,6 +217,8 @@ async function json(c: Context<App>): Promise<unknown> {
 }
 
 open.onError((error, c) => {
+  const refused = translation(error);
+  if (refused) return refused;
   if (error instanceof WorkspaceError) return c.json({ error: error.message }, error.status);
   console.error(error);
   return c.json({ error: "Something went wrong on the server." }, 500);

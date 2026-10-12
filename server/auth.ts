@@ -1,38 +1,18 @@
 import { betterAuth, type BetterAuthOptions } from "better-auth";
-import { APIError, createAuthMiddleware } from "better-auth/api";
+import { APIError } from "better-auth/api";
 import { magicLink, organization } from "better-auth/plugins";
 import type { RateLimit } from "./cloudflare.ts";
 import { sendEmail } from "./email.ts";
 import type { Env } from "./env.ts";
-import { deleteSoleWorkspaces, freeSeats, MAX_WORKSPACES_PER_USER, workspaceCount } from "./workspace.ts";
+import { deleteSoleWorkspaces, freeSeats, MAX_WORKSPACES_PER_USER, SEAT_LIMIT_SENTENCE, WORKSPACE_LIMIT_SENTENCE, workspaceCount } from "./workspace.ts";
 
 const AUTH_BASE_PATH = "/api/auth";
-const INVITE_MEMBER = "/organization/invite-member";
 
 const signInMagicLink = magicLink({
   sendMagicLink() {
     throw new Error("schema lookup");
   },
 }).endpoints.signInMagicLink;
-
-// The plugin's own resend branch reuses a live invitation: it updates the row's
-// expiry and sends the email without calling beforeCreateInvitation. This runs
-// before the route, so a refusal leaves the row and its expiry exactly as they
-// were.
-const limitInvitations = createAuthMiddleware(async (ctx) => {
-  if (ctx.path !== INVITE_MEMBER) return;
-  const body = ctx.body as { resend?: unknown; organizationId?: unknown; email?: unknown } | undefined;
-  if (!body?.resend || typeof body.organizationId !== "string" || typeof body.email !== "string") return;
-  const database = ctx.context.options.database as unknown as Parameters<typeof freeSeats>[0];
-  // A re-sent invitation already holds its seat, so it does not take another.
-  const row = await database
-    .prepare(`SELECT id FROM invitation WHERE organizationId = ? AND email = ? AND status = 'pending' AND datetime(expiresAt) > datetime('now')`)
-    .bind(body.organizationId, body.email.toLowerCase())
-    .first<{ id: string }>();
-  if (!row) return;
-  if ((await freeSeats(database, body.organizationId, new Date(), row.id)) > 0) return;
-  throw new APIError("FORBIDDEN", { message: "This workspace has no free seat, so cancel a pending invitation or add seats." });
-});
 
 function tooManyRequests(): Response {
   return Response.json({ message: "Too many requests. Please try again later." }, { status: 429 });
@@ -71,11 +51,12 @@ export function authOptions(env: Env, seatsFor: (workspaceId: string) => Promise
         [signInMagicLink.path]: () => false,
       },
     },
-    hooks: {
-      // Scope the seat check to the invitation route, where the plugin's hooks
-      // do not reach every path that sends email.
-      before: limitInvitations,
-    },
+    // A database error is not an APIError, so better-call would answer it with
+    // an empty 500 and the sentence a refused invitation carries would go no
+    // further than the log. Throwing it instead lets the Worker translate it
+    // into that sentence. Everything Better Auth refuses itself is an APIError
+    // and is still answered by Better Auth, exactly as before.
+    onAPIError: { throw: true },
     account: { accountLinking: { enabled: true, trustedProviders: ["microsoft", "google"] } },
     user: { deleteUser: { enabled: true, beforeDelete: (user) => deleteSoleWorkspaces(env.DB, user.id) } },
     plugins: [
@@ -88,45 +69,33 @@ export function authOptions(env: Env, seatsFor: (workspaceId: string) => Promise
         // A workspace holds as many members as it has paid seats; one (the owner) before it subscribes.
         membershipLimit: (_user, workspace) => seatsFor(workspace.id),
         invitationExpiresIn: 7 * 24 * 60 * 60,
-        // The hooks below run before the row is written and before the
-        // invitation email, so a refusal leaves neither behind. The triggers in
-        // migrations/0004 hold the same limits against two writes that arrive
-        // at the same moment, and afterCreateOrganization and
-        // sendInvitationEmail turn their undo into the same sentences.
+        // Both hooks run before the row is written, so a refusal leaves neither
+        // a row nor an email behind. server/worker.ts asks the same two
+        // questions before Better Auth runs, so an ordinary request is refused
+        // before the plugin sees it; these hooks are the guard for every other
+        // caller, and the triggers in migrations/0004_workspace_limits.sql hold
+        // the invitation limit against two invitations written at the same
+        // moment.
         organizationHooks: {
           beforeCreateOrganization: async ({ user }) => {
             if ((await workspaceCount(env.DB, user.id)) >= MAX_WORKSPACES_PER_USER) {
-              throw new APIError("FORBIDDEN", {
-                message: `You can own up to ${MAX_WORKSPACES_PER_USER} workspaces, so delete one before creating another.`,
-              });
-            }
-          },
-          // Two creates at the same moment both pass the check above and both
-          // write. The trigger in migrations/0004 undoes the second one, so the
-          // workspace it wrote a row for is gone by the time this hook runs and
-          // the request answers with the ordinary refusal.
-          afterCreateOrganization: async ({ organization }) => {
-            if (!(await env.DB.prepare(`SELECT id FROM organization WHERE id = ?`).bind(organization.id).first())) {
-              throw new APIError("FORBIDDEN", {
-                message: `You can own up to ${MAX_WORKSPACES_PER_USER} workspaces, so delete one before creating another.`,
-              });
+              throw new APIError("FORBIDDEN", { message: WORKSPACE_LIMIT_SENTENCE });
             }
           },
           beforeCreateInvitation: async ({ organization: workspace }) => {
             if ((await freeSeats(env.DB, workspace.id)) <= 0) {
-              throw new APIError("FORBIDDEN", { message: "This workspace has no free seat, so cancel a pending invitation or add seats." });
+              throw new APIError("FORBIDDEN", { message: SEAT_LIMIT_SENTENCE });
             }
           },
         },
+        // The route sends this once the invitation row exists, so the only
+        // thing left to check is that the row is still there. A seat check
+        // here runs after a write has happened, and a refusal from it is
+        // swallowed by the background helper that runs this callback, which
+        // then answers 200 with an invitation nobody can act on.
         sendInvitationEmail: async ({ email, organization: workspace, inviter, id }) => {
-          // The resend path sends without asking beforeCreateInvitation, and two
-          // invitations at the same moment both pass it. The triggers in
-          // migrations/0004 undo those writes, so the seat the invitation was
-          // given is either held by someone else or already gone, and sending
-          // now would mail an address with nowhere to land.
-          if ((await freeSeats(env.DB, workspace.id, new Date(), id)) <= 0) {
-            throw new APIError("FORBIDDEN", { message: "This workspace has no free seat, so cancel a pending invitation or add seats." });
-          }
+          const row = await env.DB.prepare(`SELECT id FROM invitation WHERE id = ?`).bind(id).first();
+          if (!row) throw new APIError("FORBIDDEN", { message: SEAT_LIMIT_SENTENCE });
           return sendEmail(
             env,
             email,
