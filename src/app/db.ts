@@ -184,8 +184,8 @@ export interface BrowserDatabase {
 
 // A UTF-8 file is handed to the database as its own bytes, so this is the most
 // that is read up front, and a prefix may stop between two bytes of one
-// character. A prefix that is not UTF-8 (a Windows-1252 or UTF-16 export) is
-// read in full, to tell its encoding from its whole text.
+// character. A prefix that fails the prefix check is read in full, to tell its
+// encoding from its whole text.
 const CSV_PREFIX_BYTES = 65536;
 
 // read_csv only reads UTF-8. When a file that passed the prefix check turns out
