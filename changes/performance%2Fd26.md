@@ -1,0 +1,1 @@
+- Period values that are all plain digit strings of at most 15 digits, such as months 8, 9, and 10, are listed and stepped in numeric order. Any other period column keeps the previous text order.

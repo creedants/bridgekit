@@ -13,6 +13,7 @@ import { exportExcel } from "./exportExcel.ts";
 import { download } from "./files.ts";
 import { whole } from "./format.ts";
 import { distinctCounts, findRollups } from "./profile.ts";
+import { loadPeriodList } from "./periods.ts";
 import type { Run } from "./Results.tsx";
 import {
   guessSetup,
@@ -189,12 +190,9 @@ export function App() {
     task("Reading periods…", async () => {
       const q = await query();
       await q(viewSql(setup));
-      const rows = await q(
-        `SELECT DISTINCT ${quote(PERIOD)} AS p FROM ${quote(VIEW)}
-         WHERE ${quote(PERIOD)} IS NOT NULL ORDER BY 1 DESC LIMIT 200`,
-      );
+      const list = await loadPeriodList(q, quote(PERIOD), quote(VIEW));
       if (stale) return;
-      const values = rows.map((row) => String(row.p)).reverse();
+      const values = [...list.values];
       setPeriods(values);
       setCurrent((value) => (values.includes(value) ? value : (values.at(-1) ?? "")));
       setPrior((value) => (values.includes(value) ? value : (values.at(-2) ?? "")));
