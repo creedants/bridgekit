@@ -8,7 +8,7 @@ export interface Env {
   BETTER_AUTH_URL: string;
   BETTER_AUTH_SECRET: string;
   ANTHROPIC_API_KEY?: string;
-  /** Without both, email is sent through Resend. With one missing, see LOCAL_EMAIL_LOG. */
+  /** With both set, email is sent through Resend. With either missing, see LOCAL_EMAIL_LOG. */
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
   /**
