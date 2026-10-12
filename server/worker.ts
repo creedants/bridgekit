@@ -205,7 +205,6 @@ for (const pathname of HTML_PAGE) {
 const worker = {
   fetch(request: Request, env: Env, ctx: HonoExecutionContext): Response | Promise<Response> {
     const closed = closedApiResponse(request.method, getPath(request));
-    // closedApiResponse returns null for a page, so this does not read ACCOUNTS, and createAuth does not run.
     if (closed !== null && !accountsEnabled(env.ACCOUNTS)) return closed;
     return open.fetch(request, env, ctx);
   },
