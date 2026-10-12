@@ -77,7 +77,7 @@ export function authOptions(env: Env, seatsFor: (workspaceId: string) => Promise
 export async function limitMagicLinkSignIn(request: Request, rateLimit: RateLimit | undefined): Promise<Response | null> {
   if (request.method !== "POST" || new URL(request.url).pathname !== AUTH_BASE_PATH + signInMagicLink.path) return null;
   const mediaType = request.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
-  if (mediaType !== "application/json") return null;
+  if (mediaType !== "application/json") return Response.json({ message: "Content-Type must be application/json." }, { status: 415 });
   let parsed: unknown;
   try {
     parsed = await request.clone().json();
