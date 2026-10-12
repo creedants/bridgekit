@@ -1,0 +1,1 @@
+- The seeded test now checks reported totals and drill groups against amounts computed from the generated rows, including combined price when the bridge splits price.
