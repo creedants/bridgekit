@@ -81,8 +81,8 @@ Edit: `wrangler.jsonc:35`
 
 - Source: `wrangler.jsonc:35` has `"BETTER_AUTH_URL"`.
 - Source: `wrangler.jsonc:34` has `Replaced with the real address in production.`
-- Source: `server/auth.ts:19` has `trustedOrigins: [env.BETTER_AUTH_URL]`.
-- Source: `server/auth.ts:53` has `${env.BETTER_AUTH_URL}/app/?invitation=${id}`.
+- Source: `server/auth.ts:32` has `trustedOrigins: [env.BETTER_AUTH_URL]`.
+- Source: `server/auth.ts:70` has `${env.BETTER_AUTH_URL}/app/?invitation=${id}`.
 - Source: `server/env.ts:8` has `BETTER_AUTH_URL: string`.
 - Worked: `grep -n BETTER_AUTH_URL wrangler.jsonc` prints one line, and that line contains `"BETTER_AUTH_URL": "https://<domain>"`.
 
@@ -138,7 +138,7 @@ npx wrangler secret put BETTER_AUTH_SECRET
 
 - Source: `server/env.ts:9` has `BETTER_AUTH_SECRET: string`.
 - Source: `.dev.vars.example:3` has `at-least-32-chars`.
-- Source: `wrangler.jsonc:37` has `wrangler secret put NAME`.
+- Source: `wrangler.jsonc:44` has `wrangler secret put NAME`.
 - Source: `package.json:41` has `"wrangler": "^4.147.0"`.
 - Not verified: the remote prompt, creating the draft Worker, and the retry. This session did not run secret put or deploy.
 - Worked: `npx wrangler secret list` prints `BETTER_AUTH_SECRET`.
@@ -201,7 +201,7 @@ curl -sS -w '\n%{http_code}\n' -X POST 'https://<domain>/api/auth/sign-in/magic-
 - Source: `server/worker.ts:49` has `providers: [] as string[]`, `commentary: false`, `billing: false`.
 - Source: `server/worker.ts:55-56` has `function closedApiResponse`, `pathname === "/api/config"`, `CLOSED_CONFIG`.
 - Source: `server/worker.ts:52` has `{ error: "Not found." }`, `status: 404`.
-- Source: `server/worker.ts:207-208` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`.
+- Source: `server/worker.ts:211-212` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`.
 - Worked: the config body has no providers, `commentary` is false, and `billing` is false. The sign-in body is `{"error":"Not found."}` and the status is 404.
 
 ### 1.13 Check the home page and the pay address
@@ -243,7 +243,7 @@ https://<domain>/
 ```
 
 - Source: `server/counts.ts:11` has `headless|curl|wget`.
-- Source: `server/worker.ts:195` has `countPageView(`.
+- Source: `server/worker.ts:199` has `countPageView(`.
 - Source: `package.json:20` has `SELECT day, path, referrer, views FROM page_views`.
 - Worked: `npm run stats` prints a row whose path is `/`.
 
@@ -271,14 +271,14 @@ Account, workspace, checkout, webhook, and commentary routes are off because `AC
 - Source: `server/worker.ts:49` has `CLOSED_CONFIG`.
 - Source: `server/worker.ts:55-58` has `closedApiResponse`, `gatedApiPath`, `notFound()`.
 - Source: `server/worker.ts:65` has `createAuth(c.env`.
-- Source: `server/worker.ts:207-209` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`, `open.fetch`.
+- Source: `server/worker.ts:211-213` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`, `open.fetch`.
 - Source: `wrangler.jsonc:30-32` has `ACCOUNTS is a Worker variable`, `This file does not`, `set it`.
 - Source: `src/app/App.tsx:34` has `elsewhere the code is left out`.
 - Source: `src/app/App.tsx:35` has `import.meta.env.VITE_WORKSPACES === "1"`.
 
 `worker.fetch` returns the closed response before `open.fetch` when accounts are off. `createAuth` is on the open app, so that return does not call it. A gated path returns 404 and `{"error":"Not found."}`. It does not write a verification row, because the auth handler does not run.
 
-- Derived from: `server/worker.ts:65` has `createAuth(c.env`. `server/worker.ts:207-209` has `return closed`, `open.fetch`. The verification write is not a line in this return. It was not run.
+- Derived from: `server/worker.ts:65` has `createAuth(c.env`. `server/worker.ts:212-213` has `return closed`, `open.fetch`. The verification write is not a line in this return. It was not run.
 
 A path whose first segment is `api` in another letter case does not match `run_worker_first`. `/API/auth/sign-in/magic-link` is that kind of path. A local wrangler measurement returned the site's HTML 404 page for GET and 405 with an empty body for POST. That path never reaches an account route. The measurement is the local one. It was not a live zone.
 
@@ -293,7 +293,7 @@ A feature segment in another letter case does match `/api/*`. `/api/AUTH/sign-in
 
 ## Part 2. Accounts and payments
 
-You need a Resend account and a Paddle account that can take live payments. The server is set before the pages that show sign-in and Subscribe. Those pages ship in step 2.17.
+You need a Resend account and a Paddle account that can take live payments. The server is set before the pages that show sign-in and Subscribe. Those pages ship in step 2.18.
 
 ### 2.1 Move the account to Workers Paid
 
@@ -314,9 +314,9 @@ grep -n BETTER_AUTH_URL wrangler.jsonc
 ```
 
 - Source: `wrangler.jsonc:35` has `"BETTER_AUTH_URL"`.
-- Source: `server/auth.ts:19` has `trustedOrigins: [env.BETTER_AUTH_URL]`.
+- Source: `server/auth.ts:32` has `trustedOrigins: [env.BETTER_AUTH_URL]`.
 - Source: `server/worker.ts:73-74` has `new URL(c.env.BETTER_AUTH_URL).origin`, `Requests must come from this site.`
-- Source: `server/auth.ts:53` has `${env.BETTER_AUTH_URL}/app/?invitation=${id}`.
+- Source: `server/auth.ts:70` has `${env.BETTER_AUTH_URL}/app/?invitation=${id}`.
 - Not verified: what the sign-in routes answer when the address is outside `trustedOrigins`. That code is not in this repo.
 - Worked: the printed line contains `"BETTER_AUTH_URL": "https://<domain>"`. This proves it is set, not that it is right.
 - If this is wrong you will see: trustedOrigins is this address. Saving, deleting, and Subscribe answer `Requests must come from this site.` An invitation link is this address joined to `/app/?invitation=`, and a trailing slash puts a second slash before `app`.
@@ -338,7 +338,7 @@ Dashboard (not verified): the repo does not name the dashboard control for a Wor
 - Source: `server/worker.ts:37-38` has `value === "on"`.
 - Not verified: the dashboard control for a Worker variable.
 - Worked: `grep -n '"ACCOUNTS"' wrangler.jsonc` prints `"ACCOUNTS": "on"`.
-- If this value is missing or is any other value, every account, workspace, checkout, webhook, and commentary route returns 404 `{"error":"Not found."}` even when the secrets are set. `GET /api/config` still reports no providers, no billing, and no commentary. Step 2.18 is the check after the rest of Part 2 is in place.
+- If this value is missing or is any other value, every account, workspace, checkout, webhook, and commentary route returns 404 `{"error":"Not found."}` even when the secrets are set. `GET /api/config` still reports no providers, no billing, and no commentary. Step 2.19 is the check after the rest of Part 2 is in place.
 
 ### 2.4 Verify a sending domain in Resend
 
@@ -348,7 +348,7 @@ Dashboard (not verified): Resend > Domains > Add Domain.
 
 - Not verified: that Resend refuses an unverified sender. This repo does not check the domain.
 - Source: `server/email.ts:12` has `from: env.EMAIL_FROM`.
-- Worked: Resend lists the domain as verified. Later steps do not wait for that. Step 2.19 does.
+- Worked: Resend lists the domain as verified. Later steps do not wait for that. Step 2.20 does.
 
 ### 2.5 Store the Resend API key
 
@@ -402,7 +402,7 @@ npx wrangler secret put PADDLE_PRICE_ID
 - Source: `server/paddle.ts:198` has `quantity: options.seats`.
 - Source: `src/app/Workspace.tsx:252` has `max={200}`.
 - Source: `index.html:281` has `per user per month`.
-- Source: `server/worker.ts:160-162` has `c.env.PADDLE_PRICE_ID ? [c.env.PADDLE_PRICE_ID] : undefined`, `"ignored"`.
+- Source: `server/worker.ts:164-166` has `c.env.PADDLE_PRICE_ID ? [c.env.PADDLE_PRICE_ID] : undefined`, `"ignored"`.
 - Not verified: Paddle's default quantity limit for a price.
 - Worked: `npx wrangler secret list` prints `PADDLE_PRICE_ID`.
 
@@ -457,7 +457,7 @@ Dashboard (not verified): Paddle > Developer Tools > Notifications > New destina
 https://<domain>/api/paddle/webhook
 ```
 
-- Source: `server/worker.ts:155` has `"/api/paddle/webhook"`.
+- Source: `server/worker.ts:159` has `"/api/paddle/webhook"`.
 - Source: `server/paddle.ts:77-85` has `subscription.created`, `subscription.activated`, `subscription.updated`, `subscription.trialing`, `subscription.past_due`, `subscription.paused`, `subscription.resumed`, `subscription.canceled`, `subscription.imported`.
 - Source: `server/paddle.ts:112` has `!SUBSCRIPTION_EVENTS.includes(body.event_type)) return null`.
 - Source: `server/paddle.ts:156-159` has `case "active":`, `return true`.
@@ -477,7 +477,7 @@ npx wrangler secret put PADDLE_WEBHOOK_SECRET
 ```
 
 - Source: `server/env.ts:19` has `PADDLE_WEBHOOK_SECRET?: string`.
-- Source: `server/worker.ts:157-158` has `!c.env.PADDLE_WEBHOOK_SECRET`, `Bad signature.`
+- Source: `server/worker.ts:161-162` has `!c.env.PADDLE_WEBHOOK_SECRET`, `Bad signature.`
 - Worked: `npx wrangler secret list` prints `PADDLE_WEBHOOK_SECRET`.
 
 ### 2.13 Store the Paddle API key
@@ -492,8 +492,8 @@ npx wrangler secret put PADDLE_API_KEY
 - Source: `server/env.ts:18` has `PADDLE_API_KEY?: string`.
 - Source: `server/paddle.ts:203-205` has `doFetch`, `/transactions`, `method: "POST"`.
 - Derived from: `server/paddle.ts:213` has `Paddle returned ${response.status} when creating a transaction.` A 403 makes that throw `Paddle returned 403 when creating a transaction.` It was not run.
-- Source: `server/worker.ts:97-98` has `console.error(error)`, `Something went wrong on the server.`
-- Source: `server/worker.ts:143` has `Subscriptions are not set up yet.`
+- Source: `server/worker.ts:101-102` has `console.error(error)`, `Something went wrong on the server.`
+- Source: `server/worker.ts:147` has `Subscriptions are not set up yet.`
 - Not verified: the permission name is not in this repo. Paddle's transaction reference requires `transaction.write` at [Create a transaction](https://developer.paddle.com/api-reference/transactions/create-transaction). Paddle's authentication reference says a key without the permission returns 403, at [Authentication](https://developer.paddle.com/api-reference/about/authentication). Nobody entered an account.
 - Worked: `npx wrangler secret list` prints `PADDLE_API_KEY`. This proves the name is present, not that the key can create a transaction.
 - If this is wrong you will see: Subscribe answers 500 and `Something went wrong on the server.`
@@ -511,9 +511,9 @@ npx wrangler secret put PADDLE_ENVIRONMENT
 
 - Source: `server/env.ts:22` has `PADDLE_ENVIRONMENT?: string`.
 - Source: `server/env.ts:21` has `"sandbox" (default) or "live"`.
-- Source: `wrangler.jsonc:37-40` has `wrangler secret put NAME`. `wrangler.jsonc:37-40` lacks `PADDLE_ENVIRONMENT`.
+- Source: `wrangler.jsonc:44-47` has `wrangler secret put NAME`. `wrangler.jsonc:44-47` lacks `PADDLE_ENVIRONMENT`.
 - Source: `.dev.vars.example:11` has `Worker switch`, `VITE_PADDLE_ENVIRONMENT`.
-- Source: `server/worker.ts:147` has `c.env.PADDLE_ENVIRONMENT === "live" ? "live" : "sandbox"`.
+- Source: `server/worker.ts:151` has `c.env.PADDLE_ENVIRONMENT === "live" ? "live" : "sandbox"`.
 - Source: `server/paddle.ts:19-20` has `https://sandbox-api.paddle.com`, `https://api.paddle.com`.
 - Source: `src/pay/pay.ts:47` has `VITE_PADDLE_ENVIRONMENT !== "live"`.
 - Derived from: `server/paddle.ts:204` has `PADDLE_API[options.environment]`. Any value other than `live` sends the key from step 2.13 to the sandbox host. It was not run.
@@ -533,11 +533,11 @@ Dashboard (not verified): Paddle > My account > Settings > Authentication > Clie
 
 ## Names that stay unset
 
-The Part 2 build keeps `VITE_AI_COMMENTARY` at 0, so the commentary button stays hidden, and `ANTHROPIC_API_KEY` stays unset. `src/app/Results.tsx:213` has `import.meta.env.VITE_AI_COMMENTARY === "1"`. `server/worker.ts:169` has `if (!c.env.ANTHROPIC_API_KEY) return false`.
+The Part 2 build keeps `VITE_AI_COMMENTARY` at 0, so the commentary button stays hidden, and `ANTHROPIC_API_KEY` stays unset. `src/app/Results.tsx:213` has `import.meta.env.VITE_AI_COMMENTARY === "1"`. `server/worker.ts:173` has `if (!c.env.ANTHROPIC_API_KEY) return false`.
 
 - Leave unset: `ANTHROPIC_API_KEY`
 
-Microsoft and Google stay unset. A client id alone would add that provider to the sign-in button, and registration runs only when both the id and the secret are set. `server/worker.ts:105-106` has `c.env.MICROSOFT_CLIENT_ID ? ["microsoft"]`, `c.env.GOOGLE_CLIENT_ID ? ["google"]`. `server/auth.ts:23` has `env.MICROSOFT_CLIENT_ID && env.MICROSOFT_CLIENT_SECRET`. `server/auth.ts:26` has `env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET`.
+Microsoft and Google stay unset. A client id alone would add that provider to the sign-in button, and registration runs only when both the id and the secret are set. `server/worker.ts:109-110` has `c.env.MICROSOFT_CLIENT_ID ? ["microsoft"]`, `c.env.GOOGLE_CLIENT_ID ? ["google"]`. `server/auth.ts:36` has `env.MICROSOFT_CLIENT_ID && env.MICROSOFT_CLIENT_SECRET`. `server/auth.ts:39` has `env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET`.
 
 - Leave unset: `MICROSOFT_CLIENT_ID`
 - Leave unset: `MICROSOFT_CLIENT_SECRET`
@@ -561,7 +561,43 @@ VITE_PAGE_COUNTS=1 VITE_WORKSPACES=1 VITE_AI_COMMENTARY=0 VITE_PADDLE_CLIENT_TOK
 - Source: `index.html:231` has `No cookies or accounts unless you sign in for Pro.`
 - Worked: `test -f dist/pay/index.html` succeeds, `grep -R -l '<client-token>' dist` prints a path, `grep -c 'sign in for Pro' dist/index.html` prints 1, `grep -c 'No tracking scripts.' dist/index.html` prints 1, and `ls dist/assets | grep -c '\.wasm$'` prints 0.
 
-### 2.17 Deploy
+### 2.17 Confirm the sign-in rate limit
+
+Do: Leave the `ratelimits` entry in `wrangler.jsonc`. The name is `MAGIC_LINK_RATE_LIMIT`. Part 1 does not need this step, because accounts are off and the Worker returns the closed response before it reaches this binding.
+
+Do: Keep `namespace_id` as a string that holds a positive integer. The file has `"1001"`. Read the wrangler config of each other Worker in this account. When one of them already uses `1001`, replace that string with a positive integer none of them use. Do that before step 2.18. Leave `limit` at 3. Leave `period` at 60. The `simple` object holds those two fields. Do not store `MAGIC_LINK_RATE_LIMIT` with `npx wrangler secret put`.
+
+Do: Confirm that this account's plan includes this binding.
+
+The limit is approximate. Cloudflare counts it per location, and the count is eventually consistent.
+
+The Configuration section of [Rate Limiting](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) says a `namespace_id` is unique in the account when you do not want to share counters, and that two Workers that share a `namespace_id` share counters. The Monitoring section of that page says rate limiting bindings are not currently visible in the Cloudflare dashboard. The Locality section says the limit is local to the Cloudflare location. The Accuracy section says the API is permissive and eventually consistent.
+
+Step 2.1 moves the account to Workers Paid. It does not say that this binding is included.
+
+After step 2.18, step 2.20 sends four sign-in requests for one valid address from one connection within a minute. Once Cloudflare's count has caught up, the four answer 200, 200, 200, 429 and three emails arrive. Four 200 answers are inconclusive, not proof that the binding is missing. The Locality and Accuracy sections of [Rate Limiting](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) say the count is per location and eventually consistent, so a request can pass before the cached count reaches it. Step 2.20 bounds the run and says what to do when it stays inconclusive.
+
+Run:
+```sh
+grep -n -A 4 '"ratelimits"' wrangler.jsonc
+```
+
+- Source: `wrangler.jsonc:39` has `"name": "MAGIC_LINK_RATE_LIMIT"`.
+- Source: `wrangler.jsonc:40` has `"namespace_id": "1001"`.
+- Source: `wrangler.jsonc:41` has `"limit": 3`, `"period": 60`.
+- Source: `server/env.ts:25` has `MAGIC_LINK_RATE_LIMIT?: RateLimit`.
+- Derived from: `server/worker.ts:37-38` has `value === "on"`. `server/worker.ts:80` has `limitMagicLinkSignIn`. `server/worker.ts:211-212` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`. Part 1 returns the closed response and does not call `limitMagicLinkSignIn`. It was not run.
+- Source: `server/auth.ts:89` has `if (rateLimit === undefined) return null`.
+- Source: `server/auth.ts:49-51` has `customRules: {`, `[signInMagicLink.path]: () => false`. The library's own limit for this route is off, so a missing binding leaves sign-in unlimited.
+- Not verified: which plan includes the binding. The [Limits](https://developers.cloudflare.com/workers/platform/limits/) page does not name it. The [Pricing](https://developers.cloudflare.com/workers/platform/pricing/) page does not name it.
+- Not verified: a way to list the `namespace_id` values other Workers in this account already use.
+- Not verified: what you see when two Workers share a `namespace_id`. The Configuration section, cited above, says they share counters.
+- Not verified: how far a live count can differ from 3.
+- Not verified: whether a deploy fails when the plan omits this binding. The `ratelimits` entry is in the file step 1.10 deploys.
+- Worked: the command prints `MAGIC_LINK_RATE_LIMIT`, `"namespace_id"` with `"1001"` or the string you wrote, `"limit": 3`, and `"period": 60`.
+- If this is wrong you will see: a 429 before the fourth valid request in step 2.20. Four 200 answers are not the whole evidence. They are inconclusive, because the count is per location and eventually consistent. Follow step 2.20's bounded repeat, then its next action, before treating the binding as absent. A missing binding lets every request through, however many you send.
+
+### 2.18 Deploy
 
 Do: Deploy the build from step 2.16. This is the same command as step 1.10. It applies any migration that is not applied yet, then deploys, and it does not build. If the upload fails after the migrations are already applied, run the same command again. From this moment the pages include sign-in and Subscribe. The account routes answer only when `ACCOUNTS` is the exact string `on`.
 
@@ -577,7 +613,7 @@ npm run cf:deploy
 - Not verified: whether a second apply of the same migrations is a no-op.
 - Worked: the command ends without an error, and `curl -s -o /dev/null -w '%{http_code}\n' https://<domain>/pay/` prints 200.
 
-### 2.18 Check what the site offers
+### 2.19 Check what the site offers
 
 Do: Ask the live site what it offers. Send the same sign-in POST as step 1.12.
 
@@ -590,7 +626,7 @@ curl -sS -w '\n%{http_code}\n' -X POST 'https://<domain>/api/auth/sign-in/magic-
   --data '{"email":"review@example.invalid","callbackURL":"https://<domain>/app/"}'
 ```
 
-- Source: `server/worker.ts:108-109` has `commentary: Boolean(c.env.ANTHROPIC_API_KEY)`, `billing: Boolean(c.env.PADDLE_API_KEY && c.env.PADDLE_PRICE_ID)`.
+- Source: `server/worker.ts:112-113` has `commentary: Boolean(c.env.ANTHROPIC_API_KEY)`, `billing: Boolean(c.env.PADDLE_API_KEY && c.env.PADDLE_PRICE_ID)`.
 - Source: `server/worker.ts:37-38` has `value === "on"`.
 - Source: `server/worker.ts:56` has `CLOSED_CONFIG`.
 - Source: `src/app/account.ts:79` has `status: boolean`, `/api/auth/sign-in/magic-link`.
@@ -598,7 +634,7 @@ curl -sS -w '\n%{http_code}\n' -X POST 'https://<domain>/api/auth/sign-in/magic-
 - Worked: `providers` is empty, `commentary` is false, and `billing` is true. The sign-in status is 200 and the body is `{"status":true}`.
 - If `ACCOUNTS` is missing or is any other value, the sign-in status is 404 and the body is `{"error":"Not found."}`. Config still has no providers, `commentary` false, and `billing` false, even when the Paddle secrets are set.
 
-### 2.19 Check that a sign-in email arrives
+### 2.20 Check that a sign-in email arrives
 
 Do: Open the tool. The Workspace fieldset is already on the page. It is not a panel opened by a button. Ask for a link at your own address.
 
@@ -610,11 +646,54 @@ https://<domain>/app/
 - Source: `src/app/Workspace.tsx:86` has `return <SignIn`.
 - Source: `src/app/Workspace.tsx:211-212` has `<fieldset className="team">`, `<legend>Workspace</legend>`.
 - Source: `src/app/Workspace.tsx:218` has `Check your email for a sign-in link.`
-- Derived from: `server/auth.ts:16-17` has `baseURL: env.BETTER_AUTH_URL`, `basePath: "/api/auth"`. The link is built from those two. It was not run.
-- Source: `server/auth.ts:40` has `expiresIn: 15 * 60`.
+- Derived from: `server/auth.ts:29` has `baseURL: env.BETTER_AUTH_URL`. `server/auth.ts:30` has `basePath: AUTH_BASE_PATH`. `server/auth.ts:8` has `AUTH_BASE_PATH = "/api/auth"`. The link is built from the base URL and that path. It was not run.
+- Source: `server/auth.ts:57` has `expiresIn: 15 * 60`.
 - Worked: mail from the address in step 2.6 arrives, its link starts with `https://<domain>/api/auth/`, and the link signs you in.
 
-### 2.20 Check that Subscribe opens the checkout
+Do: Check the sign-in limit from one connection.
+Do: Wait until a minute has passed with no successful sign-in from this connection.
+Do: Run the three commands below from that same connection.
+Do: Time the four valid requests together. A run that takes longer than the 60 second window proves nothing, so discard it and wait out another quiet minute first.
+Do: Repeat the timed run up to three times, and stop once the fourth valid request answers 429. Three is this runbook's own bound. Cloudflare documents no guaranteed number of attempts or delay before a count catches up.
+Do: Leave `not-an-email` as it is.
+Do: In the last command, put your own address in place of `review@example.invalid`.
+
+The counter key is the `cf-connecting-ip` header. A different address on the same connection uses the same count.
+
+Run:
+```sh
+curl -sS -w '\n%{http_code}\n' -X POST 'https://<domain>/api/auth/sign-in/magic-link' \
+  -H 'Origin: https://<domain>' \
+  -H 'content-type: text/plain' \
+  --data '{"email":"not-an-email","callbackURL":"https://<domain>/app/"}'
+
+for n in 1 2 3; do
+  curl -sS -w '\n%{http_code}\n' -X POST 'https://<domain>/api/auth/sign-in/magic-link' \
+    -H 'Origin: https://<domain>' \
+    -H 'content-type: application/json' \
+    --data '{"email":"not-an-email","callbackURL":"https://<domain>/app/"}'
+done
+
+for n in 1 2 3 4; do
+  curl -sS -w '\n%{http_code}\n' -X POST 'https://<domain>/api/auth/sign-in/magic-link' \
+    -H 'Origin: https://<domain>' \
+    -H 'content-type: application/json' \
+    --data '{"email":"review@example.invalid","callbackURL":"https://<domain>/app/"}'
+done
+```
+
+- Source: `server/auth.ts:80` has `Content-Type must be application/json.`
+- Source: `server/auth.ts:88` has `if (result.issues) return null`.
+- Source: `server/auth.ts:16-17` has `Too many requests. Please try again later.`
+- Source: `server/auth.ts:90` has `cf-connecting-ip`.
+- Source: `test/rate-limit.test.ts:551` has `{ status: 400, body: LIBRARY_EMAIL }`.
+- Source: `test/rate-limit.test.ts:557` has `calls: [{ key: CLIENT, success: true }]`.
+- Not verified: that a minute with no successful sign-in clears the counter, and how many attempts a real count needs. Step 2.17 cites the Accuracy section.
+- Worked: the `text/plain` request prints 415 and `Content-Type must be application/json.` All three `not-an-email` requests print 400 and send no mail, so they fail validation and do not reach the limit. Once the count has caught up, the four valid requests answer 200, 200, 200, 429 and three emails for your address arrive; a fourth email does not. The pass rests on the whole run, the three 400 answers with no mail and the fourth valid request's 429, not on the first valid request's 200 alone.
+- If this is wrong you will see: a 429 before the fourth valid request. Wait out one more quiet minute and send the four valid requests again. All four valid requests answering 200 is inconclusive, not proof that the binding is missing, because the count is per location and eventually consistent. Repeat the timed run as above, then do the next action if it stays inconclusive. If no email arrives for the first valid request, the email check is incomplete. Confirm the address you typed is your own, then recheck the HTTP result, steps 2.4 through 2.6, and mail delivery. A missing first email does not show that the address belongs to someone else.
+- Not verified: that the Cloudflare dashboard or a read-only command names a deployed Worker's rate limit binding. The Monitoring section, cited in step 2.17, says rate limiting bindings are not visible in the Cloudflare dashboard, so the dashboard does not settle it. As the next action, run the read-only `npx wrangler versions list`, then `npx wrangler versions view <version-id>` for the deployed version, and look for the `ratelimits` entry. Whether that output names the `ratelimits` binding is not verified. This repo did not run either command.
+
+### 2.21 Check that Subscribe opens the checkout
 
 Do: While signed in, create a workspace and press Subscribe.
 
@@ -627,7 +706,7 @@ https://<domain>/app/
 - Source: `server/paddle.ts:188-189` has `?_ptxn=`.
 - Worked: the address bar shows `https://<domain>/pay/?_ptxn=` followed by an id, and the checkout shows the price you chose.
 
-### 2.21 Check that a payment turns Pro on
+### 2.22 Check that a payment turns Pro on
 
 Do: Finish one purchase. Open the tool. Load the sample or a file so columns exist. Save a named setup. Reload the same columns. Do not use the thank-you sentence as the check.
 
@@ -645,7 +724,7 @@ https://<domain>/app/?sample
 - Source: `server/workspace.ts:49` has `Saving to a workspace needs a Pro subscription.`
 - Worked: the hint reads `Pro,` then the seat count and `seat` or `seats`. Save setup is on the page. After you reload the same columns, the saved name is still listed.
 
-### 2.22 Check that an immediate cancellation reaches the site
+### 2.23 Check that an immediate cancellation reaches the site
 
 Do: Cancel that subscription in Paddle immediately. Wait until Paddle shows the `subscription.canceled` delivery. Query that subscription, not every row.
 
@@ -677,6 +756,7 @@ npx wrangler d1 execute bridgekit --remote --command "SELECT status, currentPeri
 - Source: `src/app/Workspace.tsx:249` has `/#pricing`. The Subscribe hint links there.
 - Source: `wrangler.jsonc:18` has `/assets/*.wasm`. `wrangler.jsonc:18` lacks `/pay`. The pay page is not counted.
 - Source: `src/app/Workspace.tsx:68` has `Thank you. Pro switches on as soon as Paddle confirms the payment`. `src/app/Workspace.tsx:31` has `done = ""`. `src/app/Workspace.tsx:37` has `setMessage(done)`. `src/app/Workspace.tsx:76` has `act(async () => {`. The thank-you sentence is assigned and then cleared. That is a code follow-up, not a launch check.
+- Source: `privacy.html:70` has `Your IP address is used briefly, in memory, to slow repeated sign-in attempts.` The page still says the IP address is used in memory. You have yet to reword it.
 
 To hide accounts and payments on the pages, run step 1.7 and step 1.10 again. The secrets stay set. The routes stay on while `ACCOUNTS` is `on`. To turn the routes off, remove `"ACCOUNTS": "on"`. Run step 1.10 again. A gated path then returns 404 and `{"error":"Not found."}`, and that return does not call `createAuth`.
 
