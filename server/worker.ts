@@ -327,7 +327,7 @@ async function pageResponse(request: Request, assets: Fetcher): Promise<Response
 
 open.get("*", async (c) => {
   const response = await pageResponse(c.req.raw, c.env.ASSETS);
-  const view = pageView(c.req.raw, response);
+  const view = pageView(c.req.raw, response, HTML_PAGE);
   if (view) {
     (c.executionCtx as unknown as ExecutionContext).waitUntil(
       countPageView(c.env.DB, view, new Date().toISOString().slice(0, 10)).catch((e) => console.error("count failed", e)),

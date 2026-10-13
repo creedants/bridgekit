@@ -133,13 +133,15 @@ test("deleting an account removes the workspaces it is alone in, with their save
 test("page counts keep the path and referring site only, and skip bots and non-pages", async () => {
   const db = testDatabase();
   const html = new Response("<html>", { headers: { "content-type": "text/html; charset=utf-8" } });
+  const articles = new Set(["/guide.html", "/method.html", "/privacy.html", "/price-volume-mix-analysis.html", "/grouping-level.html"]);
   const visit = (url: string, headers: Record<string, string>) =>
-    pageView(new Request(url, { headers: { "user-agent": "Mozilla/5.0", ...headers } }), html);
+    pageView(new Request(url, { headers: { "user-agent": "Mozilla/5.0", ...headers } }), html, articles);
   assert.deepEqual(visit("https://bk.example/app/?sample=3", { referer: "https://www.linkedin.com/feed/x" }), { path: "/app/", referrer: "www.linkedin.com" });
-  assert.deepEqual(visit("https://bk.example/guide.html", { referer: "https://bk.example/" }), { path: "/guide.html", referrer: "" });
+  assert.deepEqual(visit("https://bk.example/guide.html", { referer: "https://bk.example/" }), { path: "/guide", referrer: "" });
+  assert.deepEqual(visit("https://bk.example/guide", { referer: "https://bk.example/method" }), { path: "/guide", referrer: "" });
   assert.equal(visit("https://bk.example/", { "user-agent": "Googlebot/2.1" }), null);
   assert.equal(visit("https://bk.example/", { "sec-fetch-dest": "iframe" }), null);
-  assert.equal(pageView(new Request("https://bk.example/x.js"), new Response("", { headers: { "content-type": "text/javascript" } })), null);
+  assert.equal(pageView(new Request("https://bk.example/x.js"), new Response("", { headers: { "content-type": "text/javascript" } }), articles), null);
   await countPageView(db, { path: "/", referrer: "" }, "2026-10-04");
   await countPageView(db, { path: "/", referrer: "" }, "2026-10-04");
   assert.deepEqual((await db.prepare(`SELECT * FROM page_views`).all()).results, [{ day: "2026-10-04", path: "/", referrer: "", views: 2 }]);
