@@ -74,7 +74,7 @@ Edit: `wrangler.jsonc:25`
 
 Do: Set `BETTER_AUTH_URL` to `https://<domain>` with no path and no trailing slash. Do not change this value in Part 2. Step 2.3 adds `ACCOUNTS` beside it.
 
-Edit: `wrangler.jsonc:35`
+Edit: `wrangler.jsonc:40`
 ```text
     "BETTER_AUTH_URL": "https://<domain>",
 ```
@@ -203,9 +203,9 @@ curl -sS -w '\n%{http_code}\n' -X POST 'https://<domain>/api/auth/sign-in/magic-
 
 - Source: `server/worker.ts:43-44` has `function accountsEnabled`, `value === "on"`.
 - Source: `server/worker.ts:55` has `providers: [] as string[]`, `commentary: false`, `billing: false`.
-- Source: `server/worker.ts:55-56` has `function closedApiResponse`, `pathname === "/api/config"`, `CLOSED_CONFIG`.
-- Source: `server/worker.ts:52` has `{ error: "Not found." }`, `status: 404`.
-- Source: `server/worker.ts:211-212` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`.
+- Source: `server/worker.ts:61-62` has `function closedApiResponse`, `pathname === "/api/config"`, `CLOSED_CONFIG`.
+- Source: `server/worker.ts:58` has `{ error: "Not found." }`, `status: 404`.
+- Source: `server/worker.ts:345-346` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`.
 - Worked: the config body has no providers, `commentary` is false, and `billing` is false. The sign-in body is `{"error":"Not found."}` and the status is 404.
 
 ### 1.13 Check the home page and the pay address
@@ -273,9 +273,9 @@ Account, workspace, checkout, webhook, and commentary routes are off because `AC
 
 - Source: `server/worker.ts:44` has `value === "on"`.
 - Source: `server/worker.ts:49` has `CLOSED_CONFIG`.
-- Source: `server/worker.ts:55-58` has `closedApiResponse`, `gatedApiPath`, `notFound()`.
+- Source: `server/worker.ts:61-63` has `closedApiResponse`, `gatedApiPath`, `notFound()`.
 - Source: `server/worker.ts:71` has `createAuth(c.env`.
-- Source: `server/worker.ts:211-213` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`, `open.fetch`.
+- Source: `server/worker.ts:345-347` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`, `open.fetch`.
 - Source: `wrangler.jsonc:30-32` has `ACCOUNTS is a Worker variable`, `This file does not`, `set it`.
 - Source: `src/app/App.tsx:35` has `elsewhere the code is left out`.
 - Source: `src/app/App.tsx:36` has `import.meta.env.VITE_WORKSPACES === "1"`.
@@ -292,7 +292,7 @@ A feature segment in another letter case does match `/api/*`. `/api/AUTH/sign-in
 
 - Source: `wrangler.jsonc:18` has `run_worker_first`, `/api/*`.
 - Source: `wrangler.jsonc:13` has `"not_found_handling": "404-page"`.
-- Source: `server/worker.ts:45-46` has `toLowerCase()`, `feature === "auth"`.
+- Source: `server/worker.ts:51-52` has `toLowerCase()`, `feature === "auth"`.
 - Not verified: production asset responses for the other-case prefix and the encoded prefix. The statuses above are the local wrangler measurement.
 
 ## Part 2. Accounts and payments
@@ -538,11 +538,11 @@ Dashboard (not verified): Paddle > My account > Settings > Authentication > Clie
 
 ## Names that stay unset
 
-The Part 2 build keeps `VITE_AI_COMMENTARY` at 0, so the commentary button stays hidden, and `ANTHROPIC_API_KEY` stays unset. `src/app/Results.tsx:213` has `import.meta.env.VITE_AI_COMMENTARY === "1"`. `server/worker.ts:173` has `if (!c.env.ANTHROPIC_API_KEY) return false`.
+The Part 2 build keeps `VITE_AI_COMMENTARY` at 0, so the commentary button stays hidden, and `ANTHROPIC_API_KEY` stays unset. `src/app/Results.tsx:213` has `import.meta.env.VITE_AI_COMMENTARY === "1"`. `server/worker.ts:307` has `if (!c.env.ANTHROPIC_API_KEY) return false`.
 
 - Leave unset: `ANTHROPIC_API_KEY`
 
-Microsoft and Google stay unset. A client id alone would add that provider to the sign-in button, and registration runs only when both the id and the secret are set. `server/worker.ts:109-110` has `c.env.MICROSOFT_CLIENT_ID ? ["microsoft"]`, `c.env.GOOGLE_CLIENT_ID ? ["google"]`. `server/auth.ts:36` has `env.MICROSOFT_CLIENT_ID && env.MICROSOFT_CLIENT_SECRET`. `server/auth.ts:39` has `env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET`.
+Microsoft and Google stay unset. A client id alone would add that provider to the sign-in button, and registration runs only when both the id and the secret are set. `server/worker.ts:242-243` has `c.env.MICROSOFT_CLIENT_ID ? ["microsoft"]`, `c.env.GOOGLE_CLIENT_ID ? ["google"]`. `server/auth.ts:37` has `env.MICROSOFT_CLIENT_ID && env.MICROSOFT_CLIENT_SECRET`. `server/auth.ts:40` has `env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET`.
 
 - Leave unset: `MICROSOFT_CLIENT_ID`
 - Leave unset: `MICROSOFT_CLIENT_SECRET`
@@ -591,7 +591,7 @@ grep -n -A 4 '"ratelimits"' wrangler.jsonc
 - Source: `wrangler.jsonc:45` has `"namespace_id": "1001"`.
 - Source: `wrangler.jsonc:46` has `"limit": 3`, `"period": 60`.
 - Source: `server/env.ts:33` has `MAGIC_LINK_RATE_LIMIT?: RateLimit`.
-- Derived from: `server/worker.ts:44` has `value === "on"`. `server/worker.ts:80` has `limitMagicLinkSignIn`. `server/worker.ts:211-212` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`. Part 1 returns the closed response and does not call `limitMagicLinkSignIn`. It was not run.
+- Derived from: `server/worker.ts:44` has `value === "on"`. `server/worker.ts:80` has `limitMagicLinkSignIn`. `server/worker.ts:345-346` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`. Part 1 returns the closed response and does not call `limitMagicLinkSignIn`. It was not run.
 - Source: `server/auth.ts:123` has `if (rateLimit === undefined) return null`.
 - Source: `server/auth.ts:49-51` has `customRules: {`, `[signInMagicLink.path]: () => false`. The library's own limit for this route is off, so a missing binding leaves sign-in unlimited.
 - Not verified: which plan includes the binding. The [Limits](https://developers.cloudflare.com/workers/platform/limits/) page does not name it. The [Pricing](https://developers.cloudflare.com/workers/platform/pricing/) page does not name it.
@@ -650,7 +650,7 @@ https://<domain>/app/
 ```
 
 - Source: `src/app/Workspace.tsx:89` has `return <SignIn`.
-- Source: `src/app/Workspace.tsx:211-212` has `<fieldset className="team">`, `<legend>Workspace</legend>`.
+- Source: `src/app/Workspace.tsx:215` has `<fieldset className="team">`, `<legend>Workspace</legend>`.
 - Source: `src/app/Workspace.tsx:239` has `Check your email for a sign-in link.`
 - Derived from: `server/auth.ts:30` has `baseURL: env.BETTER_AUTH_URL`. `server/auth.ts:31` has `basePath: AUTH_BASE_PATH`. `server/auth.ts:9` has `AUTH_BASE_PATH = "/api/auth"`. The link is built from the base URL and that path. It was not run.
 - Source: `server/auth.ts:64` has `expiresIn: 15 * 60`.
@@ -721,9 +721,9 @@ Open:
 https://<domain>/app/?sample
 ```
 
-- Source: `src/app/Workspace.tsx:110` has `Pro,`, `"seat"`, `"seats"`.
+- Source: `src/app/Workspace.tsx:113` has `Pro,`, `"seat"`, `"seats"`.
 - Source: `src/app/Workspace.tsx:119` has `props.columns.length > 0`.
-- Source: `src/app/Workspace.tsx:129-131` has `props.setup`, `label="Save setup"`.
+- Source: `src/app/Workspace.tsx:132-134` has `props.setup`, `label="Save setup"`.
 - Source: `src/app/Workspace.tsx:139` has `api.saveSetup`.
 - Source: `src/pay/pay.ts:48` has `/app/?subscribed=1`.
 - Source: `server/workspace.ts:207` has `"applied"`.
@@ -748,7 +748,7 @@ npx wrangler d1 execute bridgekit --remote --command "SELECT status, currentPeri
 - Source: `server/workspace.ts:188-193` has `status`. `server/workspace.ts:188-193` lacks `scheduled_change`.
 - Source: `server/paddle.ts:154` has `export function hasPro`.
 - Source: `server/paddle.ts:160-163` has `case "canceled":`, `now.getTime() < end`.
-- Source: `src/app/Workspace.tsx:110` has `plan.plan.status === "canceled"`, `currentPeriodEnd`, `ends`, `slice(0, 10)`.
+- Source: `src/app/Workspace.tsx:113` has `plan.plan.status === "canceled"`, `currentPeriodEnd`, `ends`, `slice(0, 10)`.
 - Source: `migrations/0003_workspaces.sql:6` has `paddleSubscriptionId`.
 - Source: `migrations/0003_workspaces.sql:8` has `status TEXT NOT NULL`.
 - Source: `migrations/0003_workspaces.sql:11` has `currentPeriodEnd TEXT`.

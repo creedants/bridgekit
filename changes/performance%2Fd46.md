@@ -2,5 +2,5 @@
 - Sign-in links are printed in the terminal only when `LOCAL_EMAIL_LOG` is exactly `on`. When email cannot be sent and no sign-in provider is configured, the Workspace panel shows "Accounts are not open yet." and no form.
 - The privacy page says: Your IP address is used briefly to slow repeated sign-in attempts, and Bridgekit does not store it.
 - README states the page-count paths, the host with no port, the 200-character direct visit, and the cap of 32 new foreign hosts.
-- DEPLOY citations whose quoted text has one current line now cite that line. Citations whose quoted text has several lines are unchanged.
+- This change points each DEPLOY citation with one shortest run of lines that contains its quotes at that run, and it labels the site-address edit `wrangler.jsonc:40`. A citation is unchanged when its quote is missing, when more than one shortest run contains its quotes, or when it is a whole-file `lacks` claim.
 - Step 1.7 records that `npm run build:cloudflare:free` wrote the same files and hashes as its command.
