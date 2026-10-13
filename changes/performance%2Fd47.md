@@ -1,0 +1,1 @@
+- A workspace with a live subscription cannot open another checkout, and a webhook for a different subscription id does not replace that live row.
