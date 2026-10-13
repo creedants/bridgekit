@@ -210,14 +210,45 @@ export function openBrowserDatabase(): Promise<BrowserDatabase> {
   return opening;
 }
 
-function startFailureForPage(error: unknown): Error {
+const workerScriptByError = new WeakMap<Error, string>();
+
+function noteWorkerScript(error: unknown, scriptUrl: string): void {
+  if (error instanceof Error) workerScriptByError.set(error, scriptUrl);
+}
+
+function sameOriginWorkerScript(url: string | undefined): string | undefined {
+  if (url == null) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (parsed.origin !== location.origin) return undefined;
+  return parsed.href;
+}
+
+async function workerScriptLoaded(url: string): Promise<boolean> {
+  let response: Response;
+  try {
+    response = await fetch(url, { cache: "no-store", redirect: "manual" });
+  } catch {
+    return false;
+  }
+  const answered = response.ok;
+  if (response.body !== null) await response.body.cancel().catch(() => undefined);
+  return answered;
+}
+
+async function startFailureForPage(error: unknown): Promise<Error> {
   if (error instanceof ChunkUnavailable) return error;
   console.error(error);
-  if (error instanceof Error && isDownloadFailure(error.message)) return new Error(LIBRARY_FAILURE.network);
+  if (error instanceof Error && (await isDownloadFailure(error))) return new Error(LIBRARY_FAILURE.network);
   return new Error("The database worker did not start");
 }
 
-function isDownloadFailure(message: string): boolean {
+async function isDownloadFailure(error: Error): Promise<boolean> {
+  const message = error.message;
   if (message === "Failed to fetch") return true;
   if (
     message.includes("Failed to execute 'compile' on 'WebAssembly'") &&
@@ -225,11 +256,14 @@ function isDownloadFailure(message: string): boolean {
   ) {
     return true;
   }
+  // Chromium uses this importScripts text for a refused 200 and for a failed download.
   if (
     message.includes("Failed to execute 'importScripts' on 'WorkerGlobalScope'") &&
     message.includes("failed to load")
   ) {
-    return true;
+    const scriptUrl = sameOriginWorkerScript(workerScriptByError.get(error));
+    if (scriptUrl == null) return false;
+    return !(await workerScriptLoaded(scriptUrl));
   }
   return false;
 }
@@ -237,9 +271,10 @@ function isDownloadFailure(message: string): boolean {
 function openFresh(): Promise<BrowserDatabase> {
   const attempt = instantiateBrowserDatabase().then(
     (database) => database,
-    (error: unknown) => {
+    async (error: unknown) => {
+      const pageError = await startFailureForPage(error);
       if (opening === attempt) opening = undefined;
-      throw startFailureForPage(error);
+      throw pageError;
     },
   );
   return attempt;
@@ -366,6 +401,7 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
     eh: { mainModule: ehWasm, mainWorker: ehWorker },
   });
   if (bundle.mainWorker == null) throw new Error("DuckDB bundle is missing its worker");
+  const workerScriptUrl = pageUrl(bundle.mainWorker);
   const script = databaseWorker(bundle.mainWorker);
   try {
     const db = new duckdb.AsyncDuckDB(new duckdb.VoidLogger(), script.worker);
@@ -373,7 +409,11 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
     const startFailed = new Promise<never>((_, reject) => {
       script.worker.addEventListener(
         "error",
-        (event) => reject(new Error(event.message)),
+        (event) => {
+          const failure = new Error(event.message);
+          noteWorkerScript(failure, workerScriptUrl);
+          reject(failure);
+        },
         { once: true },
       );
     });
@@ -419,6 +459,7 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
       },
     };
   } catch (error) {
+    noteWorkerScript(error, workerScriptUrl);
     script.worker.terminate();
     throw error;
   } finally {

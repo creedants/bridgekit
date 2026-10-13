@@ -20,27 +20,11 @@ function isUnnamed(value: unknown): boolean {
   return true;
 }
 
-function claimHeaderName(candidate: string, used: Map<string, number>): string {
-  let name = candidate;
-  for (;;) {
-    const key = name.toLowerCase();
-    const count = used.get(key);
-    if (count === undefined) {
-      used.set(key, 0);
-      return name;
-    }
-    used.set(key, count + 1);
-    name = `${name}_${count + 1}`;
-  }
-}
-
 export function excelHeaderNames(values: readonly unknown[], width: number): string[] {
-  const used = new Map<string, number>();
   const names: string[] = [];
   for (let index = 0; index < width; index++) {
     const flat = flattenCell(values[index]);
-    const candidate = isUnnamed(flat) ? `column${index}` : String(flat);
-    names.push(claimHeaderName(candidate, used));
+    names.push(isUnnamed(flat) ? "" : String(flat));
   }
   return names;
 }
