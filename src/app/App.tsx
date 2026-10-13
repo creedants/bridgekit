@@ -298,7 +298,7 @@ export function App() {
       <input
         type="file"
         accept=".csv,.tsv,.txt,.parquet,.xlsx"
-        hidden
+        className="file-input"
         onChange={(e) => {
           if (e.target.files?.[0]) loadFile(e.target.files[0]);
           e.target.value = "";
@@ -435,7 +435,7 @@ export function App() {
                   <input
                     type="file"
                     accept=".json"
-                    hidden
+                    className="file-input"
                     onChange={(e) => {
                       if (e.target.files?.[0]) importSetup(e.target.files[0]);
                       e.target.value = "";

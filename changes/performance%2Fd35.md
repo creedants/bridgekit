@@ -1,0 +1,1 @@
+- "Choose file" and "Load setup" are reachable from the keyboard and show a visible focus ring in every browser the build targets: browsers with `:has()` draw the neighbouring buttons' ring on keyboard focus only, and older browsers without it draw the ring whenever the control holds focus.
