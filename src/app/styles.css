@@ -40,11 +40,21 @@ button.icon { width: 24px; height: 24px; padding: 0; justify-content: center; bo
   border: 0;
   background: transparent;
 }
-/* Show the label ring when its input has keyboard focus. */
+/* The input keeps focus but draws no outline of its own. */
 .button input[type="file"].file-input:focus { outline: none; }
-.button:has(input[type="file"].file-input:focus-visible) {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+/* With :has(), the label shows the neighbours' ring on keyboard focus only. */
+@supports selector(:has(*)) {
+  .button:has(input[type="file"].file-input:focus-visible) {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+}
+/* Without :has(), the label shows the ring whenever it holds focus. */
+@supports not selector(:has(*)) {
+  .button:focus-within {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
 }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
