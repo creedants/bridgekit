@@ -1,0 +1,1 @@
+- "Choose file" and "Load setup" are reachable from the keyboard with the same focus ring as the neighbouring buttons.
