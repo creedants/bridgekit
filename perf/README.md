@@ -94,7 +94,7 @@ Bytes:
 
 - `build.totals` sums every file under `dist/`. `gzipBytes` is zlib gzip at the default level. `brotliBytes` is brotli quality 5.
 - `build.toolPage` sums the files the local server saw by the time the harness observed the interactive mark, including the HTML document. The page sets the mark. The harness polls until it reads that mark, so a request in the gap, such as the favicon, is included.
-- `build.duckdbOnFirstFile` sums the DuckDB wasm and worker files requested after the interactive mark, including a `--pick-delay` wait and the first file. The idle open can request the worker before the harness sees the interactive mark. That worker is then counted in `toolPage`, and the wasm file stays here.
+- `build.duckdbOnFirstFile` sums the DuckDB wasm and worker files requested after the interactive mark, including a `--pick-delay` wait and the first file. The idle open can request the worker before the harness sees the interactive mark. That worker is then counted in `toolPage`, and the wasm file stays here. The tool-page set can include the DuckDB chunk when the idle callback runs before the harness reads the interactive mark, which happened in 2 of 20 branch loads.
 
 The local server sends bytes with no content encoding. `npm run build:cloudflare` is a different bundle. It turns on page counts, workspaces, and AI commentary, then stores a Brotli copy and a gzip copy of each wasm file and deletes the original. This script does not run that build.
 
