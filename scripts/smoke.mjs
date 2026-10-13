@@ -6,6 +6,8 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { get as httpGet } from "node:http";
+import { get as httpsGet } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -159,7 +161,7 @@ const BUILDS = {
     secrets: [],
     prepare: () => [],
     command: () => [bin("vite"), "preview", "--host", "127.0.0.1", "--port", "4173", "--strictPort"],
-    policies: 1, // the meta tag
+    policy: { headers: 0, metas: 1 },
   },
   wrangler: {
     origin: `http://127.0.0.1:${devPort()}`,
@@ -177,7 +179,7 @@ const BUILDS = {
       bin("wrangler"), "dev", "--port", devPort(), "--ip", "127.0.0.1", ...local(dir),
       "--var", "ACCOUNTS:on", "--var", "LOCAL_EMAIL_LOG:on",
     ],
-    policies: 2, // the meta tag, and the header from public/_headers
+    policy: { headers: 1, metas: 1 },
   },
 };
 
@@ -356,7 +358,185 @@ function onLeave(origin) {
   return `addEventListener("pagehide", () => { navigator.sendBeacon(${JSON.stringify(beacon)}, "x"); fetch(${JSON.stringify(keep)}, { method: "POST", body: "x", keepalive: true }); })`;
 }
 
-/** Loads /app/, makes every attempt in asks(), and says whether the document declares a policy. */
+/**
+ * The default agent keeps the socket open, which holds the process after the run ends.
+ * @param {URL} url
+ * @returns {Promise<{ status: number, rawHeaders: string[], body: string }>}
+ */
+function getResponse(url) {
+  const get = url.protocol === "https:" ? httpsGet : httpGet;
+  return new Promise((resolve, reject) => {
+    const req = get(url, { agent: false }, (res) => {
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, rawHeaders: res.rawHeaders, body: Buffer.concat(chunks).toString("utf8") }));
+      res.on("error", reject);
+    });
+    req.on("error", reject);
+  });
+}
+
+/** @param {URL} current @param {string[]} rawHeaders @returns {URL | null} */
+function redirectTarget(current, rawHeaders) {
+  let location = "";
+  for (let i = 0; i + 1 < rawHeaders.length; i += 2) {
+    if (location || String(rawHeaders[i]).toLowerCase() !== "location") continue;
+    location = String(rawHeaders[i + 1]).trim();
+  }
+  if (!location) return null;
+  let next;
+  try {
+    next = new URL(location, current);
+  } catch {
+    return null;
+  }
+  if (next.protocol !== "http:" && next.protocol !== "https:") return null;
+  return next;
+}
+
+/** Enforcing Content-Security-Policy header policies. Chrome splits one field on commas. */
+function policyHeaders(rawHeaders) {
+  let count = 0;
+  for (let i = 0; i + 1 < rawHeaders.length; i += 2) {
+    if (String(rawHeaders[i]).toLowerCase() !== "content-security-policy") continue;
+    for (const token of String(rawHeaders[i + 1]).split(",")) {
+      if (token.trim() !== "") count += 1;
+    }
+  }
+  return count;
+}
+
+/**
+ * Enforcing Content-Security-Policy meta elements in the document head.
+ * Chrome ignores a meta tag in a script, a style, or outside the head.
+ */
+function policyMetas(html) {
+  const source = String(html).replace(/<!--[\s\S]*?-->/g, "");
+  const lower = source.toLowerCase();
+  let inHead = false;
+  let raw = "";
+  let count = 0;
+  let cursor = 0;
+  const skipTag = (at) => {
+    let quote = "";
+    let end = at;
+    for (; end < source.length; end++) {
+      const char = source[end];
+      if (quote) {
+        if (char === quote) quote = "";
+      } else if (char === "\"" || char === "'") quote = char;
+      else if (char === ">") break;
+    }
+    return end;
+  };
+  const boundaryOf = (at, name) => {
+    const boundary = source[at + name.length];
+    return !boundary || /[\s/>]/.test(boundary);
+  };
+  while (cursor < source.length) {
+    if (raw) {
+      const close = lower.indexOf(`</${raw}`, cursor);
+      if (close < 0) break;
+      if (!boundaryOf(close + 2, raw)) {
+        cursor = close + 2;
+        continue;
+      }
+      const end = skipTag(close);
+      if (end >= source.length) break;
+      raw = "";
+      cursor = end + 1;
+      continue;
+    }
+    const next = lower.indexOf("<", cursor);
+    if (next < 0) break;
+    if (lower.startsWith("<head", next) && boundaryOf(next + 1, "head")) {
+      inHead = true;
+      const end = skipTag(next);
+      if (end >= source.length) break;
+      cursor = end + 1;
+      continue;
+    }
+    if (lower.startsWith("</head", next) && boundaryOf(next + 2, "head")) {
+      inHead = false;
+      const end = skipTag(next);
+      if (end >= source.length) break;
+      cursor = end + 1;
+      continue;
+    }
+    if (inHead && (lower.startsWith("<script", next) || lower.startsWith("<style", next))) {
+      const name = lower.startsWith("<script", next) ? "script" : "style";
+      if (boundaryOf(next + 1, name)) {
+        raw = name;
+        const end = skipTag(next);
+        if (end >= source.length) break;
+        cursor = end + 1;
+        continue;
+      }
+    }
+    if (inHead && lower.startsWith("<meta", next) && boundaryOf(next + 1, "meta")) {
+      const end = skipTag(next);
+      if (end >= source.length) break;
+      const attrs = new Map();
+      const pattern = /([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+      for (const match of source.slice(next + 5, end).matchAll(pattern)) {
+        const name = match[1].toLowerCase();
+        if (!attrs.has(name)) attrs.set(name, match[2] ?? match[3] ?? match[4] ?? "");
+      }
+      const equiv = attrs.get("http-equiv");
+      const content = attrs.get("content");
+      if (equiv != null && equiv.trim().toLowerCase() === "content-security-policy" && content != null && content.trim() !== "") count += 1;
+      cursor = end + 1;
+      continue;
+    }
+    cursor = next + 1;
+  }
+  return count;
+}
+
+/**
+ * Enforcing policies on the final response of GET `${origin}/app/`.
+ * fetch() joins repeated Content-Security-Policy lines into one value, so the count walks rawHeaders.
+ * @param {string} origin
+ * @returns {Promise<{ headers: number, metas: number }>}
+ */
+async function censusPolicies(origin) {
+  const redirects = new Set([301, 302, 303, 307, 308]);
+  let url = new URL(`${origin}/app/`);
+  let response = await getResponse(url);
+  for (let followed = 0; redirects.has(response.status) && followed < 5; followed++) {
+    const next = redirectTarget(url, response.rawHeaders);
+    if (!next) break;
+    url = next;
+    response = await getResponse(url);
+  }
+  if (response.status !== 200) fail(`${origin}/app/ answered ${response.status}`);
+  return { headers: policyHeaders(response.rawHeaders), metas: policyMetas(response.body) };
+}
+
+function policyLine(census) {
+  const headers = `${census.headers} header${census.headers === 1 ? "" : "s"}`;
+  const metas = `${census.metas} meta tag${census.metas === 1 ? "" : "s"}`;
+  return `policy: ${headers}, ${metas}`;
+}
+
+function policyGap(found, want, singular, plural) {
+  if (found === want) return "";
+  const count = Math.abs(found - want);
+  const name = count === 1 ? singular : `${count} ${plural}`;
+  return found < want ? `missing ${name}` : `extra ${name}`;
+}
+
+/** The build this script started has to serve this composition. The report count still comes from the live census. */
+function requireComposition(kind, origin, census) {
+  const want = BUILDS[kind].policy;
+  const problems = [
+    policyGap(census.headers, want.headers, "Content-Security-Policy header", "Content-Security-Policy headers"),
+    policyGap(census.metas, want.metas, "enforcing meta tag", "enforcing meta tags"),
+  ].filter(Boolean);
+  if (problems.length) fail(`${origin}/app/ ${problems.join("; ")}`);
+}
+
+/** Loads /app/ and makes every attempt in asks(). */
 async function ask(browser, origin) {
   await browser.goto(`${origin}/app/`);
   // fetch() and the engine's own way of asking, a synchronous XMLHttpRequest. Both are issued before the first await.
@@ -367,7 +547,6 @@ async function ask(browser, origin) {
   };
   for (const from of Object.keys(PROVEN)) await browser.evalJs(PROVEN[from](script(from)));
   await browser.evalJs(onLeave(origin));
-  return browser.evalJs(`!!document.querySelector('meta[http-equiv="Content-Security-Policy"]')`);
 }
 
 /**
@@ -508,16 +687,20 @@ async function drive(browser, origin, rows) {
   const rememberBox = "[...document.querySelectorAll('.check input')].find(i => i.closest('label').textContent.includes('Remember'))";
 
   await browser.evalJs("T.btn('Clear data').click()");
-  await browser.sleep(1500);
-  if (!(await browser.evalJs("!document.querySelector('aside') && document.body.innerText.includes('Load a sales file')"))) fail("Clear data did not reset the tool");
+  try {
+    await browser.waitFor("!document.querySelector('aside') && document.body.innerText.includes('Load a sales file')");
+  } catch (error) {
+    fail(`Clear data did not reset the tool (${error.message})`);
+  }
   console.log("ok  clear data returns to the empty tool");
 
   // The next file with the same columns opens with the remembered setup, minus filters.
   await loadCsv();
-  const restored = await browser.evalJs(
-    "document.body.innerText.includes('Restored the setup') && document.querySelectorAll('.values input:checked').length === 0",
-  );
-  if (!restored) fail("the remembered setup was not restored without its filters");
+  try {
+    await browser.waitFor("document.body.innerText.includes('Restored the setup') && document.querySelectorAll('.values input:checked').length === 0");
+  } catch (error) {
+    fail(`the remembered setup was not restored without its filters (${error.message})`);
+  }
   console.log("ok  remember setup: restored on the next load, without filter selections");
 
   // Unticking deletes the setup and keeps only the "off" choice, which survives a reload.
@@ -810,17 +993,34 @@ async function drive(browser, origin, rows) {
       }
       fail(`exported workbook: non-numeric ${key} is ${JSON.stringify(v)}`);
     };
-    if (checkCell && typeof checkCell === "object" && "formula" in checkCell) {
-      const computed = evalFormula(String(checkCell.formula), bridgeSheet, "B", checkRowNumber);
-      if (!Number.isFinite(computed) || Math.abs(computed) > 1e-6) fail(`exported workbook: check row evaluates to ${computed}, expected zero`);
-      if ("result" in checkCell && typeof checkCell.result === "number" && Number.isFinite(checkCell.result)) {
-        if (Math.abs(checkCell.result) > 1e-6) fail("exported workbook: check row result is not zero");
+    // Number(null) and Number("") are 0, so an empty cell fails here instead of being read as zero.
+    function readCheckAmount(value, address) {
+      if (value === null || value === undefined) fail(`exported workbook: ${address} is missing`);
+      if (value === "") fail(`exported workbook: ${address} is blank`);
+      if (typeof value === "number") {
+        if (Number.isFinite(value)) return { kind: "number", value };
+        fail(`exported workbook: ${address} is not a number`);
       }
-      console.log("ok  exported workbook: sheets present and the Bridge check row evaluates to zero from cell values (SUM ranges, cell refs, arithmetic, IF and CHOOSE)");
-    } else {
-      if (Number(checkCell) !== 0 && Number(bridgeSheet.getRow(checkRowNumber).getCell(2).result) !== 0) fail("exported workbook: check row is not zero");
-      console.log("ok  exported workbook: sheets present and the Bridge check row is a zero literal");
+      if (typeof value === "object" && typeof value.formula === "string") {
+        const cached = typeof value.result === "number" && Number.isFinite(value.result) ? value.result : null;
+        return { kind: "formula", formula: value.formula, cached };
+      }
+      fail(`exported workbook: ${address} is text`);
     }
+    const address = `${bridgeSheet.name}!B${checkRowNumber}`;
+    const check = readCheckAmount(checkCell, address);
+    // The check sums floating-point amounts, so a number and a formula result use one rule.
+    // A value within 1e-6 of zero passes. Anything farther fails.
+    const nearZero = (value) => Math.abs(value) <= 1e-6;
+    const computed = check.kind === "formula" ? evalFormula(check.formula, bridgeSheet, "B", checkRowNumber) : check.value;
+    if (!nearZero(computed)) {
+      const found = check.kind === "formula" ? `evaluates to ${computed}` : `is ${computed}`;
+      fail(`exported workbook: ${address} ${found}, expected a value within 1e-6 of zero`);
+    }
+    if (check.kind === "formula" && check.cached !== null && !nearZero(check.cached)) {
+      fail(`exported workbook: ${address} cached result is ${check.cached}, expected a value within 1e-6 of zero`);
+    }
+    console.log("ok  exported workbook: sheets present and the Bridge check row is a number or a formula result within 1e-6 of zero");
 
     await browser.send("Page.enable");
     await browser.send("Page.setInterceptFileChooserDialog", { enabled: true });
@@ -935,11 +1135,16 @@ let server = null;
 try {
   server = await serve(target);
   const origin = server.origin;
+  const census = await censusPolicies(origin);
+  console.log(policyLine(census));
+  // URL mode cannot tell which policies the server was meant to send. A missing
+  // header or meta tag still leaves a positive count, and this mode accepts it.
+  // smoke:preview and smoke:wrangler require the composition of the build they started.
+  if (target.kind !== "url") requireComposition(target.kind, origin, census);
+  const policies = census.headers + census.metas;
+  if (policies === 0) console.log(`note: ${origin} sends no content security policy (a dev server). Run npm run build && npm run smoke:preview for the full check.`);
   console.log(`starting ${CHROMIUM}${process.env.CHROMIUM ? "" : " from PATH (set CHROMIUM to start another browser)"}`);
   const control = await recorded((browser) => ask(browser, origin));
-  const policies = target.kind === "url" ? Number(control.result) : BUILDS[target.kind].policies;
-  if (!control.result && target.kind !== "url") fail(`${origin}/app/ carries no content security policy, and a built site must`);
-  if (policies === 0) console.log(`note: ${origin} sends no content security policy (a dev server). Run npm run build && npm run smoke:preview for the full check.`);
   const unproven = proves(control.record, origin, policies);
   if (unproven) fail(`canary: ${unproven}, so a request to another host could go unseen`);
   console.log(`ok  canary: a worker, a shared worker and the page each asked http://127.0.0.1:${DEBUG_PORT} by fetch and by XMLHttpRequest, and each attempt was ${policies ? "refused by the policy and reported" : "recorded and flagged"}`);

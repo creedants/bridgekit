@@ -365,7 +365,43 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
     }) : undefined;
     const send = (method, params = {}) => command(method, params, page);
     const evalJs = async (expression) => { const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }); if (r.exceptionDetails) throw new Error(JSON.stringify(r.exceptionDetails.exception?.description ?? r.exceptionDetails)); return r.result?.value; };
-    const waitFor = async (expr, tries = 200) => { for (let i = 0; i < tries; i++) { if (await evalJs(expr)) return; await sleep(250); } throw new Error("timeout " + expr + " :: " + (await evalJs("document.body.innerText.slice(0,300)"))); };
+    const waitFor = async (expr, tries = 200) => {
+      // A reload commits the new document before the parser inserts a body.
+      const BODY_ABSENT = "bridgekit-waitfor-body-absent-7c2e9a41";
+      const poll = `if (document.body == null) throw new Error(${JSON.stringify(BODY_ABSENT)});\n${expr}`;
+      for (let i = 0; i < tries; i++) {
+        let r;
+        try {
+          r = await send("Runtime.evaluate", { expression: poll, awaitPromise: true, returnByValue: true });
+        } catch (error) {
+          if (error.message !== "Runtime.evaluate failed: Inspected target navigated or closed" && error.message !== "Runtime.evaluate failed: Execution context was destroyed.") throw error;
+          await sleep(250);
+          continue;
+        }
+        if (r.exceptionDetails) {
+          const objectId = r.exceptionDetails.exception?.objectId;
+          if (objectId) {
+            let props;
+            try {
+              props = await send("Runtime.getProperties", { objectId });
+            } catch (error) {
+              if (error.message !== "Runtime.getProperties failed: Inspected target navigated or closed" && error.message !== "Runtime.getProperties failed: Execution context was destroyed.") throw error;
+              await sleep(250);
+              continue;
+            }
+            if (props.result?.find((p) => p.name === "message")?.value?.value === BODY_ABSENT) {
+              await sleep(250);
+              continue;
+            }
+          }
+          throw new Error(JSON.stringify(r.exceptionDetails.exception?.description ?? r.exceptionDetails));
+        }
+        if (r.result?.value) return;
+        await sleep(250);
+      }
+      const seen = await evalJs("document.body == null ? '' : document.body.innerText.slice(0,300)");
+      throw new Error("timeout " + expr + " :: " + seen);
+    };
     const helpers = `window.T = { btn: (t) => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === t), sel: (label) => [...document.querySelectorAll('label')].find(l => l.firstChild?.textContent?.trim().startsWith(label))?.querySelector('select'), set: (el, v) => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(el, v); el.dispatchEvent(new Event('change', { bubbles: true })); }, input: (el, v) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); }, tab: (t) => [...document.querySelectorAll('.tabs button')].find(b => b.textContent.startsWith(t)).click(), err: () => document.querySelector('.error')?.textContent ?? null }; true`;
     // Enabling the Network domain is part of the timed browser launch.
     await send("Network.enable");
