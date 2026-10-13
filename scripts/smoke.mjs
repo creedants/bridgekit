@@ -6,6 +6,8 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { get as httpGet } from "node:http";
+import { get as httpsGet } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -159,7 +161,6 @@ const BUILDS = {
     secrets: [],
     prepare: () => [],
     command: () => [bin("vite"), "preview", "--host", "127.0.0.1", "--port", "4173", "--strictPort"],
-    policies: 1, // the meta tag
   },
   wrangler: {
     origin: `http://127.0.0.1:${devPort()}`,
@@ -177,7 +178,6 @@ const BUILDS = {
       bin("wrangler"), "dev", "--port", devPort(), "--ip", "127.0.0.1", ...local(dir),
       "--var", "ACCOUNTS:on", "--var", "LOCAL_EMAIL_LOG:on",
     ],
-    policies: 2, // the meta tag, and the header from public/_headers
   },
 };
 
@@ -356,7 +356,115 @@ function onLeave(origin) {
   return `addEventListener("pagehide", () => { navigator.sendBeacon(${JSON.stringify(beacon)}, "x"); fetch(${JSON.stringify(keep)}, { method: "POST", body: "x", keepalive: true }); })`;
 }
 
-/** Loads /app/, makes every attempt in asks(), and says whether the document declares a policy. */
+/**
+ * The default agent keeps the socket open, which holds the process after the run ends.
+ * @param {URL} url
+ * @returns {Promise<{ status: number, rawHeaders: string[], body: string }>}
+ */
+function getResponse(url) {
+  const get = url.protocol === "https:" ? httpsGet : httpGet;
+  return new Promise((resolve, reject) => {
+    const req = get(url, { agent: false }, (res) => {
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, rawHeaders: res.rawHeaders, body: Buffer.concat(chunks).toString("utf8") }));
+      res.on("error", reject);
+    });
+    req.on("error", reject);
+  });
+}
+
+/** @param {URL} current @param {string[]} rawHeaders @returns {URL | null} */
+function redirectTarget(current, rawHeaders) {
+  let location = "";
+  for (let i = 0; i + 1 < rawHeaders.length; i += 2) {
+    if (location || String(rawHeaders[i]).toLowerCase() !== "location") continue;
+    location = String(rawHeaders[i + 1]).trim();
+  }
+  if (!location) return null;
+  let next;
+  try {
+    next = new URL(location, current);
+  } catch {
+    return null;
+  }
+  if (next.protocol !== "http:" && next.protocol !== "https:") return null;
+  return next;
+}
+
+/** Content-Security-Policy header lines with a non-blank value. One line is one policy. */
+function policyHeaders(rawHeaders) {
+  let count = 0;
+  for (let i = 0; i + 1 < rawHeaders.length; i += 2) {
+    if (String(rawHeaders[i]).toLowerCase() !== "content-security-policy") continue;
+    if (String(rawHeaders[i + 1]).trim() === "") continue;
+    count += 1;
+  }
+  return count;
+}
+
+/** Meta tags whose http-equiv is Content-Security-Policy and whose content is not blank. */
+function policyMetas(html) {
+  const source = String(html).replace(/<!--[\s\S]*?-->/g, "");
+  const lower = source.toLowerCase();
+  let count = 0;
+  let cursor = 0;
+  while (cursor < source.length) {
+    const start = lower.indexOf("<meta", cursor);
+    if (start < 0) break;
+    const boundary = source[start + 5];
+    if (boundary && !/[\s/>]/.test(boundary)) {
+      cursor = start + 5;
+      continue;
+    }
+    let quote = "";
+    let end = start + 5;
+    for (; end < source.length; end++) {
+      const char = source[end];
+      if (quote) {
+        if (char === quote) quote = "";
+      } else if (char === "\"" || char === "'") quote = char;
+      else if (char === ">") break;
+    }
+    if (end >= source.length) break;
+    const attrs = new Map();
+    const pattern = /([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+    for (const match of source.slice(start + 5, end).matchAll(pattern)) {
+      const name = match[1].toLowerCase();
+      if (!attrs.has(name)) attrs.set(name, match[2] ?? match[3] ?? match[4] ?? "");
+    }
+    const equiv = attrs.get("http-equiv");
+    const content = attrs.get("content");
+    if (equiv != null && equiv.trim().toLowerCase() === "content-security-policy" && content != null && content.trim() !== "") count += 1;
+    cursor = end + 1;
+  }
+  return count;
+}
+
+/**
+ * Enforcing policies on the final response of GET `${origin}/app/`.
+ * fetch() joins repeated Content-Security-Policy lines into one value, so the count walks rawHeaders.
+ * @param {string} origin
+ * @param {{ mustEnforce: boolean }} opts
+ * @returns {Promise<number>}
+ */
+async function censusPolicies(origin, { mustEnforce }) {
+  const redirects = new Set([301, 302, 303, 307, 308]);
+  let url = new URL(`${origin}/app/`);
+  let response = await getResponse(url);
+  for (let followed = 0; redirects.has(response.status) && followed < 5; followed++) {
+    const next = redirectTarget(url, response.rawHeaders);
+    if (!next) break;
+    url = next;
+    response = await getResponse(url);
+  }
+  if (response.status !== 200) fail(`${origin}/app/ answered ${response.status}`);
+  const enforcing = policyHeaders(response.rawHeaders) + policyMetas(response.body);
+  if (mustEnforce && enforcing === 0) fail(`${origin}/app/ carries no content security policy, and a built site must`);
+  return enforcing;
+}
+
+/** Loads /app/ and makes every attempt in asks(). */
 async function ask(browser, origin) {
   await browser.goto(`${origin}/app/`);
   // fetch() and the engine's own way of asking, a synchronous XMLHttpRequest. Both are issued before the first await.
@@ -367,7 +475,6 @@ async function ask(browser, origin) {
   };
   for (const from of Object.keys(PROVEN)) await browser.evalJs(PROVEN[from](script(from)));
   await browser.evalJs(onLeave(origin));
-  return browser.evalJs(`!!document.querySelector('meta[http-equiv="Content-Security-Policy"]')`);
 }
 
 /**
@@ -810,15 +917,29 @@ async function drive(browser, origin, rows) {
       }
       fail(`exported workbook: non-numeric ${key} is ${JSON.stringify(v)}`);
     };
-    if (checkCell && typeof checkCell === "object" && "formula" in checkCell) {
-      const computed = evalFormula(String(checkCell.formula), bridgeSheet, "B", checkRowNumber);
-      if (!Number.isFinite(computed) || Math.abs(computed) > 1e-6) fail(`exported workbook: check row evaluates to ${computed}, expected zero`);
-      if ("result" in checkCell && typeof checkCell.result === "number" && Number.isFinite(checkCell.result)) {
-        if (Math.abs(checkCell.result) > 1e-6) fail("exported workbook: check row result is not zero");
+    // Number(null) and Number("") are 0, so an empty cell fails here instead of being read as zero.
+    function readCheckAmount(value, address) {
+      if (value === null || value === undefined) fail(`exported workbook: ${address} is missing`);
+      if (value === "") fail(`exported workbook: ${address} is blank`);
+      if (typeof value === "number") {
+        if (Number.isFinite(value)) return { kind: "number", value };
+        fail(`exported workbook: ${address} is not a number`);
       }
+      if (typeof value === "object" && typeof value.formula === "string") {
+        const cached = typeof value.result === "number" && Number.isFinite(value.result) ? value.result : null;
+        return { kind: "formula", formula: value.formula, cached };
+      }
+      fail(`exported workbook: ${address} is text`);
+    }
+    const address = `${bridgeSheet.name}!B${checkRowNumber}`;
+    const check = readCheckAmount(checkCell, address);
+    if (check.kind === "formula") {
+      const computed = evalFormula(check.formula, bridgeSheet, "B", checkRowNumber);
+      if (Math.abs(computed) > 1e-6) fail(`exported workbook: ${address} evaluates to ${computed}, expected zero`);
+      if (check.cached !== null && Math.abs(check.cached) > 1e-6) fail(`exported workbook: ${address} cached result is ${check.cached}, expected zero`);
       console.log("ok  exported workbook: sheets present and the Bridge check row evaluates to zero from cell values (SUM ranges, cell refs, arithmetic, IF and CHOOSE)");
     } else {
-      if (Number(checkCell) !== 0 && Number(bridgeSheet.getRow(checkRowNumber).getCell(2).result) !== 0) fail("exported workbook: check row is not zero");
+      if (check.value !== 0) fail(`exported workbook: ${address} is ${check.value}, expected zero`);
       console.log("ok  exported workbook: sheets present and the Bridge check row is a zero literal");
     }
 
@@ -935,11 +1056,10 @@ let server = null;
 try {
   server = await serve(target);
   const origin = server.origin;
+  const policies = await censusPolicies(origin, { mustEnforce: target.kind !== "url" });
+  if (policies === 0) console.log(`note: ${origin} sends no content security policy (a dev server). Run npm run build && npm run smoke:preview for the full check.`);
   console.log(`starting ${CHROMIUM}${process.env.CHROMIUM ? "" : " from PATH (set CHROMIUM to start another browser)"}`);
   const control = await recorded((browser) => ask(browser, origin));
-  const policies = target.kind === "url" ? Number(control.result) : BUILDS[target.kind].policies;
-  if (!control.result && target.kind !== "url") fail(`${origin}/app/ carries no content security policy, and a built site must`);
-  if (policies === 0) console.log(`note: ${origin} sends no content security policy (a dev server). Run npm run build && npm run smoke:preview for the full check.`);
   const unproven = proves(control.record, origin, policies);
   if (unproven) fail(`canary: ${unproven}, so a request to another host could go unseen`);
   console.log(`ok  canary: a worker, a shared worker and the page each asked http://127.0.0.1:${DEBUG_PORT} by fetch and by XMLHttpRequest, and each attempt was ${policies ? "refused by the policy and reported" : "recorded and flagged"}`);
