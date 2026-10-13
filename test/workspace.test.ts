@@ -16,6 +16,7 @@ import {
   workspaceCount,
   WorkspaceError,
 } from "../server/workspace.ts";
+import { listSetups as requestSetups } from "../src/app/account.ts";
 import { testDatabase } from "./support/d1.ts";
 
 const now = "2026-10-04T00:00:00.000Z";
@@ -79,6 +80,34 @@ test("members share saved setups and bridges; outsiders see nothing", async () =
   await rejects(deleteSaved(db, "u3", "w1", "setup", id), 404);
   await deleteSaved(db, "u2", "w1", "setup", id);
   assert.deepEqual(await listSetups(db, "u1", "w1", columns), []);
+});
+
+test("a file load asks for saved setups without sending column names", async () => {
+  const seen: { method: string; url: string; body: string | undefined }[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    seen.push({
+      method: init?.method ?? "GET",
+      url,
+      body: typeof init?.body === "string" ? init.body : undefined,
+    });
+    return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    await requestSetups("w1", ["zephyr-column", "quartz-column"]);
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.equal(seen.length, 1);
+  const url = new URL(seen[0].url, "http://localhost");
+  assert.equal(url.pathname, "/api/workspaces/w1/setups");
+  assert.equal(url.search, "");
+  assert.equal(seen[0].method, "GET");
+  assert.equal(seen[0].body, undefined);
+  const wire = JSON.stringify(seen);
+  assert.equal(wire.includes("zephyr-column"), false);
+  assert.equal(wire.includes("quartz-column"), false);
 });
 
 test("only setups without filter values and bridge totals can be saved", async () => {
