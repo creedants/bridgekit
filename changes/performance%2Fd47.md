@@ -1,0 +1,1 @@
+- A workspace with a live subscription cannot open another checkout.

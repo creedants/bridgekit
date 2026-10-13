@@ -10,8 +10,8 @@ import { hasPro, type SubscriptionChange, type SubscriptionStatus } from "./padd
  */
 
 export class WorkspaceError extends Error {
-  readonly status: 400 | 402 | 403 | 404;
-  constructor(status: 400 | 402 | 403 | 404, message: string) {
+  readonly status: 400 | 402 | 403 | 404 | 409;
+  constructor(status: 400 | 402 | 403 | 404 | 409, message: string) {
     super(message);
     this.status = status;
   }
@@ -245,6 +245,14 @@ export async function userHasPro(db: D1Database, userId: string, now = new Date(
     if ((await plan(db, organizationId, now)).pro) return true;
   }
   return false;
+}
+
+export async function assertCheckoutOpen(db: D1Database, workspaceId: string): Promise<void> {
+  const held = await db
+    .prepare(`SELECT 1 AS held FROM subscription WHERE organizationId = ? AND NOT (subscription.status = ?)`)
+    .bind(workspaceId, "canceled")
+    .first();
+  if (held) throw new WorkspaceError(409, "This workspace already has a subscription.");
 }
 
 /**

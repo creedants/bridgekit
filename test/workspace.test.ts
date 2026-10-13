@@ -37,6 +37,26 @@ const subscription = (over: Partial<SubscriptionChange> = {}): SubscriptionChang
   seats: 3, currentPeriodEnd: "2027-10-04T00:00:00Z", eventId: "evt_1", occurredAt: "2026-10-04T01:00:00.000000Z", ...over,
 });
 
+async function storedSubscription(db: Awaited<ReturnType<typeof seeded>>, workspaceId = "w1") {
+  const row = await db
+    .prepare(
+      `SELECT paddleSubscriptionId, paddleCustomerId, status, priceId, seats, currentPeriodEnd, lastEventAt
+       FROM subscription WHERE organizationId = ?`,
+    )
+    .bind(workspaceId)
+    .first<{
+      paddleSubscriptionId: string;
+      paddleCustomerId: string;
+      status: string;
+      priceId: string;
+      seats: number;
+      currentPeriodEnd: string | null;
+      lastEventAt: string;
+    }>();
+  assert.ok(row);
+  return row;
+}
+
 const columns = ["year", "units", "sales", "design"];
 const setup = { periodColumn: "year", grain: "value", unitsColumn: "units", salesColumn: "sales", levels: [{ name: "Design", columns: ["design"] }], filters: [] };
 const summary = {
@@ -66,6 +86,111 @@ test("an older Paddle event does not overwrite a newer one, and unknown workspac
   assert.equal(await applySubscription(db, subscription({ status: "canceled", occurredAt: "2026-10-03T00:00:00.000000Z" })), "stale");
   assert.equal((await plan(db, "w1", new Date(now))).status, "active");
   assert.equal(await applySubscription(db, subscription({ workspaceId: "nope" })), "unknown-workspace");
+});
+
+test("a newer event for a different subscription id replaces the stored row", async () => {
+  const db = await seeded();
+  assert.equal(await applySubscription(db, subscription()), "applied");
+  assert.equal(
+    await applySubscription(db, subscription({ subscriptionId: "sub_other", occurredAt: "2026-10-05T00:00:00.000000Z", eventId: "evt_other" })),
+    "applied",
+  );
+  const row = await storedSubscription(db);
+  assert.equal(row.paddleSubscriptionId, "sub_other");
+  assert.equal(row.status, "active");
+  assert.equal(row.lastEventAt, "2026-10-05T00:00:00.000000Z");
+});
+
+test("a repeated event at the same time leaves the stored subscription unchanged", async () => {
+  const db = await seeded();
+  assert.equal(await applySubscription(db, subscription()), "applied");
+  const before = await storedSubscription(db);
+  assert.equal(await applySubscription(db, subscription({ eventId: "evt_repeat" })), "stale");
+  assert.deepEqual(await storedSubscription(db), before);
+});
+
+test("a newer event for the same subscription id can mark it past_due", async () => {
+  const db = await seeded();
+  assert.equal(await applySubscription(db, subscription()), "applied");
+  assert.equal(
+    await applySubscription(db, subscription({ status: "past_due", occurredAt: "2026-10-05T00:00:00.000000Z", eventId: "evt_due" })),
+    "applied",
+  );
+  const row = await storedSubscription(db);
+  assert.equal(row.paddleSubscriptionId, "sub_1");
+  assert.equal(row.status, "past_due");
+});
+
+test("a newer event for the same subscription id can mark it canceled", async () => {
+  const db = await seeded();
+  assert.equal(await applySubscription(db, subscription()), "applied");
+  assert.equal(
+    await applySubscription(db, subscription({ status: "canceled", occurredAt: "2026-10-05T00:00:00.000000Z", eventId: "evt_cancel" })),
+    "applied",
+  );
+  const row = await storedSubscription(db);
+  assert.equal(row.paddleSubscriptionId, "sub_1");
+  assert.equal(row.status, "canceled");
+});
+
+test("a canceled row accepts a newer subscription id", async () => {
+  const db = await seeded();
+  assert.equal(await applySubscription(db, subscription({ status: "canceled" })), "applied");
+  assert.equal(
+    await applySubscription(db, subscription({ subscriptionId: "sub_next", status: "active", occurredAt: "2026-10-05T00:00:00.000000Z", eventId: "evt_next" })),
+    "applied",
+  );
+  assert.equal((await storedSubscription(db)).paddleSubscriptionId, "sub_next");
+});
+
+test("an older event for a different subscription id leaves the stored id unchanged", async () => {
+  const db = await seeded();
+  assert.equal(await applySubscription(db, subscription()), "applied");
+  assert.equal(
+    await applySubscription(db, subscription({ subscriptionId: "sub_older", occurredAt: "2026-10-03T00:00:00.000000Z", eventId: "evt_older" })),
+    "stale",
+  );
+  assert.equal((await storedSubscription(db)).paddleSubscriptionId, "sub_1");
+});
+
+test("a delayed old cancellation preserves the new paid subscription", async () => {
+  const db = await seeded();
+  await applySubscription(
+    db,
+    subscription({
+      subscriptionId: "sub_old",
+      currentPeriodEnd: "2099-01-01T00:00:00Z",
+      eventId: "evt_sub_old_1",
+      occurredAt: "2026-10-01T00:00:01.000000Z",
+    }),
+  );
+  await applySubscription(
+    db,
+    subscription({
+      subscriptionId: "sub_new",
+      currentPeriodEnd: "2099-01-01T00:00:00Z",
+      eventId: "evt_sub_new_3",
+      occurredAt: "2026-10-01T00:00:03.000000Z",
+    }),
+  );
+  await applySubscription(
+    db,
+    subscription({
+      subscriptionId: "sub_old",
+      status: "canceled",
+      currentPeriodEnd: null,
+      eventId: "evt_sub_old_2",
+      occurredAt: "2026-10-01T00:00:02.000000Z",
+    }),
+  );
+  assert.equal((await plan(db, "w1", new Date("2026-10-13T00:00:00Z"))).pro, true);
+  assert.equal((await storedSubscription(db)).paddleSubscriptionId, "sub_new");
+});
+
+test("a subscription event for an unknown workspace is skipped", async () => {
+  const db = await seeded();
+  assert.equal(await applySubscription(db, subscription({ workspaceId: "missing" })), "unknown-workspace");
+  assert.equal(await db.prepare(`SELECT organizationId FROM subscription WHERE organizationId = 'missing'`).first(), null);
 });
 
 test("members share saved setups and bridges; outsiders see nothing", async () => {

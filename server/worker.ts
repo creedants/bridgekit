@@ -10,6 +10,7 @@ import type { Env } from "./env.ts";
 import { createCheckout, parseSubscriptionEvent, verifyPaddleSignature, type PaddleEnvironment } from "./paddle.ts";
 import {
   applySubscription,
+  assertCheckoutOpen,
   deleteSaved,
   invitationHasSeat,
   listBridges,
@@ -283,6 +284,7 @@ open.post("/api/workspaces/:id/checkout", async (c) => {
   if (role !== "owner" && role !== "admin") throw new WorkspaceError(403, "Only a workspace owner or admin can subscribe.");
   if (!c.env.PADDLE_API_KEY || !c.env.PADDLE_PRICE_ID) throw new WorkspaceError(404, "Subscriptions are not set up yet.");
   const { seats } = ((await json(c)) ?? {}) as { seats?: unknown };
+  await assertCheckoutOpen(c.env.DB, id);
   const checkout = await createCheckout({
     apiKey: c.env.PADDLE_API_KEY,
     environment: (c.env.PADDLE_ENVIRONMENT === "live" ? "live" : "sandbox") as PaddleEnvironment,
