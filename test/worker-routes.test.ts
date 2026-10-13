@@ -449,6 +449,209 @@ test("a signed-out setups list does not take column names", async () => {
   assert.equal(body.includes("zephyr-column"), false);
 });
 
+const SENTINEL = "zephyr-column";
+const OLDER_KEY = "design|sales|units|year";
+const NO_COLUMNS = { error: "This request does not take column names." };
+const SIGN_IN_FIRST = { error: "Sign in first." };
+const NOT_FOUND = { error: "Workspace not found." };
+
+const NEWER_SETUP = {
+  periodColumn: "year",
+  grain: "value",
+  unitsColumn: "units",
+  salesColumn: "sales",
+  levels: [{ name: "Region", columns: ["region"] }],
+  filters: [],
+};
+const OLDER_SETUP = {
+  periodColumn: "year",
+  grain: "value",
+  unitsColumn: "units",
+  salesColumn: "sales",
+  levels: [{ name: "Design", columns: ["design"] }],
+  filters: [],
+};
+
+const stored = [
+  {
+    id: "setup-newer",
+    name: "Newer",
+    setup: NEWER_SETUP,
+    createdAt: "2026-10-04T01:00:00.000Z",
+    columnsKey: "region|sales|units|year",
+  },
+  {
+    id: "setup-older",
+    name: "Older",
+    setup: OLDER_SETUP,
+    createdAt: "2026-10-04T00:00:00.000Z",
+    columnsKey: OLDER_KEY,
+  },
+];
+const listed = stored.map((row) => ({ ...row, createdBy: "Owner" }));
+
+type ListedResponse = { status: number; body: unknown; echoed: boolean };
+
+async function storeSetups(db: Env["DB"], workspaceId: string): Promise<string> {
+  const owner = await db.prepare("SELECT id FROM user WHERE email = ?").bind(OWNER).first<{ id: string }>();
+  assert.ok(owner);
+  const renamed = await db.prepare("UPDATE user SET name = ? WHERE id = ?").bind("Owner", owner.id).run();
+  assert.equal(renamed.meta.changes, 1);
+  for (const row of stored) {
+    await db
+      .prepare(
+        `INSERT INTO saved_setup (id, organizationId, name, columnsKey, setup, createdBy, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(row.id, workspaceId, row.name, row.columnsKey, JSON.stringify(row.setup), owner.id, row.createdAt)
+      .run();
+  }
+  return owner.id;
+}
+
+type OtherWorkspace = {
+  id: string;
+  slug: string;
+  setupId: string;
+  name: string;
+  createdAt: string;
+  member: boolean;
+};
+
+async function storeOtherWorkspace(db: Env["DB"], ownerId: string, row: OtherWorkspace): Promise<void> {
+  await db
+    .prepare("INSERT INTO organization (id, name, slug, createdAt) VALUES (?, ?, ?, ?)")
+    .bind(row.id, row.name, row.slug, row.createdAt)
+    .run();
+  if (row.member) {
+    await db
+      .prepare("INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES (?, ?, ?, 'owner', ?)")
+      .bind(`member-${row.id}`, row.id, ownerId, row.createdAt)
+      .run();
+  }
+  const membership = await db
+    .prepare("SELECT COUNT(*) AS n FROM member WHERE organizationId = ? AND userId = ?")
+    .bind(row.id, ownerId)
+    .first<{ n: number }>();
+  assert.equal(membership?.n, row.member ? 1 : 0);
+  await db
+    .prepare(
+      `INSERT INTO saved_setup (id, organizationId, name, columnsKey, setup, createdBy, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(row.setupId, row.id, row.name, OLDER_KEY, JSON.stringify(OLDER_SETUP), ownerId, row.createdAt)
+    .run();
+}
+
+async function memberPair(env: Env, workspaceId: string, cookie: string): Promise<ListedResponse[]> {
+  const pair: ListedResponse[] = [];
+  for (const search of ["", `?column=${SENTINEL}`] as const) {
+    const response = await call(`${ORIGIN}/api/workspaces/${workspaceId}/setups${search}`, env, {
+      headers: { cookie, origin: ORIGIN },
+    });
+    const text = await response.text();
+    const body: unknown = JSON.parse(text);
+    pair.push({ status: response.status, body, echoed: text.includes(SENTINEL) });
+  }
+  return pair;
+}
+
+test("a member receives every setup of the workspace, newest first, with each stored columns key", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, {});
+  const ownerId = await storeSetups(db, workspaceId);
+  await storeOtherWorkspace(db, ownerId, {
+    id: "foreign-workspace",
+    slug: "foreign-workspace",
+    setupId: "foreign-setup",
+    name: "Foreign",
+    createdAt: "2026-10-04T02:00:00.000Z",
+    member: false,
+  });
+  await storeOtherWorkspace(db, ownerId, {
+    id: "second-workspace",
+    slug: "second-workspace",
+    setupId: "second-setup",
+    name: "Second",
+    createdAt: "2026-10-04T03:00:00.000Z",
+    member: true,
+  });
+  const headers = { cookie, origin: ORIGIN };
+  const plain = await call(`${ORIGIN}/api/workspaces/${workspaceId}/setups`, env, { headers });
+  const other = await call(`${ORIGIN}/api/workspaces/${workspaceId}/setups?columns=${SENTINEL}`, env, { headers });
+  const otherText = await other.text();
+  const otherBody: unknown = JSON.parse(otherText);
+  assert.deepEqual(
+    [
+      { status: plain.status, body: await plain.json() },
+      { status: other.status, body: otherBody, echoed: otherText.includes(SENTINEL) },
+    ],
+    [
+      { status: 200, body: listed },
+      { status: 200, body: listed, echoed: false },
+    ],
+  );
+});
+
+test("a member who sends column names is refused and the body does not echo them", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, {});
+  await storeSetups(db, workspaceId);
+  const columnQueries: {
+    [K in "stored-set" | "unknown-name" | "bare"]: { search: string; echo: string | null };
+  } = {
+    "stored-set": { search: "?column=year&column=units&column=sales&column=design", echo: OLDER_KEY },
+    "unknown-name": { search: `?column=${SENTINEL}`, echo: SENTINEL },
+    bare: { search: "?column", echo: null },
+  };
+  const seen: ListedResponse[] = [];
+  for (const query of Object.values(columnQueries)) {
+    const response = await call(`${ORIGIN}/api/workspaces/${workspaceId}/setups${query.search}`, env, {
+      headers: { cookie, origin: ORIGIN },
+    });
+    const text = await response.text();
+    const body: unknown = JSON.parse(text);
+    seen.push({ status: response.status, body, echoed: query.echo !== null && text.includes(query.echo) });
+  }
+  assert.deepEqual(seen, [
+    { status: 400, body: NO_COLUMNS, echoed: false },
+    { status: 400, body: NO_COLUMNS, echoed: false },
+    { status: 400, body: NO_COLUMNS, echoed: false },
+  ]);
+});
+
+test("a signed-out caller is refused before column names are read", async () => {
+  const { db, workspaceId } = await session();
+  const env = mailEnv(db, {});
+  await storeSetups(db, workspaceId);
+  const response = await call(`${ORIGIN}/api/workspaces/${workspaceId}/setups?column=${SENTINEL}`, env);
+  const text = await response.text();
+  assert.equal(response.status, 403);
+  assert.deepEqual(JSON.parse(text), SIGN_IN_FIRST);
+  assert.equal(text.includes(SENTINEL), false);
+});
+
+test("a signed-in non-member is refused with and without a column query", async () => {
+  const { db, workspaceId } = await session();
+  const env = mailEnv(db, {});
+  await storeSetups(db, workspaceId);
+  const cookie = await signIn(db, "colleague@example.invalid");
+  assert.deepEqual(await memberPair(env, workspaceId, cookie), [
+    { status: 404, body: NOT_FOUND, echoed: false },
+    { status: 404, body: NOT_FOUND, echoed: false },
+  ]);
+});
+
+test("a member whose member row is then deleted is refused with and without a column query", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, {});
+  const ownerId = await storeSetups(db, workspaceId);
+  const removed = await db.prepare("DELETE FROM member WHERE organizationId = ? AND userId = ?").bind(workspaceId, ownerId).run();
+  assert.equal(removed.meta.changes, 1);
+  assert.deepEqual(await memberPair(env, workspaceId, cookie), [
+    { status: 404, body: NOT_FOUND, echoed: false },
+    { status: 404, body: NOT_FOUND, echoed: false },
+  ]);
+});
+
 test("the config reports whether an email can be sent", async () => {
   const { env } = bindings({ "/": html(HOME) });
   const turnedOn = { ...env, ACCOUNTS: "on" };

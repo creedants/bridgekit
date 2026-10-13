@@ -1,0 +1,1 @@
+- Tests only. A signed-in member listing saved setups gets every setup in the workspace, newest first, and a column query is refused.
