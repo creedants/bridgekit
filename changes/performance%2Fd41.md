@@ -1,0 +1,1 @@
+- The Pro workspaces section of the privacy page now says the IP address is used briefly to slow repeated sign-in attempts, and that Bridgekit does not store it.
