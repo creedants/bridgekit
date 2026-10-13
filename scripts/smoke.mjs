@@ -226,13 +226,13 @@ const CONTROL = {
   keepalive: () => ({ records: 1, blocked: null, reports: 0 }),
 };
 
-/** @typedef {{ from: string, how: keyof typeof CONTROL, url: string }} Ask */
+/** @typedef {{ from: string, how: keyof typeof CONTROL, method: string, url: string }} Ask */
 
-/** @returns {Ask[]} */
+/** @returns {Ask[]} The control requests and the literal method each uses. */
 function asks(origin) {
   const port = `http://127.0.0.1:${DEBUG_PORT}`;
-  const cross = Object.keys(PROVEN).flatMap((from) => ["fetch", "XMLHttpRequest"].map((how) => ({ from, how, url: `${port}/json/version?${from}-${how}` })));
-  const leave = ["sendBeacon", "keepalive"].map((how) => ({ from: "page", how, url: `${origin}/app/?control-${how}` }));
+  const cross = Object.keys(PROVEN).flatMap((from) => ["fetch", "XMLHttpRequest"].map((how) => ({ from, how, method: "GET", url: `${port}/json/version?${from}-${how}` })));
+  const leave = ["sendBeacon", "keepalive"].map((how) => ({ from: "page", how, method: "POST", url: `${origin}/app/?control-${how}` }));
   return [...cross, ...leave];
 }
 
@@ -279,11 +279,12 @@ function proves(record, origin, policies) {
     }
     if (reports.length !== expect.reports) return `${reports.length} policy reports of the ${item.from}'s ${item.how}, expected ${expect.reports} (${reports.map((entry) => `${entry.from} ${entry.directive} ${entry.url}`).join("; ")})`;
   }
-  // The control URLs are the only requests this browser may make off its origin or with a method other than GET.
-  const control = new Set(asks(origin).map((item) => item.url));
-  const stray = strays(record.network.filter((entry) => !control.has(entry.url)), origin, policies === 0);
+  // The control requests, matched by URL and method, are the only requests this browser may make off its origin or with a method other than GET.
+  const control = new Set(asks(origin).map((item) => `${item.method} ${item.url}`));
+  const stray = strays(record.network.filter((entry) => !control.has(`${entry.method} ${entry.url}`)), origin, policies === 0);
   if (stray.length) return `requests that could carry data: ${stray.slice(0, 5).join("; ")}`;
-  const refused = record.violations.filter((entry) => !control.has(entry.url));
+  const controlUrls = new Set(asks(origin).map((item) => item.url));
+  const refused = record.violations.filter((entry) => !controlUrls.has(entry.url));
   if (refused.length) return `content policy violations: ${[...new Set(refused.map((entry) => `[${entry.from}] ${entry.directive} ${entry.url}`))].join("; ")}`;
   return null;
 }
