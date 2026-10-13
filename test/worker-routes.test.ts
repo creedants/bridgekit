@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { test } from "node:test";
 import type { Fetcher } from "../server/cloudflare.ts";
 import { EMAIL_NOT_SET_UP } from "../server/email.ts";
@@ -454,6 +455,47 @@ test("the config reports whether an email can be sent", async () => {
     ...without,
     email: true,
   });
+});
+
+const WEBHOOK_SECRET = "paddle-test-secret";
+
+function paddleSignature(body: string, secret = WEBHOOK_SECRET): string {
+  const ts = Math.floor(Date.now() / 1000);
+  const hex = createHmac("sha256", secret).update(`${ts}:${body}`).digest("hex");
+  return `ts=${ts};h1=${hex}`;
+}
+
+test("a signed webhook body that is not JSON is refused as invalid JSON", async () => {
+  const { env } = bindings({ "/": html(HOME) }, database());
+  const on = { ...env, BETTER_AUTH_SECRET: AUTH_SECRET, ACCOUNTS: "on", PADDLE_WEBHOOK_SECRET: WEBHOOK_SECRET };
+  const body = "not-json";
+  const signed = await call(`${ORIGIN}/api/paddle/webhook`, on, {
+    method: "POST",
+    headers: { "paddle-signature": paddleSignature(body) },
+    body,
+  });
+  assert.equal(signed.status, 400);
+  assert.deepEqual(await signed.json(), { error: "The request was not valid JSON." });
+
+  const unsigned = await call(`${ORIGIN}/api/paddle/webhook`, on, { method: "POST", body });
+  assert.equal(unsigned.status, 401);
+  assert.deepEqual(await unsigned.json(), { error: "Bad signature." });
+
+  const wrong = await call(`${ORIGIN}/api/paddle/webhook`, on, {
+    method: "POST",
+    headers: { "paddle-signature": paddleSignature(body, "other-secret") },
+    body,
+  });
+  assert.equal(wrong.status, 401);
+  assert.deepEqual(await wrong.json(), { error: "Bad signature." });
+
+  const ignored = await call(`${ORIGIN}/api/paddle/webhook`, on, {
+    method: "POST",
+    headers: { "paddle-signature": paddleSignature("{}") },
+    body: "{}",
+  });
+  assert.equal(ignored.status, 200);
+  assert.deepEqual(await ignored.json(), { result: "ignored" });
 });
 
 const OWNER = "owner@example.invalid";
