@@ -11,6 +11,7 @@ import {
 } from "./db.ts";
 import { exportExcel } from "./exportExcel.ts";
 import { download } from "./files.ts";
+import { fileProblem, type FileProblem } from "./fileProblems.ts";
 import { whole } from "./format.ts";
 import { distinctCounts, findRollups } from "./profile.ts";
 import { loadPeriodList } from "./periods.ts";
@@ -205,6 +206,16 @@ export function App() {
   const signature = JSON.stringify([setup, prior, current, source]);
   const ready =
     setup && setup.unitsColumn && setup.salesColumn && setup.levels.length > 0 && prior && current && prior !== current;
+  const problem: FileProblem = setup
+    ? fileProblem({
+        columns,
+        rows: rowCount,
+        periodColumn: setup.periodColumn,
+        periods,
+        unitsColumn: setup.unitsColumn,
+        salesColumn: setup.salesColumn,
+      })
+    : { kind: "none" };
 
   const calculate = () =>
     task("Calculating…", async () => {
@@ -399,11 +410,14 @@ export function App() {
               <button className="primary" disabled={!ready || !!busy} onClick={calculate}>
                 Calculate bridge
               </button>
+              {problem.kind === "note" && <p className="hint">{problem.message}</p>}
               {!ready && (
                 <p className="hint">
-                  {prior && prior === current
-                    ? "Prior and current must be different periods."
-                    : "Choose periods, units, sales and at least one attribute."}
+                  {problem.kind === "reason"
+                    ? problem.message
+                    : prior && prior === current
+                      ? "Prior and current must be different periods."
+                      : "Choose periods, units, sales and at least one attribute."}
                 </p>
               )}
               <label className="check">
