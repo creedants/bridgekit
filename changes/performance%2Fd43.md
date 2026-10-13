@@ -1,0 +1,1 @@
+- Links the home page nav and the note under the two-bridge table to the grouping-level article, and names grouping-level.html in the README layout list.
