@@ -1,5 +1,5 @@
 import type { BridgeBy, BridgePanel, BridgeResult, PanelStatus } from "../engine.ts";
-import { signedWhole } from "./format.ts";
+import { compact, signedWhole } from "./format.ts";
 
 /**
  * Every rule behind a bridge's bars and behind the small-bridge grid, in one
@@ -55,14 +55,27 @@ export function steps(result: BridgeResult, priorLabel: string, currentLabel: st
   return out;
 }
 
-/** Deltas are usually small next to the totals, so the axis starts above zero when it has to. */
+/**
+ * Deltas are usually small next to the totals, so the axis starts above zero
+ * when it has to. A level below zero lowers the axis to that level exactly.
+ * Padding under it would move the shared scale, which already reaches the
+ * lowest level on its own.
+ */
 export function axisFloor(bars: Step[]): number {
-  const levels = bars.flatMap((b) => (b.kind === "total" ? [b.high] : [b.low, b.high]));
+  const levels = barLevels(bars);
   const low = Math.min(...levels);
   const range = Math.max(...levels) - low;
+  if (low < 0) return low;
   if (range <= 0 || low - range * 0.6 <= 0) return 0;
   const step = 10 ** Math.floor(Math.log10(range));
   return Math.floor((low - range * 0.6) / step) * step;
+}
+
+/** The sentence under the main waterfall and the full-size panel, or null when the axis starts at zero. */
+export function axisCaption(bars: Step[]): string | null {
+  const floor = axisFloor(bars);
+  if (floor === 0) return null;
+  return `Value axis starts at ${compact(floor)}, not zero, so the steps are visible.`;
 }
 
 /** Both ends of every bar, in the order the floor rule reads them. */
@@ -167,6 +180,92 @@ export function gridAction(column: string, stale: boolean, shownFor: string): Gr
   return "clear";
 }
 
+/** The one sentence shown when the split cannot be calculated. */
+export const SPLIT_FAILURE_SENTENCE = "The small bridges could not be calculated.";
+
+/**
+ * The bridge a split result has to match. The calculation counter changes when
+ * a different run is rendered. The row generation changes when a load is queued.
+ */
+export interface ScreenBridge {
+  column: string;
+  calculation: number;
+  rows: number;
+}
+
+/** True only when the result is still the bridge, the rows, and the column on screen, and the setup notice is absent. */
+export function splitBelongs(started: ScreenBridge, screen: ScreenBridge, stale: boolean): boolean {
+  return !stale
+    && started.column !== ""
+    && started.column === screen.column
+    && started.calculation === screen.calculation
+    && started.rows === screen.rows;
+}
+
+export type SplitOutcome<T> =
+  | { status: "grid"; result: T }
+  | { status: "drop" }
+  | { status: "fail" };
+
+/**
+ * Runs one split and keeps the result only while `splitBelongs` stays true.
+ * A failed install is a failure, not a hang, because the await sits in this try.
+ */
+export async function attemptSplit<Q, T>(input: {
+  started: ScreenBridge;
+  screen: () => ScreenBridge;
+  stale: () => boolean;
+  install: () => Promise<void>;
+  prepare: () => Promise<Q>;
+  calculate: (prepared: Q) => Promise<T>;
+}): Promise<SplitOutcome<T>> {
+  const belongs = () => splitBelongs(input.started, input.screen(), input.stale());
+  try {
+    await input.install();
+    if (!belongs()) return { status: "drop" };
+    const prepared = await input.prepare();
+    if (!belongs()) return { status: "drop" };
+    const result = await input.calculate(prepared);
+    if (!belongs()) return { status: "drop" };
+    return { status: "grid", result };
+  } catch (error: unknown) {
+    console.error(error);
+    if (!belongs()) return { status: "drop" };
+    return { status: "fail" };
+  }
+}
+
+/**
+ * True for the statement that replaces the loaded table.
+ * A temporary table and a view stay on the joining path.
+ */
+export function statementStartsTurn(sql: string): boolean {
+  return /^\s*create\s+or\s+replace\s+table\b/i.test(sql);
+}
+
+/**
+ * Remembers a successful attempt and forgets a rejected one, so the next caller
+ * tries again instead of awaiting the same failure.
+ */
+export function createAttemptCache(): { run(start: () => Promise<void>): Promise<void> } {
+  let pending: Promise<void> | null = null;
+  return {
+    run(start) {
+      if (pending) return pending;
+      let attempt: Promise<void> | null = null;
+      attempt = start().then(
+        () => undefined,
+        (error: unknown) => {
+          if (pending === attempt) pending = null;
+          throw error;
+        },
+      );
+      pending = attempt;
+      return attempt;
+    },
+  };
+}
+
 /** Where keyboard focus goes when a panel opens or closes. */
 export type FocusPlace = "back" | "trigger" | "select";
 
@@ -188,9 +287,16 @@ interface Session {
  */
 export function createConnectionQueue(): {
   schedule<T>(work: () => Promise<T>): Promise<T>;
+  /** Runs after the current session and never joins it. Bumps the row generation before the work starts. */
+  turn<T>(work: () => Promise<T>): Promise<T>;
+  generation(): number;
+  /** Fires when a rejected turn restores the row generation. Returns the unsubscribe. */
+  whenTurnRejected(listen: () => void): () => void;
 } {
   let current: Session | null = null;
   let tail: Promise<void> = Promise.resolve();
+  let rows = 0;
+  const rejected = new Set<() => void>();
 
   function schedule<T>(work: () => Promise<T>): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -218,11 +324,7 @@ export function createConnectionQueue(): {
       }
       const session: Session = { jobs: [], accepting: false };
       session.jobs.push(launch(session));
-      const run = tail.then(() => drain(session));
-      tail = run.then(
-        () => undefined,
-        () => undefined,
-      );
+      enqueue(session);
     });
   }
 
@@ -247,7 +349,42 @@ export function createConnectionQueue(): {
     }
   }
 
-  return { schedule };
+  function enqueue(session: Session): void {
+    const run = tail.then(() => drain(session));
+    tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+  }
+
+  function turn<T>(work: () => Promise<T>): Promise<T> {
+    const stamp = ++rows;
+    return new Promise<T>((resolve, reject) => {
+      const session: Session = { jobs: [], accepting: false };
+      session.jobs.push(async () => {
+        try {
+          resolve(await work());
+        } catch (error) {
+          if (rows === stamp) {
+            rows = stamp - 1;
+            for (const listen of [...rejected]) listen();
+          }
+          reject(error);
+        }
+      });
+      enqueue(session);
+    });
+  }
+
+  return {
+    schedule,
+    turn,
+    generation: () => rows,
+    whenTurnRejected(listen) {
+      rejected.add(listen);
+      return () => rejected.delete(listen);
+    },
+  };
 }
 
 /**

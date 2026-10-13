@@ -5,9 +5,12 @@ import {
   BETWEEN_SENTENCE,
   BLANK_TITLE,
   COMBINED_TITLE,
+  attemptSplit,
+  axisCaption,
   axisFloor,
   betweenLine,
   chartStack,
+  createAttemptCache,
   createConnectionQueue,
   createSplitRunner,
   focusPlace,
@@ -16,9 +19,14 @@ import {
   panelStatusLabel,
   panelTitle,
   sharedScale,
+  SPLIT_FAILURE_SENTENCE,
+  splitBelongs,
+  statementStartsTurn,
   steps,
+  type ScreenBridge,
   type Step,
 } from "../src/app/small-bridges.ts";
+import { compact } from "../src/app/format.ts";
 
 function bridge(priorSales: number, effects: [string, number][]): BridgeResult {
   let running = priorSales;
@@ -86,10 +94,23 @@ test("the floor rises only while every bar stays in view", () => {
   assert.equal(axisFloor(drawn(bridge(1000, [["volume", 2000]]))), 0);
   // Steps are small next to the totals, so the axis starts above zero to show them.
   assert.equal(axisFloor(drawn(bridge(1000, [["volume", 20]]))), 980);
-  // A step that falls below zero keeps the axis at zero, so nothing is cut off.
-  assert.equal(axisFloor(drawn(bridge(1000, [["volume", -1400]]))), 0);
+  // A step that crosses zero lowers the axis to the lowest level, so the bar is drawn whole.
+  assert.equal(axisFloor(drawn(bridge(1000, [["volume", -1400]]))), -400);
+  // A bridge wholly below zero lowers the axis to that level.
+  assert.equal(axisFloor(drawn(bridge(-50, []))), -50);
+  assert.equal(axisFloor(drawn(bridge(-50, [["price", 10], ["cost", -5]]))), -50);
   // Nothing at all leaves the axis at zero over one unit.
   assert.equal(axisFloor(drawn(bridge(0, []))), 0);
+});
+
+test("the caption is the existing sentence only when the axis does not start at zero", () => {
+  assert.equal(axisCaption(drawn(bridge(1000, [["volume", 2000]]))), null);
+  assert.equal(axisCaption(drawn(bridge(0, []))), null);
+  const raised = `Value axis starts at ${compact(980)}, not zero, so the steps are visible.`;
+  assert.equal(axisCaption(drawn(bridge(1000, [["volume", 20]]))), raised);
+  const below = `Value axis starts at ${compact(-400)}, not zero, so the steps are visible.`;
+  assert.equal(axisCaption(drawn(bridge(1000, [["volume", -1400]]))), below);
+  assert.equal(axisCaption(drawn(bridge(-170, [["volume", -5]]))), `Value axis starts at ${compact(-175)}, not zero, so the steps are visible.`);
 });
 
 test("a panel's title is its value, with the two fixed titles for blank and combined", () => {
@@ -271,4 +292,118 @@ test("a split replaced before it starts never runs, and only the latest follows 
   second.request("customer");
   await second.settled();
   assert.deepEqual(followed, ["design:start", "design:end", "customer:start", "customer:end"]);
+});
+
+const screen = (over: Partial<ScreenBridge> = {}): ScreenBridge => ({
+  column: "coating",
+  calculation: 1,
+  rows: 0,
+  ...over,
+});
+
+test("a split result belongs only to the bridge and the rows it started with", () => {
+  const started = screen();
+  assert.equal(splitBelongs(started, screen(), false), true);
+  assert.equal(splitBelongs(started, screen({ column: "design" }), false), false);
+  assert.equal(splitBelongs(started, screen({ calculation: 2 }), false), false);
+  assert.equal(splitBelongs(started, screen({ rows: 1 }), false), false);
+  assert.equal(splitBelongs(started, screen(), true), false);
+  assert.equal(splitBelongs(screen({ column: "" }), screen({ column: "" }), false), false);
+});
+
+test("replacing the loaded table takes its own turn, and a temporary table does not", () => {
+  assert.equal(statementStartsTurn('\nCREATE OR REPLACE TABLE "sales" AS'), true);
+  assert.equal(statementStartsTurn('CREATE OR REPLACE TEMP TABLE bridge_cells'), false);
+  assert.equal(statementStartsTurn("CREATE OR REPLACE VIEW bridge_ready AS SELECT 1"), false);
+  assert.equal(statementStartsTurn("SELECT 1"), false);
+});
+
+test("a load waits out the engine call instead of joining it", async () => {
+  const queue = createConnectionQueue();
+  let active = 0;
+  let maxActive = 0;
+  const order: string[] = [];
+  const run = async (name: string, body: () => Promise<unknown>) => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    order.push(`${name}:start`);
+    await body();
+    active -= 1;
+    order.push(`${name}:end`);
+  };
+  const engine = (async () => {
+    await queue.schedule(() => run("prior", () => delay(8)));
+    const loading = queue.turn(() => run("load", () => delay(8)));
+    await queue.schedule(() => run("panel", () => delay(8)));
+    await loading;
+  })();
+  await engine;
+  assert.equal(maxActive, 1);
+  assert.deepEqual(order, ["prior:start", "prior:end", "panel:start", "panel:end", "load:start", "load:end"]);
+});
+
+test("a rejected load restores the row generation and the next load is a new one", async () => {
+  const queue = createConnectionQueue();
+  let notices = 0;
+  const stop = queue.whenTurnRejected(() => {
+    notices += 1;
+  });
+  const started = queue.turn(async () => {
+    assert.equal(queue.generation(), 1);
+    throw new Error("load failed");
+  });
+  assert.equal(queue.generation(), 1);
+  await assert.rejects(started, /load failed/);
+  assert.equal(queue.generation(), 0);
+  assert.equal(notices, 1);
+  await queue.turn(async () => {
+    assert.equal(queue.generation(), 1);
+  });
+  assert.equal(queue.generation(), 1);
+  assert.equal(notices, 1);
+  stop();
+});
+
+test("a failed queue install is forgotten, and the split ends on the existing sentence", async () => {
+  assert.equal(SPLIT_FAILURE_SENTENCE, "The small bridges could not be calculated.");
+  const cache = createAttemptCache();
+  let opens = 0;
+  const here = screen();
+  const fail = await attemptSplit({
+    started: here,
+    screen: () => here,
+    stale: () => false,
+    install: () => cache.run(async () => {
+      opens += 1;
+      throw new Error("worker did not start");
+    }),
+    prepare: async () => "query",
+    calculate: async () => "grid",
+  });
+  assert.deepEqual(fail, { status: "fail" });
+  const again = await attemptSplit({
+    started: here,
+    screen: () => here,
+    stale: () => false,
+    install: () => cache.run(async () => {
+      opens += 1;
+    }),
+    prepare: async () => "query",
+    calculate: async (prepared) => prepared,
+  });
+  assert.deepEqual(again, { status: "grid", result: "query" });
+  assert.equal(opens, 2);
+
+  const moved = screen({ rows: 1 });
+  const dropped = await attemptSplit({
+    started: here,
+    screen: () => moved,
+    stale: () => false,
+    install: async () => {
+      throw new Error("worker did not start");
+    },
+    prepare: async () => "query",
+    calculate: async () => "grid",
+  });
+  assert.deepEqual(dropped, { status: "drop" });
 });

@@ -3,7 +3,9 @@ import { bridgeBy, measureName, type BridgeBy, type BridgeConfig, type BridgePan
 import { openBrowserDatabase } from "./db.ts";
 import { whole } from "./format.ts";
 import {
+  attemptSplit,
   betweenLine,
+  createAttemptCache,
   createConnectionQueue,
   createSplitRunner,
   focusPlace,
@@ -12,15 +14,15 @@ import {
   panelStatusLabel,
   panelTitle,
   sharedScale,
+  SPLIT_FAILURE_SENTENCE,
+  statementStartsTurn,
   steps,
+  type ScreenBridge,
   type Step,
   type ValueScale,
 } from "./small-bridges.ts";
 import { BridgeChart, Legend, Waterfall } from "./Waterfall.tsx";
 import type { Run } from "./Results.tsx";
-
-/** The one sentence shown when the split cannot be calculated. */
-const FAILURE = "The small bridges could not be calculated.";
 
 /** The limit `bridgeBy` uses by default: at most 12 value panels, then the remainder. */
 const LIMIT = 12;
@@ -36,33 +38,31 @@ let chosen = "";
 
 // One queue for the page's one connection. bridgeBy replaces bridge_cells, so
 // a second engine call has to wait until the first has finished every statement.
-// Loading a file keeps the query it closed over when the database opened, and
-// a query captured before this replacement ran, so neither joins the queue.
+// A file load, a paste, and a sample's table replacement take a turn that does
+// not join the running call. The row generation records that the rows changed.
 const pageQueue = createConnectionQueue();
-let pageQueueInstalled: Promise<void> | null = null;
+const installs = createAttemptCache();
+let shownRun: object | null = null;
+let calculationOnScreen = 0;
 
-function statementLog(): unknown[] | null {
-  const list: unknown = Reflect.get(globalThis, "__bridgekitStatements");
-  return Array.isArray(list) ? list : null;
+function noteRun(run: object): void {
+  if (shownRun === run) return;
+  shownRun = run;
+  calculationOnScreen += 1;
 }
 
 function installPageQueue(): Promise<void> {
-  pageQueueInstalled ??= openBrowserDatabase().then((database) => {
+  return installs.run(async () => {
+    const database = await openBrowserDatabase();
     if (Reflect.get(database.query, "pageQueue") === true) return;
     const inner = database.query;
+    const loadFile = database.loadFile.bind(database);
     const wrapped: Query = (sql) =>
-      pageQueue.schedule(async () => {
-        const start = performance.now();
-        try {
-          return await inner(sql);
-        } finally {
-          statementLog()?.push({ start, end: performance.now(), sql: sql.slice(0, 160) });
-        }
-      });
+      statementStartsTurn(sql) ? pageQueue.turn(() => inner(sql)) : pageQueue.schedule(() => inner(sql));
     Reflect.set(wrapped, "pageQueue", true);
     database.query = wrapped;
+    database.loadFile = (file, table) => pageQueue.turn(() => loadFile(file, table));
   });
-  return pageQueueInstalled;
 }
 
 void installPageQueue().catch((error: unknown) => {
@@ -85,6 +85,7 @@ function bridgeIsStale(): boolean {
  * draws what it is given and formats it.
  */
 export function SmallBridges(props: { run: Run; query: () => Promise<Query> }) {
+  noteRun(props.run);
   const { config, textColumns } = props.run;
   // A file loaded later can have other columns, so a choice that names a column
   // this file has not got is dropped rather than run against it.
@@ -94,6 +95,7 @@ export function SmallBridges(props: { run: Run; query: () => Promise<Query> }) {
   /** The panel shown at full size, or null while the grid is on screen. */
   const [open, setOpen] = useState<number | null>(null);
   const [stale, setStale] = useState(false);
+  const [rowsEpoch, setRowsEpoch] = useState(0);
   const shownFor = useRef("");
   const wanted = useRef(column);
   const openRef = useRef<number | null>(null);
@@ -106,29 +108,43 @@ export function SmallBridges(props: { run: Run; query: () => Promise<Query> }) {
   configRef.current = config;
   queryRef.current = props.query;
   openRef.current = open;
+  const screenRef = useRef<() => ScreenBridge>(() => ({
+    column: wanted.current,
+    calculation: calculationOnScreen,
+    rows: pageQueue.generation(),
+  }));
+  screenRef.current = () => ({
+    column: wanted.current,
+    calculation: calculationOnScreen,
+    rows: pageQueue.generation(),
+  });
 
   const runner = useRef<ReturnType<typeof createSplitRunner> | null>(null);
   if (runner.current === null) {
     runner.current = createSplitRunner(async (next) => {
-      await installPageQueue();
-      if (wanted.current !== next) return;
-      const query = await queryRef.current();
-      if (wanted.current !== next) return;
-      try {
-        const result = await bridgeBy(query, configRef.current, next, LIMIT);
-        if (wanted.current !== next || bridgeIsStale()) return;
-        shownFor.current = next;
-        setFailure("");
-        setGrid(result);
-      } catch (error: unknown) {
-        console.error(error);
-        if (wanted.current !== next || bridgeIsStale()) return;
+      const started = { ...screenRef.current(), column: next };
+      const outcome = await attemptSplit({
+        started,
+        screen: () => screenRef.current(),
+        stale: bridgeIsStale,
+        install: installPageQueue,
+        prepare: () => queryRef.current(),
+        calculate: (query) => bridgeBy(query, configRef.current, next, LIMIT),
+      });
+      if (outcome.status === "drop") return;
+      if (outcome.status === "fail") {
         shownFor.current = "";
         setGrid(null);
-        setFailure(FAILURE);
+        setFailure(SPLIT_FAILURE_SENTENCE);
+        return;
       }
+      shownFor.current = next;
+      setFailure("");
+      setGrid(outcome.result);
     });
   }
+
+  useEffect(() => pageQueue.whenTurnRejected(() => setRowsEpoch((n) => n + 1)), []);
 
   useEffect(() => {
     const root = document.querySelector("main") ?? document.body;
@@ -156,7 +172,7 @@ export function SmallBridges(props: { run: Run; query: () => Promise<Query> }) {
     }
     if (action === "clear") return;
     runner.current?.request(column);
-  }, [column, stale, props.run]);
+  }, [column, stale, props.run, rowsEpoch]);
 
   useEffect(() => {
     return () => {

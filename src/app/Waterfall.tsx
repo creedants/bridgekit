@@ -7,7 +7,7 @@ import { useEffect, useRef } from "react";
 import type React from "react";
 import type { BridgeResult } from "../engine.ts";
 import { compact, signedCompact } from "./format.ts";
-import { axisFloor, chartStack, steps, type Step, type ValueScale } from "./small-bridges.ts";
+import { axisCaption, axisFloor, chartStack, steps, type Step, type ValueScale } from "./small-bridges.ts";
 
 echarts.use([BarChart, GridComponent, TooltipComponent, LegacyGridContainLabel, CanvasRenderer]);
 
@@ -163,7 +163,7 @@ export function Waterfall(props: {
 }) {
   const chartRef = useRef<echarts.ECharts>(null);
   const bars = steps(props.result, props.priorLabel, props.currentLabel);
-  const floor = axisFloor(bars);
+  const caption = axisCaption(bars);
 
   return (
     <figure className="waterfall">
@@ -194,7 +194,7 @@ export function Waterfall(props: {
           chartRef.current = chart;
         }}
       />
-      {floor > 0 && <figcaption>Value axis starts at {compact(floor)}, not zero, so the steps are visible.</figcaption>}
+      {caption && <figcaption>{caption}</figcaption>}
       {props.footer}
     </figure>
   );
