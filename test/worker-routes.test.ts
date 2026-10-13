@@ -439,6 +439,16 @@ test("accounts stay closed unless ACCOUNTS is on", async () => {
   assert.deepEqual(await views(turnedOn.db), beforeUpper);
 });
 
+test("a signed-out setups list does not take column names", async () => {
+  const { env } = bindings({ "/": html(HOME) }, database());
+  const on = { ...env, BETTER_AUTH_SECRET: AUTH_SECRET, ACCOUNTS: "on" };
+  const response = await call(`${ORIGIN}/api/workspaces/perf-local/setups?column=zephyr-column&column=quartz-column`, on);
+  const body = await response.text();
+  assert.equal(response.status, 403);
+  assert.deepEqual(JSON.parse(body), { error: "Sign in first." });
+  assert.equal(body.includes("zephyr-column"), false);
+});
+
 test("the config reports whether an email can be sent", async () => {
   const { env } = bindings({ "/": html(HOME) });
   const turnedOn = { ...env, ACCOUNTS: "on" };
