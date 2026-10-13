@@ -23,7 +23,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
 }
 
-function readLimiter(): LimiterConfig {
+function readLimiter(name = "MAGIC_LINK_RATE_LIMIT"): LimiterConfig {
   const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
   const parsed: unknown = JSON.parse(text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, ""));
   assert.ok(isRecord(parsed));
@@ -31,24 +31,35 @@ function readLimiter(): LimiterConfig {
   assert.ok(Array.isArray(listed));
   assert.deepEqual(
     listed.map((item) => (isRecord(item) ? item.name : undefined)),
-    ["MAGIC_LINK_RATE_LIMIT"],
+    ["MAGIC_LINK_RATE_LIMIT", "COMMENTARY_RATE_LIMIT"],
   );
-  const entry = listed[0];
+  const entry = listed.find((item) => isRecord(item) && item.name === name);
   assert.ok(isRecord(entry));
   const simple = entry.simple;
   assert.ok(isRecord(simple));
-  const name = entry.name;
+  const foundName = entry.name;
   const namespaceId = entry.namespace_id;
   const limit = simple.limit;
   const period = simple.period;
-  if (typeof name !== "string" || typeof namespaceId !== "string" || typeof limit !== "number" || typeof period !== "number") {
+  if (typeof foundName !== "string" || typeof namespaceId !== "string" || typeof limit !== "number" || typeof period !== "number") {
     throw new Error("wrangler.jsonc rate limit binding is incomplete");
   }
-  assert.equal(name, "MAGIC_LINK_RATE_LIMIT");
+  assert.equal(foundName, name);
   assert.match(namespaceId, /^[1-9][0-9]*$/);
   assert.equal(period, 60);
-  assert.equal(limit, 3);
-  return { name, namespace_id: namespaceId, simple: { limit, period } };
+  if (name === "MAGIC_LINK_RATE_LIMIT") {
+    assert.equal(limit, 3);
+  } else if (name === "COMMENTARY_RATE_LIMIT") {
+    assert.equal(limit, 5);
+    assert.notEqual(namespaceId, "1001");
+    const magic = listed.find((item) => isRecord(item) && item.name === "MAGIC_LINK_RATE_LIMIT");
+    assert.ok(isRecord(magic));
+    assert.equal(typeof magic.namespace_id, "string");
+    assert.notEqual(namespaceId, magic.namespace_id);
+  } else {
+    throw new Error(`unknown rate limit binding ${name}`);
+  }
+  return { name: foundName, namespace_id: namespaceId, simple: { limit, period } };
 }
 
 // Better Auth reads pragma_table_info through D1 batch. The shared stand-in
@@ -756,13 +767,7 @@ function fenceAnthropic(): { urls: string[]; restore(): void } {
   const original = globalThis.fetch;
   globalThis.fetch = async (input: Request | string | URL, init?: RequestInit) => {
     const url = input instanceof Request ? input.url : input instanceof URL ? input.href : String(input);
-    let hostname = "";
-    try {
-      hostname = new URL(url).hostname;
-    } catch {
-      hostname = "";
-    }
-    if (hostname === "api.anthropic.com") {
+    if (new URL(url).hostname === "api.anthropic.com") {
       urls.push(url);
       return Response.json({
         id: "msg_test",
@@ -850,44 +855,182 @@ function commentaryRequest(cookie: string, headers: Record<string, string>, body
 }
 
 async function commentaryLimited(): Promise<void> {
-  const limit = 5;
+  const limit = readLimiter("COMMENTARY_RATE_LIMIT").simple.limit;
   const calls: LimitCall[] = [];
   const db = database();
   const env = withCommentary(commentaryEnv(db), limiter(limit, calls));
   const fence = fenceAnthropic();
   try {
     const { cookie, userId } = await signInCommentaryMember(env, "pro-limit@example.invalid", "pro-limit", true);
-    const body = JSON.stringify({ summary: COMMENTARY_SUMMARY });
-    const outcomes = [];
-    for (let index = 0; index < limit + 1; index += 1) {
-      const response = await dispatch(env, commentaryRequest(cookie, { origin: ORIGIN }, body));
-      outcomes.push({
-        status: response.status,
-        body: await response.json(),
-        retryAfter: response.headers.get("retry-after"),
-        xRetryAfter: response.headers.get("x-retry-after"),
-      });
-    }
-    const allowed = {
-      status: 200,
-      body: { paragraphs: ["Sales rose.", "Volume led."], model: "claude-opus-5-5" },
-      retryAfter: null,
-      xRetryAfter: null,
-    };
+    const outcomes = await commentaryOutcomes(env, cookie, limit + 1, () => ({ origin: ORIGIN }));
     assert.deepEqual(
       { outcomes, fence: fence.urls.length, keys: calls.map((entry) => entry.key) },
       {
         outcomes: [
-          ...Array.from({ length: limit }, () => allowed),
-          {
-            status: 429,
-            body: { error: "You are sending commentary requests too quickly." },
-            retryAfter: null,
-            xRetryAfter: null,
-          },
+          ...Array.from({ length: limit }, () => ALLOWED_COMMENTARY),
+          { status: 429, body: COMMENTARY_TOO_QUICKLY, retryAfter: null, xRetryAfter: null },
         ],
         fence: limit,
         keys: Array.from({ length: limit + 1 }, () => userId),
+      },
+    );
+  } finally {
+    fence.restore();
+  }
+}
+
+const ALLOWED_COMMENTARY = {
+  status: 200,
+  body: { paragraphs: ["Sales rose.", "Volume led."], model: "claude-opus-5-5" },
+  retryAfter: null,
+  xRetryAfter: null,
+};
+const COMMENTARY_TOO_QUICKLY = { error: "You are sending commentary requests too quickly." };
+
+async function commentaryOutcomes(
+  env: Env,
+  cookie: string,
+  count: number,
+  headersFor: (index: number) => Record<string, string>,
+): Promise<{ status: number; body: unknown; retryAfter: string | null; xRetryAfter: string | null }[]> {
+  const body = JSON.stringify({ summary: COMMENTARY_SUMMARY });
+  const outcomes = [];
+  for (let index = 0; index < count; index += 1) {
+    const response = await dispatch(env, commentaryRequest(cookie, headersFor(index), body));
+    outcomes.push({
+      status: response.status,
+      body: await response.json(),
+      retryAfter: response.headers.get("retry-after"),
+      xRetryAfter: response.headers.get("x-retry-after"),
+    });
+  }
+  return outcomes;
+}
+
+async function commentaryBadBody(): Promise<void> {
+  const calls: LimitCall[] = [];
+  const env = withCommentary(commentaryEnv(database()), limiter(readLimiter("COMMENTARY_RATE_LIMIT").simple.limit, calls));
+  const fence = fenceAnthropic();
+  try {
+    const { cookie } = await signInCommentaryMember(env, "pro-body@example.invalid", "pro-body", true);
+    const bodies = ["x".repeat(20_000), "not json", JSON.stringify({ summary: { rows: [] } })];
+    const outcomes = [];
+    for (const body of bodies) {
+      const response = await dispatch(env, commentaryRequest(cookie, { origin: ORIGIN }, body));
+      outcomes.push({ status: response.status, body: await response.json() });
+    }
+    assert.deepEqual(
+      { outcomes, calls, fence: fence.urls.length },
+      {
+        outcomes: [
+          { status: 413, body: { error: "That request is too large to be bridge totals." } },
+          { status: 400, body: { error: "The request was not valid JSON." } },
+          { status: 400, body: { error: "The request must contain bridge totals only." } },
+        ],
+        calls: [],
+        fence: 0,
+      },
+    );
+  } finally {
+    fence.restore();
+  }
+}
+
+async function commentaryUnbound(): Promise<void> {
+  const env = withCommentary(commentaryEnv(database()), undefined);
+  const fence = fenceAnthropic();
+  try {
+    const { cookie } = await signInCommentaryMember(env, "pro-open@example.invalid", "pro-open", true);
+    const outcomes = await commentaryOutcomes(env, cookie, 6, () => ({ origin: ORIGIN }));
+    assert.deepEqual(
+      { outcomes, fence: fence.urls.length },
+      { outcomes: Array.from({ length: 6 }, () => ALLOWED_COMMENTARY), fence: 6 },
+    );
+  } finally {
+    fence.restore();
+  }
+}
+
+async function commentaryThrowing(): Promise<void> {
+  const calls: LimitCall[] = [];
+  const rateLimit: RateLimit = {
+    async limit({ key }) {
+      calls.push({ key, success: false });
+      throw new Error("binding down");
+    },
+  };
+  const env = withCommentary(commentaryEnv(database()), rateLimit);
+  const fence = fenceAnthropic();
+  const recorded = captureCommentaryLog();
+  try {
+    const { cookie, userId } = await signInCommentaryMember(env, "pro-throw@example.invalid", "pro-throw", true);
+    const outcomes = await commentaryOutcomes(env, cookie, 1, () => ({ origin: ORIGIN }));
+    assert.deepEqual(
+      { outcomes, fence: fence.urls.length, calls, logged: recorded.lines.some((line) => line.includes("binding down")) },
+      {
+        outcomes: [{ status: 429, body: COMMENTARY_TOO_QUICKLY, retryAfter: null, xRetryAfter: null }],
+        fence: 0,
+        calls: [{ key: userId, success: false }],
+        logged: false,
+      },
+    );
+  } finally {
+    recorded.restore();
+    fence.restore();
+  }
+}
+
+async function commentaryTwoMembers(): Promise<void> {
+  const calls: LimitCall[] = [];
+  const limit = readLimiter("COMMENTARY_RATE_LIMIT").simple.limit;
+  const env = withCommentary(commentaryEnv(database()), limiter(limit, calls));
+  const fence = fenceAnthropic();
+  try {
+    const first = await signInCommentaryMember(env, "pro-a@example.invalid", "pro-a", true);
+    const second = await signInCommentaryMember(env, "pro-b@example.invalid", "pro-b", true);
+    const firstOutcomes = await commentaryOutcomes(env, first.cookie, limit, () => ({ origin: ORIGIN }));
+    const secondOutcome = await commentaryOutcomes(env, second.cookie, 1, () => ({ origin: ORIGIN }));
+    assert.deepEqual(
+      {
+        first: firstOutcomes,
+        second: secondOutcome,
+        fence: fence.urls.length,
+        keys: calls.map((entry) => entry.key),
+      },
+      {
+        first: Array.from({ length: limit }, () => ALLOWED_COMMENTARY),
+        second: [ALLOWED_COMMENTARY],
+        fence: limit + 1,
+        keys: [...Array.from({ length: limit }, () => first.userId), second.userId],
+      },
+    );
+  } finally {
+    fence.restore();
+  }
+}
+
+async function commentaryTwoAddresses(): Promise<void> {
+  const calls: LimitCall[] = [];
+  const limit = readLimiter("COMMENTARY_RATE_LIMIT").simple.limit;
+  const env = withCommentary(commentaryEnv(database()), limiter(limit, calls));
+  const fence = fenceAnthropic();
+  try {
+    const { cookie, userId } = await signInCommentaryMember(env, "pro-addresses@example.invalid", "pro-addresses", true);
+    const addresses = ["192.0.2.10", "192.0.2.10", "192.0.2.10", "192.0.2.11", "192.0.2.11", "192.0.2.11"];
+    assert.equal(addresses.length, limit + 1);
+    const outcomes = await commentaryOutcomes(env, cookie, addresses.length, (index) => ({
+      origin: ORIGIN,
+      "cf-connecting-ip": addresses[index],
+    }));
+    assert.deepEqual(
+      { outcomes, fence: fence.urls.length, keys: calls.map((entry) => entry.key) },
+      {
+        outcomes: [
+          ...Array.from({ length: limit }, () => ALLOWED_COMMENTARY),
+          { status: 429, body: COMMENTARY_TOO_QUICKLY, retryAfter: null, xRetryAfter: null },
+        ],
+        fence: limit,
+        keys: Array.from({ length: addresses.length }, () => userId),
       },
     );
   } finally {
@@ -937,6 +1080,7 @@ else if (isolated) throw new Error(`unknown rate limit case ${isolated}`);
 else {
   test("wrangler.jsonc declares the magic-link rate limit", () => {
     readLimiter();
+    readLimiter("COMMENTARY_RATE_LIMIT");
   });
   test("the configured number of sign-in links is the limit", () => runIsolated("limited"));
   test("application/jsonx does not send a sign-in email", () => runIsolated("jsonx"));
@@ -961,4 +1105,9 @@ else {
   test("sign-in has no limit when the binding is absent", () => runIsolated("unbound"));
   test("a sign-in refused for no email does not spend a limit slot", () => runIsolated("refused-mail"));
   test("the sixth commentary request from one Pro member is refused", commentaryLimited);
+  test("a refused commentary body does not spend a slot", commentaryBadBody);
+  test("commentary has no limit when the binding is absent", commentaryUnbound);
+  test("a failing commentary rate limit binding refuses the request", commentaryThrowing);
+  test("two Pro members do not share a commentary limit", commentaryTwoMembers);
+  test("one Pro member on two addresses shares one commentary limit", commentaryTwoAddresses);
 }

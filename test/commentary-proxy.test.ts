@@ -91,7 +91,7 @@ test("the proxy refuses anything that is not bridge totals, without calling the 
   assert.equal((await handleCommentary(post("not json"), options)).status, 400);
   assert.equal((await handleCommentary(post("x".repeat(20_000)), options)).status, 413);
   assert.equal((await handleCommentary(new Request("http://localhost/api/commentary"), options)).status, 405);
-  const denied = await handleCommentary(post({ summary: summarize(result, config) }), { ...options, authorize: async () => false });
+  const denied = await handleCommentary(post({ summary: summarize(result, config) }), { ...options, spender: async () => null, rateLimit: undefined });
   assert.equal(denied.status, 403);
   assert.equal(calls.length, 0);
 });
@@ -178,13 +178,7 @@ function fenceAnthropic(): { urls: string[]; restore(): void } {
   const original = globalThis.fetch;
   globalThis.fetch = async (input: Request | string | URL, init?: RequestInit) => {
     const url = input instanceof Request ? input.url : input instanceof URL ? input.href : String(input);
-    let hostname = "";
-    try {
-      hostname = new URL(url).hostname;
-    } catch {
-      hostname = "";
-    }
-    if (hostname === "api.anthropic.com") {
+    if (new URL(url).hostname === "api.anthropic.com") {
       urls.push(url);
       return Response.json({
         id: "msg_test",
@@ -297,4 +291,99 @@ test("a Pro commentary post with no origin does not call the model", async () =>
     body: { error: "Requests must come from this site." },
     calls: 0,
   });
+});
+
+test("a Pro commentary post with an empty origin does not call the model", async () => {
+  assert.deepEqual(await proCommentary("pro-empty@example.invalid", "pro-empty", { origin: "" }), {
+    status: 403,
+    body: { error: "Requests must come from this site." },
+    calls: 0,
+  });
+});
+
+const PRO_SENTENCE = "AI commentary is part of Pro. Sign in to a workspace with Pro to use it.";
+
+test("a signed-out commentary post from another origin is refused as cross-site", async () => {
+  const env = workerEnv(database(), PRO_ENV);
+  const fence = fenceAnthropic();
+  try {
+    const response = await dispatch(env, commentaryRequest(undefined, { origin: "https://evil.example" }, summaryBody));
+    assert.deepEqual(
+      { status: response.status, body: await response.json(), calls: fence.urls.length },
+      { status: 403, body: { error: "Requests must come from this site." }, calls: 0 },
+    );
+  } finally {
+    fence.restore();
+  }
+});
+
+test("a signed-out commentary post from this site stays on the Pro refusal", async () => {
+  const env = workerEnv(database(), PRO_ENV);
+  const fence = fenceAnthropic();
+  try {
+    const response = await dispatch(env, commentaryRequest(undefined, { origin: SITE }, summaryBody));
+    assert.deepEqual(
+      { status: response.status, body: await response.json(), calls: fence.urls.length },
+      { status: 403, body: { error: PRO_SENTENCE }, calls: 0 },
+    );
+  } finally {
+    fence.restore();
+  }
+});
+
+test("a same-origin commentary post from a member without Pro stays on the Pro refusal", async () => {
+  const env = workerEnv(database(), PRO_ENV);
+  const fence = fenceAnthropic();
+  try {
+    const { cookie } = await signInMember(env, "free@example.invalid", "free-member", false);
+    const response = await dispatch(env, commentaryRequest(cookie, { origin: SITE }, summaryBody));
+    assert.deepEqual(
+      { status: response.status, body: await response.json(), calls: fence.urls.length },
+      { status: 403, body: { error: PRO_SENTENCE }, calls: 0 },
+    );
+  } finally {
+    fence.restore();
+  }
+});
+
+test("commentary is not found when accounts are off", async () => {
+  const env = workerEnv(database());
+  const fence = fenceAnthropic();
+  try {
+    const response = await dispatch(env, commentaryRequest(undefined, { origin: "https://evil.example" }, summaryBody));
+    assert.deepEqual(
+      { status: response.status, body: await response.json(), calls: fence.urls.length },
+      { status: 404, body: { error: "Not found." }, calls: 0 },
+    );
+  } finally {
+    fence.restore();
+  }
+});
+
+test("GET commentary from another origin is not found", async () => {
+  const env = workerEnv(database(), PRO_ENV);
+  const fence = fenceAnthropic();
+  try {
+    const response = await dispatch(env, new Request(`${SITE}/api/commentary`, { headers: { origin: "https://evil.example" } }));
+    assert.deepEqual(
+      { status: response.status, body: await response.json(), calls: fence.urls.length },
+      { status: 404, body: { error: "Not found." }, calls: 0 },
+    );
+  } finally {
+    fence.restore();
+  }
+});
+
+test("a workspace write from another origin is still refused as cross-site", async () => {
+  const env = workerEnv(database(), PRO_ENV);
+  const response = await dispatch(
+    env,
+    new Request(`${SITE}/api/workspaces/perf-local/setups`, {
+      method: "POST",
+      headers: { origin: "https://evil.example", "content-type": "application/json" },
+      body: "{}",
+    }),
+  );
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), { error: "Requests must come from this site." });
 });

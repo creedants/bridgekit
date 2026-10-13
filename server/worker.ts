@@ -1,9 +1,9 @@
-import { Hono, type Context, type ExecutionContext as HonoExecutionContext } from "hono";
+import { Hono, type Context, type ExecutionContext as HonoExecutionContext, type Next } from "hono";
 import { getPath } from "hono/utils/url";
 import { serveCompressedWasm } from "./assets.ts";
 import { createAuth, limitMagicLinkSignIn, type Auth } from "./auth.ts";
 import type { ExecutionContext, Fetcher } from "./cloudflare.ts";
-import { handleCommentary } from "./commentary.ts";
+import { handleCommentary, type CommentarySpender } from "./commentary.ts";
 import { countPageView, pageView } from "./counts.ts";
 import { canSendEmail, EMAIL_NOT_SET_UP } from "./email.ts";
 import type { Env } from "./env.ts";
@@ -77,12 +77,15 @@ open.use("/api/*", async (c, next) => {
 // Changes must come from the site itself. The session cookie is already
 // SameSite=Lax, which stops most cross-site requests; this is a second check.
 // (Better Auth checks the origin on its own routes.)
-open.use("/api/workspaces/*", async (c, next) => {
+async function requireSiteOrigin(c: Context<App>, next: Next): Promise<Response | void> {
   if (c.req.method !== "GET" && c.req.header("origin") !== new URL(c.env.BETTER_AUTH_URL).origin) {
     return c.json({ error: "Requests must come from this site." }, 403);
   }
   await next();
-});
+}
+
+open.use("/api/workspaces/*", requireSiteOrigin);
+open.use("/api/commentary", requireSiteOrigin);
 
 /**
  * The Better Auth routes whose only way to answer is to put an email in front
@@ -305,14 +308,18 @@ open.post("/api/paddle/webhook", async (c) => {
   return c.json({ result: change ? await applySubscription(c.env.DB, change) : "ignored" });
 });
 
+async function commentarySpender(c: Context<App>): Promise<CommentarySpender | null> {
+  if (!c.env.ANTHROPIC_API_KEY) return null;
+  const session = await c.get("auth").api.getSession({ headers: c.req.raw.headers });
+  if (!session || session.user.id === "" || !(await userHasPro(c.env.DB, session.user.id))) return null;
+  return session.user.id as CommentarySpender;
+}
+
 open.post("/api/commentary", (c) =>
   handleCommentary(c.req.raw, {
     apiKey: c.env.ANTHROPIC_API_KEY ?? "",
-    authorize: async () => {
-      if (!c.env.ANTHROPIC_API_KEY) return false;
-      const session = await c.get("auth").api.getSession({ headers: c.req.raw.headers });
-      return session !== null && (await userHasPro(c.env.DB, session.user.id));
-    },
+    spender: () => commentarySpender(c),
+    rateLimit: c.env.COMMENTARY_RATE_LIMIT,
   }),
 );
 
