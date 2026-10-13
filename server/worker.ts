@@ -219,6 +219,14 @@ async function json(c: Context<App>): Promise<unknown> {
   }
 }
 
+function parseWebhookBody(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new WorkspaceError(400, "The request was not valid JSON.");
+  }
+}
+
 open.onError((error, c) => {
   const refused = translation(error);
   if (refused) return refused;
@@ -287,7 +295,7 @@ open.post("/api/paddle/webhook", async (c) => {
   if (!c.env.PADDLE_WEBHOOK_SECRET || !(await verifyPaddleSignature(raw, c.req.header("paddle-signature") ?? null, c.env.PADDLE_WEBHOOK_SECRET))) {
     return c.json({ error: "Bad signature." }, 401);
   }
-  const change = parseSubscriptionEvent(JSON.parse(raw), c.env.PADDLE_PRICE_ID ? [c.env.PADDLE_PRICE_ID] : undefined);
+  const change = parseSubscriptionEvent(parseWebhookBody(raw), c.env.PADDLE_PRICE_ID ? [c.env.PADDLE_PRICE_ID] : undefined);
   // Events we do not use are acknowledged so Paddle does not retry them.
   return c.json({ result: change ? await applySubscription(c.env.DB, change) : "ignored" });
 });

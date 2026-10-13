@@ -16,7 +16,8 @@
     "smoke:wrangler": "node scripts/smoke.mjs --serve wrangler",
     "perf": "node scripts/perf/baseline.mjs",
     "perf:worker": "node scripts/perf/worker.mjs",
-    "build:cloudflare": "VITE_PAGE_COUNTS=1 VITE_WORKSPACES=1 VITE_AI_COMMENTARY=1 vite build && node scripts/compress-wasm.mjs",
+    "build:cloudflare": "VITE_PAGE_COUNTS=${VITE_PAGE_COUNTS:-1} VITE_WORKSPACES=${VITE_WORKSPACES:-1} VITE_AI_COMMENTARY=${VITE_AI_COMMENTARY:-1} vite build && node scripts/compress-wasm.mjs",
+    "build:cloudflare:free": "VITE_PAGE_COUNTS=1 VITE_WORKSPACES=0 VITE_AI_COMMENTARY=0 vite build && node scripts/compress-wasm.mjs",
     "cf:dev": "wrangler d1 migrations apply bridgekit --local && wrangler dev",
     "cf:deploy": "wrangler d1 migrations apply bridgekit --remote && wrangler deploy",
     "stats": "wrangler d1 execute bridgekit --remote --command \"SELECT day, path, referrer, views FROM page_views ORDER BY day DESC, views DESC LIMIT 100\""
