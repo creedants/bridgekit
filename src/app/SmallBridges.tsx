@@ -1,8 +1,14 @@
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { bridgeBy, measureName, type BridgeBy, type BridgeConfig, type BridgePanel, type Query } from "../engine.ts";
+import { openBrowserDatabase } from "./db.ts";
 import { whole } from "./format.ts";
 import {
   betweenLine,
+  createConnectionQueue,
+  createSplitRunner,
+  focusPlace,
+  gridAction,
+  noticesAreStale,
   panelStatusLabel,
   panelTitle,
   sharedScale,
@@ -28,6 +34,50 @@ const LIMIT = 12;
  */
 let chosen = "";
 
+// One queue for the page's one connection. bridgeBy replaces bridge_cells, so
+// a second engine call has to wait until the first has finished every statement.
+// Loading a file keeps the query it closed over when the database opened, and
+// a query captured before this replacement ran, so neither joins the queue.
+const pageQueue = createConnectionQueue();
+let pageQueueInstalled: Promise<void> | null = null;
+
+function statementLog(): unknown[] | null {
+  const list: unknown = Reflect.get(globalThis, "__bridgekitStatements");
+  return Array.isArray(list) ? list : null;
+}
+
+function installPageQueue(): Promise<void> {
+  pageQueueInstalled ??= openBrowserDatabase().then((database) => {
+    if (Reflect.get(database.query, "pageQueue") === true) return;
+    const inner = database.query;
+    const wrapped: Query = (sql) =>
+      pageQueue.schedule(async () => {
+        const start = performance.now();
+        try {
+          return await inner(sql);
+        } finally {
+          statementLog()?.push({ start, end: performance.now(), sql: sql.slice(0, 160) });
+        }
+      });
+    Reflect.set(wrapped, "pageQueue", true);
+    database.query = wrapped;
+  });
+  return pageQueueInstalled;
+}
+
+void installPageQueue().catch((error: unknown) => {
+  console.error(error);
+});
+
+function noticeTexts(): string[] {
+  const root = document.querySelector("main") ?? document.body;
+  return [...root.querySelectorAll("p.notice")].map((node) => node.textContent ?? "");
+}
+
+function bridgeIsStale(): boolean {
+  return noticesAreStale(noticeTexts());
+}
+
 /**
  * A bridge for every value of one column of the loaded file, drawn as small
  * bridges below the main one. The engine decides the panels, their order, the
@@ -43,50 +93,123 @@ export function SmallBridges(props: { run: Run; query: () => Promise<Query> }) {
   const [failure, setFailure] = useState("");
   /** The panel shown at full size, or null while the grid is on screen. */
   const [open, setOpen] = useState<number | null>(null);
+  const [stale, setStale] = useState(false);
+  const shownFor = useRef("");
+  const wanted = useRef(column);
+  const openRef = useRef<number | null>(null);
+  const configRef = useRef(config);
+  const queryRef = useRef(props.query);
+  const selectRef = useRef<HTMLSelectElement>(null);
+  const backRef = useRef<HTMLButtonElement>(null);
+  const triggers = useRef(new Map<number, HTMLButtonElement>());
+  const pendingFocus = useRef<"back" | "select" | number | null>(null);
+  configRef.current = config;
+  queryRef.current = props.query;
+  openRef.current = open;
+
+  const runner = useRef<ReturnType<typeof createSplitRunner> | null>(null);
+  if (runner.current === null) {
+    runner.current = createSplitRunner(async (next) => {
+      await installPageQueue();
+      if (wanted.current !== next) return;
+      const query = await queryRef.current();
+      if (wanted.current !== next) return;
+      try {
+        const result = await bridgeBy(query, configRef.current, next, LIMIT);
+        if (wanted.current !== next || bridgeIsStale()) return;
+        shownFor.current = next;
+        setFailure("");
+        setGrid(result);
+      } catch (error: unknown) {
+        console.error(error);
+        if (wanted.current !== next || bridgeIsStale()) return;
+        shownFor.current = "";
+        setGrid(null);
+        setFailure(FAILURE);
+      }
+    });
+  }
 
   useEffect(() => {
-    if (!column) {
-      chosen = "";
-      setGrid(null);
-      setFailure("");
-      setOpen(null);
-      return;
-    }
+    const root = document.querySelector("main") ?? document.body;
+    const read = () => {
+      const next = bridgeIsStale();
+      setStale((prev) => (prev === next ? prev : next));
+    };
+    read();
+    const observer = new MutationObserver(read);
+    observer.observe(root, { subtree: true, childList: true, characterData: true });
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    wanted.current = column;
     chosen = column;
-    // A selection that has moved on drops the older answer, as every other tab
-    // that runs its own engine work does. One connection serves the whole page,
-    // so the late answer must never overwrite the newer one. The answer on
-    // screen belongs to this column alone, so it goes until the new one lands.
-    let stale = false;
+    const action = gridAction(column, stale || bridgeIsStale(), shownFor.current);
+    if (action === "keep") return;
     setFailure("");
     setGrid(null);
-    setOpen(null);
-    props
-      .query()
-      .then((query) => bridgeBy(query, config, column, LIMIT))
-      .then((result) => {
-        if (stale) return;
-        setGrid(result);
-      })
-      .catch((error: unknown) => {
-        console.error(error);
-        if (stale) return;
-        setFailure(FAILURE);
-      });
-    return () => {
-      stale = true;
-    };
-  }, [props.run, column]);
+    shownFor.current = "";
+    if (openRef.current !== null) {
+      pendingFocus.current = "select";
+      setOpen(null);
+    }
+    if (action === "clear") return;
+    runner.current?.request(column);
+  }, [column, stale, props.run]);
 
-  const openPanel = useCallback((index: number) => setOpen(index), []);
-  const closePanel = useCallback(() => setOpen(null), []);
+  useEffect(() => {
+    return () => {
+      wanted.current = "";
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    const pending = pendingFocus.current;
+    if (pending === null) return;
+    pendingFocus.current = null;
+    if (pending === "back") {
+      backRef.current?.focus();
+      return;
+    }
+    if (pending === "select") {
+      selectRef.current?.focus();
+      return;
+    }
+    const button = triggers.current.get(pending) ?? null;
+    const place = focusPlace("close", button?.isConnected === true);
+    if (place === "trigger") button?.focus();
+    else selectRef.current?.focus();
+  }, [open, grid]);
+
+  const openPanel = useCallback((index: number) => {
+    pendingFocus.current = focusPlace("open", true) === "back" ? "back" : "select";
+    setOpen(index);
+  }, []);
+  const closePanel = useCallback(() => {
+    pendingFocus.current = openRef.current ?? "select";
+    setOpen(null);
+  }, []);
+
+  // Drop a grid that is not the one on screen before paint. The effect below
+  // starts the replacement, and it runs too late to stop this frame.
+  const liveStale = stale || bridgeIsStale();
+  const action = gridAction(column, liveStale, shownFor.current);
+  const drop = action !== "keep" && shownFor.current !== column;
+  if (drop && (grid !== null || open !== null || failure !== "")) {
+    shownFor.current = "";
+    if (open !== null) pendingFocus.current = "select";
+    if (grid !== null) setGrid(null);
+    if (failure !== "") setFailure("");
+    if (open !== null) setOpen(null);
+  }
 
   return (
     <section className="split">
       <div className="toolbar">
         <label>
           Split by
-          <select value={column} onChange={(e) => setColumn(e.target.value)}>
+          <select ref={selectRef} value={column} onChange={(e) => setColumn(e.target.value)}>
             <option value="">None</option>
             {textColumns.map((name) => (
               <option key={name} value={name}>{name}</option>
@@ -98,19 +221,24 @@ export function SmallBridges(props: { run: Run; query: () => Promise<Query> }) {
       {!column ? null : grid === null ? (
         failure ? (
           <p className="error" role="alert">{failure}</p>
-        ) : (
+        ) : stale || bridgeIsStale() ? null : (
           <p className="hint" role="status">Calculating…</p>
         )
       ) : open === null ? (
-        <Grid by={grid} config={config} onOpen={openPanel} />
+        <Grid by={grid} config={config} onOpen={openPanel} triggers={triggers.current} />
       ) : (
-        <Opened by={grid} index={open} config={config} onBack={closePanel} />
+        <Opened by={grid} index={open} config={config} onBack={closePanel} backRef={backRef} />
       )}
     </section>
   );
 }
 
-function Grid(props: { by: BridgeBy; config: BridgeConfig; onOpen: (index: number) => void }) {
+function Grid(props: {
+  by: BridgeBy;
+  config: BridgeConfig;
+  onOpen: (index: number) => void;
+  triggers: Map<number, HTMLButtonElement>;
+}) {
   const priorLabel = String(props.config.prior);
   const currentLabel = String(props.config.current);
   // One pass builds every panel's bars and the one axis they all stand on.
@@ -132,6 +260,7 @@ function Grid(props: { by: BridgeBy; config: BridgeConfig; onOpen: (index: numbe
             index={index}
             config={props.config}
             onOpen={props.onOpen}
+            triggers={props.triggers}
           />
         ))}
       </div>
@@ -152,13 +281,23 @@ const Panel = memo(function Panel(props: {
   index: number;
   config: BridgeConfig;
   onOpen: (index: number) => void;
+  triggers: Map<number, HTMLButtonElement>;
 }) {
   const title = panelTitle(props.panel);
   const status = panelStatusLabel(props.panel.status);
   return (
     <div className="panel">
       {props.bars ? (
-        <button className="panel-title" onClick={() => props.onOpen(props.index)}>{title}</button>
+        <button
+          className="panel-title"
+          ref={(node) => {
+            if (node) props.triggers.set(props.index, node);
+            else props.triggers.delete(props.index);
+          }}
+          onClick={() => props.onOpen(props.index)}
+        >
+          {title}
+        </button>
       ) : (
         <span className="panel-title">{title}</span>
       )}
@@ -191,17 +330,25 @@ const Panel = memo(function Panel(props: {
  * offers no movers. The value is the button's name where the panel put its own
  * title, and the "Split by" control above clears the view the same way.
  */
-function Opened(props: { by: BridgeBy; index: number; config: BridgeConfig; onBack: () => void }) {
+function Opened(props: {
+  by: BridgeBy;
+  index: number;
+  config: BridgeConfig;
+  onBack: () => void;
+  backRef: RefObject<HTMLButtonElement | null>;
+}) {
   const panel = props.by.panels[props.index];
   if (!panel?.result) return null;
+  const title = panelTitle(panel);
   return (
     <Waterfall
       result={panel.result}
       priorLabel={String(props.config.prior)}
       currentLabel={String(props.config.current)}
+      ariaLabel={`Bridge for ${title}`}
       controls={
-        <button className="quiet" onClick={props.onBack}>
-          {panelTitle(panel)}
+        <button ref={props.backRef} className="quiet" onClick={props.onBack}>
+          {title}
         </button>
       }
     />

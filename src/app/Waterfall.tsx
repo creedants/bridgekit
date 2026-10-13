@@ -7,7 +7,7 @@ import { useEffect, useRef } from "react";
 import type React from "react";
 import type { BridgeResult } from "../engine.ts";
 import { compact, signedCompact } from "./format.ts";
-import { axisFloor, steps, type Step, type ValueScale } from "./small-bridges.ts";
+import { axisFloor, chartStack, steps, type Step, type ValueScale } from "./small-bridges.ts";
 
 echarts.use([BarChart, GridComponent, TooltipComponent, LegacyGridContainLabel, CanvasRenderer]);
 
@@ -57,6 +57,7 @@ export function BridgeChart(props: {
     onReady.current?.(chart);
     const colors = { total: token("--total"), up: token("--up"), down: token("--down") };
     const ink = token("--text");
+    const stack = chartStack(bars);
     // On a narrow chart the category labels are angled and value labels that would collide are dropped.
     const narrow = element.current.clientWidth < 560;
 
@@ -99,13 +100,15 @@ export function BridgeChart(props: {
         {
           type: "bar",
           stack: "bridge",
+          stackStrategy: stack.strategy,
           silent: true,
           itemStyle: { color: "transparent" },
-          data: bars.map((b) => b.low),
+          data: stack.bases,
         },
         {
           type: "bar",
           stack: "bridge",
+          stackStrategy: stack.strategy,
           barMaxWidth: 52,
           labelLayout: { hideOverlap: true },
           cursor: onSelect.current ? "pointer" : "default",
@@ -119,9 +122,9 @@ export function BridgeChart(props: {
               return bar.kind === "total" ? compact(bar.value) : signedCompact(bar.value);
             },
           },
-          data: bars.map((b) => ({
-            value: b.high - b.low,
-            itemStyle: { color: colors[b.kind], borderRadius: b.kind === "total" ? [2, 2, 0, 0] : 2 },
+          data: bars.map((bar, index) => ({
+            value: stack.extents[index],
+            itemStyle: { color: colors[bar.kind], borderRadius: bar.kind === "total" ? [2, 2, 0, 0] : 2 },
           })),
         },
       ],
@@ -155,6 +158,8 @@ export function Waterfall(props: {
   footer?: React.ReactNode;
   /** Extra controls shown beside the legend. */
   controls?: React.ReactNode;
+  /** The chart's accessible name. The main bridge keeps the sentence it has always used. */
+  ariaLabel?: string;
 }) {
   const chartRef = useRef<echarts.ECharts>(null);
   const bars = steps(props.result, props.priorLabel, props.currentLabel);
@@ -184,7 +189,7 @@ export function Waterfall(props: {
         bars={bars}
         priorSales={props.result.priorSales}
         onSelect={props.onSelect}
-        ariaLabel="Waterfall chart of the sales bridge. The same numbers are in the table beside it."
+        ariaLabel={props.ariaLabel ?? "Waterfall chart of the sales bridge. The same numbers are in the table beside it."}
         onReady={(chart) => {
           chartRef.current = chart;
         }}
