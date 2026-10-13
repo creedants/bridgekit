@@ -201,7 +201,7 @@ test("a conditional 304 does not count", async () => {
   assert.deepEqual(await views(db), []);
 });
 
-test("a query string is kept on the asset request and the count uses the html address", async () => {
+test("a query string is kept on the asset request and the count stores /privacy", async () => {
   const { env, db, calls } = bindings({
     "/privacy.html": redirect("/privacy"),
     "/privacy": html(PRIVACY),

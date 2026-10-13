@@ -2,4 +2,4 @@
 - A referrer is stored as the host only, in lower case, with no port, user info, or path. The same site, an invalid host, and a host that is not a real host name are stored as a direct visit.
 - Each page keeps at most 32 foreign hosts per day. Further new hosts increment the referrer `other`. The check and the insert are one statement, after the response. Overlapping writes can pass 32.
 - `/pay/` is still served by the asset layer and is still not counted.
-- The notes in `scripts/perf/worker.mjs` say `/guide.html` and `/method.html` answer 200 and are stored as `/guide` and `/method`. The page-count check reads those rows. `perf/worker-baseline.json` is still the earlier capture. `perf/README.md` still says the script notes are false and that the check looks for a `/guide.html` row.
+- The notes in `scripts/perf/worker.mjs` say `/guide.html` and `/method.html` answer 200 and are stored as `/guide` and `/method`. The page-count check reads those rows. `perf/worker-baseline.json` is still the earlier capture.
