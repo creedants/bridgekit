@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { excelHeaderNames } from "../src/app/sheet.ts";
+import { excelHeaderNames, excelHoleIndexes, holeRenames } from "../src/app/sheet.ts";
 
 test("writes the word undefined for a missing header cell", () => {
   assert.deepEqual(excelHeaderNames(["region", undefined, undefined, undefined], 4), [
@@ -115,4 +115,76 @@ test("flattens numbers, dates, formulas, and rich text before naming", () => {
 test("pads a short row and stops at the sheet width", () => {
   assert.deepEqual(excelHeaderNames(["region"], 3), ["region", "undefined", "undefined"]);
   assert.deepEqual(excelHeaderNames(["region", "product", "units", "sales"], 2), ["region", "product"]);
+});
+
+test("records only a missing header cell as a hole", () => {
+  assert.deepEqual(excelHoleIndexes(["region", undefined, undefined, undefined], 4), [1, 2, 3]);
+  assert.deepEqual(excelHoleIndexes(["region", undefined, "units", "sales"], 4), [1]);
+  assert.deepEqual(excelHoleIndexes(["region", null, "units", "sales"], 4), []);
+  assert.deepEqual(excelHoleIndexes(["region", "", "units", "sales"], 4), []);
+  assert.deepEqual(excelHoleIndexes(["region", "   ", "units", "sales"], 4), []);
+  assert.deepEqual(excelHoleIndexes(["region", "\t", "units", "sales"], 4), []);
+  assert.deepEqual(excelHoleIndexes(["region", "\u00A0", "units", "sales"], 4), []);
+  assert.deepEqual(excelHoleIndexes(["region", "\n", "units", "sales"], 4), []);
+  assert.deepEqual(excelHoleIndexes(["undefined", undefined, "sales"], 3), [1]);
+  assert.deepEqual(excelHoleIndexes([undefined, "product", "units", "sales"], 4), [0]);
+  assert.deepEqual(excelHoleIndexes(["region"], 3), [1, 2]);
+  assert.deepEqual(excelHoleIndexes([{ result: null }], 1), []);
+  assert.deepEqual(excelHoleIndexes([{ text: "  " }], 1), []);
+  assert.deepEqual(excelHoleIndexes(["undefined", "null"], 2), []);
+});
+
+test("renames a missing column without taking a filled header", () => {
+  assert.deepEqual(holeRenames(["region", "undefined", "undefined_1", "undefined_2"], [1, 2, 3]), [
+    { index: 1, from: "undefined", to: "column1" },
+    { index: 2, from: "undefined_1", to: "column2" },
+    { index: 3, from: "undefined_2", to: "column3" },
+  ]);
+  assert.deepEqual(holeRenames(["column1", "undefined", "COLUMN1_1", "sales"], [1]), [
+    { index: 1, from: "undefined", to: "column1_2" },
+  ]);
+  assert.deepEqual(holeRenames(["column1", "undefined", "column1_1"], [1]), [
+    { index: 1, from: "undefined", to: "column1_2" },
+  ]);
+  assert.deepEqual(holeRenames(["undefined", "undefined_1", "sales"], [1]), [
+    { index: 1, from: "undefined_1", to: "column1" },
+  ]);
+  assert.deepEqual(holeRenames(["undefined", "product", "units", "sales"], [0]), [
+    { index: 0, from: "undefined", to: "column0" },
+  ]);
+  assert.deepEqual(holeRenames(["undefined", "Column0"], [0]), [
+    { index: 0, from: "undefined", to: "column0_1" },
+  ]);
+  assert.deepEqual(holeRenames(["Column1", "undefined", "units", "sales"], [1]), [
+    { index: 1, from: "undefined", to: "column1_1" },
+  ]);
+  assert.deepEqual(holeRenames(["column1_1", "undefined", "units", "sales"], [1]), [
+    { index: 1, from: "undefined", to: "column1" },
+  ]);
+  assert.deepEqual(holeRenames(["Sales report FY26", "undefined", "undefined_1", "undefined_2"], [1, 2, 3]), [
+    { index: 1, from: "undefined", to: "column1" },
+    { index: 2, from: "undefined_1", to: "column2" },
+    { index: 3, from: "undefined_2", to: "column3" },
+  ]);
+  assert.deepEqual(holeRenames(["region", "undefined", "units", "sales"], [1]), [
+    { index: 1, from: "undefined", to: "column1" },
+  ]);
+  assert.deepEqual(holeRenames(["region", "product", "units", "undefined"], [3]), [
+    { index: 3, from: "undefined", to: "column3" },
+  ]);
+  assert.deepEqual(holeRenames(["foo", "undefined", "foo_1"], [1]), [
+    { index: 1, from: "undefined", to: "column1" },
+  ]);
+  assert.deepEqual(holeRenames(["undefined", "sales"], []), []);
+  const names = ["region", "undefined", "units", "undefined_1"];
+  const holes = [3, 1];
+  assert.deepEqual(holeRenames(names, holes), [
+    { index: 1, from: "undefined", to: "column1" },
+    { index: 3, from: "undefined_1", to: "column3" },
+  ]);
+  assert.deepEqual(names, ["region", "undefined", "units", "undefined_1"]);
+  assert.deepEqual(holes, [3, 1]);
+  assert.throws(() => holeRenames(["region"], [1]), RangeError);
+  assert.throws(() => holeRenames(["region"], [1.5]), RangeError);
+  assert.throws(() => holeRenames(["region"], [-1]), RangeError);
 });

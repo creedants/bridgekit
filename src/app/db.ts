@@ -5,7 +5,7 @@ import mvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import type { Query } from "../engine.ts";
 import { decodeCsvBuffer, ENCODING_SENTENCE, isUtf8Prefix } from "./encoding.ts";
 import { convertFormattedNumbers } from "./numbers.ts";
-import { firstSheetAsCsv } from "./sheet.ts";
+import { firstSheetAsCsv, holeRenames } from "./sheet.ts";
 
 type ChunkFailure = "network" | "gone";
 
@@ -228,6 +228,12 @@ function sameOriginWorkerScript(url: string | undefined): string | undefined {
   return parsed.href;
 }
 
+function quote(name: string): string {
+  return `"${name.replaceAll('"', '""')}"`;
+}
+
+// True means the response finished or redirected, so this is not a download failure.
+// A redirect is not followed. One request stays on this origin.
 async function workerScriptLoaded(url: string): Promise<boolean> {
   let response: Response;
   try {
@@ -235,9 +241,20 @@ async function workerScriptLoaded(url: string): Promise<boolean> {
   } catch {
     return false;
   }
-  const answered = response.ok;
-  if (response.body !== null) await response.body.cancel().catch(() => undefined);
-  return answered;
+  if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
+    if (response.body !== null) await response.body.cancel().catch(() => undefined);
+    return true;
+  }
+  if (!response.ok) {
+    if (response.body !== null) await response.body.cancel().catch(() => undefined);
+    return false;
+  }
+  try {
+    await response.arrayBuffer();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function startFailureForPage(error: unknown): Promise<Error> {
@@ -256,6 +273,7 @@ async function isDownloadFailure(error: Error): Promise<boolean> {
   ) {
     return true;
   }
+  if (message.includes("WebAssembly compilation aborted") && message.includes("Network error")) return true;
   // Chromium uses this importScripts text for a refused 200 and for a failed download.
   if (
     message.includes("Failed to execute 'importScripts' on 'WorkerGlobalScope'") &&
@@ -434,8 +452,11 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
           throw new Error("Use a CSV, Excel (.xlsx) or Parquet file");
         }
         const registered = isParquet ? "upload.parquet" : "upload.csv";
+        let excelHoles: readonly number[] = [];
         if (isExcel) {
-          await db.registerFileText(registered, await firstSheetAsCsv(file));
+          const sheet = await firstSheetAsCsv(file);
+          excelHoles = sheet.holes;
+          await db.registerFileText(registered, sheet.csv);
         } else if (isParquet) {
           await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
         } else {
@@ -454,6 +475,14 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
           await query(`CREATE OR REPLACE TABLE "${table}" AS SELECT * FROM ${reader}`);
         } catch (error) {
           throw csvEncodingFailure(error);
+        }
+        if (excelHoles.length > 0) {
+          const described = await query(`DESCRIBE ${quote(table)}`);
+          const names = described.map((row) => String(row.column_name));
+          for (const rename of holeRenames(names, excelHoles)) {
+            if (rename.from === rename.to) continue;
+            await query(`ALTER TABLE ${quote(table)} RENAME COLUMN ${quote(rename.from)} TO ${quote(rename.to)}`);
+          }
         }
         await convertFormattedNumbers(query, table);
       },

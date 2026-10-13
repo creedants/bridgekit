@@ -10,26 +10,58 @@ function flattenCell(value: unknown): unknown {
   return "";
 }
 
-function isUnnamed(value: unknown): boolean {
-  if (value == null) return true;
-  if (typeof value !== "string") return false;
-  for (let index = 0; index < value.length; index++) {
-    const code = value.charCodeAt(index);
-    if (code !== 0x20 && code !== 0x09) return false;
-  }
-  return true;
-}
-
 export function excelHeaderNames(values: readonly unknown[], width: number): string[] {
   const names: string[] = [];
   for (let index = 0; index < width; index++) {
-    const flat = flattenCell(values[index]);
-    names.push(isUnnamed(flat) ? "" : String(flat));
+    names.push(String(flattenCell(values[index])));
   }
   return names;
 }
 
-export async function firstSheetAsCsv(file: File): Promise<string> {
+// A hole is a missing cell. Null, a blank string, and whitespace stay as written.
+export function excelHoleIndexes(values: readonly unknown[], width: number): number[] {
+  const holes: number[] = [];
+  for (let index = 0; index < width; index++) {
+    if (flattenCell(values[index]) === undefined) holes.push(index);
+  }
+  return holes;
+}
+
+// DuckDB folds only A-Z when it settles a duplicate header.
+function asciiFold(name: string): string {
+  let folded = "";
+  for (const char of name) {
+    const code = char.charCodeAt(0);
+    folded += code >= 65 && code <= 90 ? String.fromCharCode(code + 32) : char;
+  }
+  return folded;
+}
+
+export function holeRenames(
+  columnNames: readonly string[],
+  holes: readonly number[],
+): { index: number; from: string; to: string }[] {
+  const used = new Set(columnNames.map(asciiFold));
+  const renames: { index: number; from: string; to: string }[] = [];
+  for (const index of [...holes].sort((left, right) => left - right)) {
+    if (!Number.isInteger(index) || index < 0 || index >= columnNames.length) {
+      throw new RangeError(`Column ${index} is outside the loaded table`);
+    }
+    const from = columnNames[index];
+    used.delete(asciiFold(from));
+    let to = `column${index}`;
+    let suffix = 1;
+    while (used.has(asciiFold(to))) {
+      to = `column${index}_${suffix}`;
+      suffix += 1;
+    }
+    used.add(asciiFold(to));
+    renames.push({ index, from, to });
+  }
+  return renames;
+}
+
+export async function firstSheetAsCsv(file: File): Promise<{ csv: string; holes: readonly number[] }> {
   const { default: ExcelJS } = await import("exceljs");
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await file.arrayBuffer());
@@ -42,8 +74,9 @@ export async function firstSheetAsCsv(file: File): Promise<string> {
     rows.push(values);
   });
   const header = excelHeaderNames(rows[0], width);
+  const holes = excelHoleIndexes(rows[0], width);
   const data = rows.slice(1).map((values) =>
     Array.from({ length: width }, (_, index) => flattenCell(values[index])),
   );
-  return toCsv(header, data);
+  return { csv: toCsv(header, data), holes };
 }
