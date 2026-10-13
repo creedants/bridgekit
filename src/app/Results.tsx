@@ -32,6 +32,7 @@ import { trendPeriods } from "./periods.ts";
 import { TABLE } from "./setup.ts";
 import { useCommentaryOffer } from "./useConfig.ts";
 import { buildReport } from "./report.ts";
+import { SmallBridges } from "./SmallBridges.tsx";
 import { Waterfall } from "./Waterfall.tsx";
 
 export interface Run {
@@ -101,62 +102,65 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
       </div>
 
       {tab === "bridge" && (
-        <div className="bridge">
-          <Waterfall
-            result={combineMix ? withCombinedMix(result) : result}
-            controls={
-              mixCount > 1 && (
-                <label className="check">
-                  <input type="checkbox" checked={combineMix} onChange={(e) => setCombineMix(e.target.checked)} />
-                  Combine mix
-                </label>
-              )
-            }
-            priorLabel={String(config.prior)}
-            currentLabel={String(config.current)}
-            footer={<Summary run={run} result={result} query={props.query} />}
-            onSelect={(key) => {
-              setSortBy(key.startsWith("mix_") ? "mix" : key.startsWith("price") ? "price" : key);
-              setTab("movers");
-            }}
-          />
-          <div>
-            <table>
-              <thead>
-                <tr><th>Bridge</th><th className="num">Amount</th><th className="num">% of prior</th></tr>
-              </thead>
-              <tbody>
-                <tr className="total"><td>{measureName(config)} {config.prior}</td><td className="num">{whole(result.priorSales)}</td><td /></tr>
-                {result.effects.map((e) => (
-                  <tr key={e.key}>
-                    <td>{e.label}</td>
-                    <td className="num">{signedWhole(e.value)}</td>
-                    <td className="num">{signedPercent(e.value / result.priorSales)}</td>
-                  </tr>
-                ))}
-                <tr className="total"><td>{measureName(config)} {config.current}</td><td className="num">{whole(result.currentSales)}</td><td /></tr>
-              </tbody>
-            </table>
-            <h3>How current sales were matched</h3>
-            <table>
-              <thead>
-                <tr><th>Compared against</th><th className="num">Share</th><th className="num">Configurations</th></tr>
-              </thead>
-              <tbody>
-                {result.coverage.map((c) => (
-                  <tr key={c.level}>
-                    <td>{c.label}</td>
-                    <td className="num">{percent(c.share)}</td>
-                    <td className="num">{whole(c.cells)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="hint">
-              Only exact matches count as price. The rest is in “New configurations”; see the Unmatched tab. Shares are of current sales on rows with units.
-            </p>
+        <>
+          <div className="bridge">
+            <Waterfall
+              result={combineMix ? withCombinedMix(result) : result}
+              controls={
+                mixCount > 1 && (
+                  <label className="check">
+                    <input type="checkbox" checked={combineMix} onChange={(e) => setCombineMix(e.target.checked)} />
+                    Combine mix
+                  </label>
+                )
+              }
+              priorLabel={String(config.prior)}
+              currentLabel={String(config.current)}
+              footer={<Summary run={run} result={result} query={props.query} />}
+              onSelect={(key) => {
+                setSortBy(key.startsWith("mix_") ? "mix" : key.startsWith("price") ? "price" : key);
+                setTab("movers");
+              }}
+            />
+            <div>
+              <table>
+                <thead>
+                  <tr><th>Bridge</th><th className="num">Amount</th><th className="num">% of prior</th></tr>
+                </thead>
+                <tbody>
+                  <tr className="total"><td>{measureName(config)} {config.prior}</td><td className="num">{whole(result.priorSales)}</td><td /></tr>
+                  {result.effects.map((e) => (
+                    <tr key={e.key}>
+                      <td>{e.label}</td>
+                      <td className="num">{signedWhole(e.value)}</td>
+                      <td className="num">{signedPercent(e.value / result.priorSales)}</td>
+                    </tr>
+                  ))}
+                  <tr className="total"><td>{measureName(config)} {config.current}</td><td className="num">{whole(result.currentSales)}</td><td /></tr>
+                </tbody>
+              </table>
+              <h3>How current sales were matched</h3>
+              <table>
+                <thead>
+                  <tr><th>Compared against</th><th className="num">Share</th><th className="num">Configurations</th></tr>
+                </thead>
+                <tbody>
+                  {result.coverage.map((c) => (
+                    <tr key={c.level}>
+                      <td>{c.label}</td>
+                      <td className="num">{percent(c.share)}</td>
+                      <td className="num">{whole(c.cells)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="hint">
+                Only exact matches count as price. The rest is in “New configurations”; see the Unmatched tab. Shares are of current sales on rows with units.
+              </p>
+            </div>
           </div>
-        </div>
+          <SmallBridges run={run} query={props.query} />
+        </>
       )}
       {tab === "accounts" && <Accounts run={run} query={props.query} />}
       {tab === "gaps" && <PriceGaps run={run} query={props.query} />}
