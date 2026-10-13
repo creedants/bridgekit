@@ -1,0 +1,5 @@
+- One page is one `page_views` path per day and referrer. `/guide.html` and `/guide` both store `/guide`. The same collapse applies to `/method`, `/privacy`, `/price-volume-mix-analysis`, and `/grouping-level`. `/` and `/app/` stay as they are. A path that is not one of those pages is not counted.
+- A referrer is stored as the host only, in lower case, with no port, user info, or path. The same site, an invalid host, and a host that is not a real host name are stored as a direct visit.
+- Each page keeps at most 32 foreign hosts per day. Further new hosts increment the referrer `other`. The check and the insert are one statement, after the response. Overlapping writes can pass 32.
+- `/pay/` is still served by the asset layer and is still not counted.
+- `perf/README.md` matches this. `scripts/perf/worker.mjs` and `perf/worker-baseline.json` are unchanged. The script's note that `/guide.html` answers 307 is still false, and a run of `npm run perf:worker` will look for a `/guide.html` row that is no longer written.

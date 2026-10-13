@@ -49,7 +49,17 @@ The generated file also sets `ACCOUNTS=on`, so the route timings still see those
 
 Each route records the first request, discards one warm-up, then keeps five steady samples. The median is the middle steady sample. The first request is first-hit for that route in one process. Only the home page is the first request after the process starts.
 
-Static pages are `/`, `/app/`, `/guide.html`, and `/method.html`. The site links to the `.html` addresses. Wrangler's default HTML handling answers `/guide.html` and `/method.html` with a 307 to `/guide` and `/method`, then the asset layer serves the HTML. The script follows that redirect, and `totalMs` includes it. `/guide` and `/method` are not in `run_worker_first`, so the Worker never sees those 200s and `page_views` does not rise for them. `/` and `/app/` are served by the Worker, and those counts do rise. `wrangler.jsonc` does not set `html_handling`, so this redirect is the assets default, not a local-only quirk. There is no route that reads the counts. After the samples, the script reads the local D1 `page_views` table and stores how much each final path rose.
+The script times `/`, `/app/`, `/guide.html`, and `/method.html`. The Worker serves `/` and `/app/`. It also serves five articles, and it stores each one under the extensionless path: `/guide`, `/method`, `/privacy`, `/price-volume-mix-analysis`, and `/grouping-level`. A request for the `.html` name fetches that same file and stores the same path. `/guide.html` and `/guide` are one `page_views` row. The other four articles work the same way.
+
+`/pay/` is the checkout page. It is not in `run_worker_first`, so the Worker does not see it and `page_views` has no row for it. `/pay/index.html` matches `/*.html`. The Worker returns the asset redirect, and that 307 is not counted. `/index.html` and `/app/index.html` stay redirects and are not counted.
+
+`wrangler.jsonc` does not set `html_handling`. An `.html` name that the Worker does not serve itself still gets the asset layer's default 307. The five article names are not that case. The Worker answers them with 200.
+
+A stored referrer is a host name in lower case, with no port, user info, or path. The same site, including another port, is an empty referrer. Each page stores at most 32 foreign hosts per day. A further new host increments the row whose referrer is `other`. An empty referrer is a direct visit and does not take one of the 32 slots. Two overlapping writes can both pass that check, so a page can go past 32 by the number of writes that overlap.
+
+There is no HTTP route that reads the counts. After the samples, the script reads the local D1 `page_views` table and stores how much each final path rose.
+
+The notes in `scripts/perf/worker.mjs` still say that `/guide.html` and `/method.html` answer 307 and are not counted. Those notes are false. The script requires `page_views` to rise for a page route whose final path is the path it requested. A 200 for `/guide.html` is now stored as `/guide`, so that check looks for a row the Worker does not write. This change does not edit the script, and it does not replace `perf/worker-baseline.json`.
 
 Wasm routes request `/assets/*.wasm` with `Accept-Encoding` of `br`, `gzip`, and no encoding header. One extra request per file sends `gzip, deflate, br, zstd`, which is the header current Chrome sends. `/api/config` is timed with no credentials. `GET /api/workspaces/perf-local` is timed for the unsigned-in 403. `POST /api/workspaces/perf-local/setups` is timed with no Origin header, for the 403 that returns before a save. `POST /api/paddle/webhook` sends `{}` and no signature, for the 401. `POST /api/commentary` sends `{}` and no session, for the 403. None of these call Paddle or a model.
 
