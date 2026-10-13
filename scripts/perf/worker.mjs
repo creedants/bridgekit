@@ -325,8 +325,8 @@ function buildRoutes(assets) {
   const pages = [
     page("page-home", "/", counted),
     page("page-app", "/app/", counted),
-    page("page-guide", "/guide.html", "Site links here. Assets html_handling answers with 307 to /guide, which is not in run_worker_first, so the HTML bypasses the Worker and page_views does not rise. totalMs includes the redirect."),
-    page("page-method", "/method.html", "Site links here. Assets html_handling answers with 307 to /method, which is not in run_worker_first, so the HTML bypasses the Worker and page_views does not rise. totalMs includes the redirect."),
+    page("page-guide", "/guide.html", "Site links here. The Worker answers 200 and stores the page view as /guide."),
+    page("page-method", "/method.html", "Site links here. The Worker answers 200 and stores the page view as /method."),
   ];
   const wasm = [];
   for (const asset of assets) {
@@ -639,6 +639,14 @@ function viewsOf(counts, path) {
   return counts.rows.reduce((sum, item) => (item.path === path ? sum + Number(item.views) : sum), 0);
 }
 
+function storedPagePath(path) {
+  return path.endsWith(".html") ? path.slice(0, -".html".length) : path;
+}
+
+function countPath(route) {
+  return route.pageCounted ? storedPagePath(route.finalPath) : route.finalPath;
+}
+
 async function pageCountsSettled(paths, before, needed) {
   let last = null;
   for (let attempt = 0; attempt < 10; attempt++) {
@@ -733,8 +741,8 @@ async function main() {
         console.error(`route ${routes[i].id}`);
         timed.push(await timeRoute(origin, routes[i], count, i === 0));
       }
-      pagePaths = [...new Set(timed.filter((route) => route.group === "page").map((route) => route.finalPath))];
-      countedPaths = [...new Set(timed.filter((route) => route.pageCounted).map((route) => route.finalPath))];
+      pagePaths = [...new Set(timed.filter((route) => route.group === "page").map(countPath))];
+      countedPaths = [...new Set(timed.filter((route) => route.pageCounted).map(countPath))];
       const needed = count + WARMUP + 1;
       counts = await pageCountsSettled(countedPaths, beforeCounts, needed);
       const log = scrub(started.readLog());
@@ -758,7 +766,7 @@ async function main() {
         byteMatch: "stored-br, stored-gz, or raw when the wire size equals that file. other when it equals none of them. null for routes that are not wasm.",
         cold: "The first request to that route in this process. Only page-home is the first request after wrangler dev becomes ready.",
         steady: `${count} request${count === 1 ? "" : "s"} after one discarded warm-up. The median is the middle sample.`,
-        pageCount: "A 200 HTML response from the Worker schedules countPageView. The script then reads local D1 and requires that rise on routes whose final path is the path it requested. A redirect onto a path outside run_worker_first is stored and not required. There is no public route that reads the counts.",
+        pageCount: "A 200 HTML response from the Worker schedules countPageView. The script reads local D1 and requires that rise on the path the Worker stores. /guide.html and /method.html are stored as /guide and /method. A redirect whose final path differs from the requested path is recorded and not required. There is no public route that reads the counts.",
         authEnv: "Every wrangler command receives a generated file through --env-file. The generated file sets BETTER_AUTH_SECRET, ACCOUNTS=on, and LOCAL_EMAIL_LOG=on, which is what lets a local run write an email to its log instead of failing. The child environment keeps PATH, a private HOME, and the switches that turn off telemetry, error reports, the update banner, and the cf.json fetch. .env, .env.local, and .dev.vars are not read. Commentary, Paddle, and sign-in keys are unset.",
       },
       productionBlindSpots: [
