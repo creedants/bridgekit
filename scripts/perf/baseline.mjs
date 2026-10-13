@@ -2,7 +2,7 @@
 // Definitions of each metric live in the JSON under `definitions` and in perf/README.md.
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { cpus, loadavg, arch, platform, release } from "node:os";
 import { extname, join, relative, resolve, sep } from "node:path";
@@ -40,7 +40,7 @@ const BRIDGE = {
 };
 
 const CSV_COLUMNS = ["year", "customer", "design", "coating", "photochromic", "polar", "material", "finish_type", "jobs", "sales"];
-const CSV_DIR = "/tmp/bridgekit-perf";
+const DEFAULT_CSV_DIR = "/tmp/bridgekit-perf";
 
 // The mark fires when the empty tool is ready. DuckDB opens after the load event, on an idle callback, unless Save-Data is on. A pick delay waits after this mark.
 const INTERACTIVE_WATCH = `
@@ -89,8 +89,41 @@ function pickDelayMs() {
   return delay;
 }
 
+// An explicit size list replaces the default table for that run, and every
+// listed size runs in the browser. A plain run without this flag is unchanged.
+function parseSizesArg() {
+  const raw = option("--sizes");
+  if (raw === undefined) return null;
+  const parts = raw.split(",").map((part) => part.trim()).filter((part) => part.length > 0);
+  if (parts.length === 0) die("--sizes needs a comma-separated list of row counts");
+  return parts.map((part) => {
+    if (!/^\d+$/.test(part)) die("--sizes needs a comma-separated list of row counts");
+    const rows = Number(part);
+    if (!Number.isSafeInteger(rows) || rows < 1) die("--sizes needs a comma-separated list of row counts");
+    if (rows > 20_000_000) die("--sizes row counts must be at most 20000000");
+    return { name: `rows-${rows}`, rows, browser: true };
+  });
+}
+
+function resolveSizes() {
+  return parseSizesArg() ?? SIZES;
+}
+
+// Generated CSVs live in a private run directory under the base directory.
+// The base defaults to the historical directory. A --csv-dir override only
+// changes that base and never changes the measured numbers. The run creates
+// one sub-directory for its own files and removes only that directory.
+let activeCsvRunDir = null;
+
+function csvDir() {
+  const raw = option("--csv-dir");
+  if (raw === undefined) return DEFAULT_CSV_DIR;
+  if (raw.length === 0) die("--csv-dir needs a value");
+  return raw;
+}
+
 function assertFullRun(out, count) {
-  const partial = process.argv.includes("--skip-build") || option("--only") || count !== 5 || pickDelayMs() !== 0;
+  const partial = process.argv.includes("--skip-build") || option("--only") || option("--sizes") || count !== 5 || pickDelayMs() !== 0;
   if (partial && resolve(root, out) === defaultOut) {
     die("A partial run cannot write perf/baseline.json. Pass --out to another path.");
   }
@@ -325,10 +358,10 @@ function startServer(dist, port) {
   });
 }
 
-async function timeEngine(count) {
+async function timeEngine(count, table, dir) {
   const sizes = [];
-  mkdirSync(CSV_DIR, { recursive: true });
-  for (const size of SIZES) {
+  mkdirSync(dir, { recursive: true });
+  for (const size of table) {
     console.error(`engine ${size.name} ${size.rows} rows`);
     const query = await openDatabase();
     const generateMs = [];
@@ -390,7 +423,7 @@ async function timeEngine(count) {
     if (hashes.size !== 1) die(`${size.name} rounded fingerprints differ`);
     let csv = null;
     if (size.browser) {
-      csv = join(CSV_DIR, `${size.rows}.csv`);
+      csv = join(dir, `${size.rows}.csv`);
       rmSync(csv, { force: true });
       const sqlPath = csv.replaceAll("'", "''");
       await query(
@@ -688,15 +721,16 @@ function matchEngine(sample, engineSize) {
   return priorOk && currentOk && effectsOk;
 }
 
-async function timeBrowser(engineSizes, distPort, count, hosted, pickDelay) {
+async function timeBrowser(engineSizes, distPort, count, hosted, pickDelay, table, dir) {
   process.setMaxListeners(32);
   const chromePort = await freePort();
   const origin = `http://127.0.0.1:${distPort}`;
-  const browserSizes = SIZES.filter((size) => size.browser);
+  const browserSizes = table.filter((size) => size.browser);
+  if (browserSizes.length === 0) die("no browser sizes to measure");
   let chromium = "";
   const discarded = [];
   console.error(`browser warmup ${browserSizes[0].name}`);
-  const warmup = await oneBrowser(chromePort, origin, join(CSV_DIR, `${browserSizes[0].rows}.csv`), browserSizes[0].rows, hosted, pickDelay);
+  const warmup = await oneBrowser(chromePort, origin, join(dir, `${browserSizes[0].rows}.csv`), browserSizes[0].rows, hosted, pickDelay);
   chromium = warmup.chromium;
   discarded.push({ name: browserSizes[0].name, rows: browserSizes[0].rows, ...warmup, resources: undefined });
   console.error(`  discarded warmup total ${warmup.totalMs}ms interactive ${warmup.interactiveMs}ms`);
@@ -707,7 +741,7 @@ async function timeBrowser(engineSizes, distPort, count, hosted, pickDelay) {
     const samples = [];
     for (let i = 0; i < count; i++) {
       console.error(`browser ${size.name} sample ${i + 1}/${count}`);
-      const sample = await oneBrowser(chromePort, origin, join(CSV_DIR, `${size.rows}.csv`), size.rows, hosted, pickDelay);
+      const sample = await oneBrowser(chromePort, origin, join(dir, `${size.rows}.csv`), size.rows, hosted, pickDelay);
       chromium = sample.chromium || chromium;
       const engineSize = engineSizes.find((item) => item.name === size.name);
       if (!matchEngine(sample, engineSize)) {
@@ -852,6 +886,18 @@ async function main() {
   const out = resolve(root, option("--out") ?? defaultOut);
   assertFullRun(out, count);
   if (only && !["assets", "engine", "browser"].includes(only)) die("--only must be assets, engine, or browser");
+  const table = resolveSizes();
+  const csvBase = csvDir();
+  const wantAssets = !only || only === "assets" || only === "engine" || only === "browser";
+  const wantEngine = !only || only === "engine" || only === "browser";
+  const wantBrowser = !only || only === "browser";
+  let dir = csvBase;
+  if (wantEngine) {
+    mkdirSync(csvBase, { recursive: true });
+    dir = mkdtempSync(join(csvBase, "run-"));
+    activeCsvRunDir = dir;
+  }
+  try {
   const chrome = spawnSync("chromium", ["--version"], { encoding: "utf8" });
   if (chrome.status !== 0) die("chromium is not on PATH");
 
@@ -860,14 +906,10 @@ async function main() {
   const dist = join(root, "dist");
   if (!existsSync(join(dist, "app", "index.html"))) die("dist/app/index.html is missing. Run npm run build.");
 
-  const wantAssets = !only || only === "assets" || only === "engine" || only === "browser";
-  const wantEngine = !only || only === "engine" || only === "browser";
-  const wantBrowser = !only || only === "browser";
-
   const build = wantAssets ? { command: "npm run build", ...measureAssets(dist) } : null;
   if (build && build.totals.wasm < WASM_MIN_BYTES) die(`dist wasm is ${build.totals.wasm} bytes`);
 
-  const engineSizes = wantEngine ? await timeEngine(count) : null;
+  const engineSizes = wantEngine ? await timeEngine(count, table, dir) : null;
   let browser = null;
   let hosted = null;
   if (wantBrowser) {
@@ -875,7 +917,7 @@ async function main() {
     const distPort = await freePort();
     hosted = await startServer(dist, distPort);
     try {
-      const timed = await timeBrowser(engineSizes, distPort, count, hosted, pickDelay);
+      const timed = await timeBrowser(engineSizes, distPort, count, hosted, pickDelay, table, dir);
       const sets = downloadSets(timed.cold);
       const toolPage = bytesFor(build.assets, sets.firstLoad);
       const duckdbOnFirstFile = bytesFor(build.assets, sets.duckdb);
@@ -961,6 +1003,12 @@ async function main() {
   if (renamed.status !== 0) die(renamed.stderr || "could not move the result into place");
   printSummary(report);
   console.log(`wrote ${out}`);
+  } finally {
+    if (activeCsvRunDir) {
+      rmSync(activeCsvRunDir, { recursive: true, force: true });
+      activeCsvRunDir = null;
+    }
+  }
 }
 
 main()
@@ -969,5 +1017,5 @@ main()
     process.exit(1);
   })
   .finally(() => {
-    rmSync(CSV_DIR, { recursive: true, force: true });
+    if (activeCsvRunDir) rmSync(activeCsvRunDir, { recursive: true, force: true });
   });

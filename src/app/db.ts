@@ -427,9 +427,10 @@ async function firstSheetAsCsv(file: File): Promise<string> {
     return value;
   };
   const rows: unknown[][] = [];
+  const width = sheet.columnCount;
   sheet.eachRow((row) => {
     const values = (row.values as unknown[]).slice(1);
-    rows.push(Array.from({ length: sheet.columnCount }, (_, i) => plain(values[i])));
+    rows.push(Array.from({ length: width }, (_, i) => plain(values[i])));
   });
   return toCsv(rows[0].map(String), rows.slice(1));
 }

@@ -1,0 +1,3 @@
+- `scripts/perf/baseline.mjs` now takes an optional `--sizes` list such as `1000000,3000000`, which replaces the row table for that run and measures every listed size in the browser, plus `--csv-dir` to set the base directory for generated CSV scratch files. The run makes its own sub-directory under that base and removes only that directory. A plain run without these flags measures exactly what it measured before.
+- `perf/README.md` documents `--sizes` and `--csv-dir` with example commands, including that a run with `--sizes` is a partial run and needs `--out` to another path.
+- `src/app/db.ts` reads the Excel sheet width once before converting rows. Loaded tables are unchanged.
