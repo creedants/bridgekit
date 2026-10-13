@@ -157,7 +157,7 @@ needs `ACCOUNTS=on` as well as the secrets.
 - `src/engine.ts`: the calculation. It generates SQL and takes a query
   function, so the same code runs on DuckDB in Node and in the browser.
 - `src/app/`: the tool, a React app using DuckDB-WASM and ECharts.
-- `index.html`, `guide.html`, `method.html`, `price-volume-mix-analysis.html`,
+- `index.html`, `guide.html`, `method.html`, `price-volume-mix-analysis.html`, `grouping-level.html`,
   `src/site/`: the site pages.
 - `src/commentary.ts`: the written summary.
 - `src/summary.ts`: the bridge reduced to totals, the only thing an opt-in feature may send.
