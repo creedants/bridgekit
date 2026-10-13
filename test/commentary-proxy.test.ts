@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { handleCommentary, MODEL, type CommentaryOptions } from "../server/commentary.ts";
+import type { Fetcher } from "../server/cloudflare.ts";
+import type { Env } from "../server/env.ts";
+import app from "../server/worker.ts";
 import type { BridgeConfig, BridgeResult } from "../src/engine.ts";
 import { parseSummary, summarize } from "../src/summary.ts";
+import { testDatabase } from "./support/d1.ts";
 
 const config: BridgeConfig = {
   table: "t", periodColumn: "period", prior: "2025", current: "2026",
@@ -96,4 +100,201 @@ test("a refusal from the model is reported, not shown as commentary", async () =
   const { client } = fakeClient({ stop_reason: "refusal", text: "" });
   const response = await handleCommentary(post({ summary: summarize(result, config) }), { apiKey: "k", client });
   assert.equal(response.status, 502);
+});
+
+const SITE = "http://127.0.0.1:8790";
+const AUTH_SECRET = "0123456789abcdef0123456789abcdef";
+const PRO_ENV = { ACCOUNTS: "on", LOCAL_EMAIL_LOG: "on", ANTHROPIC_API_KEY: "sk-ant-fake-not-a-real-key" } as const;
+
+let clients = 0;
+
+function clientIp(): string {
+  clients += 1;
+  return `203.0.113.${(clients % 254) + 1}`;
+}
+
+// Better Auth reads pragma_table_info through D1 batch. The shared stand-in
+// answers batch with run(), which drops those rows, and sign-in then answers 500.
+function database(): Env["DB"] {
+  const db = testDatabase();
+  return {
+    prepare: (sql) => db.prepare(sql),
+    batch: (statements) => Promise.all(statements.map((statement) => statement.all())),
+    exec: (sql) => db.exec(sql),
+  };
+}
+
+function workerEnv(db: Env["DB"], extra: Partial<Env> = {}): Env {
+  const assets: Fetcher = {
+    async fetch() {
+      return new Response("missing", { status: 500 });
+    },
+  };
+  return {
+    ASSETS: assets,
+    DB: db,
+    BETTER_AUTH_URL: SITE,
+    BETTER_AUTH_SECRET: AUTH_SECRET,
+    ...extra,
+  };
+}
+
+function authPrefix(baseURL: string): string {
+  const pathname = new URL(baseURL).pathname;
+  return pathname === "/" ? "/api/auth" : pathname.replace(/\/+$/, "");
+}
+
+async function dispatch(env: Env, request: Request): Promise<Response> {
+  const pending: Promise<unknown>[] = [];
+  const response = await app.fetch(request, env, {
+    waitUntil(promise) {
+      pending.push(promise);
+    },
+    passThroughOnException() {},
+    props: {},
+  });
+  await Promise.all(pending);
+  return response;
+}
+
+function captureLog(): { lines: string[]; restore(): void } {
+  const lines: string[] = [];
+  const previous = { debug: console.debug, info: console.info, log: console.log, warn: console.warn, error: console.error };
+  for (const method of ["debug", "info", "log", "warn", "error"] as const) {
+    console[method] = (...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "));
+    };
+  }
+  return {
+    lines,
+    restore() {
+      Object.assign(console, previous);
+    },
+  };
+}
+
+function fenceAnthropic(): { urls: string[]; restore(): void } {
+  const urls: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (input: Request | string | URL, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : input instanceof URL ? input.href : String(input);
+    let hostname = "";
+    try {
+      hostname = new URL(url).hostname;
+    } catch {
+      hostname = "";
+    }
+    if (hostname === "api.anthropic.com") {
+      urls.push(url);
+      return Response.json({
+        id: "msg_test",
+        type: "message",
+        role: "assistant",
+        model: MODEL,
+        stop_reason: "end_turn",
+        stop_sequence: null,
+        content: [{ type: "text", text: "Sales rose.\n\nVolume led." }],
+      });
+    }
+    return original(input, init);
+  };
+  return {
+    urls,
+    restore() {
+      globalThis.fetch = original;
+    },
+  };
+}
+
+async function signInMember(
+  env: Env,
+  email: string,
+  slug: string,
+  pro: boolean,
+): Promise<{ cookie: string; userId: string; workspaceId: string }> {
+  const origin = new URL(env.BETTER_AUTH_URL).origin;
+  const prefix = authPrefix(env.BETTER_AUTH_URL);
+  const recorded = captureLog();
+  try {
+    const signIn = await dispatch(
+      env,
+      new Request(`${origin}${prefix}/sign-in/magic-link`, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json", "x-forwarded-for": clientIp() },
+        body: JSON.stringify({ email, callbackURL: `${origin}/app/` }),
+      }),
+    );
+    assert.equal(signIn.status, 200, await signIn.text());
+    const link = recorded.lines
+      .join("\n")
+      .match(new RegExp(`${origin.replaceAll(".", "\\.")}${prefix.replaceAll("/", "\\/")}/magic-link/verify\\?\\S+`))?.[0];
+    assert.ok(link, "the sign-in link was not written to the log");
+    const verified = await dispatch(env, new Request(link, { headers: { origin, "x-forwarded-for": clientIp() } }));
+    assert.equal(verified.status, 302, await verified.text());
+    const cookie = verified.headers
+      .getSetCookie()
+      .map((entry) => entry.split(";")[0])
+      .join("; ");
+    assert.notEqual(cookie, "", "the verification set no session cookie");
+    const created = await dispatch(
+      env,
+      new Request(`${origin}${prefix}/organization/create`, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json", cookie, "x-forwarded-for": clientIp() },
+        body: JSON.stringify({ name: slug, slug }),
+      }),
+    );
+    const createdBody = await created.text();
+    assert.equal(created.status, 200, createdBody);
+    const workspaceId = (JSON.parse(createdBody) as { id: string }).id;
+    if (pro) {
+      await env.DB
+        .prepare(
+          "INSERT INTO subscription VALUES (?, 'sub_review', 'ctm_review', 'active', 'pri_review', 2, '2099-01-01T00:00:00Z', '2026-10-12T00:00:00Z')",
+        )
+        .bind(workspaceId)
+        .run();
+    }
+    const user = await env.DB.prepare("SELECT id FROM user WHERE email = ?").bind(email).first<{ id: string }>();
+    assert.ok(user);
+    return { cookie, userId: user.id, workspaceId };
+  } finally {
+    recorded.restore();
+  }
+}
+
+function commentaryRequest(cookie: string | undefined, headers: Record<string, string>, body: string): Request {
+  const all: Record<string, string> = { "content-type": "application/json", ...headers };
+  if (cookie !== undefined) all.cookie = cookie;
+  return new Request(`${SITE}/api/commentary`, { method: "POST", headers: all, body });
+}
+
+const summaryBody = JSON.stringify({ summary: summarize(result, config) });
+
+async function proCommentary(email: string, slug: string, headers: Record<string, string>): Promise<{ status: number; body: unknown; calls: number }> {
+  const env = workerEnv(database(), PRO_ENV);
+  const fence = fenceAnthropic();
+  try {
+    const { cookie } = await signInMember(env, email, slug, true);
+    const response = await dispatch(env, commentaryRequest(cookie, headers, summaryBody));
+    return { status: response.status, body: await response.json(), calls: fence.urls.length };
+  } finally {
+    fence.restore();
+  }
+}
+
+test("a Pro commentary post from another origin does not call the model", async () => {
+  assert.deepEqual(await proCommentary("pro-foreign@example.invalid", "pro-foreign", { origin: "https://evil.example" }), {
+    status: 403,
+    body: { error: "Requests must come from this site." },
+    calls: 0,
+  });
+});
+
+test("a Pro commentary post with no origin does not call the model", async () => {
+  assert.deepEqual(await proCommentary("pro-missing@example.invalid", "pro-missing", {}), {
+    status: 403,
+    body: { error: "Requests must come from this site." },
+    calls: 0,
+  });
 });

@@ -17,6 +17,7 @@ const JSON_ONLY = { message: "Content-Type must be application/json." };
 
 type LimitCall = { key: string; success: boolean };
 type LimiterConfig = { name: string; namespace_id: string; simple: { limit: number; period: number } };
+type EnvWithCommentary = Env & { COMMENTARY_RATE_LIMIT?: RateLimit };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
@@ -687,6 +688,213 @@ async function refusedForNoMail(): Promise<void> {
   }, "none");
 }
 
+function withCommentary(env: Env, rateLimit: RateLimit | undefined): EnvWithCommentary {
+  return rateLimit === undefined ? env : { ...env, COMMENTARY_RATE_LIMIT: rateLimit };
+}
+
+function commentaryEnv(db: Env["DB"]): Env {
+  return {
+    ASSETS: {
+      async fetch() {
+        return new Response("missing", { status: 500 });
+      },
+    },
+    DB: db,
+    BETTER_AUTH_URL: ORIGIN,
+    BETTER_AUTH_SECRET: "0122456789abcdef0122456789abcdef",
+    ACCOUNTS: "on",
+    LOCAL_EMAIL_LOG: "on",
+    ANTHROPIC_API_KEY: "sk-ant-fake-not-a-real-key",
+  };
+}
+
+const COMMENTARY_SUMMARY = {
+  measure: "Sales",
+  prior: "2025",
+  current: "2026",
+  priorTotal: 1_000_000,
+  currentTotal: 1_100_001,
+  effects: [
+    { label: "Volume", value: 60_000 },
+    { label: "Price (like-for-like)", value: 40_000 },
+  ],
+  attributes: ["Design", "Material"],
+  exactMatchShare: 0.951,
+  newAndDiscontinued: "difference",
+};
+
+let commentaryClients = 0;
+
+function commentaryClientIp(): string {
+  commentaryClients += 1;
+  return `203.0.113.${(commentaryClients % 254) + 1}`;
+}
+
+function commentaryAuthPrefix(baseURL: string): string {
+  const pathname = new URL(baseURL).pathname;
+  return pathname === "/" ? "/api/auth" : pathname.replace(/\/+$/, "");
+}
+
+function captureCommentaryLog(): { lines: string[]; restore(): void } {
+  const lines: string[] = [];
+  const previous = { debug: console.debug, info: console.info, log: console.log, warn: console.warn, error: console.error };
+  for (const method of ["debug", "info", "log", "warn", "error"] as const) {
+    console[method] = (...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "));
+    };
+  }
+  return {
+    lines,
+    restore() {
+      Object.assign(console, previous);
+    },
+  };
+}
+
+function fenceAnthropic(): { urls: string[]; restore(): void } {
+  const urls: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (input: Request | string | URL, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : input instanceof URL ? input.href : String(input);
+    let hostname = "";
+    try {
+      hostname = new URL(url).hostname;
+    } catch {
+      hostname = "";
+    }
+    if (hostname === "api.anthropic.com") {
+      urls.push(url);
+      return Response.json({
+        id: "msg_test",
+        type: "message",
+        role: "assistant",
+        model: "claude-opus-5-5",
+        stop_reason: "end_turn",
+        stop_sequence: null,
+        content: [{ type: "text", text: "Sales rose.\n\nVolume led." }],
+      });
+    }
+    return original(input, init);
+  };
+  return {
+    urls,
+    restore() {
+      globalThis.fetch = original;
+    },
+  };
+}
+
+async function signInCommentaryMember(
+  env: Env,
+  email: string,
+  slug: string,
+  pro: boolean,
+): Promise<{ cookie: string; userId: string; workspaceId: string }> {
+  const origin = new URL(env.BETTER_AUTH_URL).origin;
+  const prefix = commentaryAuthPrefix(env.BETTER_AUTH_URL);
+  const recorded = captureCommentaryLog();
+  try {
+    const signIn = await dispatch(
+      env,
+      new Request(`${origin}${prefix}/sign-in/magic-link`, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json", "x-forwarded-for": commentaryClientIp() },
+        body: JSON.stringify({ email, callbackURL: `${origin}/app/` }),
+      }),
+    );
+    assert.equal(signIn.status, 200, await signIn.text());
+    const link = recorded.lines
+      .join("\n")
+      .match(new RegExp(`${origin.replaceAll(".", "\\.")}${prefix.replaceAll("/", "\\/")}/magic-link/verify\\?\\S+`))?.[0];
+    assert.ok(link, "the sign-in link was not written to the log");
+    const verified = await dispatch(env, new Request(link, { headers: { origin, "x-forwarded-for": commentaryClientIp() } }));
+    assert.equal(verified.status, 302, await verified.text());
+    const cookie = verified.headers
+      .getSetCookie()
+      .map((entry) => entry.split(";")[0])
+      .join("; ");
+    assert.notEqual(cookie, "", "the verification set no session cookie");
+    const created = await dispatch(
+      env,
+      new Request(`${origin}${prefix}/organization/create`, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json", cookie, "x-forwarded-for": commentaryClientIp() },
+        body: JSON.stringify({ name: slug, slug }),
+      }),
+    );
+    const createdBody = await created.text();
+    assert.equal(created.status, 200, createdBody);
+    const workspaceId = (JSON.parse(createdBody) as { id: string }).id;
+    if (pro) {
+      await env.DB
+        .prepare(
+          "INSERT INTO subscription VALUES (?, 'sub_review', 'ctm_review', 'active', 'pri_review', 2, '2099-01-01T00:00:00Z', '2026-10-12T00:00:00Z')",
+        )
+        .bind(workspaceId)
+        .run();
+    }
+    const user = await env.DB.prepare("SELECT id FROM user WHERE email = ?").bind(email).first<{ id: string }>();
+    assert.ok(user);
+    return { cookie, userId: user.id, workspaceId };
+  } finally {
+    recorded.restore();
+  }
+}
+
+function commentaryRequest(cookie: string, headers: Record<string, string>, body: string): Request {
+  return new Request(`${ORIGIN}/api/commentary`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie, ...headers },
+    body,
+  });
+}
+
+async function commentaryLimited(): Promise<void> {
+  const limit = 5;
+  const calls: LimitCall[] = [];
+  const db = database();
+  const env = withCommentary(commentaryEnv(db), limiter(limit, calls));
+  const fence = fenceAnthropic();
+  try {
+    const { cookie, userId } = await signInCommentaryMember(env, "pro-limit@example.invalid", "pro-limit", true);
+    const body = JSON.stringify({ summary: COMMENTARY_SUMMARY });
+    const outcomes = [];
+    for (let index = 0; index < limit + 1; index += 1) {
+      const response = await dispatch(env, commentaryRequest(cookie, { origin: ORIGIN }, body));
+      outcomes.push({
+        status: response.status,
+        body: await response.json(),
+        retryAfter: response.headers.get("retry-after"),
+        xRetryAfter: response.headers.get("x-retry-after"),
+      });
+    }
+    const allowed = {
+      status: 200,
+      body: { paragraphs: ["Sales rose.", "Volume led."], model: "claude-opus-5-5" },
+      retryAfter: null,
+      xRetryAfter: null,
+    };
+    assert.deepEqual(
+      { outcomes, fence: fence.urls.length, keys: calls.map((entry) => entry.key) },
+      {
+        outcomes: [
+          ...Array.from({ length: limit }, () => allowed),
+          {
+            status: 429,
+            body: { error: "You are sending commentary requests too quickly." },
+            retryAfter: null,
+            xRetryAfter: null,
+          },
+        ],
+        fence: limit,
+        keys: Array.from({ length: limit + 1 }, () => userId),
+      },
+    );
+  } finally {
+    fence.restore();
+  }
+}
+
 function withoutSecrets(stdout: string | null, stderr: string | null): string {
   return `${stdout ?? ""}\n${stderr ?? ""}`
     .split("\n")
@@ -752,4 +960,5 @@ else {
   test("a sign-in with no client address is refused", () => runIsolated("missing-ip"));
   test("sign-in has no limit when the binding is absent", () => runIsolated("unbound"));
   test("a sign-in refused for no email does not spend a limit slot", () => runIsolated("refused-mail"));
+  test("the sixth commentary request from one Pro member is refused", commentaryLimited);
 }
