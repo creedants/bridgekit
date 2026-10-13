@@ -136,17 +136,27 @@ export interface SavedSetup {
   setup: Setup;
   createdBy: string | null;
   createdAt: string;
+  columnsKey: string;
 }
 
-export async function listSetups(db: D1Database, userId: string, workspaceId: string, columns: string[]): Promise<SavedSetup[]> {
+export const COLUMN_QUERY_SENTENCE = "This request does not take column names.";
+
+export type SetupListQuery = "absent" | "present";
+
+export function setupListQuery(url: string): SetupListQuery {
+  return new URL(url).searchParams.has("column") ? "present" : "absent";
+}
+
+export async function listSetups(db: D1Database, userId: string, workspaceId: string, query: SetupListQuery): Promise<SavedSetup[]> {
   await membership(db, userId, workspaceId);
+  if (query === "present") throw new WorkspaceError(400, COLUMN_QUERY_SENTENCE);
   const { results } = await db
     .prepare(
-      `SELECT s.id, s.name, s.setup, COALESCE(NULLIF(u.name, ''), u.email) AS createdBy, s.createdAt FROM saved_setup s
+      `SELECT s.id, s.name, s.setup, s.columnsKey, COALESCE(NULLIF(u.name, ''), u.email) AS createdBy, s.createdAt FROM saved_setup s
        LEFT JOIN user u ON u.id = s.createdBy
-       WHERE s.organizationId = ? AND s.columnsKey = ? ORDER BY s.createdAt DESC`,
+       WHERE s.organizationId = ? ORDER BY s.createdAt DESC`,
     )
-    .bind(workspaceId, columnsKey(parseColumns(columns)))
+    .bind(workspaceId)
     .all<Omit<SavedSetup, "setup"> & { setup: string }>();
   return results.map((r) => ({ ...r, setup: JSON.parse(r.setup) as Setup }));
 }

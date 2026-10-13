@@ -15,6 +15,7 @@ import {
   listBridges,
   listSetups,
   membership,
+  setupListQuery,
   plan,
   saveBridge,
   saveSetup,
@@ -254,9 +255,11 @@ open.get("/api/workspaces/:id", async (c) => {
   return c.json({ role, plan: await plan(c.env.DB, id) });
 });
 
-open.get("/api/workspaces/:id/setups", async (c) =>
-  c.json(await listSetups(c.env.DB, await userId(c), c.req.param("id"), c.req.queries("column") ?? [])),
-);
+open.get("/api/workspaces/:id/setups", async (c) => {
+  const user = await userId(c);
+  const query = setupListQuery(c.req.url);
+  return c.json(await listSetups(c.env.DB, user, c.req.param("id"), query));
+});
 open.post("/api/workspaces/:id/setups", async (c) =>
   c.json(await saveSetup(c.env.DB, await userId(c), c.req.param("id"), await json(c)), 201),
 );
