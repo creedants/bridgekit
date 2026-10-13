@@ -22,6 +22,7 @@ export interface Config {
   providers: ("microsoft" | "google")[];
   commentary: boolean;
   billing: boolean;
+  email?: boolean;
 }
 export interface User {
   id: string;

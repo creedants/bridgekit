@@ -50,8 +50,10 @@ export default function WorkspacePanel(props: {
 
   useEffect(() => {
     act(async () => {
-      const [found, signedIn] = await Promise.all([api.getConfig(), api.getUser()]);
+      const found = await api.getConfig();
       setConfig(found);
+      if (!accountsOpen(found)) return;
+      const signedIn = await api.getUser();
       setUser(signedIn);
       if (!signedIn) return;
       // An invitation link is /app/?invitation=ID; accept it once signed in.
@@ -81,8 +83,9 @@ export default function WorkspacePanel(props: {
     });
   }, [active, columnsKey]);
 
-  if (user === undefined) return <fieldset className="team"><legend>Workspace</legend>{error && <p className="error">{error}</p>}</fieldset>;
-
+  if (config === null) return loadingShell(error);
+  if (!accountsOpen(config)) return closedShell();
+  if (user === undefined) return loadingShell(error);
   if (user === null) return <SignIn config={config} busy={busy} error={error} message={message} act={act} />;
 
   const pro = plan?.plan.pro ?? false;
@@ -204,24 +207,43 @@ export default function WorkspacePanel(props: {
 
 type Act = (work: () => Promise<unknown>, done?: string) => Promise<void>;
 
-function SignIn(props: { config: api.Config | null; busy: boolean; error: string; message: string; act: Act }) {
+function accountsOpen(config: api.Config): boolean {
+  return config.email === true || config.providers.length > 0;
+}
+
+function loadingShell(error: string) {
+  return <fieldset className="team"><legend>Workspace</legend>{error && <p className="error">{error}</p>}</fieldset>;
+}
+
+function closedShell() {
+  return (
+    <fieldset className="team">
+      <legend>Workspace</legend>
+      <p>Accounts are not open yet.</p>
+    </fieldset>
+  );
+}
+
+function SignIn(props: { config: api.Config; busy: boolean; error: string; message: string; act: Act }) {
   const [email, setEmail] = useState("");
   const labels = { microsoft: "Microsoft", google: "Google" };
   return (
     <fieldset className="team">
       <legend>Workspace</legend>
       <p className="hint">With Pro, setups and bridge totals are saved to a workspace your team can open from any computer. Your file is never uploaded.</p>
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          props.act(() => api.emailSignIn(email), "Check your email for a sign-in link.");
-        }}
-      >
-        <input type="email" required placeholder="Work email" aria-label="Work email" value={email} onChange={(e) => setEmail(e.target.value)} />
-        <button disabled={props.busy || !email}>Email me a link</button>
-      </form>
-      {props.config?.providers.map((p) => (
+      {props.config.email === true && (
+        <form
+          className="row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            props.act(() => api.emailSignIn(email), "Check your email for a sign-in link.");
+          }}
+        >
+          <input type="email" required placeholder="Work email" aria-label="Work email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <button disabled={props.busy || !email}>Email me a link</button>
+        </form>
+      )}
+      {props.config.providers.map((p) => (
         <button key={p} disabled={props.busy} onClick={() => props.act(() => api.providerSignIn(p))}>Sign in with {labels[p]}</button>
       ))}
       {props.message && <p className="hint" role="status">{props.message}</p>}
