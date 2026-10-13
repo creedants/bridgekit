@@ -53,9 +53,15 @@ test("a referrer is the foreign host, or nothing", () => {
   assert.equal(referrerLabel("http://[2001:db8::1]/a", "http://[2001:db8::1]:8790/guide"), "");
   assert.equal(referrerLabel(`http://${"a".repeat(300)}/`, page), "");
   assert.equal(referrerLabel(`http://${"a".repeat(64)}.example/`, page), "");
+  const host200 = `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(8)}`;
+  const host201 = `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(9)}`;
   const long = `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(61)}`;
+  assert.equal(host200.length, 200);
+  assert.equal(host201.length, 201);
   assert.equal(long.length, 253);
-  assert.equal(referrerLabel(`http://${long}/`, page), long);
+  assert.equal(referrerLabel(`http://${host200}/`, page), host200);
+  assert.equal(referrerLabel(`http://${host201}/`, page), "");
+  assert.equal(referrerLabel(`http://${long}/`, page), "");
 });
 
 test("pageView counts one canonical page and drops the rest", () => {
@@ -69,6 +75,43 @@ test("pageView counts one canonical page and drops the rest", () => {
   assert.equal(visit("https://bk.example/", { "sec-fetch-dest": "iframe" }), null);
   assert.equal(pageView(new Request("https://bk.example/"), new Response("", { status: 404, headers: { "content-type": "text/html" } }), articles), null);
   assert.equal(pageView(new Request("https://bk.example/x.js"), new Response("", { headers: { "content-type": "text/javascript" } }), articles), null);
+});
+
+test("two hosts longer than 200 characters store no host row", async () => {
+  const db = testDatabase();
+  const day = "2026-10-13";
+  const H1 = `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(61)}`;
+  const H2 = `${H1.slice(0, -1)}e`;
+  assert.equal(H1.length, 253);
+  assert.equal(H2.length, 253);
+  assert.equal(H1.slice(0, 200), H2.slice(0, 200));
+  assert.notEqual(H1, H2);
+  const visit = (host: string) =>
+    pageView(
+      new Request("https://bk.example/grouping-level", {
+        headers: { "user-agent": "Mozilla/5.0", referer: `https://${host}/private?q=secret` },
+      }),
+      html(),
+      articles,
+    );
+  const first = visit(H1);
+  const second = visit(H2);
+  assert.deepEqual(first, { path: "/grouping-level", referrer: "" });
+  assert.deepEqual(second, { path: "/grouping-level", referrer: "" });
+  if (first === null || second === null) throw new Error("expected a page view");
+  await countPageView(db, first, day);
+  await countPageView(db, second, day);
+  const longRows = (
+    await db
+      .prepare(`SELECT day, path, referrer, length(referrer) AS len, views FROM page_views WHERE path = ? AND length(referrer) >= 200`)
+      .bind("/grouping-level")
+      .all<{ day: string; path: string; referrer: string; len: number; views: number }>()
+  ).results;
+  assert.deepEqual(longRows, []);
+  const rows = (
+    await db.prepare(`SELECT path, referrer, views FROM page_views WHERE path = ?`).bind("/grouping-level").all<{ path: string; referrer: string; views: number }>()
+  ).results;
+  assert.deepEqual(rows, [{ path: "/grouping-level", referrer: "", views: 2 }]);
 });
 
 test("each page stores at most 32 foreign referrer hosts", async () => {
