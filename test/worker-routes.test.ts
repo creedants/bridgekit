@@ -508,6 +508,39 @@ async function storeSetups(db: Env["DB"], workspaceId: string): Promise<string> 
   return owner.id;
 }
 
+type OtherWorkspace = {
+  id: string;
+  slug: string;
+  setupId: string;
+  name: string;
+  createdAt: string;
+  member: boolean;
+};
+
+async function storeOtherWorkspace(db: Env["DB"], ownerId: string, row: OtherWorkspace): Promise<void> {
+  await db
+    .prepare("INSERT INTO organization (id, name, slug, createdAt) VALUES (?, ?, ?, ?)")
+    .bind(row.id, row.name, row.slug, row.createdAt)
+    .run();
+  if (row.member) {
+    await db
+      .prepare("INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES (?, ?, ?, 'owner', ?)")
+      .bind(`member-${row.id}`, row.id, ownerId, row.createdAt)
+      .run();
+  }
+  const membership = await db
+    .prepare("SELECT COUNT(*) AS n FROM member WHERE organizationId = ? AND userId = ?")
+    .bind(row.id, ownerId)
+    .first<{ n: number }>();
+  assert.equal(membership?.n, row.member ? 1 : 0);
+  await db
+    .prepare(
+      `INSERT INTO saved_setup (id, organizationId, name, columnsKey, setup, createdBy, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(row.setupId, row.id, row.name, OLDER_KEY, JSON.stringify(OLDER_SETUP), ownerId, row.createdAt)
+    .run();
+}
+
 async function memberPair(env: Env, workspaceId: string, cookie: string): Promise<ListedResponse[]> {
   const pair: ListedResponse[] = [];
   for (const search of ["", `?column=${SENTINEL}`] as const) {
@@ -524,7 +557,23 @@ async function memberPair(env: Env, workspaceId: string, cookie: string): Promis
 test("a member receives every setup of the workspace, newest first, with each stored columns key", async () => {
   const { db, cookie, workspaceId } = await session();
   const env = mailEnv(db, {});
-  await storeSetups(db, workspaceId);
+  const ownerId = await storeSetups(db, workspaceId);
+  await storeOtherWorkspace(db, ownerId, {
+    id: "foreign-workspace",
+    slug: "foreign-workspace",
+    setupId: "foreign-setup",
+    name: "Foreign",
+    createdAt: "2026-10-04T02:00:00.000Z",
+    member: false,
+  });
+  await storeOtherWorkspace(db, ownerId, {
+    id: "second-workspace",
+    slug: "second-workspace",
+    setupId: "second-setup",
+    name: "Second",
+    createdAt: "2026-10-04T03:00:00.000Z",
+    member: true,
+  });
   const headers = { cookie, origin: ORIGIN };
   const plain = await call(`${ORIGIN}/api/workspaces/${workspaceId}/setups`, env, { headers });
   const other = await call(`${ORIGIN}/api/workspaces/${workspaceId}/setups?columns=${SENTINEL}`, env, { headers });
