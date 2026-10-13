@@ -1,0 +1,1 @@
+- Commentary uses the same origin check as workspace routes. A Pro member is limited to 5 commentary requests per 60 seconds by COMMENTARY_RATE_LIMIT, keyed by user id. A refused body does not use a slot. A missing binding leaves the route unlimited. Nothing is written to D1. Cloudflare's count is approximate and per location, so the sixth request is not refused in every case.

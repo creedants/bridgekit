@@ -14,14 +14,27 @@ import { parseSummary, type BridgeSummary } from "../src/summary.ts";
 export const MODEL = "claude-opus-5-5";
 const MAX_BODY_BYTES = 16_000;
 
-export interface CommentaryOptions {
+/** User id allowed to spend on commentary. Only commentarySpender in worker.ts produces one. */
+export type CommentarySpender = string & { readonly __commentarySpender: never };
+
+type RateLimitShape = {
+  limit(options: { key: string }): Promise<{ success: boolean }>;
+};
+
+type CommentaryBase = {
   apiKey: string;
   model?: string;
-  /** Decides whether this caller may spend API credit, for example a signed-in Pro user. */
-  authorize?: (request: Request) => Promise<boolean>;
-  /** For tests. */
   client?: Pick<Anthropic, "beta">;
-}
+};
+
+type Ungated = CommentaryBase & { spender?: undefined; rateLimit?: undefined };
+
+type Gated = CommentaryBase & {
+  spender: (request: Request) => Promise<CommentarySpender | null>;
+  rateLimit: RateLimitShape | undefined;
+};
+
+export type CommentaryOptions = Ungated | Gated;
 
 const SYSTEM = `You write commentary on a price-volume-mix sales bridge for a finance or pricing team. You receive only the bridge totals, as JSON. Write three to five short paragraphs in plain business English, suitable for a monthly business review: what changed overall, what drove it, how the drivers relate to each other, how far to trust the price figure given the match coverage, and two or three specific questions the team should look into next.
 
@@ -43,8 +56,13 @@ Rules:
 
 export async function handleCommentary(request: Request, options: CommentaryOptions): Promise<Response> {
   if (request.method !== "POST") return reply(405, { error: "Use POST." });
-  if (options.authorize && !(await options.authorize(request))) {
-    return reply(403, { error: "AI commentary is part of Pro. Sign in to a workspace with Pro to use it." });
+  let spender: CommentarySpender | undefined;
+  if (options.spender) {
+    const id = await options.spender(request);
+    if (id === null) {
+      return reply(403, { error: "AI commentary is part of Pro. Sign in to a workspace with Pro to use it." });
+    }
+    spender = id;
   }
   const raw = await request.text();
   if (raw.length > MAX_BODY_BYTES) return reply(413, { error: "That request is too large to be bridge totals." });
@@ -56,6 +74,14 @@ export async function handleCommentary(request: Request, options: CommentaryOpti
   }
   const summary = parseSummary((body as { summary?: unknown } | null)?.summary);
   if (!summary) return reply(400, { error: "The request must contain bridge totals only." });
+  if (spender !== undefined && options.rateLimit !== undefined) {
+    try {
+      const { success } = await options.rateLimit.limit({ key: spender });
+      if (!success) return reply(429, { error: "You are sending commentary requests too quickly." });
+    } catch {
+      return reply(429, { error: "You are sending commentary requests too quickly." });
+    }
+  }
 
   const client = options.client ?? new Anthropic({ apiKey: options.apiKey });
   try {

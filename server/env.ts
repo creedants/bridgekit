@@ -31,4 +31,5 @@ export interface Env {
   /** Off unless the value is exactly "on". */
   ACCOUNTS?: string;
   MAGIC_LINK_RATE_LIMIT?: RateLimit;
+  COMMENTARY_RATE_LIMIT?: RateLimit;
 }
