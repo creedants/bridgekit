@@ -687,16 +687,20 @@ async function drive(browser, origin, rows) {
   const rememberBox = "[...document.querySelectorAll('.check input')].find(i => i.closest('label').textContent.includes('Remember'))";
 
   await browser.evalJs("T.btn('Clear data').click()");
-  await browser.sleep(1500);
-  if (!(await browser.evalJs("!document.querySelector('aside') && document.body.innerText.includes('Load a sales file')"))) fail("Clear data did not reset the tool");
+  try {
+    await browser.waitFor("!document.querySelector('aside') && document.body.innerText.includes('Load a sales file')");
+  } catch (error) {
+    fail(`Clear data did not reset the tool (${error.message})`);
+  }
   console.log("ok  clear data returns to the empty tool");
 
   // The next file with the same columns opens with the remembered setup, minus filters.
   await loadCsv();
-  const restored = await browser.evalJs(
-    "document.body.innerText.includes('Restored the setup') && document.querySelectorAll('.values input:checked').length === 0",
-  );
-  if (!restored) fail("the remembered setup was not restored without its filters");
+  try {
+    await browser.waitFor("document.body.innerText.includes('Restored the setup') && document.querySelectorAll('.values input:checked').length === 0");
+  } catch (error) {
+    fail(`the remembered setup was not restored without its filters (${error.message})`);
+  }
   console.log("ok  remember setup: restored on the next load, without filter selections");
 
   // Unticking deletes the setup and keeps only the "off" choice, which survives a reload.
