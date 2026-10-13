@@ -182,7 +182,7 @@ function leak({ url, method, hasBody, blocked }, origin, { devServer }) {
   const to = URL.canParse(url) ? new URL(url) : null;
   // Vite's hot-reload socket, which only a dev server has.
   if (method === "WEBSOCKET") return devServer && to?.host === new URL(origin).host ? null : "websocket";
-  if (!["GET", "HEAD"].includes(method)) return "method";
+  if (method !== "GET") return "method";
   if (hasBody) return "body";
   if (to?.origin !== origin) return "another host" + (blocked ? `, blocked by ${blocked}` : "");
   return null;
