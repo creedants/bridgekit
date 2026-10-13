@@ -107,10 +107,10 @@ test("an html address returns that page and counts the request once", async () =
     ["/guide", "/method", "/privacy", "/price-volume-mix-analysis"],
   );
   assert.deepEqual(await views(db), [
-    { path: "/guide.html", referrer: "", views: 1 },
-    { path: "/method.html", referrer: "", views: 1 },
-    { path: "/price-volume-mix-analysis.html", referrer: "", views: 1 },
-    { path: "/privacy.html", referrer: "", views: 1 },
+    { path: "/guide", referrer: "", views: 1 },
+    { path: "/method", referrer: "", views: 1 },
+    { path: "/price-volume-mix-analysis", referrer: "", views: 1 },
+    { path: "/privacy", referrer: "", views: 1 },
   ]);
 });
 
@@ -132,7 +132,7 @@ test("two requests for the same html address count two views of that address", a
   });
   assert.equal((await open("/method.html", env)).status, 200);
   assert.equal((await open("/method.html", env)).status, 200);
-  assert.deepEqual(await views(db), [{ path: "/method.html", referrer: "", views: 2 }]);
+  assert.deepEqual(await views(db), [{ path: "/method", referrer: "", views: 2 }]);
 });
 
 test("an html address is read from the extensionless file even when the html name itself is a page", async () => {
@@ -144,7 +144,7 @@ test("an html address is read from the extensionless file even when the html nam
   assert.equal(response.status, 200);
   assert.equal(await response.text(), PRIVACY);
   assert.deepEqual(calls.map((call) => call.pathname), ["/privacy"]);
-  assert.deepEqual(await views(db), [{ path: "/privacy.html", referrer: "", views: 1 }]);
+  assert.deepEqual(await views(db), [{ path: "/privacy", referrer: "", views: 1 }]);
 });
 
 test("index.html redirects stay redirects", async () => {
@@ -212,7 +212,7 @@ test("a query string is kept on the asset request and the count uses the html ad
   assert.deepEqual(calls, [
     { method: "GET", pathname: "/privacy", search: "?a=1&a=2&encoded=%2F", ifNoneMatch: null, body: "" },
   ]);
-  assert.deepEqual(await views(db), [{ path: "/privacy.html", referrer: "", views: 1 }]);
+  assert.deepEqual(await views(db), [{ path: "/privacy", referrer: "", views: 1 }]);
 });
 
 test("POST and PUT to an extensionless page are passed through unchanged", async () => {
