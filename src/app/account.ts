@@ -171,7 +171,7 @@ interface SetupRow extends SavedSetup {
 
 export function setupsForColumns<T extends { readonly columnsKey: string }>(saved: readonly T[], columns: readonly string[]): T[] {
   if (columns.length === 0) return [];
-  const key = columnsKey(columns);
+  const key = columnsKey(columns.slice());
   return saved.filter((row) => row.columnsKey === key);
 }
 
