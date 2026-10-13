@@ -801,6 +801,229 @@ test("a sign-in on the moved route is refused and writes no verification row", a
   assert.deepEqual(recorded.lines, [], recorded.lines.join("\n"));
 });
 
+const CHECKOUT_URL = "https://pay.example.com/checkout?_ptxn=txn_test";
+
+function installPaddleFetch(): { calls: string[]; restore(): void } {
+  const calls: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (input: Request | string | URL) => {
+    const url = input instanceof Request ? input.url : input instanceof URL ? input.href : String(input);
+    calls.push(url);
+    const host = new URL(url).hostname;
+    if (host === "sandbox-api.paddle.com" || host === "api.paddle.com") {
+      return Response.json({ data: { id: "txn_test", checkout: { url: CHECKOUT_URL } } }, { status: 201 });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  return {
+    calls,
+    restore() {
+      globalThis.fetch = original;
+    },
+  };
+}
+
+function paddleCallCount(calls: readonly string[]): number {
+  return calls.filter((url) => {
+    const host = new URL(url).hostname;
+    return host === "sandbox-api.paddle.com" || host === "api.paddle.com";
+  }).length;
+}
+
+function checkoutEnv(db: Env["DB"], fields: Partial<Env> = { PADDLE_API_KEY: "pdl_test_key", PADDLE_PRICE_ID: "pri_review" }): Env {
+  return mailEnv(db, fields);
+}
+
+async function subscriptionRow(db: Env["DB"], workspaceId: string) {
+  return db
+    .prepare("SELECT paddleSubscriptionId, status, currentPeriodEnd FROM subscription WHERE organizationId = ?")
+    .bind(workspaceId)
+    .first<{ paddleSubscriptionId: string; status: string; currentPeriodEnd: string | null }>();
+}
+
+async function postCheckout(env: Env, workspaceId: string, cookie?: string): Promise<{ status: number; body: unknown; paddleCalls: number }> {
+  const recorded = installPaddleFetch();
+  try {
+    const headers: Record<string, string> = { origin: ORIGIN, "content-type": "application/json" };
+    if (cookie !== undefined) headers.cookie = cookie;
+    const response = await call(`${ORIGIN}/api/workspaces/${workspaceId}/checkout`, env, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ seats: 1 }),
+    });
+    return { status: response.status, body: await response.json(), paddleCalls: paddleCallCount(recorded.calls) };
+  } finally {
+    recorded.restore();
+  }
+}
+
+async function signIn(db: Env["DB"], email: string, base: string = ORIGIN): Promise<string> {
+  const env = mailEnv(db, { LOCAL_EMAIL_LOG: "on" }, base);
+  const origin = new URL(base).origin;
+  const prefix = authPrefix(base);
+  const recorded = record();
+  try {
+    const started = await call(`${origin}${prefix}/sign-in/magic-link`, env, {
+      method: "POST",
+      headers: { origin: ORIGIN, "content-type": "application/json", "x-forwarded-for": clientIp() },
+      body: JSON.stringify({ email, callbackURL: `${ORIGIN}/app/` }),
+    });
+    assert.equal(started.status, 200, await started.text());
+    const link = recorded.lines
+      .join("\n")
+      .match(new RegExp(`http://127\\.0\\.0\\.1:8790${prefix.replaceAll("/", "\\/")}/magic-link/verify\\?\\S+`))?.[0];
+    assert.ok(link, "the sign-in link was not written to the log");
+    const verified = await call(link, env, { headers: { origin: ORIGIN, "x-forwarded-for": clientIp() } });
+    assert.equal(verified.status, 302, await verified.text());
+    const cookie = verified.headers
+      .getSetCookie()
+      .map((entry) => entry.split(";")[0])
+      .join("; ");
+    assert.notEqual(cookie, "", "the verification set no session cookie");
+    return cookie;
+  } finally {
+    recorded.restore();
+  }
+}
+
+function webhookBody(workspaceId: string, fields: { id: string; status: string; occurredAt: string; eventId: string }): string {
+  return JSON.stringify({
+    event_id: fields.eventId,
+    event_type: "subscription.updated",
+    occurred_at: fields.occurredAt,
+    notification_id: "ntf_route",
+    data: {
+      id: fields.id,
+      status: fields.status,
+      customer_id: "ctm_review",
+      items: [{ price: { id: "pri_review" }, quantity: 2 }],
+      custom_data: { workspace_id: workspaceId },
+      current_billing_period: { starts_at: "2026-10-12T00:00:00Z", ends_at: "2099-01-01T00:00:00Z" },
+      scheduled_change: null,
+    },
+  });
+}
+
+async function postWebhook(db: Env["DB"], body: string): Promise<Response> {
+  const env = mailEnv(db, { PADDLE_WEBHOOK_SECRET: WEBHOOK_SECRET, PADDLE_PRICE_ID: "pri_review" });
+  return call(`${ORIGIN}/api/paddle/webhook`, env, {
+    method: "POST",
+    headers: { "paddle-signature": paddleSignature(body) },
+    body,
+  });
+}
+
+for (const status of ["active", "trialing", "past_due", "paused"] as const) {
+  test(`an owner cannot open a second checkout while the subscription is ${status}`, async () => {
+    const { db, cookie, workspaceId } = await session();
+    const updated = await db.prepare("UPDATE subscription SET status = ? WHERE organizationId = ?").bind(status, workspaceId).run();
+    assert.equal(updated.meta.changes, 1);
+    const before = await subscriptionRow(db, workspaceId);
+    const result = await postCheckout(checkoutEnv(db), workspaceId, cookie);
+    assert.equal(result.status, 409);
+    assert.deepEqual(result.body, { error: "This workspace already has a subscription." });
+    assert.equal(result.paddleCalls, 0);
+    assert.deepEqual(await subscriptionRow(db, workspaceId), before);
+  });
+}
+
+test("an owner with no subscription row can open a checkout", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const removed = await db.prepare("DELETE FROM subscription WHERE organizationId = ?").bind(workspaceId).run();
+  assert.equal(removed.meta.changes, 1);
+  assert.equal(await subscriptionRow(db, workspaceId), null);
+  const result = await postCheckout(checkoutEnv(db), workspaceId, cookie);
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body, { checkoutUrl: CHECKOUT_URL });
+  assert.equal(result.paddleCalls, 1);
+  assert.equal(await subscriptionRow(db, workspaceId), null);
+});
+
+test("an owner can open a checkout when the subscription is canceled and the period has not ended", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const updated = await db.prepare("UPDATE subscription SET status = 'canceled' WHERE organizationId = ?").bind(workspaceId).run();
+  assert.equal(updated.meta.changes, 1);
+  const before = await subscriptionRow(db, workspaceId);
+  assert.equal(before?.status, "canceled");
+  assert.equal(before?.currentPeriodEnd, "2099-01-01T00:00:00Z");
+  const result = await postCheckout(checkoutEnv(db), workspaceId, cookie);
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body, { checkoutUrl: CHECKOUT_URL });
+  assert.equal(result.paddleCalls, 1);
+  assert.deepEqual(await subscriptionRow(db, workspaceId), before);
+});
+
+test("a checkout without a session cookie is refused before Paddle", async () => {
+  const { db, workspaceId } = await session();
+  const before = await subscriptionRow(db, workspaceId);
+  const result = await postCheckout(checkoutEnv(db), workspaceId);
+  assert.equal(result.status, 403);
+  assert.deepEqual(result.body, { error: "Sign in first." });
+  assert.equal(result.paddleCalls, 0);
+  assert.deepEqual(await subscriptionRow(db, workspaceId), before);
+});
+
+test("a signed-in member who is not an owner or admin cannot subscribe", async () => {
+  const { db, workspaceId } = await session();
+  const cookie = await signIn(db, "colleague@example.invalid");
+  const user = await db.prepare("SELECT id FROM user WHERE email = ?").bind("colleague@example.invalid").first<{ id: string }>();
+  assert.ok(user);
+  await db
+    .prepare("INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES (?, ?, ?, 'member', ?)")
+    .bind("member-colleague", workspaceId, user.id, "2026-10-12T00:00:00.000Z")
+    .run();
+  const before = await subscriptionRow(db, workspaceId);
+  const result = await postCheckout(checkoutEnv(db), workspaceId, cookie);
+  assert.equal(result.status, 403);
+  assert.deepEqual(result.body, { error: "Only a workspace owner or admin can subscribe." });
+  assert.equal(result.paddleCalls, 0);
+  assert.deepEqual(await subscriptionRow(db, workspaceId), before);
+});
+
+test("an owner with a live subscription and no Paddle key is told subscriptions are not set up", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const before = await subscriptionRow(db, workspaceId);
+  assert.equal(before?.status, "active");
+  const result = await postCheckout(checkoutEnv(db, { PADDLE_PRICE_ID: "pri_review" }), workspaceId, cookie);
+  assert.equal(result.status, 404);
+  assert.deepEqual(result.body, { error: "Subscriptions are not set up yet." });
+  assert.equal(result.paddleCalls, 0);
+  assert.deepEqual(await subscriptionRow(db, workspaceId), before);
+});
+
+test("a webhook for a different subscription id does not replace an active row", async () => {
+  const { db, workspaceId } = await session();
+  const before = await subscriptionRow(db, workspaceId);
+  assert.equal(before?.paddleSubscriptionId, "sub_review");
+  assert.equal(before?.status, "active");
+  const body = webhookBody(workspaceId, {
+    id: "sub_other",
+    status: "active",
+    occurredAt: "2026-10-13T00:00:00.000000Z",
+    eventId: "evt_other",
+  });
+  const response = await postWebhook(db, body);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { result: "stale" });
+  assert.deepEqual(await subscriptionRow(db, workspaceId), before);
+});
+
+test("a webhook for the same subscription id with a later time can mark it past_due", async () => {
+  const { db, workspaceId } = await session();
+  const body = webhookBody(workspaceId, {
+    id: "sub_review",
+    status: "past_due",
+    occurredAt: "2026-10-13T00:00:00.000000Z",
+    eventId: "evt_due",
+  });
+  const response = await postWebhook(db, body);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { result: "applied" });
+  const row = await subscriptionRow(db, workspaceId);
+  assert.equal(row?.paddleSubscriptionId, "sub_review");
+  assert.equal(row?.status, "past_due");
+});
+
 test("an invitation still succeeds under the moved route when the local email log is on", async () => {
   const { db, cookie, workspaceId } = await session(ALTERNATE);
   const env = mailEnv(db, { LOCAL_EMAIL_LOG: "on" }, ALTERNATE);
