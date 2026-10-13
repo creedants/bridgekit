@@ -154,6 +154,40 @@ test("an older event for a different subscription id leaves the stored id unchan
   assert.equal((await storedSubscription(db)).paddleSubscriptionId, "sub_1");
 });
 
+test("a delayed old cancellation preserves the new paid subscription", async () => {
+  const db = await seeded();
+  await applySubscription(
+    db,
+    subscription({
+      subscriptionId: "sub_old",
+      currentPeriodEnd: "2099-01-01T00:00:00Z",
+      eventId: "evt_sub_old_1",
+      occurredAt: "2026-10-01T00:00:01.000000Z",
+    }),
+  );
+  await applySubscription(
+    db,
+    subscription({
+      subscriptionId: "sub_new",
+      currentPeriodEnd: "2099-01-01T00:00:00Z",
+      eventId: "evt_sub_new_3",
+      occurredAt: "2026-10-01T00:00:03.000000Z",
+    }),
+  );
+  await applySubscription(
+    db,
+    subscription({
+      subscriptionId: "sub_old",
+      status: "canceled",
+      currentPeriodEnd: null,
+      eventId: "evt_sub_old_2",
+      occurredAt: "2026-10-01T00:00:02.000000Z",
+    }),
+  );
+  assert.equal((await plan(db, "w1", new Date("2026-10-13T00:00:00Z"))).pro, true);
+  assert.equal((await storedSubscription(db)).paddleSubscriptionId, "sub_new");
+});
+
 test("a subscription event for an unknown workspace is skipped", async () => {
   const db = await seeded();
   assert.equal(await applySubscription(db, subscription({ workspaceId: "missing" })), "unknown-workspace");
