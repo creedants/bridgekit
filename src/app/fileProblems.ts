@@ -1,18 +1,11 @@
-import { isDate, isNumeric, type Column } from "./setup.ts";
+import { guessSetup, isNumeric, type Column } from "./setup.ts";
 
 /**
- * A period label stands for a span of rows: one per year, four per year or
- * twelve per year. Eight years of monthly labels make 96 values, so a period
- * column above this holds something else, usually a date the file kept as text
- * where every string became its own period. `loadPeriodList` stops at 200
- * values, so this threshold sits well inside that cap.
+ * A long period list draws a hint. Eight years of months are 96 labels, and
+ * the period list stops at 200 values. A longer monthly history still crosses
+ * this line, so the note only says the list is long.
  */
 export const MAX_PERIOD_VALUES = 100;
-
-// The same words `guessSetup` uses to pick measures, so a column named like a
-// measure is one the user expects to find in the Units or Sales list.
-const SALES_NAME = /sales|revenue|amount|value/i;
-const UNITS_NAME = /unit|qty|quant|volume|pieces/i;
 
 export interface FileProblemInput {
   /** Columns of the loaded table, in file order. */
@@ -21,7 +14,7 @@ export interface FileProblemInput {
   readonly rows: number;
   /** The period column the setup picked, empty when none is picked. */
   readonly periodColumn: string;
-  /** Distinct values of that column in the current view, oldest first. */
+  /** Periods available to compare with the current column, grain and filters, oldest first. */
   readonly periods: readonly string[];
   /** The column picked for units, empty when none is picked. */
   readonly unitsColumn: string;
@@ -37,22 +30,87 @@ export type FileProblem =
   /** The general hint is right. Show this beside it. */
   | { readonly kind: "note"; readonly message: string };
 
+/** DuckDB reports a character column as VARCHAR. No other recorded type is called text. */
+function isText(type: string): boolean {
+  return type.toUpperCase() === "VARCHAR";
+}
+
+function columnNamed(columns: readonly Column[], name: string): Column | undefined {
+  return columns.find((column) => column.name === name);
+}
+
+function choiceApplies(columns: readonly Column[], name: string): boolean {
+  const column = name === "" ? undefined : columnNamed(columns, name);
+  return column !== undefined && isNumeric(column.type);
+}
+
+/** The period column keeps its type. Every other non-numeric column is offered to guessSetup as a number. */
+function promoted(columns: readonly Column[], periodColumn: string): Column[] {
+  return columns.map((column) =>
+    column.name === periodColumn || isNumeric(column.type) ? column : { ...column, type: "DOUBLE" },
+  );
+}
+
+type Role = "sales" | "units";
+
+function chosenName(input: FileProblemInput, role: Role): string {
+  return role === "sales" ? input.salesColumn : input.unitsColumn;
+}
+
 /**
- * A column that holds text but is named like a measure, for the measure the
- * setup has not filled yet. The Units and Sales lists hold numeric columns
- * only, so such a column is missing from the list the user is looking at and
- * nothing on the page says why.
+ * A number the user can still pick for this measure. The period column, and the
+ * other measure when that choice is itself a number, are not that measure.
  */
-function missingTextMeasure(input: FileProblemInput): { name: string; role: "sales" | "units" } | undefined {
-  for (const column of input.columns) {
-    if (isNumeric(column.type) || isDate(column.type)) continue;
-    if (column.name === input.periodColumn) continue;
-    if (!SALES_NAME.test(column.name) && !UNITS_NAME.test(column.name)) continue;
-    const role = SALES_NAME.test(column.name) ? "sales" : "units";
-    if (role === "sales" ? input.salesColumn !== "" : input.unitsColumn !== "") continue;
-    return { name: column.name, role };
+function numericAvailable(input: FileProblemInput, role: Role): boolean {
+  const otherRole: Role = role === "sales" ? "units" : "sales";
+  const other = choiceApplies(input.columns, chosenName(input, otherRole)) ? chosenName(input, otherRole) : "";
+  return input.columns.some(
+    (column) => isNumeric(column.type) && column.name !== input.periodColumn && column.name !== other,
+  );
+}
+
+/**
+ * The column guessSetup would pick for a missing measure if that column were
+ * numeric. Notes and unit prices stay excluded because guessSetup excludes them.
+ * A number the user has not picked yet is not named. A column is described as
+ * text only when its recorded type is VARCHAR.
+ */
+function soundMeasure(input: FileProblemInput): { name: string; role: Role; text: boolean } | undefined {
+  const probed = guessSetup(promoted(input.columns, input.periodColumn));
+  const found: { name: string; role: Role; text: boolean; index: number }[] = [];
+  for (const role of ["sales", "units"] as const) {
+    const chosen = chosenName(input, role);
+    if (choiceApplies(input.columns, chosen)) continue;
+    if (chosen === "" && numericAvailable(input, role)) continue;
+    const name = role === "sales" ? probed.salesColumn : probed.unitsColumn;
+    if (name === "" || name === input.periodColumn) continue;
+    const column = columnNamed(input.columns, name);
+    if (!column || isNumeric(column.type)) continue;
+    found.push({ name, role, text: isText(column.type), index: input.columns.indexOf(column) });
   }
-  return undefined;
+  found.sort((a, b) => a.index - b.index);
+  const first = found[0];
+  return first === undefined ? undefined : { name: first.name, role: first.role, text: first.text };
+}
+
+function measureMessage(role: Role, name: string, text: boolean): string {
+  const measure = role === "sales" ? "Sales" : "Units";
+  const clause = text ? "holds text" : "is not a column of numbers";
+  return `${measure} must be a column of numbers, and "${name}" ${clause}.`;
+}
+
+/** True when the list is exactly the suggestion: one column per name, in that order. */
+export function sameSuggestedLevels(
+  levels: readonly { readonly name: string; readonly columns: readonly string[] }[],
+  suggested: readonly string[],
+): boolean {
+  return (
+    levels.length === suggested.length &&
+    levels.every((level, index) => {
+      const name = suggested[index];
+      return level.name === name && level.columns.length === 1 && level.columns[0] === name;
+    })
+  );
 }
 
 /**
@@ -67,13 +125,12 @@ export function fileProblem(input: FileProblemInput): FileProblem {
   if (input.periodColumn !== "" && input.periods.length === 1) {
     return {
       kind: "reason",
-      message: `The period column "${input.periodColumn}" has only one value, and a bridge compares two periods.`,
+      message: `With these settings "${input.periodColumn}" gives only one period, and a bridge compares two periods.`,
     };
   }
-  const missing = missingTextMeasure(input);
+  const missing = soundMeasure(input);
   if (missing) {
-    const measure = missing.role === "sales" ? "Sales" : "Units";
-    return { kind: "reason", message: `${measure} must be a column of numbers, and "${missing.name}" holds text.` };
+    return { kind: "reason", message: measureMessage(missing.role, missing.name, missing.text) };
   }
   if (input.columns.every((column) => !isNumeric(column.type))) {
     return { kind: "reason", message: "Sales and Units must be columns of numbers, and this file has none." };
@@ -81,7 +138,7 @@ export function fileProblem(input: FileProblemInput): FileProblem {
   if (input.periodColumn !== "" && input.periods.length > MAX_PERIOD_VALUES) {
     return {
       kind: "note",
-      message: `The period column "${input.periodColumn}" holds more than ${MAX_PERIOD_VALUES} values, and a period column should hold a few period labels such as years or months.`,
+      message: `The period column "${input.periodColumn}" has more than ${MAX_PERIOD_VALUES} periods.`,
     };
   }
   return { kind: "none" };

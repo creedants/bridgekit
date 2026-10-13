@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Level, Query } from "../engine.ts";
+import { sameSuggestedLevels } from "./fileProblems.ts";
 import { suggestAttributes } from "./profile.ts";
 import { isDate, isNumeric, quote, TABLE, type Column, type Filter, type Grain, type Setup } from "./setup.ts";
 
@@ -40,10 +41,7 @@ export function SetupPanel(props: {
   const suggestRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const [asking, setAsking] = useState(false);
-  // One column per level, in the same order: then the suggestion is what the
-  // user already has and replacing it would change nothing.
-  const sameAsSuggested =
-    setup.levels.length === suggested.length && setup.levels.every((level, i) => level.name === suggested[i]);
+  const sameAsSuggested = sameSuggestedLevels(setup.levels, suggested);
   useEffect(() => setAsking(false), [suggested.join("|")]);
   useEffect(() => {
     if (asking) confirmRef.current?.focus();

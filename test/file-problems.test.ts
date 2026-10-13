@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fileProblem, MAX_PERIOD_VALUES, type FileProblemInput } from "../src/app/fileProblems.ts";
+import { fileProblem, MAX_PERIOD_VALUES, sameSuggestedLevels, type FileProblemInput } from "../src/app/fileProblems.ts";
 import type { Column } from "../src/app/setup.ts";
 
 const text = (name: string): Column => ({ name, type: "VARCHAR" });
@@ -304,6 +304,85 @@ test("108 month labels are a note that the period list is long", () => {
     kind: "note",
     message: 'The period column "month" has more than 100 periods.',
   });
+});
+
+test("a unit price with no numeric units column is not named", () => {
+  const onlyPrice = input({
+    columns: [number("period"), text("design"), text("unit_price"), number("sales")],
+    rows: 2,
+    periodColumn: "period",
+    periods: ["2025", "2026"],
+    unitsColumn: "",
+    salesColumn: "sales",
+  });
+  assert.deepEqual(fileProblem(onlyPrice), { kind: "none" });
+});
+
+test("a note is not named when the file has no column of numbers", () => {
+  const notesOnly = input({
+    columns: [text("period"), text("design"), text("sales_notes")],
+    rows: 4,
+    periodColumn: "period",
+    periods: ["2025", "2026"],
+  });
+  assert.deepEqual(fileProblem(notesOnly), {
+    kind: "reason",
+    message: "Sales and Units must be columns of numbers, and this file has none.",
+  });
+});
+
+test("a chosen Boolean sales column is described without calling it text", () => {
+  const chosen = input({
+    columns: [number("period"), text("design"), number("units"), boolean("sales")],
+    rows: 2,
+    periodColumn: "period",
+    periods: ["2025", "2026"],
+    unitsColumn: "units",
+    salesColumn: "sales",
+  });
+  assert.deepEqual(fileProblem(chosen), {
+    kind: "reason",
+    message: 'Sales must be a column of numbers, and "sales" is not a column of numbers.',
+  });
+});
+
+test("Suggest attributes matches names, columns and order", () => {
+  const suggested = ["polar", "finish_type", "design"];
+  assert.equal(
+    sameSuggestedLevels(
+      [
+        { name: "polar", columns: ["polar"] },
+        { name: "finish_type", columns: ["finish_type"] },
+        { name: "design", columns: ["design"] },
+      ],
+      suggested,
+    ),
+    true,
+  );
+  assert.equal(
+    sameSuggestedLevels(
+      [
+        { name: "polar", columns: ["polar", "customer"] },
+        { name: "finish_type", columns: ["finish_type"] },
+        { name: "design", columns: ["design"] },
+      ],
+      suggested,
+    ),
+    false,
+  );
+  assert.equal(
+    sameSuggestedLevels(
+      [
+        { name: "design", columns: ["design"] },
+        { name: "polar", columns: ["polar"] },
+        { name: "finish_type", columns: ["finish_type"] },
+      ],
+      suggested,
+    ),
+    false,
+  );
+  assert.equal(sameSuggestedLevels([], []), true);
+  assert.equal(sameSuggestedLevels([{ name: "polar", columns: ["polar"] }], []), false);
 });
 
 test("a text column named like a value in a non-measure role is left alone", () => {
