@@ -1,0 +1,1 @@
+- CI now runs the browser smoke test against the default build and against local wrangler dev, builds the Cloudflare bundle, and the smoke test's request check covers the database worker.

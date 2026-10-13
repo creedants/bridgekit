@@ -1,0 +1,1 @@
+- The smoke test records each page, frame, and worker Chrome announces, including a shared worker. A kind the control did not prove fails the run. A recorder command Chrome refuses fails the run and names the method and Chrome's error. `open(port)` launches `chromium` from PATH.

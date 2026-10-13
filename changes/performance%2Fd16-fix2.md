@@ -1,0 +1,2 @@
+- The smoke test runs its self-check in its own browser before the application, and checks the application's record with nothing removed. A beacon or a keepalive request during navigation is recorded.
+- A target that stays listed with no recorder fails the run when a timer in it still runs, and the message names the target. A worker whose event loop has stopped, and the browser closing, do not.
