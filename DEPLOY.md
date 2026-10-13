@@ -6,9 +6,9 @@ Write the site host for `<domain>`, the database id from step 1.3 for `<id>`, an
 
 `npm ci` installs Wrangler in this repo. It does not put `wrangler` on the shell PATH. Use `npx wrangler` for a direct command. `npm run cf:dev` and `npm run cf:deploy` already run that install, because npm puts `node_modules/.bin` on the script PATH.
 
-- Source: `package.json:41` has `"wrangler": "^4.147.0"`.
-- Source: `package.json:18` has `wrangler dev`.
-- Source: `package.json:19` has `wrangler deploy`.
+- Source: `package.json:44` has `"wrangler": "^4.147.0"`.
+- Source: `package.json:21` has `wrangler dev`.
+- Source: `package.json:22` has `wrangler deploy`.
 - Not verified: npm's script PATH is not a line in this repo.
 
 Each step uses the same lines. `Do` says what to do. One of `Run`, `Edit`, `Open`, or `Dashboard (not verified)` says where. `Source` names a file and a line, and the words on that line. `Derived from` means those lines support the step and do not state it. When a derived command was not run, the line says so. `Not verified` means the repo is silent. `Worked` says what you see before the next step. When that check shows a value is set and not that it is right, the next line says what a wrong value looks like later.
@@ -31,7 +31,7 @@ npx wrangler login
 
 - Source: `.github/workflows/ci.yml:12` has `node-version: 24`.
 - Source: `.github/workflows/ci.yml:14` has `npm ci`.
-- Source: `package.json:41` has `"wrangler": "^4.147.0"`.
+- Source: `package.json:44` has `"wrangler": "^4.147.0"`.
 - Worked: `npx wrangler whoami` prints the account you mean to use.
 
 ### 1.2 Put the domain on Cloudflare
@@ -74,15 +74,15 @@ Edit: `wrangler.jsonc:25`
 
 Do: Set `BETTER_AUTH_URL` to `https://<domain>` with no path and no trailing slash. Do not change this value in Part 2. Step 2.3 adds `ACCOUNTS` beside it.
 
-Edit: `wrangler.jsonc:35`
+Edit: `wrangler.jsonc:40`
 ```text
     "BETTER_AUTH_URL": "https://<domain>",
 ```
 
-- Source: `wrangler.jsonc:35` has `"BETTER_AUTH_URL"`.
-- Source: `wrangler.jsonc:34` has `Replaced with the real address in production.`
-- Source: `server/auth.ts:32` has `trustedOrigins: [env.BETTER_AUTH_URL]`.
-- Source: `server/auth.ts:70` has `${env.BETTER_AUTH_URL}/app/?invitation=${id}`.
+- Source: `wrangler.jsonc:40` has `"BETTER_AUTH_URL"`.
+- Source: `wrangler.jsonc:39` has `Replaced with the real address in production.`
+- Source: `server/auth.ts:33` has `trustedOrigins: [env.BETTER_AUTH_URL]`.
+- Source: `server/auth.ts:103` has `${env.BETTER_AUTH_URL}/app/?invitation=${id}`.
 - Source: `server/env.ts:8` has `BETTER_AUTH_URL: string`.
 - Worked: `grep -n BETTER_AUTH_URL wrangler.jsonc` prints one line, and that line contains `"BETTER_AUTH_URL": "https://<domain>"`.
 
@@ -115,14 +115,17 @@ Run:
 VITE_PAGE_COUNTS=1 VITE_WORKSPACES=0 VITE_AI_COMMENTARY=0 npx vite build && node scripts/compress-wasm.mjs
 ```
 
-- Derived from: `package.json:17` has `VITE_PAGE_COUNTS=1 VITE_WORKSPACES=1 VITE_AI_COMMENTARY=1 vite build && node scripts/compress-wasm.mjs`. The command above keeps page counts. It sets the other two flags to 0. No npm script builds that combination. The author's session ran this command locally. `ls dist/pay` failed. The raw wasm count was 0. `dist/index.html` had `No tracking scripts.` once. `dist/index.html` had `No cookies, no accounts.` once. `dist/index.html` had `sign in for Pro` zero times. The reviewer's session ran the same command locally, including a repeat. Both runs exited 0. The Worked checks matched. The reviewer's Node was v26.7.0. The author's report records no Node version. Node 24 was not installed in the reviewer's session. Neither session deployed.
-- Source: `wrangler.jsonc:2` has `npm run build:cloudflare`. That line tells you to run the script in `package.json`, and that script turns AI commentary on. This step does not follow that line.
+`npm run build:cloudflare:free` wrote the same files, with the same hashes, as the command above.
+
+- Derived from: `package.json:20` has `"build:cloudflare:free": "VITE_PAGE_COUNTS=1 VITE_WORKSPACES=0 VITE_AI_COMMENTARY=0 vite build && node scripts/compress-wasm.mjs"`. The command above keeps page counts. It sets the other two flags to 0. The author's session ran this command locally. `ls dist/pay` failed. The raw wasm count was 0. `dist/index.html` had `No tracking scripts.` once. `dist/index.html` had `No cookies, no accounts.` once. `dist/index.html` had `sign in for Pro` zero times. The reviewer's session ran the same command locally, including a repeat. Both runs exited 0. The Worked checks matched. The reviewer's Node was v26.7.0. The author's report records no Node version. Node 24 was not installed in the reviewer's session. Neither session deployed.
+- Source: `wrangler.jsonc:2` has `npm run build:cloudflare`. That line tells you to run the script in `package.json`. This step does not follow that line.
+- Source: `package.json:19` has `VITE_AI_COMMENTARY=${VITE_AI_COMMENTARY:-1}`.
 - Source: `package.json:9` has `"build": "vite build"`.
-- Derived from: `index.html:231` has `No analytics.`, `No tracking scripts.`. `scripts/feature-blocks.ts:4` has `kept only when it applies`. `npm run build` does not set `VITE_PAGE_COUNTS`. The home page would keep `No analytics.` while the server counts page loads. The author's session ran `npm run build`. The reviewer's session ran `npm run build`. That run exited 0. Neither report records a reading of the home page after that build. Whether that page keeps `No analytics.` was not checked.
+- Derived from: `index.html:232` has `No analytics.`, `No tracking scripts.`. `scripts/feature-blocks.ts:4` has `kept only when it applies`. `npm run build` does not set `VITE_PAGE_COUNTS`. The home page would keep `No analytics.` while the server counts page loads. The author's session ran `npm run build`. The reviewer's session ran `npm run build`. That run exited 0. Neither report records a reading of the home page after that build. Whether that page keeps `No analytics.` was not checked.
 - Source: `vite.config.ts:60` has `VITE_PAGE_COUNTS === "1"`.
 - Source: `vite.config.ts:76` has `VITE_WORKSPACES === "1"`, `pay/index.html`.
 - Source: `scripts/compress-wasm.mjs:30` has `rmSync(file)`.
-- Source: `index.html:231` has `No cookies, no accounts.`, `No cookies or accounts unless you sign in for Pro.`
+- Source: `index.html:232` has `No cookies, no accounts.`, `No cookies or accounts unless you sign in for Pro.`
 - Worked: `ls dist/pay` fails, `ls dist/assets | grep -c '\.wasm$'` prints 0, `grep -c 'No tracking scripts.' dist/index.html` prints 1, `grep -c 'No cookies, no accounts.' dist/index.html` prints 1, and `grep -c 'sign in for Pro' dist/index.html` prints 0.
 
 ### 1.8 Store the one secret Part 1 needs
@@ -138,8 +141,8 @@ npx wrangler secret put BETTER_AUTH_SECRET
 
 - Source: `server/env.ts:9` has `BETTER_AUTH_SECRET: string`.
 - Source: `.dev.vars.example:3` has `at-least-32-chars`.
-- Source: `wrangler.jsonc:44` has `wrangler secret put NAME`.
-- Source: `package.json:41` has `"wrangler": "^4.147.0"`.
+- Source: `wrangler.jsonc:49` has `wrangler secret put NAME`.
+- Source: `package.json:44` has `"wrangler": "^4.147.0"`.
 - Not verified: the remote prompt, creating the draft Worker, and the retry. This session did not run secret put or deploy.
 - Worked: `npx wrangler secret list` prints `BETTER_AUTH_SECRET`.
 
@@ -154,7 +157,7 @@ grep -c '"ACCOUNTS"' wrangler.jsonc
 ```
 
 - Source: `wrangler.jsonc:30-32` has `This file does not`, `set it`.
-- Source: `wrangler.jsonc:33-36` has `"BETTER_AUTH_URL"`. `wrangler.jsonc:33-36` lacks `"ACCOUNTS"`.
+- Source: `wrangler.jsonc:40` has `"BETTER_AUTH_URL"`. `wrangler.jsonc:40` lacks `"ACCOUNTS"`.
 - Worked: the first command prints `BETTER_AUTH_SECRET` and no other name from `server/env.ts`. The second command prints 0.
 
 ### 1.10 Deploy
@@ -166,7 +169,7 @@ Run:
 npm run cf:deploy
 ```
 
-- Source: `package.json:19` has `"cf:deploy": "wrangler d1 migrations apply bridgekit --remote && wrangler deploy"`. `package.json:19` lacks `vite build`.
+- Source: `package.json:22` has `"cf:deploy": "wrangler d1 migrations apply bridgekit --remote && wrangler deploy"`. `package.json:22` lacks `vite build`.
 - Source: `wrangler.jsonc:26` has `"migrations_dir": "migrations"`.
 - Source: `migrations/0001_page_views.sql:2` has `CREATE TABLE page_views`.
 - Source: `migrations/0002_auth.sql:2` has `create table "user"`.
@@ -198,11 +201,11 @@ curl -sS -w '\n%{http_code}\n' -X POST 'https://<domain>/api/auth/sign-in/magic-
   --data '{"email":"review@example.invalid","callbackURL":"https://<domain>/app/"}'
 ```
 
-- Source: `server/worker.ts:37-38` has `function accountsEnabled`, `value === "on"`.
-- Source: `server/worker.ts:49` has `providers: [] as string[]`, `commentary: false`, `billing: false`.
-- Source: `server/worker.ts:55-56` has `function closedApiResponse`, `pathname === "/api/config"`, `CLOSED_CONFIG`.
-- Source: `server/worker.ts:52` has `{ error: "Not found." }`, `status: 404`.
-- Source: `server/worker.ts:211-212` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`.
+- Source: `server/worker.ts:43-44` has `function accountsEnabled`, `value === "on"`.
+- Source: `server/worker.ts:55` has `providers: [] as string[]`, `commentary: false`, `billing: false`.
+- Source: `server/worker.ts:61-62` has `function closedApiResponse`, `pathname === "/api/config"`, `CLOSED_CONFIG`.
+- Source: `server/worker.ts:58` has `{ error: "Not found." }`, `status: 404`.
+- Source: `server/worker.ts:345-346` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`.
 - Worked: the config body has no providers, `commentary` is false, and `billing` is false. The sign-in body is `{"error":"Not found."}` and the status is 404.
 
 ### 1.13 Check the home page and the pay address
@@ -216,7 +219,7 @@ curl -s https://<domain>/ | grep -c 'sign in for Pro'
 curl -s -o /dev/null -w '%{http_code}\n' https://<domain>/pay/
 ```
 
-- Source: `index.html:231` has `No tracking scripts.`, `No cookies or accounts unless you sign in for Pro.`
+- Source: `index.html:232` has `No tracking scripts.`, `No cookies or accounts unless you sign in for Pro.`
 - Derived from: `vite.config.ts:76` has `pay/index.html`. `wrangler.jsonc:13` has `"not_found_handling": "404-page"`. The Part 1 build has no pay page. The address is not found. The author's session saw this on a local Part 1 Worker. The home page had `No tracking scripts.` once. The home page had `sign in for Pro` zero times. `GET /pay/` returned 404. The reviewer's session ran the three commands in this step against `http://127.0.0.1:8790`. The first command printed 1. The second command printed 0. The third command printed 404. Neither session sent the requests to the live domain.
 - Worked: the three commands print 1, then 0, then 404.
 
@@ -243,9 +246,9 @@ Open:
 https://<domain>/
 ```
 
-- Source: `server/counts.ts:11` has `headless|curl|wget`.
-- Source: `server/worker.ts:199` has `countPageView(`.
-- Source: `package.json:20` has `SELECT day, path, referrer, views FROM page_views`.
+- Source: `server/counts.ts:16` has `headless|curl|wget`.
+- Source: `server/worker.ts:333` has `countPageView(`.
+- Source: `package.json:23` has `SELECT day, path, referrer, views FROM page_views`.
 - Worked: `npm run stats` prints a row whose path is `/`.
 
 ### 1.16 Optional. Run the smoke test against the live site
@@ -259,8 +262,8 @@ npm run smoke -- https://<domain>
 
 - Source: `package.json:14` has `"smoke": "node scripts/smoke.mjs"`.
 - Source: `scripts/smoke.mjs:7` has `process.argv[2] ?? "http://localhost:5173"`.
-- Source: `scripts/smoke.mjs:159` has `smoke test passed`.
-- Source: `README.md:149` has `npm run smoke -- http://localhost:8790`.
+- Source: `scripts/smoke.mjs:959` has `smoke test passed`.
+- Source: `README.md:158` has `npm run smoke -- http://localhost:8790`.
 - Not verified: that this passes against a deployed site. The repo shows it against a local server.
 - Worked: the last line is `smoke test passed`.
 
@@ -268,18 +271,18 @@ npm run smoke -- https://<domain>
 
 Account, workspace, checkout, webhook, and commentary routes are off because `ACCOUNTS` is unset. The Part 1 pages omit the workspace code because `VITE_WORKSPACES` is `0`. The page flag and the server flag change separately.
 
-- Source: `server/worker.ts:37-38` has `value === "on"`.
+- Source: `server/worker.ts:44` has `value === "on"`.
 - Source: `server/worker.ts:49` has `CLOSED_CONFIG`.
-- Source: `server/worker.ts:55-58` has `closedApiResponse`, `gatedApiPath`, `notFound()`.
-- Source: `server/worker.ts:65` has `createAuth(c.env`.
-- Source: `server/worker.ts:211-213` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`, `open.fetch`.
+- Source: `server/worker.ts:61-63` has `closedApiResponse`, `gatedApiPath`, `notFound()`.
+- Source: `server/worker.ts:71` has `createAuth(c.env`.
+- Source: `server/worker.ts:345-347` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`, `open.fetch`.
 - Source: `wrangler.jsonc:30-32` has `ACCOUNTS is a Worker variable`, `This file does not`, `set it`.
-- Source: `src/app/App.tsx:34` has `elsewhere the code is left out`.
-- Source: `src/app/App.tsx:35` has `import.meta.env.VITE_WORKSPACES === "1"`.
+- Source: `src/app/App.tsx:35` has `elsewhere the code is left out`.
+- Source: `src/app/App.tsx:36` has `import.meta.env.VITE_WORKSPACES === "1"`.
 
 `worker.fetch` returns the closed response before `open.fetch` when accounts are off. `createAuth` is on the open app, so that return does not call it. A gated path returns 404 and `{"error":"Not found."}`. It does not write a verification row, because the auth handler does not run.
 
-- Derived from: `server/worker.ts:65` has `createAuth(c.env`. `server/worker.ts:212-213` has `return closed`, `open.fetch`. The verification write is not a line in this return. It was not run.
+- Derived from: `server/worker.ts:71` has `createAuth(c.env`. `server/worker.ts:346-347` has `return closed`, `open.fetch`. The verification write is not a line in this return. It was not run.
 
 A path whose first segment is `api` in another letter case does not match `run_worker_first`. `/API/auth/sign-in/magic-link` is that kind of path. A local wrangler measurement returned the site's HTML 404 page for GET and 405 with an empty body for POST. That path never reaches an account route. The measurement is the local one. It was not a live zone.
 
@@ -289,7 +292,7 @@ A feature segment in another letter case does match `/api/*`. `/api/AUTH/sign-in
 
 - Source: `wrangler.jsonc:18` has `run_worker_first`, `/api/*`.
 - Source: `wrangler.jsonc:13` has `"not_found_handling": "404-page"`.
-- Source: `server/worker.ts:45-46` has `toLowerCase()`, `feature === "auth"`.
+- Source: `server/worker.ts:51-52` has `toLowerCase()`, `feature === "auth"`.
 - Not verified: production asset responses for the other-case prefix and the encoded prefix. The statuses above are the local wrangler measurement.
 
 ## Part 2. Accounts and payments
@@ -314,10 +317,10 @@ Run:
 grep -n BETTER_AUTH_URL wrangler.jsonc
 ```
 
-- Source: `wrangler.jsonc:35` has `"BETTER_AUTH_URL"`.
-- Source: `server/auth.ts:32` has `trustedOrigins: [env.BETTER_AUTH_URL]`.
-- Source: `server/worker.ts:73-74` has `new URL(c.env.BETTER_AUTH_URL).origin`, `Requests must come from this site.`
-- Source: `server/auth.ts:70` has `${env.BETTER_AUTH_URL}/app/?invitation=${id}`.
+- Source: `wrangler.jsonc:40` has `"BETTER_AUTH_URL"`.
+- Source: `server/auth.ts:33` has `trustedOrigins: [env.BETTER_AUTH_URL]`.
+- Source: `server/worker.ts:79-80` has `new URL(c.env.BETTER_AUTH_URL).origin`, `Requests must come from this site.`
+- Source: `server/auth.ts:103` has `${env.BETTER_AUTH_URL}/app/?invitation=${id}`.
 - Not verified: what the sign-in routes answer when the address is outside `trustedOrigins`. That code is not in this repo.
 - Worked: the printed line contains `"BETTER_AUTH_URL": "https://<domain>"`. This proves it is set, not that it is right.
 - If this is wrong you will see: trustedOrigins is this address. Saving, deleting, and Subscribe answer `Requests must come from this site.` An invitation link is this address joined to `/app/?invitation=`, and a trailing slash puts a second slash before `app`.
@@ -333,10 +336,10 @@ Edit: `wrangler.jsonc` `vars`
 
 Dashboard (not verified): the repo does not name the dashboard control for a Worker variable.
 
-- Source: `wrangler.jsonc:33` has `"vars"`.
+- Source: `wrangler.jsonc:38` has `"vars"`.
 - Source: `wrangler.jsonc:30-32` has `ACCOUNTS is a Worker variable`, `exact string on`, `This file does not`.
-- Source: `server/env.ts:23-24` has `Off unless the value is exactly "on".`, `ACCOUNTS?: string`.
-- Source: `server/worker.ts:37-38` has `value === "on"`.
+- Source: `server/env.ts:31-32` has `Off unless the value is exactly "on".`, `ACCOUNTS?: string`.
+- Source: `server/worker.ts:44` has `value === "on"`.
 - Not verified: the dashboard control for a Worker variable.
 - Worked: `grep -n '"ACCOUNTS"' wrangler.jsonc` prints `"ACCOUNTS": "on"`.
 - If this value is missing or is any other value, every account, workspace, checkout, webhook, and commentary route returns 404 `{"error":"Not found."}` even when the secrets are set. `GET /api/config` still reports no providers, no billing, and no commentary. Step 2.19 is the check after the rest of Part 2 is in place.
@@ -348,7 +351,7 @@ Do: Add the domain you will send sign-in mail from, and add the DNS records Rese
 Dashboard (not verified): Resend > Domains > Add Domain.
 
 - Not verified: that Resend refuses an unverified sender. This repo does not check the domain.
-- Source: `server/email.ts:12` has `from: env.EMAIL_FROM`.
+- Source: `server/email.ts:36` has `from: env.EMAIL_FROM`.
 - Worked: Resend lists the domain as verified. Later steps do not wait for that. Step 2.20 does.
 
 ### 2.5 Store the Resend API key
@@ -361,7 +364,7 @@ npx wrangler secret put RESEND_API_KEY
 ```
 
 - Source: `server/env.ts:12` has `RESEND_API_KEY?: string`.
-- Source: `server/email.ts:9-11` has `https://api.resend.com/emails`, `Bearer ${env.RESEND_API_KEY}`.
+- Source: `server/email.ts:33-35` has `https://api.resend.com/emails`, `Bearer ${env.RESEND_API_KEY}`.
 - Worked: `npx wrangler secret list` prints `RESEND_API_KEY`.
 
 ### 2.6 Store the sender address
@@ -374,11 +377,12 @@ npx wrangler secret put EMAIL_FROM
 ```
 
 - Source: `server/env.ts:13` has `EMAIL_FROM?: string`.
-- Source: `server/email.ts:5-6` has `!env.RESEND_API_KEY || !env.EMAIL_FROM`, `[email] to`.
-- Source: `src/app/Workspace.tsx:218` has `Check your email for a sign-in link.`
-- Source: `src/app/account.ts:65` has `if (!response.ok) throw new Error`.
+- Source: `server/email.ts:6` has `return value === "on"`.
+- Source: `server/email.ts:28-30` has `!env.RESEND_API_KEY || !env.EMAIL_FROM`, `[email] to`.
+- Source: `src/app/Workspace.tsx:239` has `Check your email for a sign-in link.`
+- Source: `src/app/account.ts:77` has `if (!response.ok) throw new Error`.
 - Worked: `npx wrangler secret list` prints `EMAIL_FROM` and `RESEND_API_KEY`. This proves it is set, not that it is right.
-- If this is wrong you will see: only one of the pair is set. The page says `Check your email for a sign-in link.` No mail arrives. The Worker log contains `[email] to`.
+- If this is wrong you will see: only one of the pair is set. When `LOCAL_EMAIL_LOG` is not exactly `on`, the Workspace panel shows `Accounts are not open yet.` and no form, and the Worker log does not contain `[email] to`. When `LOCAL_EMAIL_LOG` is exactly `on`, the form is shown and the Worker log contains `[email] to`.
 
 ### 2.7 Create the product in Paddle
 
@@ -399,11 +403,11 @@ Dashboard (not verified): Paddle > Catalog > Products > the product > New price.
 npx wrangler secret put PADDLE_PRICE_ID
 ```
 
-- Source: `server/env.ts:20` has `PADDLE_PRICE_ID?: string`.
+- Source: `server/env.ts:28` has `PADDLE_PRICE_ID?: string`.
 - Source: `server/paddle.ts:198` has `quantity: options.seats`.
-- Source: `src/app/Workspace.tsx:252` has `max={200}`.
-- Source: `index.html:281` has `per user per month`.
-- Source: `server/worker.ts:164-166` has `c.env.PADDLE_PRICE_ID ? [c.env.PADDLE_PRICE_ID] : undefined`, `"ignored"`.
+- Source: `src/app/Workspace.tsx:274` has `max={200}`.
+- Source: `index.html:282` has `per user per month`.
+- Source: `server/worker.ts:298-300` has `c.env.PADDLE_PRICE_ID ? [c.env.PADDLE_PRICE_ID] : undefined`, `"ignored"`.
 - Not verified: Paddle's default quantity limit for a price.
 - Worked: `npx wrangler secret list` prints `PADDLE_PRICE_ID`.
 
@@ -427,12 +431,12 @@ Dashboard (not verified): Paddle > Checkout > Checkout configuration.
 https://<domain>/pay/
 ```
 
-- Derived from: `server/paddle.ts:188-189` has `default payment link`, `?_ptxn=`. `vite.config.ts:76` has `pay/index.html`. `README.md:134-135` has `Checkout opens on`, `/pay/`. The code names no path for that link. `/pay/` is the page built to load Paddle's script. It was not run.
+- Derived from: `server/paddle.ts:188-189` has `default payment link`, `?_ptxn=`. `vite.config.ts:76` has `pay/index.html`. `README.md:140-141` has `Checkout opens on`, `/pay/`. The code names no path for that link. `/pay/` is the page built to load Paddle's script. It was not run.
 - Source: `scripts/policy.ts:10` has `script-src 'self' 'wasm-unsafe-eval'`.
 - Source: `scripts/policy.ts:25` has `https://cdn.paddle.com`.
-- Source: `src/app/Workspace.tsx:112` has `location.href = (await api.checkout(active, seats)).checkoutUrl`.
+- Source: `src/app/Workspace.tsx:115` has `location.href = (await api.checkout(active, seats)).checkoutUrl`.
 - Source: `src/pay/pay.ts:48` has `successUrl`, `/app/?subscribed=1`.
-- Source: `src/app/Workspace.tsx:56` has `if (!signedIn) return`.
+- Source: `src/app/Workspace.tsx:58` has `if (!signedIn) return`.
 - Not verified: that a session cookie set on one host is absent on another host. That is the browser, not this repo. Nobody entered an account. The guide is [Set your default payment link](https://developer.paddle.com/build/transactions/default-payment-link).
 - Not verified: whether the dashboard accepts the link while approval is pending. Nobody entered an account to try that save.
 - Worked: Paddle shows the saved link. This proves it is set, not that it is right.
@@ -458,7 +462,7 @@ Dashboard (not verified): Paddle > Developer Tools > Notifications > New destina
 https://<domain>/api/paddle/webhook
 ```
 
-- Source: `server/worker.ts:159` has `"/api/paddle/webhook"`.
+- Source: `server/worker.ts:293` has `"/api/paddle/webhook"`.
 - Source: `server/paddle.ts:77-85` has `subscription.created`, `subscription.activated`, `subscription.updated`, `subscription.trialing`, `subscription.past_due`, `subscription.paused`, `subscription.resumed`, `subscription.canceled`, `subscription.imported`.
 - Source: `server/paddle.ts:112` has `!SUBSCRIPTION_EVENTS.includes(body.event_type)) return null`.
 - Source: `server/paddle.ts:156-159` has `case "active":`, `return true`.
@@ -477,8 +481,8 @@ Dashboard (not verified): Paddle > Developer Tools > Notifications > the destina
 npx wrangler secret put PADDLE_WEBHOOK_SECRET
 ```
 
-- Source: `server/env.ts:19` has `PADDLE_WEBHOOK_SECRET?: string`.
-- Source: `server/worker.ts:161-162` has `!c.env.PADDLE_WEBHOOK_SECRET`, `Bad signature.`
+- Source: `server/env.ts:27` has `PADDLE_WEBHOOK_SECRET?: string`.
+- Source: `server/worker.ts:295-296` has `!c.env.PADDLE_WEBHOOK_SECRET`, `Bad signature.`
 - Worked: `npx wrangler secret list` prints `PADDLE_WEBHOOK_SECRET`.
 
 ### 2.13 Store the Paddle API key
@@ -490,11 +494,11 @@ Dashboard (not verified): Paddle > My account > Settings > Authentication > API 
 npx wrangler secret put PADDLE_API_KEY
 ```
 
-- Source: `server/env.ts:18` has `PADDLE_API_KEY?: string`.
+- Source: `server/env.ts:26` has `PADDLE_API_KEY?: string`.
 - Source: `server/paddle.ts:203-205` has `doFetch`, `/transactions`, `method: "POST"`.
 - Derived from: `server/paddle.ts:213` has `Paddle returned ${response.status} when creating a transaction.` A 403 makes that throw `Paddle returned 403 when creating a transaction.` It was not run.
-- Source: `server/worker.ts:101-102` has `console.error(error)`, `Something went wrong on the server.`
-- Source: `server/worker.ts:147` has `Subscriptions are not set up yet.`
+- Source: `server/worker.ts:234-235` has `console.error(error)`, `Something went wrong on the server.`
+- Source: `server/worker.ts:281` has `Subscriptions are not set up yet.`
 - Not verified: the permission name is not in this repo. Paddle's transaction reference requires `transaction.write` at [Create a transaction](https://developer.paddle.com/api-reference/transactions/create-transaction). Paddle's authentication reference says a key without the permission returns 403, at [Authentication](https://developer.paddle.com/api-reference/about/authentication). Nobody entered an account.
 - Worked: `npx wrangler secret list` prints `PADDLE_API_KEY`. This proves the name is present, not that the key can create a transaction.
 - If this is wrong you will see: Subscribe answers 500 and `Something went wrong on the server.`
@@ -510,11 +514,11 @@ Run:
 npx wrangler secret put PADDLE_ENVIRONMENT
 ```
 
-- Source: `server/env.ts:22` has `PADDLE_ENVIRONMENT?: string`.
-- Source: `server/env.ts:21` has `"sandbox" (default) or "live"`.
-- Source: `wrangler.jsonc:44-47` has `wrangler secret put NAME`. `wrangler.jsonc:44-47` lacks `PADDLE_ENVIRONMENT`.
+- Source: `server/env.ts:30` has `PADDLE_ENVIRONMENT?: string`.
+- Source: `server/env.ts:29` has `"sandbox" (default) or "live"`.
+- Source: `wrangler.jsonc:49` has `wrangler secret put NAME`. `wrangler.jsonc:49` lacks `PADDLE_ENVIRONMENT`.
 - Source: `.dev.vars.example:11` has `Worker switch`, `VITE_PADDLE_ENVIRONMENT`.
-- Source: `server/worker.ts:151` has `c.env.PADDLE_ENVIRONMENT === "live" ? "live" : "sandbox"`.
+- Source: `server/worker.ts:285` has `c.env.PADDLE_ENVIRONMENT === "live" ? "live" : "sandbox"`.
 - Source: `server/paddle.ts:19-20` has `https://sandbox-api.paddle.com`, `https://api.paddle.com`.
 - Source: `src/pay/pay.ts:47` has `VITE_PADDLE_ENVIRONMENT !== "live"`.
 - Derived from: `server/paddle.ts:204` has `PADDLE_API[options.environment]`. Any value other than `live` sends the key from step 2.13 to the sandbox host. It was not run.
@@ -534,11 +538,11 @@ Dashboard (not verified): Paddle > My account > Settings > Authentication > Clie
 
 ## Names that stay unset
 
-The Part 2 build keeps `VITE_AI_COMMENTARY` at 0, so the commentary button stays hidden, and `ANTHROPIC_API_KEY` stays unset. `src/app/Results.tsx:213` has `import.meta.env.VITE_AI_COMMENTARY === "1"`. `server/worker.ts:173` has `if (!c.env.ANTHROPIC_API_KEY) return false`.
+The Part 2 build keeps `VITE_AI_COMMENTARY` at 0, so the commentary button stays hidden, and `ANTHROPIC_API_KEY` stays unset. `src/app/Results.tsx:213` has `import.meta.env.VITE_AI_COMMENTARY === "1"`. `server/worker.ts:307` has `if (!c.env.ANTHROPIC_API_KEY) return false`.
 
 - Leave unset: `ANTHROPIC_API_KEY`
 
-Microsoft and Google stay unset. A client id alone would add that provider to the sign-in button, and registration runs only when both the id and the secret are set. `server/worker.ts:109-110` has `c.env.MICROSOFT_CLIENT_ID ? ["microsoft"]`, `c.env.GOOGLE_CLIENT_ID ? ["google"]`. `server/auth.ts:36` has `env.MICROSOFT_CLIENT_ID && env.MICROSOFT_CLIENT_SECRET`. `server/auth.ts:39` has `env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET`.
+Microsoft and Google stay unset. A client id alone would add that provider to the sign-in button, and registration runs only when both the id and the secret are set. `server/worker.ts:242-243` has `c.env.MICROSOFT_CLIENT_ID ? ["microsoft"]`, `c.env.GOOGLE_CLIENT_ID ? ["google"]`. `server/auth.ts:37` has `env.MICROSOFT_CLIENT_ID && env.MICROSOFT_CLIENT_SECRET`. `server/auth.ts:40` has `env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET`.
 
 - Leave unset: `MICROSOFT_CLIENT_ID`
 - Leave unset: `MICROSOFT_CLIENT_SECRET`
@@ -554,12 +558,12 @@ Run:
 VITE_PAGE_COUNTS=1 VITE_WORKSPACES=1 VITE_AI_COMMENTARY=0 VITE_PADDLE_CLIENT_TOKEN=<client-token> VITE_PADDLE_ENVIRONMENT=live npx vite build && node scripts/compress-wasm.mjs
 ```
 
-- Derived from: `package.json:17` has `VITE_PAGE_COUNTS=1 VITE_WORKSPACES=1 VITE_AI_COMMENTARY=1 vite build && node scripts/compress-wasm.mjs`. `package.json:17` has `VITE_AI_COMMENTARY=1`. `package.json:17` lacks `VITE_PADDLE`. The command above sets AI commentary to 0. It adds the two Paddle variables. No npm script sets those variables. The author's session ran this command locally with a stand-in client token. `dist/pay/index.html` existed. The stand-in token was in one dist file. The `sign in for Pro` count was 1. The `No tracking scripts.` count was 1. The raw wasm count was 0. The reviewer's session ran the same command locally with a different stand-in token. The command exited 0. The Worked checks passed. Neither session deployed. Neither session used a live Paddle client token.
+- Derived from: `package.json:20` has `VITE_PAGE_COUNTS=1 VITE_WORKSPACES=0 VITE_AI_COMMENTARY=0 vite build && node scripts/compress-wasm.mjs`. `package.json` lacks `VITE_PADDLE`. The command above sets AI commentary to 0. It adds the two Paddle variables. No npm script sets those variables. The author's session ran this command locally with a stand-in client token. `dist/pay/index.html` existed. The stand-in token was in one dist file. The `sign in for Pro` count was 1. The `No tracking scripts.` count was 1. The raw wasm count was 0. The reviewer's session ran the same command locally with a different stand-in token. The command exited 0. The Worked checks passed. Neither session deployed. Neither session used a live Paddle client token.
 - Source: `src/pay/pay.ts:37` has `import.meta.env.VITE_PADDLE_CLIENT_TOKEN`.
 - Source: `src/pay/pay.ts:12` has `There is no checkout to open. Start from the Workspace panel in the tool.`
 - Source: `src/pay/pay.ts:47` has `VITE_PADDLE_ENVIRONMENT !== "live"`.
-- Source: `src/app/App.tsx:35` has `import.meta.env.VITE_WORKSPACES === "1"`.
-- Source: `index.html:231` has `No cookies or accounts unless you sign in for Pro.`
+- Source: `src/app/App.tsx:36` has `import.meta.env.VITE_WORKSPACES === "1"`.
+- Source: `index.html:232` has `No cookies or accounts unless you sign in for Pro.`
 - Worked: `test -f dist/pay/index.html` succeeds, `grep -R -l '<client-token>' dist` prints a path, `grep -c 'sign in for Pro' dist/index.html` prints 1, `grep -c 'No tracking scripts.' dist/index.html` prints 1, and `ls dist/assets | grep -c '\.wasm$'` prints 0.
 
 ### 2.17 Confirm the sign-in rate limit
@@ -583,12 +587,12 @@ Run:
 grep -n -A 4 '"ratelimits"' wrangler.jsonc
 ```
 
-- Source: `wrangler.jsonc:39` has `"name": "MAGIC_LINK_RATE_LIMIT"`.
-- Source: `wrangler.jsonc:40` has `"namespace_id": "1001"`.
-- Source: `wrangler.jsonc:41` has `"limit": 3`, `"period": 60`.
-- Source: `server/env.ts:25` has `MAGIC_LINK_RATE_LIMIT?: RateLimit`.
-- Derived from: `server/worker.ts:37-38` has `value === "on"`. `server/worker.ts:80` has `limitMagicLinkSignIn`. `server/worker.ts:211-212` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`. Part 1 returns the closed response and does not call `limitMagicLinkSignIn`. It was not run.
-- Source: `server/auth.ts:89` has `if (rateLimit === undefined) return null`.
+- Source: `wrangler.jsonc:44` has `"name": "MAGIC_LINK_RATE_LIMIT"`.
+- Source: `wrangler.jsonc:45` has `"namespace_id": "1001"`.
+- Source: `wrangler.jsonc:46` has `"limit": 3`, `"period": 60`.
+- Source: `server/env.ts:33` has `MAGIC_LINK_RATE_LIMIT?: RateLimit`.
+- Derived from: `server/worker.ts:44` has `value === "on"`. `server/worker.ts:80` has `limitMagicLinkSignIn`. `server/worker.ts:345-346` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`. Part 1 returns the closed response and does not call `limitMagicLinkSignIn`. It was not run.
+- Source: `server/auth.ts:123` has `if (rateLimit === undefined) return null`.
 - Source: `server/auth.ts:49-51` has `customRules: {`, `[signInMagicLink.path]: () => false`. The library's own limit for this route is off, so a missing binding leaves sign-in unlimited.
 - Not verified: which plan includes the binding. The [Limits](https://developers.cloudflare.com/workers/platform/limits/) page does not name it. The [Pricing](https://developers.cloudflare.com/workers/platform/pricing/) page does not name it.
 - Not verified: a way to list the `namespace_id` values other Workers in this account already use.
@@ -607,7 +611,7 @@ Run:
 npm run cf:deploy
 ```
 
-- Source: `package.json:19` has `"cf:deploy": "wrangler d1 migrations apply bridgekit --remote && wrangler deploy"`. `package.json:19` lacks `vite build`.
+- Source: `package.json:22` has `"cf:deploy": "wrangler d1 migrations apply bridgekit --remote && wrangler deploy"`. `package.json:22` lacks `vite build`.
 - Source: `migrations/0001_page_views.sql:2` has `CREATE TABLE page_views`.
 - Source: `migrations/0002_auth.sql:2` has `create table "user"`.
 - Source: `migrations/0003_workspaces.sql:4` has `CREATE TABLE subscription`.
@@ -628,10 +632,10 @@ curl -sS -w '\n%{http_code}\n' -X POST 'https://<domain>/api/auth/sign-in/magic-
   --data '{"email":"review@example.invalid","callbackURL":"https://<domain>/app/"}'
 ```
 
-- Source: `server/worker.ts:112-113` has `commentary: Boolean(c.env.ANTHROPIC_API_KEY)`, `billing: Boolean(c.env.PADDLE_API_KEY && c.env.PADDLE_PRICE_ID)`.
-- Source: `server/worker.ts:37-38` has `value === "on"`.
+- Source: `server/worker.ts:246-247` has `commentary: Boolean(c.env.ANTHROPIC_API_KEY)`, `billing: Boolean(c.env.PADDLE_API_KEY && c.env.PADDLE_PRICE_ID)`.
+- Source: `server/worker.ts:44` has `value === "on"`.
 - Source: `server/worker.ts:56` has `CLOSED_CONFIG`.
-- Source: `src/app/account.ts:79` has `status: boolean`, `/api/auth/sign-in/magic-link`.
+- Source: `src/app/account.ts:111` has `status: boolean`, `/api/auth/sign-in/magic-link`.
 - Not verified: this repo does not contain the body `{"status":true}`. A local Worker with `ACCOUNTS` set to `on` returned that body in the D25 review. The author's session sent this step's two requests to a local Part 2 Worker with `ACCOUNTS` set to `on`. Config had `billing` true. Sign-in returned 200 `{"status":true}`. The reviewer's session ran the same two commands on a local Worker. Config had `billing` true. Sign-in returned 200 `{"status":true}`. Neither session sent the requests to the live domain. The reviewer's session entered no Paddle account. The reviewer's session entered no Cloudflare account. The reviewer's session entered no Resend account. The author's report records no deploy. The author's report records no secret upload.
 - Worked: `providers` is empty, `commentary` is false, and `billing` is true. The sign-in status is 200 and the body is `{"status":true}`.
 - If `ACCOUNTS` is missing or is any other value, the sign-in status is 404 and the body is `{"error":"Not found."}`. Config still has no providers, `commentary` false, and `billing` false, even when the Paddle secrets are set.
@@ -645,11 +649,11 @@ Open:
 https://<domain>/app/
 ```
 
-- Source: `src/app/Workspace.tsx:86` has `return <SignIn`.
-- Source: `src/app/Workspace.tsx:211-212` has `<fieldset className="team">`, `<legend>Workspace</legend>`.
-- Source: `src/app/Workspace.tsx:218` has `Check your email for a sign-in link.`
-- Derived from: `server/auth.ts:29` has `baseURL: env.BETTER_AUTH_URL`. `server/auth.ts:30` has `basePath: AUTH_BASE_PATH`. `server/auth.ts:8` has `AUTH_BASE_PATH = "/api/auth"`. The link is built from the base URL and that path. It was not run.
-- Source: `server/auth.ts:57` has `expiresIn: 15 * 60`.
+- Source: `src/app/Workspace.tsx:89` has `return <SignIn`.
+- Source: `src/app/Workspace.tsx:215` has `<fieldset className="team">`, `<legend>Workspace</legend>`.
+- Source: `src/app/Workspace.tsx:239` has `Check your email for a sign-in link.`
+- Derived from: `server/auth.ts:30` has `baseURL: env.BETTER_AUTH_URL`. `server/auth.ts:31` has `basePath: AUTH_BASE_PATH`. `server/auth.ts:9` has `AUTH_BASE_PATH = "/api/auth"`. The link is built from the base URL and that path. It was not run.
+- Source: `server/auth.ts:64` has `expiresIn: 15 * 60`.
 - Worked: mail from the address in step 2.6 arrives, its link starts with `https://<domain>/api/auth/`, and the link signs you in.
 
 Do: Check the sign-in limit from one connection.
@@ -684,10 +688,10 @@ for n in 1 2 3 4; do
 done
 ```
 
-- Source: `server/auth.ts:80` has `Content-Type must be application/json.`
-- Source: `server/auth.ts:88` has `if (result.issues) return null`.
-- Source: `server/auth.ts:16-17` has `Too many requests. Please try again later.`
-- Source: `server/auth.ts:90` has `cf-connecting-ip`.
+- Source: `server/auth.ts:114` has `Content-Type must be application/json.`
+- Source: `server/auth.ts:122` has `if (result.issues) return null`.
+- Source: `server/auth.ts:18` has `Too many requests. Please try again later.`
+- Source: `server/auth.ts:124` has `cf-connecting-ip`.
 - Source: `test/rate-limit.test.ts:551` has `{ status: 400, body: LIBRARY_EMAIL }`.
 - Source: `test/rate-limit.test.ts:557` has `calls: [{ key: CLIENT, success: true }]`.
 - Not verified: that a minute with no successful sign-in clears the counter, and how many attempts a real count needs. Step 2.17 cites the Accuracy section.
@@ -704,7 +708,7 @@ Open:
 https://<domain>/app/
 ```
 
-- Source: `src/app/Workspace.tsx:112` has `location.href = (await api.checkout(active, seats)).checkoutUrl`.
+- Source: `src/app/Workspace.tsx:115` has `location.href = (await api.checkout(active, seats)).checkoutUrl`.
 - Source: `server/paddle.ts:188-189` has `?_ptxn=`.
 - Worked: the address bar shows `https://<domain>/pay/?_ptxn=` followed by an id, and the checkout shows the price you chose.
 
@@ -717,13 +721,13 @@ Open:
 https://<domain>/app/?sample
 ```
 
-- Source: `src/app/Workspace.tsx:110` has `Pro,`, `"seat"`, `"seats"`.
-- Source: `src/app/Workspace.tsx:116` has `props.columns.length > 0`.
-- Source: `src/app/Workspace.tsx:129-131` has `props.setup`, `label="Save setup"`.
-- Source: `src/app/Workspace.tsx:136` has `api.saveSetup`.
+- Source: `src/app/Workspace.tsx:113` has `Pro,`, `"seat"`, `"seats"`.
+- Source: `src/app/Workspace.tsx:119` has `props.columns.length > 0`.
+- Source: `src/app/Workspace.tsx:132-134` has `props.setup`, `label="Save setup"`.
+- Source: `src/app/Workspace.tsx:139` has `api.saveSetup`.
 - Source: `src/pay/pay.ts:48` has `/app/?subscribed=1`.
 - Source: `server/workspace.ts:207` has `"applied"`.
-- Source: `server/workspace.ts:49` has `Saving to a workspace needs a Pro subscription.`
+- Source: `server/workspace.ts:110` has `Saving to a workspace needs a Pro subscription.`
 - Worked: the hint reads `Pro,` then the seat count and `seat` or `seats`. Save setup is on the page. After you reload the same columns, the saved name is still listed.
 
 ### 2.23 Check that an immediate cancellation reaches the site
@@ -744,7 +748,7 @@ npx wrangler d1 execute bridgekit --remote --command "SELECT status, currentPeri
 - Source: `server/workspace.ts:188-193` has `status`. `server/workspace.ts:188-193` lacks `scheduled_change`.
 - Source: `server/paddle.ts:154` has `export function hasPro`.
 - Source: `server/paddle.ts:160-163` has `case "canceled":`, `now.getTime() < end`.
-- Source: `src/app/Workspace.tsx:110` has `plan.plan.status === "canceled"`, `currentPeriodEnd`, `ends`, `slice(0, 10)`.
+- Source: `src/app/Workspace.tsx:113` has `plan.plan.status === "canceled"`, `currentPeriodEnd`, `ends`, `slice(0, 10)`.
 - Source: `migrations/0003_workspaces.sql:6` has `paddleSubscriptionId`.
 - Source: `migrations/0003_workspaces.sql:8` has `status TEXT NOT NULL`.
 - Source: `migrations/0003_workspaces.sql:11` has `currentPeriodEnd TEXT`.
@@ -753,12 +757,11 @@ npx wrangler d1 execute bridgekit --remote --command "SELECT status, currentPeri
 
 ## What Part 2 leaves untrue
 
-- Source: `index.html:262` has `planned and not available yet`. The Pricing section still says the paid plan is not available yet.
-- Source: `index.html:281` has `per user per month, expected`. That expected price is the static sentence on the page. It is not rewritten from the Paddle price you chose.
-- Source: `src/app/Workspace.tsx:249` has `/#pricing`. The Subscribe hint links there.
+- Source: `index.html:263` has `planned and not available yet`. The Pricing section still says the paid plan is not available yet.
+- Source: `index.html:282` has `per user per month, expected`. That expected price is the static sentence on the page. It is not rewritten from the Paddle price you chose.
+- Source: `src/app/Workspace.tsx:271` has `/#pricing`. The Subscribe hint links there.
 - Source: `wrangler.jsonc:18` has `/assets/*.wasm`. `wrangler.jsonc:18` lacks `/pay`. The pay page is not counted.
-- Source: `src/app/Workspace.tsx:68` has `Thank you. Pro switches on as soon as Paddle confirms the payment`. `src/app/Workspace.tsx:31` has `done = ""`. `src/app/Workspace.tsx:37` has `setMessage(done)`. `src/app/Workspace.tsx:76` has `act(async () => {`. The thank-you sentence is assigned and then cleared. That is a code follow-up, not a launch check.
-- Source: `privacy.html:70` has `Your IP address is used briefly, in memory, to slow repeated sign-in attempts.` The page still says the IP address is used in memory. You have yet to reword it.
+- Source: `src/app/Workspace.tsx:70` has `Thank you. Pro switches on as soon as Paddle confirms the payment`. `src/app/Workspace.tsx:31` has `done = ""`. `src/app/Workspace.tsx:37` has `setMessage(done)`. `src/app/Workspace.tsx:76` has `act(async () => {`. The thank-you sentence is assigned and then cleared. That is a code follow-up, not a launch check.
 
 To hide accounts and payments on the pages, run step 1.7 and step 1.10 again. The secrets stay set. The routes stay on while `ACCOUNTS` is `on`. To turn the routes off, remove `"ACCOUNTS": "on"`. Run step 1.10 again. A gated path then returns 404 and `{"error":"Not found."}`, and that return does not call `createAuth`.
 

@@ -120,14 +120,20 @@ and 41 MB.
 
 ### Cloudflare, with the opt-in features
 
-`npm run build:cloudflare` builds the site with page counts, Pro workspaces
-and AI commentary switched on, then gzips the two engine files to about 8 MB
-each, under Cloudflare's 25 MiB per-file limit. The Worker in `server/` serves
-the site and the API on one address, so the security policy stays limited to
-the site's own origin:
+`npm run build:cloudflare` reads `VITE_PAGE_COUNTS`, `VITE_WORKSPACES`, and
+`VITE_AI_COMMENTARY`. An unset or empty value counts as on, and a feature is
+included only when its value is exactly `1`. `npm run build:cloudflare:free`
+forces page counts on and the other two off. The build then gzips the two
+engine files to about 8 MB each, under Cloudflare's 25 MiB per-file limit. The
+Worker in `server/` serves the site and the API on one address, so the
+security policy stays limited to the site's own origin:
 
-- `server/counts.ts`: a daily count per page and referring site, taken as the
-  Worker serves each page. No script, cookie or visitor details.
+- `server/counts.ts`: a daily count for seven extensionless paths, `/`,
+  `/app/`, `/guide`, `/method`, `/privacy`, `/price-volume-mix-analysis`, and
+  `/grouping-level`. A referrer is a host with no port. A host longer than 200
+  characters is a direct visit. At most 32 new foreign hosts are stored for
+  each page and day, and further new hosts count under `other`. No script,
+  cookie or visitor details.
 - `server/auth.ts`, `server/workspace.ts`: accounts (Better Auth: emailed
   sign-in link, Microsoft, Google) and team workspaces that save setups without
   filter values and bridge totals (`src/summary.ts`). Saving needs Pro.
@@ -140,12 +146,15 @@ the site's own origin:
 To run all of it on this machine with a local database and no Cloudflare
 account: copy `.dev.vars.example` to `.dev.vars`, set `BETTER_AUTH_SECRET`,
 then `npm run build:cloudflare && npm run cf:dev` and open
-http://localhost:8790.
+http://localhost:8790. With `VITE_PAGE_COUNTS`, `VITE_WORKSPACES`, and
+`VITE_AI_COMMENTARY` unset or empty, that build switches all three on.
 
 Sign-in, workspaces, checkout, the Paddle webhook, and commentary answer only
 when `ACCOUNTS` is exactly `on`. `.dev.vars` sets that for local work.
 
-Without an email key, sign-in links are printed in the terminal.
+Sign-in links are printed in the terminal only when `LOCAL_EMAIL_LOG` is
+exactly `on`. When email cannot be sent and no sign-in provider is configured,
+the Workspace panel shows `Accounts are not open yet.` and no form.
 `npm run smoke -- http://localhost:8790` runs the smoke test against it.
 
 To go live, follow [DEPLOY.md](DEPLOY.md). Part 1 puts the free tool and page
