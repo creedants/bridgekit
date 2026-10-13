@@ -27,10 +27,8 @@ type CommentaryBase = {
   client?: Pick<Anthropic, "beta">;
 };
 
-/** Direct unit tests. No account gate and no count. */
 type Ungated = CommentaryBase & { spender?: undefined; rateLimit?: undefined };
 
-/** Production route. rateLimit undefined means the binding is absent and the request is not counted. */
 type Gated = CommentaryBase & {
   spender: (request: Request) => Promise<CommentarySpender | null>;
   rateLimit: RateLimitShape | undefined;
