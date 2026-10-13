@@ -88,19 +88,18 @@ test("an older Paddle event does not overwrite a newer one, and unknown workspac
   assert.equal(await applySubscription(db, subscription({ workspaceId: "nope" })), "unknown-workspace");
 });
 
-for (const status of ["active", "trialing", "past_due", "paused"] as const) {
-  test(`a newer event for a different subscription id does not replace a ${status} row`, async () => {
-    const db = await seeded();
-    assert.equal(await applySubscription(db, subscription({ status })), "applied");
-    const before = await storedSubscription(db);
-    assert.equal(before.paddleSubscriptionId, "sub_1");
-    assert.equal(
-      await applySubscription(db, subscription({ subscriptionId: "sub_other", occurredAt: "2026-10-05T00:00:00.000000Z", eventId: "evt_other" })),
-      "stale",
-    );
-    assert.deepEqual(await storedSubscription(db), before);
-  });
-}
+test("a newer event for a different subscription id replaces the stored row", async () => {
+  const db = await seeded();
+  assert.equal(await applySubscription(db, subscription()), "applied");
+  assert.equal(
+    await applySubscription(db, subscription({ subscriptionId: "sub_other", occurredAt: "2026-10-05T00:00:00.000000Z", eventId: "evt_other" })),
+    "applied",
+  );
+  const row = await storedSubscription(db);
+  assert.equal(row.paddleSubscriptionId, "sub_other");
+  assert.equal(row.status, "active");
+  assert.equal(row.lastEventAt, "2026-10-05T00:00:00.000000Z");
+});
 
 test("a repeated event at the same time leaves the stored subscription unchanged", async () => {
   const db = await seeded();

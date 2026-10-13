@@ -247,19 +247,17 @@ export async function userHasPro(db: D1Database, userId: string, now = new Date(
   return false;
 }
 
-const RELEASED_STATUS = "canceled";
-
 export async function assertCheckoutOpen(db: D1Database, workspaceId: string): Promise<void> {
   const held = await db
     .prepare(`SELECT 1 AS held FROM subscription WHERE organizationId = ? AND NOT (subscription.status = ?)`)
-    .bind(workspaceId, RELEASED_STATUS)
+    .bind(workspaceId, "canceled")
     .first();
   if (held) throw new WorkspaceError(409, "This workspace already has a subscription.");
 }
 
 /**
- * An older event is ignored. A newer event for a different subscription id is
- * ignored while the stored row is not canceled.
+ * Applies a Paddle subscription event. Paddle may deliver events out of
+ * order, so an event older than the last one applied is ignored.
  */
 export async function applySubscription(db: D1Database, change: SubscriptionChange): Promise<"applied" | "stale" | "unknown-workspace"> {
   const workspace = await db.prepare(`SELECT id FROM organization WHERE id = ?`).bind(change.workspaceId).first();
@@ -272,11 +270,7 @@ export async function applySubscription(db: D1Database, change: SubscriptionChan
          paddleSubscriptionId = excluded.paddleSubscriptionId, paddleCustomerId = excluded.paddleCustomerId,
          status = excluded.status, priceId = excluded.priceId, seats = excluded.seats,
          currentPeriodEnd = excluded.currentPeriodEnd, lastEventAt = excluded.lastEventAt
-       WHERE excluded.lastEventAt > subscription.lastEventAt
-         AND (
-           excluded.paddleSubscriptionId = subscription.paddleSubscriptionId
-           OR subscription.status = ?
-         )`,
+       WHERE excluded.lastEventAt > subscription.lastEventAt`,
     )
     .bind(
       change.workspaceId,
@@ -287,7 +281,6 @@ export async function applySubscription(db: D1Database, change: SubscriptionChan
       change.seats,
       change.currentPeriodEnd,
       change.occurredAt,
-      RELEASED_STATUS,
     )
     .run();
   return meta.changes ? "applied" : "stale";

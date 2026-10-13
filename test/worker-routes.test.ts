@@ -991,7 +991,7 @@ test("an owner with a live subscription and no Paddle key is told subscriptions 
   assert.deepEqual(await subscriptionRow(db, workspaceId), before);
 });
 
-test("a webhook for a different subscription id does not replace an active row", async () => {
+test("a webhook for a different subscription id with a later time replaces the stored row", async () => {
   const { db, workspaceId } = await session();
   const before = await subscriptionRow(db, workspaceId);
   assert.equal(before?.paddleSubscriptionId, "sub_review");
@@ -1004,8 +1004,10 @@ test("a webhook for a different subscription id does not replace an active row",
   });
   const response = await postWebhook(db, body);
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { result: "stale" });
-  assert.deepEqual(await subscriptionRow(db, workspaceId), before);
+  assert.deepEqual(await response.json(), { result: "applied" });
+  const row = await subscriptionRow(db, workspaceId);
+  assert.equal(row?.paddleSubscriptionId, "sub_other");
+  assert.equal(row?.status, "active");
 });
 
 test("a webhook for the same subscription id with a later time can mark it past_due", async () => {
