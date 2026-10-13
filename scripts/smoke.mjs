@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { open } from "./cdp.mjs";
 import { openDatabase } from "../src/duckdb.ts";
 import { runBridge } from "../src/engine.ts";
+import { whole, signedWhole } from "../src/app/format.ts";
 import { PERIOD, VIEW, viewSql } from "../src/app/setup.ts";
 import {
   FIXTURE_HEADER,
@@ -35,6 +36,107 @@ class Failure extends Error {}
 const fail = (message) => {
   throw new Failure(message);
 };
+
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function parseBridgeAmount(raw, where) {
+  if (raw === "") fail(`${where} amount is missing`);
+  const spelled = whole(-1234567);
+  const runs = [...spelled.matchAll(/\d+/g)];
+  const width = runs.at(-1)[0].length;
+  const group = spelled.slice(runs.at(-2).index + runs.at(-2)[0].length, runs.at(-1).index);
+  const minus = spelled.slice(0, runs[0].index);
+  const plain = whole(1);
+  const signed = signedWhole(1);
+  const plus = signed.endsWith(plain) ? signed.slice(0, -plain.length) : "";
+  const signs = [plus, minus].filter((sign) => sign !== "").map(escapeRegExp);
+  const sign = signs.length ? `(?:${signs.join("|")})?` : "";
+  const pattern = new RegExp(`^${sign}\\d{1,${width}}(?:${escapeRegExp(group)}\\d{${width}})*$`);
+  if (!pattern.test(raw)) fail(`${where} amount is ${JSON.stringify(raw)}`);
+  const value = Number(raw.split(group).join(""));
+  const rendered = plus !== "" && raw.startsWith(plus) ? signedWhole(value) : whole(value);
+  if (!Number.isFinite(value) || raw !== rendered) fail(`${where} amount is ${JSON.stringify(raw)}`);
+  return value;
+}
+
+function parseCssColor(text) {
+  const source = String(text ?? "");
+  const comma = /rgba?\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)\s*(?:,\s*([0-9.]+)(%)?\s*)?\)/.exec(source);
+  const space = /rgba?\(\s*([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s*(?:\/\s*([0-9.]+)(%)?\s*)?\)/.exec(source);
+  const match = comma || space;
+  if (!match) return null;
+  const channels = [match[1], match[2], match[3]].map(Number);
+  if (channels.some((channel) => !Number.isFinite(channel))) return null;
+  let alpha = 1;
+  if (match[4] != null && match[4] !== "") {
+    alpha = Number(match[4]);
+    if (!Number.isFinite(alpha)) return null;
+    if (match[5] === "%") alpha /= 100;
+  }
+  return { r: channels[0], g: channels[1], b: channels[2], a: alpha };
+}
+
+function colorsDiffer(left, right) {
+  return left.r !== right.r || left.g !== right.g || left.b !== right.b || left.a !== right.a;
+}
+
+function backdropColor(backgrounds) {
+  if (!Array.isArray(backgrounds)) return null;
+  for (const css of backgrounds) {
+    const color = parseCssColor(css);
+    if (color && color.a > 0) return color;
+  }
+  return null;
+}
+
+function outlinePaints(snapshot, backdrop) {
+  if (snapshot.outlineStyle === "none" || snapshot.outlineStyle === "hidden") return false;
+  const width = Number.parseFloat(snapshot.outlineWidth);
+  if (!(width > 0)) return false;
+  const color = parseCssColor(snapshot.outlineColor);
+  if (!color || !(color.a > 0) || !colorsDiffer(color, backdrop)) return false;
+  return true;
+}
+
+function splitBoxShadow(value) {
+  const text = String(value ?? "").trim();
+  if (text === "" || text === "none") return [];
+  const pieces = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === "(") depth += 1;
+    else if (char === ")") depth -= 1;
+    else if (char === "," && depth === 0) {
+      const piece = text.slice(start, i).trim();
+      if (piece) pieces.push(piece);
+      start = i + 1;
+    }
+  }
+  const last = text.slice(start).trim();
+  if (last) pieces.push(last);
+  return pieces;
+}
+
+function shadowPaints(piece, backdrop) {
+  if (/\binset\b/.test(piece)) return false;
+  const lengths = [...piece.matchAll(/(-?(?:\d+\.\d+|\d+|\.\d+))px/g)].map((match) => Number(match[1]));
+  if (lengths.length < 2 || lengths.length > 4) return false;
+  const [x, y, blur = 0, spread = 0] = lengths;
+  if (!(spread > 0 || blur > 0 || x !== 0 || y !== 0)) return false;
+  const color = parseCssColor(piece);
+  if (!color || !(color.a > 0) || !colorsDiffer(color, backdrop)) return false;
+  return true;
+}
+
+function ringVisible(snapshot) {
+  if (!snapshot || snapshot.missing) return false;
+  const backdrop = backdropColor(snapshot.backgrounds);
+  if (!backdrop) return false;
+  if (outlinePaints(snapshot, backdrop)) return true;
+  return splitBoxShadow(snapshot.boxShadow).some((piece) => shadowPaints(piece, backdrop));
+}
 
 function devPort() {
   const port = /"port"\s*:\s*(\d+)/.exec(readFileSync(join(root, "wrangler.jsonc"), "utf8"))?.[1];
@@ -309,11 +411,8 @@ async function drive(browser, origin, rows) {
   await browser.waitFor("!!document.querySelector('.kpis')", 600).catch((error) => fail(`the sample at ${sample} did not load and calculate within 150 s (${error.message})`));
   console.log(`sample loaded and calculated in ${Date.now() - started} ms`);
 
-  const bridge = JSON.parse(
-    await browser.evalJs(
-      "JSON.stringify([...document.querySelectorAll('.bridge table')[0].rows].slice(1).map(r => Number(r.cells[1].innerText.replace(/[,+]/g, ''))))",
-    ),
-  );
+  const bridgeRowsJs = "JSON.stringify([...document.querySelectorAll('.bridge table')[0].rows].slice(1).map((row) => ({ label: (row.cells[0] ? row.cells[0].innerText : '').trim(), amount: row.cells[1] ? row.cells[1].innerText : '' })))";
+  const bridge = JSON.parse(await browser.evalJs(bridgeRowsJs)).map((row) => parseBridgeAmount(row.amount, `sample: ${row.label || "row"}`));
   const [prior, ...rest] = bridge;
   const current = rest.pop();
   const residual = prior + rest.reduce((a, b) => a + b, 0) - current;
@@ -490,19 +589,8 @@ async function drive(browser, origin, rows) {
       await browser.waitFor("!!document.querySelector('.bridge table')");
     };
     const readBridge = async (step) => {
-      const rows = JSON.parse(
-        await browser.evalJs(
-          "JSON.stringify([...document.querySelectorAll('.bridge table')[0].rows].slice(1).map((row) => ({ label: (row.cells[0] ? row.cells[0].innerText : '').trim(), amount: row.cells[1] ? row.cells[1].innerText : '' })))",
-        ),
-      );
-      return rows.map((row) => {
-        const name = row.label || "row";
-        const raw = row.amount == null ? "" : String(row.amount).trim();
-        if (raw === "") fail(`${step}: ${name} amount is missing`);
-        const value = Number(raw.replace(/[,+]/g, ""));
-        if (!Number.isFinite(value)) fail(`${step}: ${name} amount is ${JSON.stringify(raw)}`);
-        return value;
-      });
+      const rows = JSON.parse(await browser.evalJs(bridgeRowsJs));
+      return rows.map((row) => parseBridgeAmount(row.amount, `${step}: ${row.label || "row"}`));
     };
     const sameTotals = (got, want, step) => {
       if (got.length !== want.length) fail(`${step}: ${got.length} bridge rows, expected ${want.length}`);
@@ -759,29 +847,15 @@ async function drive(browser, origin, rows) {
     };
     const ringJs = (labelExpr) => `(() => {
       const label = ${labelExpr};
-      if (!label) return JSON.stringify({ missing: true, visible: false, style: "", width: "", color: "", shadow: "" });
+      if (!label) return JSON.stringify({ missing: true });
       const style = getComputedStyle(label);
-      const parse = (css) => {
-        const match = String(css).match(/rgba?\\(([^)]+)\\)/);
-        if (!match) return null;
-        const parts = match[1].split(",").map((part) => Number(part.trim()));
-        return { r: parts[0], g: parts[1], b: parts[2], a: parts.length > 3 ? parts[3] : 1 };
-      };
-      const same = (left, right) => !!left && !!right && left.r === right.r && left.g === right.g && left.b === right.b && Math.abs(left.a - right.a) < 0.01;
+      const backgrounds = [];
       let node = label.parentElement;
-      let backdrop = null;
-      while (node && !backdrop) {
-        const color = parse(getComputedStyle(node).backgroundColor);
-        if (color && color.a > 0.01) backdrop = color;
+      while (node) {
+        backgrounds.push(getComputedStyle(node).backgroundColor);
         node = node.parentElement;
       }
-      const width = Number.parseFloat(style.outlineWidth) || 0;
-      const outlineColor = parse(style.outlineColor);
-      const outlineVisible = style.outlineStyle !== "none" && width > 0 && !!outlineColor && outlineColor.a > 0.01 && !same(outlineColor, backdrop);
-      const shadowText = style.boxShadow;
-      const shadowColor = shadowText && shadowText !== "none" ? parse(shadowText) : null;
-      const shadowVisible = shadowText !== "none" && !!shadowColor && shadowColor.a > 0.01 && !same(shadowColor, backdrop);
-      return JSON.stringify({ style: style.outlineStyle, width: style.outlineWidth, color: style.outlineColor, shadow: shadowText, visible: outlineVisible || shadowVisible });
+      return JSON.stringify({ missing: false, outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth, outlineColor: style.outlineColor, boxShadow: style.boxShadow, backgrounds });
     })()`;
     for (const [kind, match, label, labelSel] of [["nav", (s) => s.startsWith("nav:"), "Choose file", "header nav label.button"], ["run", (s) => s.startsWith("run:"), "Load setup", ".run label.button"]]) {
       await browser.evalJs("if (document.activeElement) document.activeElement.blur()");
@@ -791,8 +865,8 @@ async function drive(browser, origin, rows) {
       const named = await browser.accessibleName();
       if (named.name !== label) fail(`keyboard: ${kind} control is named ${named.name}`);
       const focused = JSON.parse(await browser.evalJs(ringJs("document.activeElement && document.activeElement.closest('label.button')")));
-      const sameRing = blurred.style === focused.style && blurred.width === focused.width && blurred.color === focused.color && blurred.shadow === focused.shadow;
-      if (!focused.visible || sameRing) fail(`keyboard: ${label} shows no focus ring (${blurred.style} ${blurred.width} ${blurred.color} to ${focused.style} ${focused.width} ${focused.color})`);
+      const sameRing = blurred.outlineStyle === focused.outlineStyle && blurred.outlineWidth === focused.outlineWidth && blurred.outlineColor === focused.outlineColor && blurred.boxShadow === focused.boxShadow;
+      if (!ringVisible(focused) || sameRing) fail(`keyboard: ${label} shows no focus ring (${blurred.outlineStyle} ${blurred.outlineWidth} ${blurred.outlineColor} to ${focused.outlineStyle} ${focused.outlineWidth} ${focused.outlineColor})`);
       for (const key of ["Enter", " "]) {
         browser.clearFileChoosers();
         await browser.key(key);
