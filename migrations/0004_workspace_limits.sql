@@ -5,12 +5,15 @@
 -- arrive at the same moment pass both and then both write. The database sees
 -- both, so the losing statement is refused here.
 --
--- A trigger may only refuse the statement that fired it. Nothing in this
--- migration reads, changes or deletes an existing row: applying it adds one
--- view and two triggers, and every row is left exactly as it was. The two
--- triggers then run on every invitation write afterwards, and they refuse
--- that write with RAISE(ABORT) instead of undoing it, so the request that
--- lost the race answers with the sentence below and sends no email.
+-- A trigger may only refuse the statement that fired it. Applying this
+-- migration changes no existing row: it adds one view and two triggers, and
+-- every row is left exactly as it was. The triggers read only capacity, the
+-- member rows and the subscription seats behind workspace_seats, and change
+-- and delete nothing elsewhere. The two triggers are BEFORE INSERT and
+-- BEFORE UPDATE ON invitation, and they refuse only a write that leaves a
+-- live pending invitation the workspace has no seat for, with RAISE(ABORT)
+-- instead of undoing it, so the request that lost the race answers with the
+-- sentence below and sends no email.
 
 -- The seats a workspace pays for right now, the same rule plan() applies in
 -- server/workspace.ts: paid seats while the subscription pays, otherwise one,

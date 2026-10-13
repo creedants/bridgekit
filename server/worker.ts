@@ -148,13 +148,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Refuses a workspace creation or an invitation before Better Auth runs, with
  * the same two sentences Better Auth would answer with.
  *
- * The Worker asks, because Better Auth's invitation route sends the email from
- * a background helper that catches whatever the hooks throw and then answers
- * 200: a refusal raised inside the plugin cannot produce the plain 403 the
- * request owes its caller. server/auth.ts still holds the same two checks for
- * callers that reach the plugin directly, and the triggers in
- * migrations/0004_workspace_limits.sql refuse a losing write that both checks
- * have already let through.
+ * The Worker asks, because the invitation email callback runs inside a
+ * background helper that catches a refusal and then answers 200: a refusal
+ * raised there cannot produce the plain 403 the request owes its caller.
+ * The plugin's before-hooks run before the row is written and answer 403
+ * themselves; the route's re-send branch never reaches beforeCreateInvitation,
+ * so a re-send with no seat left is refused by the update trigger instead.
+ * server/auth.ts still holds the same two checks for callers that reach the
+ * plugin directly, and the triggers in migrations/0004_workspace_limits.sql
+ * refuse a losing write that both checks have already let through.
  *
  * The invitation route resolves the workspace from the body's organizationId
  * and, without one, from the session's active workspace. This mirrors that,
@@ -163,6 +165,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 async function limitsRefusal(auth: Auth, env: Env, request: Request): Promise<Response | null> {
   if (request.method !== "POST") return null;
+  if (!endsWith(request, CREATE_WORKSPACE) && !endsWith(request, INVITE_MEMBER)) return null;
   const session = await auth.api.getSession({ headers: request.headers });
   if (!session) return null;
   if (endsWith(request, CREATE_WORKSPACE)) {
