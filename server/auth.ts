@@ -1,9 +1,10 @@
 import { betterAuth, type BetterAuthOptions } from "better-auth";
+import { APIError } from "better-auth/api";
 import { magicLink, organization } from "better-auth/plugins";
 import type { RateLimit } from "./cloudflare.ts";
 import { sendEmail } from "./email.ts";
 import type { Env } from "./env.ts";
-import { deleteSoleWorkspaces } from "./workspace.ts";
+import { deleteSoleWorkspaces, freeSeats, MAX_WORKSPACES_PER_USER, SEAT_LIMIT_SENTENCE, WORKSPACE_LIMIT_SENTENCE, workspaceCount } from "./workspace.ts";
 
 const AUTH_BASE_PATH = "/api/auth";
 
@@ -50,6 +51,12 @@ export function authOptions(env: Env, seatsFor: (workspaceId: string) => Promise
         [signInMagicLink.path]: () => false,
       },
     },
+    // A database error is not an APIError, so better-call would answer it with
+    // an empty 500 and the sentence a refused invitation carries would go no
+    // further than the log. Throwing it instead lets the Worker translate it
+    // into that sentence. Everything Better Auth refuses itself is an APIError
+    // and is still answered by Better Auth, exactly as before.
+    onAPIError: { throw: true },
     account: { accountLinking: { enabled: true, trustedProviders: ["microsoft", "google"] } },
     user: { deleteUser: { enabled: true, beforeDelete: (user) => deleteSoleWorkspaces(env.DB, user.id) } },
     plugins: [
@@ -62,13 +69,40 @@ export function authOptions(env: Env, seatsFor: (workspaceId: string) => Promise
         // A workspace holds as many members as it has paid seats; one (the owner) before it subscribes.
         membershipLimit: (_user, workspace) => seatsFor(workspace.id),
         invitationExpiresIn: 7 * 24 * 60 * 60,
-        sendInvitationEmail: ({ email, organization: workspace, inviter, id }) =>
-          sendEmail(
+        // Both hooks run before the row is written, so a refusal leaves neither
+        // a row nor an email behind. server/worker.ts asks the same two
+        // questions before Better Auth runs, so an ordinary request is refused
+        // before the plugin sees it; these hooks are the guard for every other
+        // caller, and the triggers in migrations/0004_workspace_limits.sql hold
+        // the invitation limit against two invitations written at the same
+        // moment.
+        organizationHooks: {
+          beforeCreateOrganization: async ({ user }) => {
+            if ((await workspaceCount(env.DB, user.id)) >= MAX_WORKSPACES_PER_USER) {
+              throw new APIError("FORBIDDEN", { message: WORKSPACE_LIMIT_SENTENCE });
+            }
+          },
+          beforeCreateInvitation: async ({ organization: workspace }) => {
+            if ((await freeSeats(env.DB, workspace.id)) <= 0) {
+              throw new APIError("FORBIDDEN", { message: SEAT_LIMIT_SENTENCE });
+            }
+          },
+        },
+        // The route sends this once the invitation row exists, so the only
+        // thing left to check is that the row is still there. A seat check
+        // here runs after a write has happened, and a refusal from it is
+        // swallowed by the background helper that runs this callback, which
+        // then answers 200 with an invitation nobody can act on.
+        sendInvitationEmail: async ({ email, organization: workspace, inviter, id }) => {
+          const row = await env.DB.prepare(`SELECT id FROM invitation WHERE id = ?`).bind(id).first();
+          if (!row) throw new APIError("FORBIDDEN", { message: SEAT_LIMIT_SENTENCE });
+          return sendEmail(
             env,
             email,
             `${inviter.user.name || inviter.user.email} invited you to a Bridgekit workspace`,
             `You have been invited to the workspace "${workspace.name}".\n\nTo accept, sign in with this email address and open:\n${env.BETTER_AUTH_URL}/app/?invitation=${id}\n\nThe invitation expires in 7 days.`,
-          ),
+          );
+        },
       }),
     ],
   } satisfies BetterAuthOptions;

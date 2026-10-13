@@ -6,12 +6,14 @@ import {
   applySubscription,
   deleteSaved,
   deleteSoleWorkspaces,
+  freeSeats,
   listBridges,
   listSetups,
   plan,
   saveBridge,
   saveSetup,
   userHasPro,
+  workspaceCount,
   WorkspaceError,
 } from "../server/workspace.ts";
 import { testDatabase } from "./support/d1.ts";
@@ -87,6 +89,33 @@ test("only setups without filter values and bridge totals can be saved", async (
   await rejects(saveSetup(db, "u1", "w1", { name: "x", columns: ["other"], setup }), 400);
   await rejects(saveBridge(db, "u1", "w1", { name: "x", columns, setup, summary: { ...summary, rows: [] } }), 400);
   await rejects(saveBridge(db, "u1", "w1", { name: "x", columns, setup, summary, filterColumns: ["customer"] }), 400);
+});
+
+test("the workspace count is of owned workspaces, and memberships elsewhere do not add to it", async () => {
+  const db = await seeded();
+  await db.prepare(`INSERT INTO organization (id, name, slug, createdAt) VALUES ('w2', 'Other', 'other', ?)`).bind(now).run();
+  await db.prepare(`INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES ('m4', 'w2', 'u1', 'member', ?), ('m5', 'w2', 'u3', 'owner', ?)`).bind(now, now).run();
+  assert.equal(await workspaceCount(db, "u1"), 1);
+  assert.equal(await workspaceCount(db, "u2"), 0);
+  assert.equal(await workspaceCount(db, "u3"), 1);
+
+  await db.prepare(`DELETE FROM member WHERE id = 'm1'`).run();
+  assert.equal(await workspaceCount(db, "u1"), 0);
+
+  // Seats already spent on a member or a live pending invitation are free again
+  // once those go, and the invitation that holds a seat is not counted twice.
+  await db.prepare(`INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES ('m6', 'w1', 'u3', 'member', ?)`).bind(now).run();
+  await applySubscription(db, subscription({ seats: 3 }));
+  await db.prepare(`INSERT INTO invitation (id, organizationId, email, role, status, expiresAt, createdAt, inviterId) VALUES ('i1', 'w1', 'a@example.com', 'member', 'pending', '2026-11-01T00:00:00.000Z', ?, 'u1'), ('i2', 'w1', 'b@example.com', 'member', 'pending', '2020-01-01T00:00:00.000Z', ?, 'u1')`).bind(now, now).run();
+  const nowDate = new Date(now);
+  // Two members and one live invitation fill the three seats.
+  assert.equal(await freeSeats(db, "w1", nowDate), 0);
+  assert.equal(await freeSeats(db, "w1", nowDate, "i1"), 1);
+  await db.prepare(`UPDATE invitation SET expiresAt = '2020-01-01T00:00:00.000Z' WHERE id = 'i1'`).run();
+  assert.equal(await freeSeats(db, "w1", nowDate), 1);
+  // Two members in a three-seat workspace with no invitation hold one of them.
+  await applySubscription(db, subscription({ workspaceId: "w2" }));
+  assert.equal(await freeSeats(db, "w2", nowDate), 1);
 });
 
 test("deleting an account removes the workspaces it is alone in, with their saved items", async () => {

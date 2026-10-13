@@ -171,6 +171,7 @@ npm run cf:deploy
 - Source: `migrations/0001_page_views.sql:2` has `CREATE TABLE page_views`.
 - Source: `migrations/0002_auth.sql:2` has `create table "user"`.
 - Source: `migrations/0003_workspaces.sql:4` has `CREATE TABLE subscription`.
+- Source: `migrations/0004_workspace_limits.sql` adds `CREATE VIEW workspace_seats` and two `BEFORE` triggers on `invitation` that refuse a write with `RAISE(ABORT)`. Applying it changes no row, so `wrangler d1 migrations apply` applies it to a database that already holds workspaces and invitations at or over the limits without touching them; the `BEFORE INSERT` and `BEFORE UPDATE` triggers on `invitation` then refuse only a write that leaves a live pending invitation the workspace has no seat for.
 - Not verified: whether a second apply of the same migrations is a no-op.
 - Worked: the command ends without an error, and `npx wrangler deployments list` shows a deployment from this run.
 
@@ -610,6 +611,7 @@ npm run cf:deploy
 - Source: `migrations/0001_page_views.sql:2` has `CREATE TABLE page_views`.
 - Source: `migrations/0002_auth.sql:2` has `create table "user"`.
 - Source: `migrations/0003_workspaces.sql:4` has `CREATE TABLE subscription`.
+- Source: `migrations/0004_workspace_limits.sql` adds `CREATE VIEW workspace_seats` and two `BEFORE` triggers on `invitation` that refuse a write with `RAISE(ABORT)`. Applying it changes no row, so `wrangler d1 migrations apply` applies it to a database that already holds workspaces and invitations at or over the limits without touching them; the `BEFORE INSERT` and `BEFORE UPDATE` triggers on `invitation` then refuse only a write that leaves a live pending invitation the workspace has no seat for.
 - Not verified: whether a second apply of the same migrations is a no-op.
 - Worked: the command ends without an error, and `curl -s -o /dev/null -w '%{http_code}\n' https://<domain>/pay/` prints 200.
 

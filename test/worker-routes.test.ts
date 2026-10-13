@@ -560,7 +560,12 @@ async function session(base: string = ORIGIN): Promise<{ db: Env["DB"]; cookie: 
     });
     const createdBody = await created.text();
     assert.equal(created.status, 200, createdBody);
-    return { db, cookie, workspaceId: (JSON.parse(createdBody) as { id: string }).id };
+    const workspaceId = (JSON.parse(createdBody) as { id: string }).id;
+    await db
+      .prepare("INSERT INTO subscription VALUES (?, 'sub_review', 'ctm_review', 'active', 'pri_review', 2, '2099-01-01T00:00:00Z', '2026-10-12T00:00:00Z')")
+      .bind(workspaceId)
+      .run();
+    return { db, cookie, workspaceId };
   } finally {
     recorded.restore();
   }

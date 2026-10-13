@@ -34,6 +34,67 @@ export async function plan(db: D1Database, workspaceId: string, now = new Date()
   return { pro, status: row.status, seats: pro ? row.seats : 1, currentPeriodEnd: row.currentPeriodEnd };
 }
 
+/**
+ * The most workspaces one account may own. This is an abuse bound, not a plan
+ * feature: it stops a free account from creating workspaces without limit.
+ */
+export const MAX_WORKSPACES_PER_USER = 3;
+
+/** What a refused creation and a refused invitation answer with. */
+export const WORKSPACE_LIMIT_SENTENCE = `You can own up to ${MAX_WORKSPACES_PER_USER} workspaces, so delete one before creating another.`;
+export const SEAT_LIMIT_SENTENCE = "This workspace has no free seat, so cancel a pending invitation or add seats.";
+
+/** The workspaces the account owns. Memberships in other people's workspaces
+ * cost nothing here: joining a colleague's workspace must not use up the
+ * account's own allowance. Deleting an owned workspace lowers this. */
+export async function workspaceCount(db: D1Database, userId: string): Promise<number> {
+  const row = await db
+    .prepare(`SELECT COUNT(DISTINCT organizationId) AS n FROM member WHERE userId = ? AND instr(',' || replace(role, ' ', '') || ',', ',owner,') > 0`)
+    .bind(userId)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+/**
+ * Paid seats still open for new invitations. Current members and live pending
+ * invitations each hold a seat, so an owner cannot queue more invitations than
+ * the workspace has seats. A cancelled or expired invitation holds none.
+ *
+ * `exceptInvitationId` is the invitation being re-sent: it already holds its
+ * seat, so it is not counted against the workspace it is sent from.
+ */
+export async function freeSeats(
+  db: D1Database,
+  workspaceId: string,
+  now = new Date(),
+  exceptInvitationId?: string,
+): Promise<number> {
+  const { seats } = await plan(db, workspaceId, now);
+  const members = await db.prepare(`SELECT COUNT(*) AS n FROM member WHERE organizationId = ?`).bind(workspaceId).first<{ n: number }>();
+  const { results } = await db
+    .prepare(`SELECT id, expiresAt FROM invitation WHERE organizationId = ? AND status = 'pending'`)
+    .bind(workspaceId)
+    .all<{ id: string; expiresAt: string }>();
+  const pending = results.filter((invitation) => invitation.id !== exceptInvitationId && new Date(invitation.expiresAt) > now).length;
+  return seats - (members?.n ?? 0) - pending;
+}
+
+/**
+ * Whether an invitation Better Auth's route is about to take has a seat. A
+ * re-sent invitation already holds its seat, so it is not counted twice; the
+ * route looks the live pending row up by address and workspace, and only when
+ * the body asks for a re-send. When it finds none it writes a new invitation,
+ * which has to find a seat of its own.
+ */
+export async function invitationHasSeat(db: D1Database, workspaceId: string, body: { email?: unknown; resend?: unknown }): Promise<boolean> {
+  if (!body.resend || typeof body.email !== "string") return (await freeSeats(db, workspaceId)) > 0;
+  const row = await db
+    .prepare(`SELECT id FROM invitation WHERE organizationId = ? AND email = ? AND status = 'pending' AND datetime(expiresAt) > datetime('now')`)
+    .bind(workspaceId, body.email.toLowerCase())
+    .first<{ id: string }>();
+  return (await freeSeats(db, workspaceId, new Date(), row?.id)) > 0;
+}
+
 /** The member's role, or a 404 that does not reveal whether the workspace exists. */
 export async function membership(db: D1Database, userId: string, workspaceId: string): Promise<string> {
   const row = await db
