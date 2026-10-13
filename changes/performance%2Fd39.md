@@ -1,0 +1,2 @@
+- `src/app/sheet.ts` writes the same Excel header text main writes, including the word `undefined` for a missing cell. After the sheet is read, only those missing columns are renamed. A filled header keeps the name main shows.
+- `src/app/db.ts` shows "Could not load the database. Check your connection, then choose your file or the sample data again." when an engine file does not arrive whole. A worker script or wasm file that arrives whole, including one the browser refuses and one reached through a redirect, still shows "The database worker did not start".

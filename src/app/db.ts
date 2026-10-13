@@ -4,8 +4,8 @@ import ehWasm from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
 import mvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import type { Query } from "../engine.ts";
 import { decodeCsvBuffer, ENCODING_SENTENCE, isUtf8Prefix } from "./encoding.ts";
-import { toCsv } from "./files.ts";
 import { convertFormattedNumbers } from "./numbers.ts";
+import { firstSheetAsCsv, holeRenames } from "./sheet.ts";
 
 type ChunkFailure = "network" | "gone";
 
@@ -210,18 +210,89 @@ export function openBrowserDatabase(): Promise<BrowserDatabase> {
   return opening;
 }
 
-function startFailureForPage(error: unknown): Error {
+const workerScriptByError = new WeakMap<Error, string>();
+
+function noteWorkerScript(error: unknown, scriptUrl: string): void {
+  if (error instanceof Error) workerScriptByError.set(error, scriptUrl);
+}
+
+function sameOriginWorkerScript(url: string | undefined): string | undefined {
+  if (url == null) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (parsed.origin !== location.origin) return undefined;
+  return parsed.href;
+}
+
+function quote(name: string): string {
+  return `"${name.replaceAll('"', '""')}"`;
+}
+
+// True means the response finished or redirected, so this is not a download failure.
+// A redirect is not followed. One request stays on this origin.
+async function workerScriptLoaded(url: string): Promise<boolean> {
+  let response: Response;
+  try {
+    response = await fetch(url, { cache: "no-store", redirect: "manual" });
+  } catch {
+    return false;
+  }
+  if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
+    if (response.body !== null) await response.body.cancel().catch(() => undefined);
+    return true;
+  }
+  if (!response.ok) {
+    if (response.body !== null) await response.body.cancel().catch(() => undefined);
+    return false;
+  }
+  try {
+    await response.arrayBuffer();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function startFailureForPage(error: unknown): Promise<Error> {
   if (error instanceof ChunkUnavailable) return error;
   console.error(error);
+  if (error instanceof Error && (await isDownloadFailure(error))) return new Error(LIBRARY_FAILURE.network);
   return new Error("The database worker did not start");
+}
+
+async function isDownloadFailure(error: Error): Promise<boolean> {
+  const message = error.message;
+  if (message === "Failed to fetch") return true;
+  if (
+    message.includes("Failed to execute 'compile' on 'WebAssembly'") &&
+    message.includes("HTTP status code is not ok")
+  ) {
+    return true;
+  }
+  if (message.includes("WebAssembly compilation aborted") && message.includes("Network error")) return true;
+  // Chromium uses this importScripts text for a refused 200 and for a failed download.
+  if (
+    message.includes("Failed to execute 'importScripts' on 'WorkerGlobalScope'") &&
+    message.includes("failed to load")
+  ) {
+    const scriptUrl = sameOriginWorkerScript(workerScriptByError.get(error));
+    if (scriptUrl == null) return false;
+    return !(await workerScriptLoaded(scriptUrl));
+  }
+  return false;
 }
 
 function openFresh(): Promise<BrowserDatabase> {
   const attempt = instantiateBrowserDatabase().then(
     (database) => database,
-    (error: unknown) => {
+    async (error: unknown) => {
+      const pageError = await startFailureForPage(error);
       if (opening === attempt) opening = undefined;
-      throw startFailureForPage(error);
+      throw pageError;
     },
   );
   return attempt;
@@ -348,6 +419,7 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
     eh: { mainModule: ehWasm, mainWorker: ehWorker },
   });
   if (bundle.mainWorker == null) throw new Error("DuckDB bundle is missing its worker");
+  const workerScriptUrl = pageUrl(bundle.mainWorker);
   const script = databaseWorker(bundle.mainWorker);
   try {
     const db = new duckdb.AsyncDuckDB(new duckdb.VoidLogger(), script.worker);
@@ -355,7 +427,11 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
     const startFailed = new Promise<never>((_, reject) => {
       script.worker.addEventListener(
         "error",
-        (event) => reject(new Error(event.message)),
+        (event) => {
+          const failure = new Error(event.message);
+          noteWorkerScript(failure, workerScriptUrl);
+          reject(failure);
+        },
         { once: true },
       );
     });
@@ -376,8 +452,11 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
           throw new Error("Use a CSV, Excel (.xlsx) or Parquet file");
         }
         const registered = isParquet ? "upload.parquet" : "upload.csv";
+        let excelHoles: readonly number[] = [];
         if (isExcel) {
-          await db.registerFileText(registered, await firstSheetAsCsv(file));
+          const sheet = await firstSheetAsCsv(file);
+          excelHoles = sheet.holes;
+          await db.registerFileText(registered, sheet.csv);
         } else if (isParquet) {
           await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
         } else {
@@ -397,10 +476,19 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
         } catch (error) {
           throw csvEncodingFailure(error);
         }
+        if (excelHoles.length > 0) {
+          const described = await query(`DESCRIBE ${quote(table)}`);
+          const names = described.map((row) => String(row.column_name));
+          for (const rename of holeRenames(names, excelHoles)) {
+            if (rename.from === rename.to) continue;
+            await query(`ALTER TABLE ${quote(table)} RENAME COLUMN ${quote(rename.from)} TO ${quote(rename.to)}`);
+          }
+        }
         await convertFormattedNumbers(query, table);
       },
     };
   } catch (error) {
+    noteWorkerScript(error, workerScriptUrl);
     script.worker.terminate();
     throw error;
   } finally {
@@ -408,29 +496,3 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
   }
 }
 
-/** Reads the first worksheet of an .xlsx file, taking formula results and formatting dates as ISO. */
-async function firstSheetAsCsv(file: File): Promise<string> {
-  const { default: ExcelJS } = await import("exceljs");
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(await file.arrayBuffer());
-  const sheet = workbook.worksheets[0];
-  if (!sheet || sheet.rowCount < 2) throw new Error("The first sheet of that workbook has no data rows.");
-  const plain = (value: unknown): unknown => {
-    if (value instanceof Date) return value.toISOString().slice(0, 10);
-    if (typeof value === "object" && value !== null) {
-      const cell = value as { result?: unknown; text?: unknown; richText?: { text: string }[] };
-      if (cell.richText) return cell.richText.map((part) => part.text).join("");
-      if ("result" in cell) return plain(cell.result);
-      if ("text" in cell) return cell.text;
-      return "";
-    }
-    return value;
-  };
-  const rows: unknown[][] = [];
-  const width = sheet.columnCount;
-  sheet.eachRow((row) => {
-    const values = (row.values as unknown[]).slice(1);
-    rows.push(Array.from({ length: width }, (_, i) => plain(values[i])));
-  });
-  return toCsv(rows[0].map(String), rows.slice(1));
-}
