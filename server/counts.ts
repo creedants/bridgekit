@@ -7,14 +7,16 @@ import type { D1Database } from "./cloudflare.ts";
  * cookie, no browser details. Nothing inside the tool is counted, only that
  * /app/ was opened.
  *
- * A known page is stored once, whichever address was requested. Each page
- * keeps at most 32 foreign hosts for a day. Further new hosts add to the
- * stored referrer `other`.
+ * A known page is stored once, whichever address was requested. A new foreign
+ * host is stored only while that page and day have fewer than 32. A host
+ * already stored for that page and day keeps its row. Further new hosts add
+ * to the stored referrer `other`.
  */
 
 const BOTS = /bot|crawl|spider|slurp|preview|monitor|lighthouse|headless|curl|wget|python|httpclient|java\//i;
 const OVERFLOW = "other";
 export const REFERRER_HOST_CAP = 32;
+const STORED_HOST_LIMIT = 200;
 
 /** The path to store for a known page, or null when the address is not one. */
 export function canonicalPagePath(address: string, articles: ReadonlySet<string>): string | null {
@@ -88,6 +90,7 @@ function bareHostname(hostname: string): string {
 }
 
 function isStoredHost(host: string): boolean {
+  if (host.length > STORED_HOST_LIMIT) return false;
   if (host.includes(":")) return host.length >= 2 && host.length <= 45 && /^[0-9a-f:.]+$/.test(host);
   const parts = host.split(".");
   if (parts.length === 4 && parts.every((part) => /^\d+$/.test(part))) {
