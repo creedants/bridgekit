@@ -124,6 +124,8 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
     /** @type {Asker[]} */ const askers = [];
     /** @type {NetworkRecord[]} */ const network = [];
     /** @type {Violation[]} */ const violations = [];
+    /** File chooser openings seen while interception is on. */
+    const fileChoosers = [];
     /**
      * sessionId → the asker that session reports for, or null when the session is no recorder.
      * Never pruned, so an event in flight when its session detached still names its asker.
@@ -215,6 +217,10 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
       const asker = reporters.get(d.sessionId);
       if (asker === undefined) {
         broken ??= new Error(`${d.method} came from a session Chrome never announced, so its asker is unknown`);
+        return;
+      }
+      if (d.method === "Page.fileChooserOpened") {
+        fileChoosers.push({ backendNodeId: d.params.backendNodeId, mode: d.params.mode });
         return;
       }
       if (!asker) return;
@@ -313,7 +319,7 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
       if (d.method === "Target.attachedToTarget") attach(d.params);
       else if (d.method === "Target.detachedFromTarget") detach(d.params);
       else if (d.method === "Fetch.requestPaused") gate(d.params, d.sessionId);
-      else if (/^(Network|Audits)\./.test(d.method)) report(d);
+      else if (/^(Network|Audits)\./.test(d.method) || d.method === "Page.fileChooserOpened") report(d);
     };
     ws.onclose = () => {
       if (record) {
@@ -368,6 +374,20 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
       send, evalJs, waitFor, sleep, goto, finish,
       size: (width, height) => send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: width < 600 }),
       shot: async (name, full = false) => writeFileSync(name, Buffer.from((await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: full })).data, "base64")),
+      fileChoosers: () => [...fileChoosers],
+      clearFileChoosers: () => { fileChoosers.length = 0; },
+      waitForFileChooser: async (ms = 3000) => {
+        const end = Date.now() + ms;
+        while (fileChoosers.length === 0 && Date.now() < end) await sleep(50);
+        if (!fileChoosers.length) throw new Error("timeout waiting for the file chooser");
+      },
+      key: async (key) => {
+        const code = key === "Tab" ? "Tab" : key === "Enter" ? "Enter" : key === " " ? "Space" : key;
+        const windowsVirtualKeyCode = key === "Tab" ? 9 : key === "Enter" ? 13 : key === " " ? 32 : undefined;
+        const text = key === "Enter" ? "\r" : key === " " ? " " : undefined;
+        await send("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode, ...(text ? { text } : {}) });
+        await send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode });
+      },
       close: () => {
         if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) ws.close();
         stop();
