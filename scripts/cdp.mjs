@@ -95,6 +95,7 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
   // A profile Chrome still has open must not throw into the benchmark.
   const removeScratch = () => { try { rmSync(scratch, { recursive: true, force: true, maxRetries: 3 }); } catch {} };
   const stderrTail = () => { try { return readFileSync(stderrPath, "utf8").slice(-2000).trim(); } catch { return ""; } };
+  let browserExit = null;
   const exited = new Promise((resolve) => {
     const done = () => { removeScratch(); resolve(); };
     chrome.once("error", (error) => {
@@ -103,7 +104,8 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
     });
     chrome.once("exit", (code, signal) => {
       // An exit after open() resolved is the caller stopping the browser, not a startup failure.
-      if (!ready) failed ??= `"${chromium}" exited (${signal ?? code}) before its debugging port opened. Its last output:\n${stderrTail()}`;
+      browserExit = { code, signal, stderr: stderrTail() };
+      if (!ready) failed ??= `"${chromium}" exited (${signal ?? code}) before its debugging port opened. Its last output:\n${browserExit.stderr}`;
       done();
     });
   });
@@ -124,6 +126,8 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
     /** @type {Asker[]} */ const askers = [];
     /** @type {NetworkRecord[]} */ const network = [];
     /** @type {Violation[]} */ const violations = [];
+    /** File chooser openings seen while interception is on. */
+    const fileChoosers = [];
     /**
      * sessionId → the asker that session reports for, or null when the session is no recorder.
      * Never pruned, so an event in flight when its session detached still names its asker.
@@ -142,9 +146,16 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
     const hops = new Map();
     // The first recorder fault. Once set, every command and finish() throw it.
     let broken = null;
+    let closing = false;
+    const closedSocket = (method) => {
+      if (closing) return new Error("the browser closed its debugging socket");
+      const status = browserExit ? browserExit.signal ?? browserExit.code : "not exited";
+      const stderr = browserExit ? browserExit.stderr : stderrTail();
+      return new Error(`the browser closed its debugging socket during ${method} (exit ${status}). Its last output:\n${stderr}`);
+    };
     const command = (method, params, sessionId) => new Promise((resolve, reject) => {
       if (record && broken) return reject(broken);
-      if (record && ws.readyState !== WebSocket.OPEN) return reject(broken ??= new Error("the browser closed its debugging socket"));
+      if (record && ws.readyState !== WebSocket.OPEN) return reject(broken ??= closedSocket(method));
       const current = ++id;
       let timer;
       let settled = false;
@@ -164,6 +175,7 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
         }, REPLY_MS);
       }
       pending.set(current, {
+        method,
         reply: (d) => finish(record && d.error ? new Error(`${method} failed: ${d.error.message}`) : null, d.result),
         fail: (error) => finish(error),
       });
@@ -215,6 +227,10 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
       const asker = reporters.get(d.sessionId);
       if (asker === undefined) {
         broken ??= new Error(`${d.method} came from a session Chrome never announced, so its asker is unknown`);
+        return;
+      }
+      if (d.method === "Page.fileChooserOpened") {
+        fileChoosers.push({ backendNodeId: d.params.backendNodeId, mode: d.params.mode });
         return;
       }
       if (!asker) return;
@@ -313,14 +329,30 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
       if (d.method === "Target.attachedToTarget") attach(d.params);
       else if (d.method === "Target.detachedFromTarget") detach(d.params);
       else if (d.method === "Fetch.requestPaused") gate(d.params, d.sessionId);
-      else if (/^(Network|Audits)\./.test(d.method)) report(d);
+      else if (/^(Network|Audits)\./.test(d.method) || d.method === "Page.fileChooserOpened") report(d);
     };
     ws.onclose = () => {
-      if (record) {
-        const error = new Error("the browser closed its debugging socket");
-        for (const waiter of [...pending.values()]) waiter.fail(error);
+      let method = "none";
+      for (const entry of pending.values()) method = entry.method;
+      let settled = false;
+      const rejectWaiters = () => {
+        if (settled) return;
+        settled = true;
+        if (record) {
+          const error = closedSocket(method);
+          for (const waiter of [...pending.values()]) waiter.fail(error);
+        }
+        markClosed();
+      };
+      if (record && !closing && !browserExit) {
+        const timer = setTimeout(rejectWaiters, 500);
+        chrome.once("exit", () => {
+          clearTimeout(timer);
+          rejectWaiters();
+        });
+        return;
       }
-      markClosed();
+      rejectWaiters();
     };
     // Before any target runs, so a request cannot leave until the gate has recorded it.
     if (record) {
@@ -356,6 +388,7 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
         return left ? `the ${left.type} at ${left.url} was still running after its document was left` : null;
       });
       await settle();
+      closing = true;
       await command("Browser.close");
       await socketClosed;
       stop();
@@ -368,7 +401,33 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
       send, evalJs, waitFor, sleep, goto, finish,
       size: (width, height) => send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: width < 600 }),
       shot: async (name, full = false) => writeFileSync(name, Buffer.from((await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: full })).data, "base64")),
+      fileChoosers: () => [...fileChoosers],
+      clearFileChoosers: () => { fileChoosers.length = 0; },
+      waitForFileChooser: async (ms = 3000, step = "the file chooser") => {
+        const end = Date.now() + ms;
+        while (fileChoosers.length === 0 && Date.now() < end) await sleep(50);
+        if (!fileChoosers.length) throw new Error(`timeout waiting for ${step} to open the file chooser`);
+      },
+      accessibleName: async () => {
+        const evaluated = await send("Runtime.evaluate", { expression: "document.activeElement" });
+        const objectId = evaluated.result?.objectId;
+        if (!objectId) throw new Error("the focused control has no node");
+        const described = await send("DOM.describeNode", { objectId });
+        const backendNodeId = described.node.backendNodeId;
+        await send("Accessibility.enable");
+        const tree = await send("Accessibility.getPartialAXTree", { backendNodeId, fetchRelatives: false });
+        const node = (tree.nodes ?? []).find((entry) => entry.backendDOMNodeId === backendNodeId) ?? tree.nodes?.[0];
+        return { name: String(node?.name?.value ?? "").trim(), role: String(node?.role?.value ?? "") };
+      },
+      key: async (key) => {
+        const code = key === "Tab" ? "Tab" : key === "Enter" ? "Enter" : key === " " ? "Space" : key;
+        const windowsVirtualKeyCode = key === "Tab" ? 9 : key === "Enter" ? 13 : key === " " ? 32 : undefined;
+        const text = key === "Enter" ? "\r" : key === " " ? " " : undefined;
+        await send("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode, ...(text ? { text } : {}) });
+        await send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode });
+      },
       close: () => {
+        closing = true;
         if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) ws.close();
         stop();
         return exited;

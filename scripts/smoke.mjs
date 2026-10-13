@@ -10,6 +10,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { open } from "./cdp.mjs";
+import { openDatabase } from "../src/duckdb.ts";
+import { runBridge } from "../src/engine.ts";
+import { whole, signedWhole } from "../src/app/format.ts";
+import { PERIOD, VIEW, viewSql } from "../src/app/setup.ts";
+import {
+  FIXTURE_HEADER,
+  FIXTURE_LEVELS,
+  FORMATTED_CURRENT,
+  FORMATTED_PRIOR,
+  toTsvText,
+  writeFixtures,
+} from "./smoke-files.mjs";
 
 /** @typedef {{ kind: "preview" } | { kind: "wrangler" } | { kind: "url", origin: string }} Target */
 /** @typedef {{ origin: string, stop: () => Promise<void> }} Server */
@@ -24,6 +36,107 @@ class Failure extends Error {}
 const fail = (message) => {
   throw new Failure(message);
 };
+
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function parseBridgeAmount(raw, where) {
+  if (raw === "") fail(`${where} amount is missing`);
+  const spelled = whole(-1234567);
+  const runs = [...spelled.matchAll(/\d+/g)];
+  const width = runs.at(-1)[0].length;
+  const group = spelled.slice(runs.at(-2).index + runs.at(-2)[0].length, runs.at(-1).index);
+  const minus = spelled.slice(0, runs[0].index);
+  const plain = whole(1);
+  const signed = signedWhole(1);
+  const plus = signed.endsWith(plain) ? signed.slice(0, -plain.length) : "";
+  const signs = [plus, minus].filter((sign) => sign !== "").map(escapeRegExp);
+  const sign = signs.length ? `(?:${signs.join("|")})?` : "";
+  const pattern = new RegExp(`^${sign}\\d{1,${width}}(?:${escapeRegExp(group)}\\d{${width}})*$`);
+  if (!pattern.test(raw)) fail(`${where} amount is ${JSON.stringify(raw)}`);
+  const value = Number(raw.split(group).join(""));
+  const rendered = plus !== "" && raw.startsWith(plus) ? signedWhole(value) : whole(value);
+  if (!Number.isFinite(value) || raw !== rendered) fail(`${where} amount is ${JSON.stringify(raw)}`);
+  return value;
+}
+
+function parseCssColor(text) {
+  const source = String(text ?? "");
+  const comma = /rgba?\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)\s*(?:,\s*([0-9.]+)(%)?\s*)?\)/.exec(source);
+  const space = /rgba?\(\s*([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s*(?:\/\s*([0-9.]+)(%)?\s*)?\)/.exec(source);
+  const match = comma || space;
+  if (!match) return null;
+  const channels = [match[1], match[2], match[3]].map(Number);
+  if (channels.some((channel) => !Number.isFinite(channel))) return null;
+  let alpha = 1;
+  if (match[4] != null && match[4] !== "") {
+    alpha = Number(match[4]);
+    if (!Number.isFinite(alpha)) return null;
+    if (match[5] === "%") alpha /= 100;
+  }
+  return { r: channels[0], g: channels[1], b: channels[2], a: alpha };
+}
+
+function colorsDiffer(left, right) {
+  return left.r !== right.r || left.g !== right.g || left.b !== right.b || left.a !== right.a;
+}
+
+function backdropColor(backgrounds) {
+  if (!Array.isArray(backgrounds)) return null;
+  for (const css of backgrounds) {
+    const color = parseCssColor(css);
+    if (color && color.a > 0) return color;
+  }
+  return null;
+}
+
+function outlinePaints(snapshot, backdrop) {
+  if (snapshot.outlineStyle === "none" || snapshot.outlineStyle === "hidden") return false;
+  const width = Number.parseFloat(snapshot.outlineWidth);
+  if (!(width > 0)) return false;
+  const color = parseCssColor(snapshot.outlineColor);
+  if (!color || !(color.a > 0) || !colorsDiffer(color, backdrop)) return false;
+  return true;
+}
+
+function splitBoxShadow(value) {
+  const text = String(value ?? "").trim();
+  if (text === "" || text === "none") return [];
+  const pieces = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === "(") depth += 1;
+    else if (char === ")") depth -= 1;
+    else if (char === "," && depth === 0) {
+      const piece = text.slice(start, i).trim();
+      if (piece) pieces.push(piece);
+      start = i + 1;
+    }
+  }
+  const last = text.slice(start).trim();
+  if (last) pieces.push(last);
+  return pieces;
+}
+
+function shadowPaints(piece, backdrop) {
+  if (/\binset\b/.test(piece)) return false;
+  const lengths = [...piece.matchAll(/(-?(?:\d+\.\d+|\d+|\.\d+))px/g)].map((match) => Number(match[1]));
+  if (lengths.length < 2 || lengths.length > 4) return false;
+  const [x, y, blur = 0, spread = 0] = lengths;
+  if (!(spread > 0 || blur > 0 || x !== 0 || y !== 0)) return false;
+  const color = parseCssColor(piece);
+  if (!color || !(color.a > 0) || !colorsDiffer(color, backdrop)) return false;
+  return true;
+}
+
+function ringVisible(snapshot) {
+  if (!snapshot || snapshot.missing) return false;
+  const backdrop = backdropColor(snapshot.backgrounds);
+  if (!backdrop) return false;
+  if (outlinePaints(snapshot, backdrop)) return true;
+  return splitBoxShadow(snapshot.boxShadow).some((piece) => shadowPaints(piece, backdrop));
+}
 
 function devPort() {
   const port = /"port"\s*:\s*(\d+)/.exec(readFileSync(join(root, "wrangler.jsonc"), "utf8"))?.[1];
@@ -298,11 +411,8 @@ async function drive(browser, origin, rows) {
   await browser.waitFor("!!document.querySelector('.kpis')", 600).catch((error) => fail(`the sample at ${sample} did not load and calculate within 150 s (${error.message})`));
   console.log(`sample loaded and calculated in ${Date.now() - started} ms`);
 
-  const bridge = JSON.parse(
-    await browser.evalJs(
-      "JSON.stringify([...document.querySelectorAll('.bridge table')[0].rows].slice(1).map(r => Number(r.cells[1].innerText.replace(/[,+]/g, ''))))",
-    ),
-  );
+  const bridgeRowsJs = "JSON.stringify([...document.querySelectorAll('.bridge table')[0].rows].slice(1).map((row) => ({ label: (row.cells[0] ? row.cells[0].innerText : '').trim(), amount: row.cells[1] ? row.cells[1].innerText : '' })))";
+  const bridge = JSON.parse(await browser.evalJs(bridgeRowsJs)).map((row) => parseBridgeAmount(row.amount, `sample: ${row.label || "row"}`));
   const [prior, ...rest] = bridge;
   const current = rest.pop();
   const residual = prior + rest.reduce((a, b) => a + b, 0) - current;
@@ -420,6 +530,364 @@ async function drive(browser, origin, rows) {
   await loadCsv();
   if (!(await browser.evalJs(`!${rememberBox}.checked && localStorage.length === 1`))) fail("remembering turned itself back on after a reload");
   console.log("ok  remember setup: staying off survives a reload");
+
+  const fixtureDir = mkdtempSync(join(tmpdir(), "bridgekit-fixtures-"));
+  try {
+    const fixtures = await writeFixtures(fixtureDir);
+    const nodeQuery = await openDatabase();
+    await nodeQuery(`CREATE OR REPLACE TABLE data AS SELECT * FROM read_csv('${fixtures.csvPath}', header=true)`);
+    const fixtureSetup = {
+      periodColumn: "sale_date",
+      grain: "year",
+      unitsColumn: "units",
+      salesColumn: "net_sales",
+      levels: FIXTURE_LEVELS,
+      filters: [],
+      newAndDiscontinued: "difference",
+    };
+    await nodeQuery(viewSql(fixtureSetup));
+    const expected = await runBridge(nodeQuery, {
+      table: VIEW,
+      periodColumn: PERIOD,
+      prior: "2024",
+      current: "2025",
+      unitsColumn: "units",
+      salesColumn: "net_sales",
+      levels: FIXTURE_LEVELS,
+    });
+    const expectedAmounts = [
+      expected.priorSales,
+      ...expected.effects.filter((e) => e.key !== "no_units" || e.value !== 0).map((e) => e.value),
+      expected.currentSales,
+    ];
+
+    const setDataFile = async (path) => {
+      await browser.goto(`${origin}/app/`);
+      const { root } = await browser.send("DOM.getDocument");
+      const { nodeId } = await browser.send("DOM.querySelector", { nodeId: root.nodeId, selector: "input[type=file][accept*=csv]" });
+      await browser.send("DOM.setFileInputFiles", { nodeId, files: [path] });
+      await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent");
+    };
+    const addAttribute = async (column) => {
+      await browser.evalJs(`T.set(document.querySelector('select[aria-label="Add attribute"]'), ${JSON.stringify(column)})`);
+      try {
+        await browser.waitFor(`[...document.querySelectorAll('.levels input[aria-label="Attribute name"]')].some((input) => input.value === ${JSON.stringify(column)})`);
+      } catch (error) {
+        fail(`attributes: ${column} did not appear (${error.message})`);
+      }
+    };
+    const addFixtureLevels = async () => {
+      await addAttribute("design");
+      await addAttribute("customer");
+    };
+    const waitReady = async () => {
+      await browser.waitFor("!document.querySelector('button.primary').disabled");
+    };
+    const calculate = async () => {
+      await browser.evalJs("T.btn('Calculate bridge').click()");
+      await browser.waitFor("!!document.querySelector('.kpis')");
+      await browser.waitFor("!!document.querySelector('.bridge table')");
+    };
+    const readBridge = async (step) => {
+      const rows = JSON.parse(await browser.evalJs(bridgeRowsJs));
+      return rows.map((row) => parseBridgeAmount(row.amount, `${step}: ${row.label || "row"}`));
+    };
+    const sameTotals = (got, want, step) => {
+      if (got.length !== want.length) fail(`${step}: ${got.length} bridge rows, expected ${want.length}`);
+      got.forEach((value, i) => {
+        if (Math.abs(value - want[i]) > 1e-6) fail(`${step}: bridge row ${i} is ${value}, expected ${want[i]}`);
+      });
+    };
+
+    const totalsByFormat = {};
+    // Parquet stays out: loading one makes the browser fetch its DuckDB parquet
+    // extension from extensions.duckdb.org, which the request policy refuses.
+    // Reported separately.
+    for (const [name, path] of [["csv", fixtures.csvPath], ["xlsx", fixtures.xlsxPath]]) {
+      await setDataFile(path);
+      await addFixtureLevels();
+      await waitReady();
+      await calculate();
+      totalsByFormat[name] = await readBridge(`file paths: ${name}`);
+    }
+    sameTotals(totalsByFormat.xlsx, totalsByFormat.csv, "file paths: xlsx totals differ from csv");
+    sameTotals(totalsByFormat.csv, expectedAmounts, "file paths: csv totals differ from the engine in Node");
+    console.log("ok  file paths: csv and xlsx give equal totals matching the engine in Node");
+
+    const pasteTsv = toTsvText(FIXTURE_HEADER, fixtures.rows);
+    await browser.goto(`${origin}/app/`);
+    await browser.evalJs(
+      `(async () => { const text = ${JSON.stringify(pasteTsv)}; const data = { getData: (t) => (t === "text/plain" ? text : "") }; const event = new Event("paste", { bubbles: true, cancelable: true }); Object.defineProperty(event, "clipboardData", { value: data }); document.body.dispatchEvent(event); })()`,
+    );
+    await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent");
+    await addFixtureLevels();
+    await waitReady();
+    await calculate();
+    sameTotals(await readBridge("pasted cells"), totalsByFormat.csv, "pasted cells: totals differ from the csv load");
+    console.log("ok  pasted cells: tab-separated text through the paste path gives the same totals");
+
+    await setDataFile(fixtures.formattedPath);
+    await addAttribute("product");
+    await waitReady();
+    await calculate();
+    const formatted = await readBridge("formatted numbers");
+    const [formattedPrior, ...formattedRest] = formatted;
+    const formattedCurrent = formattedRest.pop();
+    if (Math.abs(formattedPrior - FORMATTED_PRIOR) > 1e-6) fail(`formatted numbers: prior is ${formattedPrior}, expected ${FORMATTED_PRIOR}`);
+    if (Math.abs(formattedCurrent - FORMATTED_CURRENT) > 1e-6) fail(`formatted numbers: current is ${formattedCurrent}, expected ${FORMATTED_CURRENT}`);
+    console.log("ok  formatted numbers: 1,234.50, dollar, thousands and parentheses load with the right total");
+
+    await setDataFile(fixtures.csvPath);
+    await addFixtureLevels();
+    await browser.evalJs(`T.set(T.sel('Compare by'), 'ytd')`);
+    const ytdReady = `(() => { const sel = (name) => [...document.querySelectorAll('label')].find((label) => label.firstChild && label.firstChild.textContent.trim().startsWith(name))?.querySelector('select'); const prior = sel('Prior')?.selectedOptions?.[0]; const current = sel('Current')?.selectedOptions?.[0]; return !!prior && !!current && prior.textContent.includes('YTD') && current.textContent.includes('YTD'); })()`;
+    await browser.waitFor(ytdReady);
+    const ytd = JSON.parse(
+      await browser.evalJs(`(() => {
+        const sel = (name) => [...document.querySelectorAll('label')].find((label) => label.firstChild && label.firstChild.textContent.trim().startsWith(name))?.querySelector('select');
+        const chosen = (name) => { const option = sel(name)?.selectedOptions?.[0]; return option ? { value: option.value, text: option.textContent.trim() } : null; };
+        const options = [...document.querySelectorAll('select')].flatMap((select) => [...select.options].map((option) => ({ value: option.value, text: option.textContent.trim() }))).filter((option) => option.text.includes('YTD') || option.value.includes('YTD'));
+        return JSON.stringify({ options, prior: chosen('Prior'), current: chosen('Current') });
+      })()`),
+    );
+    const visible = ytd.options.map((option) => option.text);
+    if (!visible.includes("2024 YTD") || !visible.includes("2025 YTD")) fail(`year to date: period labels are ${visible.join(", ")}`);
+    for (const option of ytd.options) {
+      if (option.value !== option.text) fail(`year to date: visible label ${JSON.stringify(option.text)} differs from value ${JSON.stringify(option.value)}`);
+    }
+    if (ytd.prior?.text !== "2024 YTD" || ytd.current?.text !== "2025 YTD") fail(`year to date: selected labels are ${ytd.prior?.text} and ${ytd.current?.text}`);
+    await waitReady();
+    await calculate();
+    console.log("ok  year to date: 2024 YTD and 2025 YTD are the visible period labels and Calculate runs");
+
+    await setDataFile(fixtures.csvPath);
+    await addAttribute("customer");
+    await addAttribute("design");
+    await browser.evalJs(`T.set(T.sel('Sales'), 'units'); T.set(T.sel('Units'), 'net_sales')`);
+    const readMapping = async () =>
+      JSON.parse(
+        await browser.evalJs(`JSON.stringify({ units: T.sel('Units') ? T.sel('Units').value : '', sales: T.sel('Sales') ? T.sel('Sales').value : '', levels: [...document.querySelectorAll('.levels input[aria-label="Attribute name"]')].map((input) => input.value) })`),
+      );
+    await browser.waitFor(`T.sel('Units')?.value === 'net_sales' && T.sel('Sales')?.value === 'units'`);
+    const drafted = await readMapping();
+    if (drafted.levels.join(",") !== "customer,design") fail(`load setup: attributes before save are ${drafted.levels.join(", ") || "none"}`);
+    const setupJson = await browser.evalJs(`(async () => {
+      let blob = null; const original = URL.createObjectURL;
+      URL.createObjectURL = (b) => { blob = b; return original(b); };
+      T.btn('Save setup to file').click();
+      for (let i = 0; i < 100 && !blob; i++) await new Promise(r => setTimeout(r, 100));
+      URL.createObjectURL = original;
+      if (!blob) return "";
+      return await blob.text();
+    })()`);
+    if (!setupJson) fail("load setup: no setup file was saved");
+    const saved = JSON.parse(setupJson);
+    if (saved.unitsColumn !== "net_sales" || saved.salesColumn !== "units") fail(`load setup: saved mapping is ${saved.unitsColumn}/${saved.salesColumn}`);
+    if (!Array.isArray(saved.levels) || saved.levels.map((level) => level.name).join(",") !== "customer,design") fail("load setup: saved attributes are not customer then design");
+    const savedSetupPath = join(fixtureDir, "bridgekit-setup.json");
+    writeFileSync(savedSetupPath, setupJson);
+    await browser.evalJs("T.btn('Clear data').click()");
+    await browser.waitFor("!document.querySelector('aside') && document.body.innerText.includes('Load a sales file')");
+    await setDataFile(fixtures.csvPath);
+    try {
+      await browser.waitFor(`T.sel('Units')?.value === 'units' && T.sel('Sales')?.value === 'net_sales' && document.querySelectorAll('.levels li').length === 0`);
+    } catch (error) {
+      const guessed = await readMapping();
+      fail(`load setup: before Load setup the file shows ${guessed.units}/${guessed.sales} and ${guessed.levels.join(", ") || "no attributes"} (${error.message})`);
+    }
+    {
+      const { root } = await browser.send("DOM.getDocument");
+      const { nodeId } = await browser.send("DOM.querySelector", { nodeId: root.nodeId, selector: 'input[type=file][accept*="json"]' });
+      await browser.send("DOM.setFileInputFiles", { nodeId, files: [savedSetupPath] });
+    }
+    try {
+      await browser.waitFor(`T.sel('Units')?.value === 'net_sales' && T.sel('Sales')?.value === 'units' && [...document.querySelectorAll('.levels input[aria-label="Attribute name"]')].map((input) => input.value).join(',') === 'customer,design'`, 40);
+    } catch {
+      const got = await readMapping();
+      fail(`load setup: mapping is ${got.units}/${got.sales}, attributes ${got.levels.join(", ") || "none"}`);
+    }
+    console.log("ok  load setup: a saved setup restores a mapping and attribute order the file would not guess");
+
+    await waitReady();
+    await calculate();
+    const exportBase64 = await browser.evalJs(`(async () => {
+      let blob = null; const original = URL.createObjectURL;
+      URL.createObjectURL = (b) => { blob = b; return original(b); };
+      T.btn('Export Excel').click();
+      for (let i = 0; i < 400 && !blob; i++) await new Promise(r => setTimeout(r, 200));
+      URL.createObjectURL = original;
+      if (!blob) return "";
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += 32768) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 32768));
+      return btoa(binary);
+    })()`);
+    if (!exportBase64) fail("exported workbook: no file was exported");
+    const { default: ExcelJS } = await import("exceljs");
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(Buffer.from(exportBase64, "base64"));
+    const sheetNames = workbook.worksheets.map((ws) => ws.name);
+    for (const name of ["Bridge", "Match coverage", "Price bands", "Setup check", "Setup", "Detail"]) {
+      if (!sheetNames.includes(name)) fail(`exported workbook: missing sheet ${name} (has ${sheetNames.join(", ")})`);
+    }
+    if (!sheetNames.some((name) => name.startsWith("By "))) fail(`exported workbook: no By sheet (has ${sheetNames.join(", ")})`);
+    const bridgeSheet = workbook.getWorksheet("Bridge");
+    let checkRowNumber = 0;
+    bridgeSheet.eachRow((row, number) => {
+      if (String(row.getCell(1).value ?? "").startsWith("Check:")) checkRowNumber = number;
+    });
+    if (!checkRowNumber) fail("exported workbook: no check row on the Bridge sheet");
+    const checkCell = bridgeSheet.getRow(checkRowNumber).getCell(2).value;
+    const detailSheet = workbook.getWorksheet("Detail");
+    if (!detailSheet) fail("exported workbook: no Detail sheet to evaluate the check row from");
+    const colIndex = (letters) => {
+      let n = 0;
+      for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64);
+      return n;
+    };
+    const rawAt = (sheet, col, row) => sheet.getRow(row).getCell(colIndex(col)).value;
+    const byName = (name) => (name === "Detail" ? detailSheet : name === "Bridge" ? bridgeSheet : null);
+    const evalFormula = (formula, sheet, col, row, seen = new Set()) => {
+      const where = `${sheet.name}!${col}${row}`;
+      const bad = (why) => fail(`exported workbook: ${where} formula ${formula}: ${why}`);
+      let expression = String(formula).replace(/^=/, "");
+      expression = expression.replace(/SUM\(\s*(?:(Detail|Bridge)!)?([A-Z]{1,3})(\d+):(?:(Detail|Bridge)!)?([A-Z]{1,3})(\d+)\s*\)/g, (m, p1, c1, r1, p2, c2, r2) => {
+        const name = p1 ?? p2 ?? sheet.name;
+        if (c1 !== c2) bad(`cannot evaluate ${m}`);
+        const target = byName(name);
+        if (!target) bad(`cannot evaluate ${m}`);
+        let sum = 0;
+        for (let r = Number(r1); r <= Number(r2); r++) sum += numAt(target, c1, r, seen);
+        return `(${sum})`;
+      });
+      expression = expression.replace(/(?:(Detail|Bridge)!)?\b([A-Z]{1,3})(\d+)\b/g, (m, prefix, c, r) => {
+        if (m === "SUM" || m === "IF" || m === "CHOOSE") return m;
+        if (prefix && prefix !== "Detail" && prefix !== "Bridge") return m;
+        const target = prefix ? byName(prefix) : sheet;
+        if (!target) bad(`cannot evaluate ${m}`);
+        const v = numAt(target, c, Number(r), seen);
+        return `(${v})`;
+      });
+      expression = expression.replace(/<>/g, "!==");
+      expression = expression.replace(/(?<![<>=!])=(?!=)/g, "===");
+      const IF = (cond, a, b) => (cond ? a : b);
+      const CHOOSE = (index, ...choices) => {
+        const i = Math.round(Number(index));
+        if (!Number.isFinite(i) || i < 1 || i > choices.length) bad(`CHOOSE index ${index} is out of range`);
+        return choices[i - 1];
+      };
+      let computed;
+      try {
+        computed = Function("IF", "CHOOSE", `"use strict"; return (${expression});`)(IF, CHOOSE);
+      } catch (error) {
+        if (error instanceof Failure) throw error;
+        bad(error instanceof Error ? error.message : String(error));
+      }
+      if (typeof computed !== "number" || !Number.isFinite(computed)) bad(`evaluates to ${computed}`);
+      return computed;
+    };
+    const numAt = (sheet, col, row, seen = new Set()) => {
+      const key = `${sheet.name}!${col}${row}`;
+      if (seen.has(key)) fail(`exported workbook: circular reference at ${key}`);
+      const v = rawAt(sheet, col, row);
+      if (typeof v === "number") return v;
+      if (v == null || v === "") return 0;
+      if (typeof v === "object" && v !== null && "formula" in v) {
+        seen.add(key);
+        try {
+          const computed = evalFormula(String(v.formula), sheet, col, row, seen);
+          if ("result" in v && typeof v.result === "number" && Number.isFinite(v.result) && Math.abs(computed - v.result) > 1e-6) {
+            fail(`exported workbook: ${key} formula ${v.formula} evaluates to ${computed}, cached result is ${v.result}`);
+          }
+          return computed;
+        } finally {
+          seen.delete(key);
+        }
+      }
+      if (typeof v === "string") {
+        const n = Number(v);
+        if (Number.isFinite(n)) return n;
+      }
+      fail(`exported workbook: non-numeric ${key} is ${JSON.stringify(v)}`);
+    };
+    if (checkCell && typeof checkCell === "object" && "formula" in checkCell) {
+      const computed = evalFormula(String(checkCell.formula), bridgeSheet, "B", checkRowNumber);
+      if (!Number.isFinite(computed) || Math.abs(computed) > 1e-6) fail(`exported workbook: check row evaluates to ${computed}, expected zero`);
+      if ("result" in checkCell && typeof checkCell.result === "number" && Number.isFinite(checkCell.result)) {
+        if (Math.abs(checkCell.result) > 1e-6) fail("exported workbook: check row result is not zero");
+      }
+      console.log("ok  exported workbook: sheets present and the Bridge check row evaluates to zero from cell values (SUM ranges, cell refs, arithmetic, IF and CHOOSE)");
+    } else {
+      if (Number(checkCell) !== 0 && Number(bridgeSheet.getRow(checkRowNumber).getCell(2).result) !== 0) fail("exported workbook: check row is not zero");
+      console.log("ok  exported workbook: sheets present and the Bridge check row is a zero literal");
+    }
+
+    await browser.send("Page.enable");
+    await browser.send("Page.setInterceptFileChooserDialog", { enabled: true });
+    browser.clearFileChoosers();
+    const fileControls = JSON.parse(
+      await browser.evalJs(`JSON.stringify([...document.querySelectorAll('label.button input[type=file]')].filter(i => i.offsetParent !== null).map(i => ({
+        accept: i.accept,
+        name: (i.labels && i.labels[0] ? i.labels[0].textContent : "").trim().replace(/\\s+/g, " "),
+        inNav: !!i.closest('header nav'),
+        inRun: !!i.closest('.run'),
+      })))`),
+    );
+    if (fileControls.length < 2) fail(`keyboard: ${fileControls.length} visible file controls`);
+    const tabToInput = async (predicate, step) => {
+      await browser.evalJs("if (document.activeElement) document.activeElement.blur()");
+      for (let i = 0; i < 40; i++) {
+        const active = await browser.evalJs(
+          `(() => { const el = document.activeElement; if (!el || el.tagName !== 'INPUT' || el.type !== 'file') return ''; const label = el.labels && el.labels[0] ? el.labels[0].textContent.trim().replace(/\\s+/g, ' ') : ''; return (el.closest('header nav') ? 'nav:' : el.closest('.run') ? 'run:' : 'other:') + label; })()`,
+        );
+        if (predicate(active)) return;
+        await browser.key("Tab");
+      }
+      fail(`keyboard: Tab did not reach ${step}`);
+    };
+    const ringJs = (labelExpr) => `(() => {
+      const label = ${labelExpr};
+      if (!label) return JSON.stringify({ missing: true });
+      const style = getComputedStyle(label);
+      const backgrounds = [];
+      let node = label.parentElement;
+      while (node) {
+        backgrounds.push(getComputedStyle(node).backgroundColor);
+        node = node.parentElement;
+      }
+      return JSON.stringify({ missing: false, outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth, outlineColor: style.outlineColor, boxShadow: style.boxShadow, backgrounds });
+    })()`;
+    for (const [kind, match, label, labelSel] of [["nav", (s) => s.startsWith("nav:"), "Choose file", "header nav label.button"], ["run", (s) => s.startsWith("run:"), "Load setup", ".run label.button"]]) {
+      await browser.evalJs("if (document.activeElement) document.activeElement.blur()");
+      await browser.waitFor("!document.activeElement || document.activeElement === document.body || document.activeElement.type !== 'file'");
+      const blurred = JSON.parse(await browser.evalJs(ringJs(`document.querySelector(${JSON.stringify(labelSel)})`)));
+      await tabToInput(match, label);
+      const named = await browser.accessibleName();
+      if (named.name !== label) fail(`keyboard: ${kind} control is named ${named.name}`);
+      const focused = JSON.parse(await browser.evalJs(ringJs("document.activeElement && document.activeElement.closest('label.button')")));
+      const sameRing = blurred.outlineStyle === focused.outlineStyle && blurred.outlineWidth === focused.outlineWidth && blurred.outlineColor === focused.outlineColor && blurred.boxShadow === focused.boxShadow;
+      if (!ringVisible(focused) || sameRing) fail(`keyboard: ${label} shows no focus ring (${blurred.outlineStyle} ${blurred.outlineWidth} ${blurred.outlineColor} to ${focused.outlineStyle} ${focused.outlineWidth} ${focused.outlineColor})`);
+      for (const key of ["Enter", " "]) {
+        browser.clearFileChoosers();
+        await browser.key(key);
+        try {
+          await browser.waitForFileChooser(3000, label);
+        } catch (error) {
+          fail(`keyboard: ${label} did not open the file chooser on ${key === " " ? "Space" : key} (${error.message})`);
+        }
+        if (!browser.fileChoosers().length) fail(`keyboard: ${label} did not open the file chooser on ${key === " " ? "Space" : key}`);
+      }
+    }
+    await browser.send("Page.setInterceptFileChooserDialog", { enabled: false });
+    console.log("ok  keyboard: Choose file and Load setup are tabbed to, named from the accessibility tree, show a visible focus ring and open on Enter and Space");
+
+    await browser.goto(`${origin}/grouping-level.html`);
+    const groupingTitle = await browser.evalJs("document.querySelector('article h1')?.textContent ?? ''");
+    if (!groupingTitle.includes("grouping level")) fail(`grouping-level page: ${groupingTitle}`);
+    console.log("ok  grouping-level");
+  } finally {
+    rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 3 });
+  }
 }
 
 /**
