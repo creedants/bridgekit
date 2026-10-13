@@ -1,4 +1,4 @@
-import { guessSetup, isNumeric, type Column } from "./setup.ts";
+import { guessSetup, isNumeric, type Column, type Filter, type Grain } from "./setup.ts";
 
 /**
  * A long period list draws a hint. Eight years of months are 96 labels, and
@@ -7,6 +7,48 @@ import { guessSetup, isNumeric, type Column } from "./setup.ts";
  */
 export const MAX_PERIOD_VALUES = 100;
 
+const periodViewBrand: unique symbol = Symbol("PeriodView");
+
+/** Identity of one period read: the load, column, grain and filters that produced it. */
+export type PeriodView = string & { readonly [periodViewBrand]: true };
+
+export interface PeriodViewParts {
+  readonly load: number;
+  readonly periodColumn: string;
+  readonly grain: Grain;
+  readonly filters: readonly Filter[];
+}
+
+/** Same parts always return the same view. The file name is not part of it. */
+export function periodView(parts: PeriodViewParts): PeriodView {
+  return JSON.stringify([parts.load, parts.periodColumn, parts.grain, parts.filters]) as PeriodView;
+}
+
+/** A period list stored with the view that produced it. */
+export interface LoadedPeriods {
+  readonly view: PeriodView;
+  readonly values: readonly string[];
+}
+
+const currentPeriods: unique symbol = Symbol("CurrentPeriods");
+
+export interface CurrentPeriods {
+  readonly values: readonly string[];
+  readonly [currentPeriods]: true;
+}
+
+/**
+ * Periods for the settings on screen. "unknown" is not an empty list: an empty
+ * list is a finished read that found nothing. Only periodsFor builds the known side.
+ */
+export type Periods = "unknown" | CurrentPeriods;
+
+/** The stored list when it was produced for this view, otherwise unknown. */
+export function periodsFor(view: PeriodView | null, loaded: LoadedPeriods | null): Periods {
+  if (view === null || loaded === null || loaded.view !== view) return "unknown";
+  return { values: loaded.values, [currentPeriods]: true };
+}
+
 export interface FileProblemInput {
   /** Columns of the loaded table, in file order. */
   readonly columns: readonly Column[];
@@ -14,8 +56,8 @@ export interface FileProblemInput {
   readonly rows: number;
   /** The period column the setup picked, empty when none is picked. */
   readonly periodColumn: string;
-  /** Periods available to compare with the current column, grain and filters, oldest first. */
-  readonly periods: readonly string[];
+  /** Periods for these settings, or unknown when the stored list belongs to other settings. */
+  readonly periods: Periods;
   /** The column picked for units, empty when none is picked. */
   readonly unitsColumn: string;
   /** The column picked for sales, empty when none is picked. */
@@ -95,8 +137,12 @@ function soundMeasure(input: FileProblemInput): { name: string; role: Role; text
 
 function measureMessage(role: Role, name: string, text: boolean): string {
   const measure = role === "sales" ? "Sales" : "Units";
-  const clause = text ? "holds text" : "is not a column of numbers";
-  return `${measure} must be a column of numbers, and "${name}" ${clause}.`;
+  if (text) return `${measure} must be a column of numbers, and "${name}" holds text.`;
+  return `"${name}" cannot be used for ${measure} because it is not a column of numbers.`;
+}
+
+function periodCount(periods: Periods): number | undefined {
+  return periods === "unknown" ? undefined : periods.values.length;
 }
 
 /** True when the list is exactly the suggestion: one column per name, in that order. */
@@ -122,7 +168,8 @@ export function fileProblem(input: FileProblemInput): FileProblem {
   if (input.rows === 0) {
     return { kind: "reason", message: "This file has no data rows, so there is nothing to bridge." };
   }
-  if (input.periodColumn !== "" && input.periods.length === 1) {
+  const count = periodCount(input.periods);
+  if (input.periodColumn !== "" && count === 1) {
     return {
       kind: "reason",
       message: `With these settings "${input.periodColumn}" gives only one period, and a bridge compares two periods.`,
@@ -135,7 +182,7 @@ export function fileProblem(input: FileProblemInput): FileProblem {
   if (input.columns.every((column) => !isNumeric(column.type))) {
     return { kind: "reason", message: "Sales and Units must be columns of numbers, and this file has none." };
   }
-  if (input.periodColumn !== "" && input.periods.length > MAX_PERIOD_VALUES) {
+  if (input.periodColumn !== "" && count !== undefined && count > MAX_PERIOD_VALUES) {
     return {
       kind: "note",
       message: `The period column "${input.periodColumn}" has more than ${MAX_PERIOD_VALUES} periods.`,

@@ -1,21 +1,35 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fileProblem, MAX_PERIOD_VALUES, sameSuggestedLevels, type FileProblemInput } from "../src/app/fileProblems.ts";
+import {
+  fileProblem,
+  MAX_PERIOD_VALUES,
+  periodView,
+  periodsFor,
+  sameSuggestedLevels,
+  type FileProblemInput,
+  type Periods,
+} from "../src/app/fileProblems.ts";
 import type { Column } from "../src/app/setup.ts";
 
 const text = (name: string): Column => ({ name, type: "VARCHAR" });
 const number = (name: string): Column => ({ name, type: "INTEGER" });
 const date = (name: string): Column => ({ name, type: "DATE" });
 
-function input(over: Partial<FileProblemInput>): FileProblemInput {
+function known(values: readonly string[]): Periods {
+  const view = periodView({ load: 1, periodColumn: "period", grain: "value", filters: [] });
+  return periodsFor(view, { view, values });
+}
+
+function input(over: Partial<Omit<FileProblemInput, "periods">> & { periods?: readonly string[] } = {}): FileProblemInput {
+  const { periods: values = [], ...rest } = over;
   return {
     columns: [],
     rows: 0,
     periodColumn: "",
-    periods: [],
     unitsColumn: "",
     salesColumn: "",
-    ...over,
+    ...rest,
+    periods: known(values),
   };
 }
 
@@ -177,14 +191,61 @@ test("a period column with very many values is a note beside the general hint", 
 
 test("the period label limit fires one value above it and not at it", () => {
   const periods = (count: number) => Array.from({ length: count }, (_, i) => `label-${i}`);
-  const atLimit = { ...HEALTHY, periods: periods(MAX_PERIOD_VALUES) };
+  const atLimit = input({ ...HEALTHY, periods: periods(MAX_PERIOD_VALUES) });
   assert.deepEqual(fileProblem(atLimit), { kind: "none" });
-  const overLimit = { ...HEALTHY, periods: periods(MAX_PERIOD_VALUES + 1) };
-  assert.equal(fileProblem(overLimit).kind, "note");
+  const overLimit = input({ ...HEALTHY, periods: periods(MAX_PERIOD_VALUES + 1) });
+  assert.deepEqual(fileProblem(overLimit), {
+    kind: "note",
+    message: `The period column "period" has more than ${MAX_PERIOD_VALUES} periods.`,
+  });
+});
+
+test("unknown periods add no period sentence", () => {
+  assert.deepEqual(fileProblem({ ...HEALTHY, periods: "unknown" }), { kind: "none" });
+  assert.deepEqual(
+    fileProblem({
+      ...input({ columns: [text("column0")], rows: 0, periodColumn: "period" }),
+      periods: "unknown",
+    }),
+    {
+      kind: "reason",
+      message: "This file has no data rows, so there is nothing to bridge.",
+    },
+  );
+  assert.deepEqual(
+    fileProblem({
+      ...input({
+        columns: [number("period"), text("design"), number("units"), text("sales")],
+        rows: 2,
+        periodColumn: "period",
+        unitsColumn: "units",
+        salesColumn: "sales",
+      }),
+      periods: "unknown",
+    }),
+    {
+      kind: "reason",
+      message: 'Sales must be a column of numbers, and "sales" holds text.',
+    },
+  );
+  assert.deepEqual(fileProblem(input({ ...HEALTHY, periods: [] })), { kind: "none" });
+});
+
+test("a period list from other settings is not the current list", () => {
+  const current = periodView({ load: 2, periodColumn: "period", grain: "month", filters: [] });
+  const previous = periodView({ load: 1, periodColumn: "period", grain: "year", filters: [] });
+  const mismatched = periodsFor(current, { view: previous, values: ["2025"] });
+  assert.equal(mismatched, "unknown");
+  assert.deepEqual(fileProblem({ ...HEALTHY, periods: mismatched }), { kind: "none" });
+  const matched = periodsFor(current, { view: current, values: ["2025"] });
+  assert.deepEqual(fileProblem({ ...HEALTHY, periods: matched }), {
+    kind: "reason",
+    message: 'With these settings "period" gives only one period, and a bridge compares two periods.',
+  });
 });
 
 test("no message without a period column picked", () => {
-  const unpicked = { ...HEALTHY, periodColumn: "", periods: [] };
+  const unpicked = input({ ...HEALTHY, periodColumn: "", periods: [] });
   assert.deepEqual(fileProblem(unpicked), { kind: "none" });
 });
 
@@ -203,16 +264,20 @@ test("a Boolean, time or blob measure is not described as text", () => {
   });
   assert.deepEqual(fileProblem(salesBoolean), {
     kind: "reason",
-    message: 'Sales must be a column of numbers, and "sales" is not a column of numbers.',
+    message: '"sales" cannot be used for Sales because it is not a column of numbers.',
   });
 
   const salesTime = input({
-    ...salesBoolean,
     columns: [number("period"), text("design"), number("units"), time("sales")],
+    rows: 2,
+    periodColumn: "period",
+    periods: ["2025", "2026"],
+    unitsColumn: "units",
+    salesColumn: "",
   });
   assert.deepEqual(fileProblem(salesTime), {
     kind: "reason",
-    message: 'Sales must be a column of numbers, and "sales" is not a column of numbers.',
+    message: '"sales" cannot be used for Sales because it is not a column of numbers.',
   });
 
   const unitsBlob = input({
@@ -225,7 +290,7 @@ test("a Boolean, time or blob measure is not described as text", () => {
   });
   assert.deepEqual(fileProblem(unitsBlob), {
     kind: "reason",
-    message: 'Units must be a column of numbers, and "qty" is not a column of numbers.',
+    message: '"qty" cannot be used for Units because it is not a column of numbers.',
   });
 });
 
@@ -342,7 +407,7 @@ test("a chosen Boolean sales column is described without calling it text", () =>
   });
   assert.deepEqual(fileProblem(chosen), {
     kind: "reason",
-    message: 'Sales must be a column of numbers, and "sales" is not a column of numbers.',
+    message: '"sales" cannot be used for Sales because it is not a column of numbers.',
   });
 });
 

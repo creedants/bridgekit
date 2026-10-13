@@ -11,7 +11,7 @@ import {
 } from "./db.ts";
 import { exportExcel } from "./exportExcel.ts";
 import { download } from "./files.ts";
-import { fileProblem, type FileProblem } from "./fileProblems.ts";
+import { fileProblem, periodView, periodsFor, type FileProblem, type LoadedPeriods } from "./fileProblems.ts";
 import { whole } from "./format.ts";
 import { distinctCounts, findRollups } from "./profile.ts";
 import { loadPeriodList } from "./periods.ts";
@@ -115,7 +115,8 @@ export function App() {
   const [rowCount, setRowCount] = useState(0);
   const [columns, setColumns] = useState<Column[]>([]);
   const [setup, setSetup] = useState<Setup | null>(null);
-  const [periods, setPeriods] = useState<string[]>([]);
+  const [load, setLoad] = useState(0);
+  const [loadedPeriods, setLoadedPeriods] = useState<LoadedPeriods | null>(null);
   const [prior, setPrior] = useState("");
   const [current, setCurrent] = useState("");
   const [remember, setRemember] = useState(isRemembering);
@@ -150,6 +151,7 @@ export function App() {
     setRowCount(Number(count.n));
     setSource(name);
     setRun(null);
+    setLoad((n) => n + 1);
     setSetup(preset ?? saved ?? guessSetup(found));
     setNotice(saved ? "Restored the setup you last used with these columns." : "");
     setPreview(await q(`SELECT * FROM ${quote(TABLE)} LIMIT 8`));
@@ -181,27 +183,35 @@ export function App() {
   };
 
   // Rebuild the filtered view and the period list whenever they could change.
-  const viewKey = setup ? JSON.stringify([setup.periodColumn, setup.grain, setup.filters, source]) : "";
+  // The load count stands in for the file name, so a second file with the same name still re-reads.
+  const view = setup
+    ? periodView({ load, periodColumn: setup.periodColumn, grain: setup.grain, filters: setup.filters })
+    : null;
   useEffect(() => {
-    if (!setup?.periodColumn) {
-      setPeriods([]);
+    if (view === null || !setup) return;
+    if (!setup.periodColumn) {
+      setLoadedPeriods({ view, values: [] });
       return;
     }
     let stale = false;
+    const requested = view;
     task("Reading periods…", async () => {
       const q = await query();
       await q(viewSql(setup));
       const list = await loadPeriodList(q, quote(PERIOD), quote(VIEW));
       if (stale) return;
       const values = [...list.values];
-      setPeriods(values);
+      setLoadedPeriods({ view: requested, values });
       setCurrent((value) => (values.includes(value) ? value : (values.at(-1) ?? "")));
       setPrior((value) => (values.includes(value) ? value : (values.at(-2) ?? "")));
     });
     return () => {
       stale = true;
     };
-  }, [viewKey]);
+  }, [view]);
+
+  const offeredPeriods = loadedPeriods ? [...loadedPeriods.values] : [];
+  const problemPeriods = periodsFor(view, loadedPeriods);
 
   const signature = JSON.stringify([setup, prior, current, source]);
   const ready =
@@ -211,7 +221,7 @@ export function App() {
         columns,
         rows: rowCount,
         periodColumn: setup.periodColumn,
-        periods,
+        periods: problemPeriods,
         unitsColumn: setup.unitsColumn,
         salesColumn: setup.salesColumn,
       })
@@ -242,7 +252,7 @@ export function App() {
         result,
         check,
         ms,
-        periods,
+        periods: offeredPeriods,
         textColumns: columns.filter((c) => !/INT|DOUBLE|DECIMAL|FLOAT|REAL|DATE|TIMESTAMP/i.test(c.type)).map((c) => c.name),
         description: describeSetup(setup, prior, current, source),
         id: Date.now(),
@@ -397,7 +407,7 @@ export function App() {
             <SetupPanel
               columns={columns}
               setup={setup}
-              periods={periods}
+              periods={offeredPeriods}
               prior={prior}
               current={current}
               query={query}
