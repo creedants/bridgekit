@@ -139,6 +139,15 @@ function workerEnv(db: Env["DB"], extra: Partial<Env> = {}): Env {
   };
 }
 
+function refusingLimiter(calls: { key: string; success: boolean }[]): NonNullable<Env["COMMENTARY_RATE_LIMIT"]> {
+  return {
+    async limit({ key }) {
+      calls.push({ key, success: false });
+      return { success: false };
+    },
+  };
+}
+
 function authPrefix(baseURL: string): string {
   const pathname = new URL(baseURL).pathname;
   return pathname === "/" ? "/api/auth" : pathname.replace(/\/+$/, "");
@@ -318,13 +327,14 @@ test("a signed-out commentary post from another origin is refused as cross-site"
 });
 
 test("a signed-out commentary post from this site stays on the Pro refusal", async () => {
-  const env = workerEnv(database(), PRO_ENV);
+  const limiterCalls: { key: string; success: boolean }[] = [];
+  const env = workerEnv(database(), { ...PRO_ENV, COMMENTARY_RATE_LIMIT: refusingLimiter(limiterCalls) });
   const fence = fenceAnthropic();
   try {
     const response = await dispatch(env, commentaryRequest(undefined, { origin: SITE }, summaryBody));
     assert.deepEqual(
-      { status: response.status, body: await response.json(), calls: fence.urls.length },
-      { status: 403, body: { error: PRO_SENTENCE }, calls: 0 },
+      { status: response.status, body: await response.json(), calls: fence.urls.length, limiterCalls },
+      { status: 403, body: { error: PRO_SENTENCE }, calls: 0, limiterCalls: [] },
     );
   } finally {
     fence.restore();
@@ -332,14 +342,35 @@ test("a signed-out commentary post from this site stays on the Pro refusal", asy
 });
 
 test("a same-origin commentary post from a member without Pro stays on the Pro refusal", async () => {
-  const env = workerEnv(database(), PRO_ENV);
+  const limiterCalls: { key: string; success: boolean }[] = [];
+  const env = workerEnv(database(), { ...PRO_ENV, COMMENTARY_RATE_LIMIT: refusingLimiter(limiterCalls) });
   const fence = fenceAnthropic();
   try {
     const { cookie } = await signInMember(env, "free@example.invalid", "free-member", false);
     const response = await dispatch(env, commentaryRequest(cookie, { origin: SITE }, summaryBody));
     assert.deepEqual(
-      { status: response.status, body: await response.json(), calls: fence.urls.length },
-      { status: 403, body: { error: PRO_SENTENCE }, calls: 0 },
+      { status: response.status, body: await response.json(), calls: fence.urls.length, limiterCalls },
+      { status: 403, body: { error: PRO_SENTENCE }, calls: 0, limiterCalls: [] },
+    );
+  } finally {
+    fence.restore();
+  }
+});
+
+test("a same-origin Pro post with no API key stays on the Pro refusal", async () => {
+  const limiterCalls: { key: string; success: boolean }[] = [];
+  const env = workerEnv(database(), {
+    ACCOUNTS: "on",
+    LOCAL_EMAIL_LOG: "on",
+    COMMENTARY_RATE_LIMIT: refusingLimiter(limiterCalls),
+  });
+  const fence = fenceAnthropic();
+  try {
+    const { cookie } = await signInMember(env, "pro-no-key@example.invalid", "pro-no-key", true);
+    const response = await dispatch(env, commentaryRequest(cookie, { origin: SITE }, summaryBody));
+    assert.deepEqual(
+      { status: response.status, body: await response.json(), calls: fence.urls.length, limiterCalls },
+      { status: 403, body: { error: PRO_SENTENCE }, calls: 0, limiterCalls: [] },
     );
   } finally {
     fence.restore();
@@ -347,13 +378,14 @@ test("a same-origin commentary post from a member without Pro stays on the Pro r
 });
 
 test("commentary is not found when accounts are off", async () => {
-  const env = workerEnv(database());
+  const limiterCalls: { key: string; success: boolean }[] = [];
+  const env = workerEnv(database(), { COMMENTARY_RATE_LIMIT: refusingLimiter(limiterCalls) });
   const fence = fenceAnthropic();
   try {
     const response = await dispatch(env, commentaryRequest(undefined, { origin: "https://evil.example" }, summaryBody));
     assert.deepEqual(
-      { status: response.status, body: await response.json(), calls: fence.urls.length },
-      { status: 404, body: { error: "Not found." }, calls: 0 },
+      { status: response.status, body: await response.json(), calls: fence.urls.length, limiterCalls },
+      { status: 404, body: { error: "Not found." }, calls: 0, limiterCalls: [] },
     );
   } finally {
     fence.restore();
