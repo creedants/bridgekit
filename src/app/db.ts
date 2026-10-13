@@ -4,8 +4,8 @@ import ehWasm from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
 import mvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import type { Query } from "../engine.ts";
 import { decodeCsvBuffer, ENCODING_SENTENCE, isUtf8Prefix } from "./encoding.ts";
-import { toCsv } from "./files.ts";
 import { convertFormattedNumbers } from "./numbers.ts";
+import { firstSheetAsCsv } from "./sheet.ts";
 
 type ChunkFailure = "network" | "gone";
 
@@ -213,7 +213,25 @@ export function openBrowserDatabase(): Promise<BrowserDatabase> {
 function startFailureForPage(error: unknown): Error {
   if (error instanceof ChunkUnavailable) return error;
   console.error(error);
+  if (error instanceof Error && isDownloadFailure(error.message)) return new Error(LIBRARY_FAILURE.network);
   return new Error("The database worker did not start");
+}
+
+function isDownloadFailure(message: string): boolean {
+  if (message === "Failed to fetch") return true;
+  if (
+    message.includes("Failed to execute 'compile' on 'WebAssembly'") &&
+    message.includes("HTTP status code is not ok")
+  ) {
+    return true;
+  }
+  if (
+    message.includes("Failed to execute 'importScripts' on 'WorkerGlobalScope'") &&
+    message.includes("failed to load")
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function openFresh(): Promise<BrowserDatabase> {
@@ -408,29 +426,3 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
   }
 }
 
-/** Reads the first worksheet of an .xlsx file, taking formula results and formatting dates as ISO. */
-async function firstSheetAsCsv(file: File): Promise<string> {
-  const { default: ExcelJS } = await import("exceljs");
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(await file.arrayBuffer());
-  const sheet = workbook.worksheets[0];
-  if (!sheet || sheet.rowCount < 2) throw new Error("The first sheet of that workbook has no data rows.");
-  const plain = (value: unknown): unknown => {
-    if (value instanceof Date) return value.toISOString().slice(0, 10);
-    if (typeof value === "object" && value !== null) {
-      const cell = value as { result?: unknown; text?: unknown; richText?: { text: string }[] };
-      if (cell.richText) return cell.richText.map((part) => part.text).join("");
-      if ("result" in cell) return plain(cell.result);
-      if ("text" in cell) return cell.text;
-      return "";
-    }
-    return value;
-  };
-  const rows: unknown[][] = [];
-  const width = sheet.columnCount;
-  sheet.eachRow((row) => {
-    const values = (row.values as unknown[]).slice(1);
-    rows.push(Array.from({ length: width }, (_, i) => plain(values[i])));
-  });
-  return toCsv(rows[0].map(String), rows.slice(1));
-}

@@ -1,0 +1,2 @@
+- `src/app/sheet.ts` names a blank cell in the first row of an Excel file from its position, so the second column with no header loads as `column1`. A repeated header keeps its first spelling, and the next copy gets a `_1` suffix.
+- `src/app/db.ts` shows "Could not load the database. Check your connection, then choose your file or the sample data again." when the database engine fails to download. Any other failure while starting the worker still shows "The database worker did not start".
