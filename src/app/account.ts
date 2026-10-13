@@ -1,5 +1,5 @@
 import type { BridgeSummary } from "../summary.ts";
-import type { Setup } from "./setup.ts";
+import { columnsKey, type Setup } from "./setup.ts";
 import {
   beginRead,
   noteConfig,
@@ -165,8 +165,27 @@ export const removeMember = (id: string, memberId: string) =>
 export const acceptInvitation = (invitationId: string) =>
   call("/api/auth/organization/accept-invitation", { body: { invitationId } });
 
-export const listSetups = (id: string, columns: string[]) =>
-  call<SavedSetup[]>(`/api/workspaces/${id}/setups?${columns.map((c) => "column=" + encodeURIComponent(c)).join("&")}`);
+interface SetupRow extends SavedSetup {
+  columnsKey: string;
+}
+
+export function setupsForColumns<T extends { readonly columnsKey: string }>(saved: readonly T[], columns: readonly string[]): T[] {
+  if (columns.length === 0) return [];
+  const key = columnsKey(columns);
+  return saved.filter((row) => row.columnsKey === key);
+}
+
+export async function listSetups(id: string, columns: string[]): Promise<SavedSetup[]> {
+  if (columns.length === 0) return [];
+  const rows = await call<SetupRow[]>(`/api/workspaces/${id}/setups`);
+  return setupsForColumns(rows, columns).map((row) => ({
+    id: row.id,
+    name: row.name,
+    setup: row.setup,
+    createdBy: row.createdBy,
+    createdAt: row.createdAt,
+  }));
+}
 
 export const saveSetup = (id: string, name: string, columns: string[], setup: Setup) =>
   call<{ id: string }>(`/api/workspaces/${id}/setups`, { body: { name, columns, setup } });

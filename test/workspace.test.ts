@@ -12,11 +12,12 @@ import {
   plan,
   saveBridge,
   saveSetup,
+  setupListQuery,
   userHasPro,
   workspaceCount,
   WorkspaceError,
 } from "../server/workspace.ts";
-import { listSetups as requestSetups } from "../src/app/account.ts";
+import { listSetups as requestSetups, setupsForColumns } from "../src/app/account.ts";
 import { testDatabase } from "./support/d1.ts";
 
 const now = "2026-10-04T00:00:00.000Z";
@@ -43,8 +44,11 @@ const summary = {
   effects: [{ label: "Volume", value: 10 }], attributes: ["Design"], exactMatchShare: 0.9, newAndDiscontinued: "difference",
 };
 
-const rejects = (promise: Promise<unknown>, status: number) =>
-  assert.rejects(promise, (e) => e instanceof WorkspaceError && e.status === status);
+const rejects = (promise: Promise<unknown>, status: number, message?: string) =>
+  assert.rejects(
+    promise,
+    (error) => error instanceof WorkspaceError && error.status === status && (message === undefined || error.message === message),
+  );
 
 test("saving needs Pro; a signed Paddle event grants it with its seat count", async () => {
   const db = await seeded();
@@ -67,19 +71,47 @@ test("an older Paddle event does not overwrite a newer one, and unknown workspac
 test("members share saved setups and bridges; outsiders see nothing", async () => {
   const db = await seeded();
   await applySubscription(db, subscription());
-  const { id } = await saveSetup(db, "u1", "w1", { name: "Default", columns, setup });
-  const shared = await listSetups(db, "u2", "w1", ["design", "sales", "units", "year"]);
-  assert.deepEqual(shared.map((s) => [s.id, s.name, s.createdBy]), [[id, "Default", "owner@example.com"]]);
-  assert.deepEqual(await listSetups(db, "u2", "w1", ["other"]), []);
-  await rejects(listSetups(db, "u3", "w1", columns), 404);
+  const older = await saveSetup(db, "u1", "w1", { name: "Older", columns, setup }, new Date("2026-10-04T00:00:00.000Z"));
+  const newerSetup = { ...setup, levels: [{ name: "Region", columns: ["region"] }] };
+  const newer = await saveSetup(
+    db,
+    "u1",
+    "w1",
+    { name: "Newer", columns: ["year", "units", "sales", "region"], setup: newerSetup },
+    new Date("2026-10-04T01:00:00.000Z"),
+  );
+  assert.deepEqual(await listSetups(db, "u2", "w1", "absent"), [
+    {
+      id: newer.id,
+      name: "Newer",
+      setup: newerSetup,
+      createdBy: "owner@example.com",
+      createdAt: "2026-10-04T01:00:00.000Z",
+      columnsKey: "region|sales|units|year",
+    },
+    {
+      id: older.id,
+      name: "Older",
+      setup,
+      createdBy: "owner@example.com",
+      createdAt: "2026-10-04T00:00:00.000Z",
+      columnsKey: "design|sales|units|year",
+    },
+  ]);
+  await rejects(listSetups(db, "u2", "w1", "present"), 400, "This request does not take column names.");
+  await rejects(listSetups(db, "u3", "w1", "present"), 404, "Workspace not found.");
+  await rejects(listSetups(db, "u3", "w1", "absent"), 404, "Workspace not found.");
 
   await saveBridge(db, "u2", "w1", { name: "FY26 vs FY25", columns, setup, summary, filterColumns: ["design"] });
   const [bridge] = await listBridges(db, "u1", "w1");
   assert.deepEqual([bridge.name, bridge.summary.currentTotal, bridge.filterColumns], ["FY26 vs FY25", 110, ["design"]]);
   await rejects(listBridges(db, "u3", "w1"), 404);
-  await rejects(deleteSaved(db, "u3", "w1", "setup", id), 404);
-  await deleteSaved(db, "u2", "w1", "setup", id);
-  assert.deepEqual(await listSetups(db, "u1", "w1", columns), []);
+  await rejects(deleteSaved(db, "u3", "w1", "setup", older.id), 404);
+  await deleteSaved(db, "u2", "w1", "setup", older.id);
+  assert.deepEqual(
+    (await listSetups(db, "u1", "w1", "absent")).map((row) => row.id),
+    [newer.id],
+  );
 });
 
 test("a file load asks for saved setups without sending column names", async () => {
@@ -108,6 +140,81 @@ test("a file load asks for saved setups without sending column names", async () 
   const wire = JSON.stringify(seen);
   assert.equal(wire.includes("zephyr-column"), false);
   assert.equal(wire.includes("quartz-column"), false);
+});
+
+test("saved setups match a column set in any order and keep the list order", () => {
+  const stored = [
+    { name: "newer", columnsKey: "design|sales|units|year" },
+    { name: "blank", columnsKey: "" },
+    { name: "other", columnsKey: "region|sales|units|year" },
+    { name: "older", columnsKey: "design|sales|units|year" },
+  ];
+  assert.deepEqual(
+    setupsForColumns(stored, ["sales", "units", "year", "design"]).map((row) => row.name),
+    ["newer", "older"],
+  );
+  assert.deepEqual(setupsForColumns(stored, ["year", "units", "sales"]), []);
+  assert.deepEqual(setupsForColumns(stored, []), []);
+});
+
+test("a file load keeps the matching setup and drops the stored key", async () => {
+  const setupRow = { periodColumn: "year", grain: "value", unitsColumn: "units", salesColumn: "sales", levels: [], filters: [] };
+  const match = {
+    id: "new",
+    name: "Newer",
+    setup: setupRow,
+    createdBy: "owner@example.com",
+    createdAt: "2026-10-05T00:00:00.000Z",
+    columnsKey: "design|sales|units|year",
+  };
+  const other = {
+    id: "other",
+    name: "Other",
+    setup: setupRow,
+    createdBy: "owner@example.com",
+    createdAt: "2026-10-06T00:00:00.000Z",
+    columnsKey: "region|sales|units|year",
+  };
+  const original = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify([match, other]), { status: 200, headers: { "content-type": "application/json" } });
+  try {
+    assert.deepEqual(await requestSetups("w1", ["sales", "units", "year", "design"]), [
+      {
+        id: "new",
+        name: "Newer",
+        setup: setupRow,
+        createdBy: "owner@example.com",
+        createdAt: "2026-10-05T00:00:00.000Z",
+      },
+    ]);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("an empty column list does not ask for setups", async () => {
+  let calls = 0;
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    assert.deepEqual(await requestSetups("w1", []), []);
+    assert.equal(calls, 0);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("the setups list records only whether a column query was sent", () => {
+  assert.equal(setupListQuery("https://bk.example/api/workspaces/w1/setups"), "absent");
+  assert.equal(
+    setupListQuery("https://bk.example/api/workspaces/w1/setups?column=period&column=design&column=coating&column=units&column=sales"),
+    "present",
+  );
+  assert.equal(setupListQuery("https://bk.example/api/workspaces/w1/setups?column"), "present");
 });
 
 test("only setups without filter values and bridge totals can be saved", async () => {
