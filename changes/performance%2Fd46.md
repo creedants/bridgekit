@@ -1,0 +1,6 @@
+- `npm run build:cloudflare` counts an unset or empty `VITE_PAGE_COUNTS`, `VITE_WORKSPACES`, or `VITE_AI_COMMENTARY` as on. `npm run build:cloudflare:free` forces page counts on and the other two off. README Deploying and DEPLOY step 1.7 say so. Step 1.7 still runs its explicit command.
+- Sign-in links are printed in the terminal only when `LOCAL_EMAIL_LOG` is exactly `on`. When email cannot be sent and no sign-in provider is configured, the Workspace panel shows "Accounts are not open yet." and no form.
+- The privacy page says: Your IP address is used briefly to slow repeated sign-in attempts, and Bridgekit does not store it.
+- README states the page-count paths, the host with no port, the 200-character direct visit, and the cap of 32 new foreign hosts.
+- DEPLOY citations whose quoted text has one current line now cite that line. Citations whose quoted text has several lines are unchanged.
+- Step 1.7 records that `npm run build:cloudflare:free` wrote the same files and hashes as its command.
