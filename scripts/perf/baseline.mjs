@@ -2,7 +2,7 @@
 // Definitions of each metric live in the JSON under `definitions` and in perf/README.md.
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { cpus, loadavg, arch, platform, release } from "node:os";
 import { extname, join, relative, resolve, sep } from "node:path";
@@ -109,8 +109,12 @@ function resolveSizes() {
   return parseSizesArg() ?? SIZES;
 }
 
-// Generated CSVs default to the historical directory. A --csv-dir override
-// only moves those scratch files and never changes the measured numbers.
+// Generated CSVs live in a private run directory under the base directory.
+// The base defaults to the historical directory. A --csv-dir override only
+// changes that base and never changes the measured numbers. The run creates
+// one sub-directory for its own files and removes only that directory.
+let activeCsvRunDir = null;
+
 function csvDir() {
   const raw = option("--csv-dir");
   if (raw === undefined) return DEFAULT_CSV_DIR;
@@ -883,7 +887,17 @@ async function main() {
   assertFullRun(out, count);
   if (only && !["assets", "engine", "browser"].includes(only)) die("--only must be assets, engine, or browser");
   const table = resolveSizes();
-  const dir = csvDir();
+  const csvBase = csvDir();
+  const wantAssets = !only || only === "assets" || only === "engine" || only === "browser";
+  const wantEngine = !only || only === "engine" || only === "browser";
+  const wantBrowser = !only || only === "browser";
+  let dir = csvBase;
+  if (wantEngine) {
+    mkdirSync(csvBase, { recursive: true });
+    dir = mkdtempSync(join(csvBase, "run-"));
+    activeCsvRunDir = dir;
+  }
+  try {
   const chrome = spawnSync("chromium", ["--version"], { encoding: "utf8" });
   if (chrome.status !== 0) die("chromium is not on PATH");
 
@@ -891,10 +905,6 @@ async function main() {
   if (!skipBuild && only !== "browser") await runCommand("npm", ["run", "build"]);
   const dist = join(root, "dist");
   if (!existsSync(join(dist, "app", "index.html"))) die("dist/app/index.html is missing. Run npm run build.");
-
-  const wantAssets = !only || only === "assets" || only === "engine" || only === "browser";
-  const wantEngine = !only || only === "engine" || only === "browser";
-  const wantBrowser = !only || only === "browser";
 
   const build = wantAssets ? { command: "npm run build", ...measureAssets(dist) } : null;
   if (build && build.totals.wasm < WASM_MIN_BYTES) die(`dist wasm is ${build.totals.wasm} bytes`);
@@ -993,6 +1003,12 @@ async function main() {
   if (renamed.status !== 0) die(renamed.stderr || "could not move the result into place");
   printSummary(report);
   console.log(`wrote ${out}`);
+  } finally {
+    if (activeCsvRunDir) {
+      rmSync(activeCsvRunDir, { recursive: true, force: true });
+      activeCsvRunDir = null;
+    }
+  }
 }
 
 main()
@@ -1001,7 +1017,5 @@ main()
     process.exit(1);
   })
   .finally(() => {
-    const dir = csvDir();
-    if (dir === DEFAULT_CSV_DIR) rmSync(dir, { recursive: true, force: true });
-    else for (const size of resolveSizes()) rmSync(join(dir, `${size.rows}.csv`), { force: true });
+    if (activeCsvRunDir) rmSync(activeCsvRunDir, { recursive: true, force: true });
   });

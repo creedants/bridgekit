@@ -27,13 +27,13 @@ A non-zero delay is a partial run. During the wait the page may download the Duc
 
 ## Measure larger files
 
-`--sizes` replaces the row table for that run with a comma-separated list of row counts. Every listed size runs in the browser. A plain run without the flag measures 10,000 and 300,000 rows in the browser and 3,000,000 rows in Node only.
+`--sizes` replaces the row table for that run with a comma-separated list of row counts. Every listed size runs in the browser. Each count must be an integer from 1 to 20000000. A plain run without the flag measures 10,000 and 300,000 rows in the browser and 3,000,000 rows in Node only.
 
 ```
 npm run perf -- --sizes 1000000,3000000 --out /home/marcus/.cache/pstack-t3/scratch/xxx/large.json
 ```
 
-A run with `--sizes` is a partial run. Pass `--out` to another path. `--csv-dir` only moves the generated CSV scratch files, which default to `/tmp/bridgekit-perf`, and never changes the measured numbers. Use it when the files are large enough to strain `/tmp`.
+A run with `--sizes` is a partial run. Pass `--out` to another path. `--csv-dir` sets the base directory for the generated CSV scratch files, which default to `/tmp/bridgekit-perf`, and never changes the measured numbers. The run makes its own sub-directory under that base, writes only there, and removes only that sub-directory at the end. An assets-only run creates nothing there. Files that existed before are never deleted or replaced. Use it when the files are large enough to strain `/tmp`.
 
 ```
 npm run perf -- --sizes 1000000 --csv-dir /home/marcus/.cache/pstack-t3/scratch/xxx --out /home/marcus/.cache/pstack-t3/scratch/xxx/one.json
