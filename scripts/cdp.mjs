@@ -376,10 +376,21 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
       shot: async (name, full = false) => writeFileSync(name, Buffer.from((await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: full })).data, "base64")),
       fileChoosers: () => [...fileChoosers],
       clearFileChoosers: () => { fileChoosers.length = 0; },
-      waitForFileChooser: async (ms = 3000) => {
+      waitForFileChooser: async (ms = 3000, step = "the file chooser") => {
         const end = Date.now() + ms;
         while (fileChoosers.length === 0 && Date.now() < end) await sleep(50);
-        if (!fileChoosers.length) throw new Error("timeout waiting for the file chooser");
+        if (!fileChoosers.length) throw new Error(`timeout waiting for ${step} to open the file chooser`);
+      },
+      accessibleName: async () => {
+        const evaluated = await send("Runtime.evaluate", { expression: "document.activeElement" });
+        const objectId = evaluated.result?.objectId;
+        if (!objectId) throw new Error("the focused control has no node");
+        const described = await send("DOM.describeNode", { objectId });
+        const backendNodeId = described.node.backendNodeId;
+        await send("Accessibility.enable");
+        const tree = await send("Accessibility.getPartialAXTree", { backendNodeId, fetchRelatives: false });
+        const node = (tree.nodes ?? []).find((entry) => entry.backendDOMNodeId === backendNodeId) ?? tree.nodes?.[0];
+        return { name: String(node?.name?.value ?? "").trim(), role: String(node?.role?.value ?? "") };
       },
       key: async (key) => {
         const code = key === "Tab" ? "Tab" : key === "Enter" ? "Enter" : key === " " ? "Space" : key;

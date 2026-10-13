@@ -469,11 +469,17 @@ async function drive(browser, origin, rows) {
       await browser.send("DOM.setFileInputFiles", { nodeId, files: [path] });
       await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent");
     };
+    const addAttribute = async (column) => {
+      await browser.evalJs(`T.set(document.querySelector('select[aria-label="Add attribute"]'), ${JSON.stringify(column)})`);
+      try {
+        await browser.waitFor(`[...document.querySelectorAll('.levels input[aria-label="Attribute name"]')].some((input) => input.value === ${JSON.stringify(column)})`);
+      } catch (error) {
+        fail(`attributes: ${column} did not appear (${error.message})`);
+      }
+    };
     const addFixtureLevels = async () => {
-      await browser.evalJs(`T.set(document.querySelector('select[aria-label="Add attribute"]'), 'design')`);
-      await browser.sleep(300);
-      await browser.evalJs(`T.set(document.querySelector('select[aria-label="Add attribute"]'), 'customer')`);
-      await browser.sleep(300);
+      await addAttribute("design");
+      await addAttribute("customer");
     };
     const waitReady = async () => {
       await browser.waitFor("!document.querySelector('button.primary').disabled");
@@ -483,12 +489,21 @@ async function drive(browser, origin, rows) {
       await browser.waitFor("!!document.querySelector('.kpis')");
       await browser.waitFor("!!document.querySelector('.bridge table')");
     };
-    const readBridge = async () =>
-      JSON.parse(
+    const readBridge = async (step) => {
+      const rows = JSON.parse(
         await browser.evalJs(
-          "JSON.stringify([...document.querySelectorAll('.bridge table')[0].rows].slice(1).map(r => Number(r.cells[1].innerText.replace(/[,+]/g, ''))))",
+          "JSON.stringify([...document.querySelectorAll('.bridge table')[0].rows].slice(1).map((row) => ({ label: (row.cells[0] ? row.cells[0].innerText : '').trim(), amount: row.cells[1] ? row.cells[1].innerText : '' })))",
         ),
       );
+      return rows.map((row) => {
+        const name = row.label || "row";
+        const raw = row.amount == null ? "" : String(row.amount).trim();
+        if (raw === "") fail(`${step}: ${name} amount is missing`);
+        const value = Number(raw.replace(/[,+]/g, ""));
+        if (!Number.isFinite(value)) fail(`${step}: ${name} amount is ${JSON.stringify(raw)}`);
+        return value;
+      });
+    };
     const sameTotals = (got, want, step) => {
       if (got.length !== want.length) fail(`${step}: ${got.length} bridge rows, expected ${want.length}`);
       got.forEach((value, i) => {
@@ -505,7 +520,7 @@ async function drive(browser, origin, rows) {
       await addFixtureLevels();
       await waitReady();
       await calculate();
-      totalsByFormat[name] = await readBridge();
+      totalsByFormat[name] = await readBridge(`file paths: ${name}`);
     }
     sameTotals(totalsByFormat.xlsx, totalsByFormat.csv, "file paths: xlsx totals differ from csv");
     sameTotals(totalsByFormat.csv, expectedAmounts, "file paths: csv totals differ from the engine in Node");
@@ -520,15 +535,14 @@ async function drive(browser, origin, rows) {
     await addFixtureLevels();
     await waitReady();
     await calculate();
-    sameTotals(await readBridge(), totalsByFormat.csv, "pasted cells: totals differ from the csv load");
+    sameTotals(await readBridge("pasted cells"), totalsByFormat.csv, "pasted cells: totals differ from the csv load");
     console.log("ok  pasted cells: tab-separated text through the paste path gives the same totals");
 
     await setDataFile(fixtures.formattedPath);
-    await browser.evalJs(`T.set(document.querySelector('select[aria-label="Add attribute"]'), 'product')`);
-    await browser.sleep(300);
+    await addAttribute("product");
     await waitReady();
     await calculate();
-    const formatted = await readBridge();
+    const formatted = await readBridge("formatted numbers");
     const [formattedPrior, ...formattedRest] = formatted;
     const formattedCurrent = formattedRest.pop();
     if (Math.abs(formattedPrior - FORMATTED_PRIOR) > 1e-6) fail(`formatted numbers: prior is ${formattedPrior}, expected ${FORMATTED_PRIOR}`);
@@ -538,19 +552,37 @@ async function drive(browser, origin, rows) {
     await setDataFile(fixtures.csvPath);
     await addFixtureLevels();
     await browser.evalJs(`T.set(T.sel('Compare by'), 'ytd')`);
-    await browser.waitFor(`JSON.stringify([...document.querySelectorAll('select')].flatMap(s => [...s.options].map(o => o.value))).includes('2024 YTD')`);
-    const ytdLabels = JSON.parse(
-      await browser.evalJs("JSON.stringify([...document.querySelectorAll('select')].flatMap(s => [...s.options].map(o => o.value)).filter(v => v.includes('YTD')))"),
+    const ytdReady = `(() => { const sel = (name) => [...document.querySelectorAll('label')].find((label) => label.firstChild && label.firstChild.textContent.trim().startsWith(name))?.querySelector('select'); const prior = sel('Prior')?.selectedOptions?.[0]; const current = sel('Current')?.selectedOptions?.[0]; return !!prior && !!current && prior.textContent.includes('YTD') && current.textContent.includes('YTD'); })()`;
+    await browser.waitFor(ytdReady);
+    const ytd = JSON.parse(
+      await browser.evalJs(`(() => {
+        const sel = (name) => [...document.querySelectorAll('label')].find((label) => label.firstChild && label.firstChild.textContent.trim().startsWith(name))?.querySelector('select');
+        const chosen = (name) => { const option = sel(name)?.selectedOptions?.[0]; return option ? { value: option.value, text: option.textContent.trim() } : null; };
+        const options = [...document.querySelectorAll('select')].flatMap((select) => [...select.options].map((option) => ({ value: option.value, text: option.textContent.trim() }))).filter((option) => option.text.includes('YTD') || option.value.includes('YTD'));
+        return JSON.stringify({ options, prior: chosen('Prior'), current: chosen('Current') });
+      })()`),
     );
-    if (!ytdLabels.includes("2024 YTD") || !ytdLabels.includes("2025 YTD")) fail(`year to date: period labels are ${ytdLabels.join(", ")}`);
+    const visible = ytd.options.map((option) => option.text);
+    if (!visible.includes("2024 YTD") || !visible.includes("2025 YTD")) fail(`year to date: period labels are ${visible.join(", ")}`);
+    for (const option of ytd.options) {
+      if (option.value !== option.text) fail(`year to date: visible label ${JSON.stringify(option.text)} differs from value ${JSON.stringify(option.value)}`);
+    }
+    if (ytd.prior?.text !== "2024 YTD" || ytd.current?.text !== "2025 YTD") fail(`year to date: selected labels are ${ytd.prior?.text} and ${ytd.current?.text}`);
     await waitReady();
     await calculate();
-    console.log("ok  year to date: 2024 YTD and 2025 YTD label the periods and Calculate runs");
+    console.log("ok  year to date: 2024 YTD and 2025 YTD are the visible period labels and Calculate runs");
 
     await setDataFile(fixtures.csvPath);
-    await addFixtureLevels();
-    await waitReady();
-    await calculate();
+    await addAttribute("customer");
+    await addAttribute("design");
+    await browser.evalJs(`T.set(T.sel('Sales'), 'units'); T.set(T.sel('Units'), 'net_sales')`);
+    const readMapping = async () =>
+      JSON.parse(
+        await browser.evalJs(`JSON.stringify({ units: T.sel('Units') ? T.sel('Units').value : '', sales: T.sel('Sales') ? T.sel('Sales').value : '', levels: [...document.querySelectorAll('.levels input[aria-label="Attribute name"]')].map((input) => input.value) })`),
+      );
+    await browser.waitFor(`T.sel('Units')?.value === 'net_sales' && T.sel('Sales')?.value === 'units'`);
+    const drafted = await readMapping();
+    if (drafted.levels.join(",") !== "customer,design") fail(`load setup: attributes before save are ${drafted.levels.join(", ") || "none"}`);
     const setupJson = await browser.evalJs(`(async () => {
       let blob = null; const original = URL.createObjectURL;
       URL.createObjectURL = (b) => { blob = b; return original(b); };
@@ -560,24 +592,33 @@ async function drive(browser, origin, rows) {
       if (!blob) return "";
       return await blob.text();
     })()`);
-    if (!setupJson.includes('"design"') || !setupJson.includes('"customer"')) fail("load setup: saved setup does not name the attributes");
+    if (!setupJson) fail("load setup: no setup file was saved");
+    const saved = JSON.parse(setupJson);
+    if (saved.unitsColumn !== "net_sales" || saved.salesColumn !== "units") fail(`load setup: saved mapping is ${saved.unitsColumn}/${saved.salesColumn}`);
+    if (!Array.isArray(saved.levels) || saved.levels.map((level) => level.name).join(",") !== "customer,design") fail("load setup: saved attributes are not customer then design");
     const savedSetupPath = join(fixtureDir, "bridgekit-setup.json");
     writeFileSync(savedSetupPath, setupJson);
     await browser.evalJs("T.btn('Clear data').click()");
     await browser.waitFor("!document.querySelector('aside') && document.body.innerText.includes('Load a sales file')");
     await setDataFile(fixtures.csvPath);
+    try {
+      await browser.waitFor(`T.sel('Units')?.value === 'units' && T.sel('Sales')?.value === 'net_sales' && document.querySelectorAll('.levels li').length === 0`);
+    } catch (error) {
+      const guessed = await readMapping();
+      fail(`load setup: before Load setup the file shows ${guessed.units}/${guessed.sales} and ${guessed.levels.join(", ") || "no attributes"} (${error.message})`);
+    }
     {
       const { root } = await browser.send("DOM.getDocument");
       const { nodeId } = await browser.send("DOM.querySelector", { nodeId: root.nodeId, selector: 'input[type=file][accept*="json"]' });
       await browser.send("DOM.setFileInputFiles", { nodeId, files: [savedSetupPath] });
     }
-    await browser.waitFor("!!document.querySelector('.levels') && document.querySelector('.levels').innerText.toLowerCase().includes('design')");
-    const restoredSetup = JSON.parse(
-      await browser.evalJs("JSON.stringify({ units: T.sel('Units').value, sales: T.sel('Sales').value, levels: document.querySelector('.levels').innerText })"),
-    );
-    if (restoredSetup.units !== "units" || restoredSetup.sales !== "net_sales") fail(`load setup: mapping is ${restoredSetup.units}/${restoredSetup.sales}`);
-    if (!restoredSetup.levels.toLowerCase().includes("design") || !restoredSetup.levels.toLowerCase().includes("customer")) fail("load setup: attributes were not restored");
-    console.log("ok  load setup: a saved setup restores the mapping and attributes through Load setup");
+    try {
+      await browser.waitFor(`T.sel('Units')?.value === 'net_sales' && T.sel('Sales')?.value === 'units' && [...document.querySelectorAll('.levels input[aria-label="Attribute name"]')].map((input) => input.value).join(',') === 'customer,design'`, 40);
+    } catch {
+      const got = await readMapping();
+      fail(`load setup: mapping is ${got.units}/${got.sales}, attributes ${got.levels.join(", ") || "none"}`);
+    }
+    console.log("ok  load setup: a saved setup restores a mapping and attribute order the file would not guess");
 
     await waitReady();
     await calculate();
@@ -618,13 +659,15 @@ async function drive(browser, origin, rows) {
     };
     const rawAt = (sheet, col, row) => sheet.getRow(row).getCell(colIndex(col)).value;
     const byName = (name) => (name === "Detail" ? detailSheet : name === "Bridge" ? bridgeSheet : null);
-    const evalFormula = (formula, sheet, row, seen = new Set()) => {
+    const evalFormula = (formula, sheet, col, row, seen = new Set()) => {
+      const where = `${sheet.name}!${col}${row}`;
+      const bad = (why) => fail(`exported workbook: ${where} formula ${formula}: ${why}`);
       let expression = String(formula).replace(/^=/, "");
       expression = expression.replace(/SUM\(\s*(?:(Detail|Bridge)!)?([A-Z]{1,3})(\d+):(?:(Detail|Bridge)!)?([A-Z]{1,3})(\d+)\s*\)/g, (m, p1, c1, r1, p2, c2, r2) => {
         const name = p1 ?? p2 ?? sheet.name;
-        if (c1 !== c2) fail(`exported workbook: cannot evaluate ${m}`);
+        if (c1 !== c2) bad(`cannot evaluate ${m}`);
         const target = byName(name);
-        if (!target) fail(`exported workbook: cannot evaluate ${m}`);
+        if (!target) bad(`cannot evaluate ${m}`);
         let sum = 0;
         for (let r = Number(r1); r <= Number(r2); r++) sum += numAt(target, c1, r, seen);
         return `(${sum})`;
@@ -633,7 +676,7 @@ async function drive(browser, origin, rows) {
         if (m === "SUM" || m === "IF" || m === "CHOOSE") return m;
         if (prefix && prefix !== "Detail" && prefix !== "Bridge") return m;
         const target = prefix ? byName(prefix) : sheet;
-        if (!target) fail(`exported workbook: cannot evaluate ${m}`);
+        if (!target) bad(`cannot evaluate ${m}`);
         const v = numAt(target, c, Number(r), seen);
         return `(${v})`;
       });
@@ -642,14 +685,18 @@ async function drive(browser, origin, rows) {
       const IF = (cond, a, b) => (cond ? a : b);
       const CHOOSE = (index, ...choices) => {
         const i = Math.round(Number(index));
-        if (!Number.isFinite(i) || i < 1 || i > choices.length) fail(`exported workbook: CHOOSE index ${index} is out of range`);
+        if (!Number.isFinite(i) || i < 1 || i > choices.length) bad(`CHOOSE index ${index} is out of range`);
         return choices[i - 1];
       };
+      let computed;
       try {
-        return Function("IF", "CHOOSE", `"use strict"; return (${expression});`)(IF, CHOOSE);
+        computed = Function("IF", "CHOOSE", `"use strict"; return (${expression});`)(IF, CHOOSE);
       } catch (error) {
-        fail(`exported workbook: cannot evaluate ${formula} (${error.message})`);
+        if (error instanceof Failure) throw error;
+        bad(error instanceof Error ? error.message : String(error));
       }
+      if (typeof computed !== "number" || !Number.isFinite(computed)) bad(`evaluates to ${computed}`);
+      return computed;
     };
     const numAt = (sheet, col, row, seen = new Set()) => {
       const key = `${sheet.name}!${col}${row}`;
@@ -657,11 +704,14 @@ async function drive(browser, origin, rows) {
       const v = rawAt(sheet, col, row);
       if (typeof v === "number") return v;
       if (v == null || v === "") return 0;
-      if (typeof v === "object" && v !== null && "result" in v && typeof v.result === "number" && Number.isFinite(v.result)) return v.result;
       if (typeof v === "object" && v !== null && "formula" in v) {
         seen.add(key);
         try {
-          return evalFormula(String(v.formula), sheet, row, seen);
+          const computed = evalFormula(String(v.formula), sheet, col, row, seen);
+          if ("result" in v && typeof v.result === "number" && Number.isFinite(v.result) && Math.abs(computed - v.result) > 1e-6) {
+            fail(`exported workbook: ${key} formula ${v.formula} evaluates to ${computed}, cached result is ${v.result}`);
+          }
+          return computed;
         } finally {
           seen.delete(key);
         }
@@ -673,12 +723,12 @@ async function drive(browser, origin, rows) {
       fail(`exported workbook: non-numeric ${key} is ${JSON.stringify(v)}`);
     };
     if (checkCell && typeof checkCell === "object" && "formula" in checkCell) {
-      const computed = evalFormula(String(checkCell.formula), bridgeSheet, checkRowNumber);
+      const computed = evalFormula(String(checkCell.formula), bridgeSheet, "B", checkRowNumber);
       if (!Number.isFinite(computed) || Math.abs(computed) > 1e-6) fail(`exported workbook: check row evaluates to ${computed}, expected zero`);
       if ("result" in checkCell && typeof checkCell.result === "number" && Number.isFinite(checkCell.result)) {
         if (Math.abs(checkCell.result) > 1e-6) fail("exported workbook: check row result is not zero");
       }
-      console.log("ok  exported workbook: sheets present and the Bridge check row evaluates to zero (SUM ranges, cell refs, arithmetic, IF and CHOOSE)");
+      console.log("ok  exported workbook: sheets present and the Bridge check row evaluates to zero from cell values (SUM ranges, cell refs, arithmetic, IF and CHOOSE)");
     } else {
       if (Number(checkCell) !== 0 && Number(bridgeSheet.getRow(checkRowNumber).getCell(2).result) !== 0) fail("exported workbook: check row is not zero");
       console.log("ok  exported workbook: sheets present and the Bridge check row is a zero literal");
@@ -707,30 +757,55 @@ async function drive(browser, origin, rows) {
       }
       fail(`keyboard: Tab did not reach ${step}`);
     };
+    const ringJs = (labelExpr) => `(() => {
+      const label = ${labelExpr};
+      if (!label) return JSON.stringify({ missing: true, visible: false, style: "", width: "", color: "", shadow: "" });
+      const style = getComputedStyle(label);
+      const parse = (css) => {
+        const match = String(css).match(/rgba?\\(([^)]+)\\)/);
+        if (!match) return null;
+        const parts = match[1].split(",").map((part) => Number(part.trim()));
+        return { r: parts[0], g: parts[1], b: parts[2], a: parts.length > 3 ? parts[3] : 1 };
+      };
+      const same = (left, right) => !!left && !!right && left.r === right.r && left.g === right.g && left.b === right.b && Math.abs(left.a - right.a) < 0.01;
+      let node = label.parentElement;
+      let backdrop = null;
+      while (node && !backdrop) {
+        const color = parse(getComputedStyle(node).backgroundColor);
+        if (color && color.a > 0.01) backdrop = color;
+        node = node.parentElement;
+      }
+      const width = Number.parseFloat(style.outlineWidth) || 0;
+      const outlineColor = parse(style.outlineColor);
+      const outlineVisible = style.outlineStyle !== "none" && width > 0 && !!outlineColor && outlineColor.a > 0.01 && !same(outlineColor, backdrop);
+      const shadowText = style.boxShadow;
+      const shadowColor = shadowText && shadowText !== "none" ? parse(shadowText) : null;
+      const shadowVisible = shadowText !== "none" && !!shadowColor && shadowColor.a > 0.01 && !same(shadowColor, backdrop);
+      return JSON.stringify({ style: style.outlineStyle, width: style.outlineWidth, color: style.outlineColor, shadow: shadowText, visible: outlineVisible || shadowVisible });
+    })()`;
     for (const [kind, match, label, labelSel] of [["nav", (s) => s.startsWith("nav:"), "Choose file", "header nav label.button"], ["run", (s) => s.startsWith("run:"), "Load setup", ".run label.button"]]) {
       await browser.evalJs("if (document.activeElement) document.activeElement.blur()");
-      await browser.sleep(150);
-      const blurred = await browser.evalJs(`(() => { const label = document.querySelector(${JSON.stringify(labelSel)}); return getComputedStyle(label).outlineStyle + '/' + getComputedStyle(label).outlineWidth; })()`);
+      await browser.waitFor("!document.activeElement || document.activeElement === document.body || document.activeElement.type !== 'file'");
+      const blurred = JSON.parse(await browser.evalJs(ringJs(`document.querySelector(${JSON.stringify(labelSel)})`)));
       await tabToInput(match, label);
-      const info = JSON.parse(
-        await browser.evalJs(`(() => { const el = document.activeElement; const label = el.closest('label.button'); return JSON.stringify({ name: el.labels[0].textContent.trim().replace(/\\s+/g, ' ') }); })()`),
-      );
-      if (!info.name.includes(label)) fail(`keyboard: ${kind} control is named ${info.name}`);
-      const focused = await browser.evalJs("(() => { const label = document.activeElement.closest('label.button'); return getComputedStyle(label).outlineStyle + '/' + getComputedStyle(label).outlineWidth; })()");
-      if (focused === blurred || focused.startsWith("none/") || focused.endsWith("/0px")) fail(`keyboard: ${label} shows no focus ring (${blurred} to ${focused})`);
+      const named = await browser.accessibleName();
+      if (named.name !== label) fail(`keyboard: ${kind} control is named ${named.name}`);
+      const focused = JSON.parse(await browser.evalJs(ringJs("document.activeElement && document.activeElement.closest('label.button')")));
+      const sameRing = blurred.style === focused.style && blurred.width === focused.width && blurred.color === focused.color && blurred.shadow === focused.shadow;
+      if (!focused.visible || sameRing) fail(`keyboard: ${label} shows no focus ring (${blurred.style} ${blurred.width} ${blurred.color} to ${focused.style} ${focused.width} ${focused.color})`);
       for (const key of ["Enter", " "]) {
         browser.clearFileChoosers();
         await browser.key(key);
         try {
-          await browser.waitForFileChooser(3000);
-        } catch {
-          fail(`keyboard: ${label} did not open the file chooser on ${key === " " ? "Space" : key}`);
+          await browser.waitForFileChooser(3000, label);
+        } catch (error) {
+          fail(`keyboard: ${label} did not open the file chooser on ${key === " " ? "Space" : key} (${error.message})`);
         }
         if (!browser.fileChoosers().length) fail(`keyboard: ${label} did not open the file chooser on ${key === " " ? "Space" : key}`);
       }
     }
     await browser.send("Page.setInterceptFileChooserDialog", { enabled: false });
-    console.log("ok  keyboard: Choose file and Load setup are tabbed to, named, ringed and open on Enter and Space");
+    console.log("ok  keyboard: Choose file and Load setup are tabbed to, named from the accessibility tree, show a visible focus ring and open on Enter and Space");
 
     await browser.goto(`${origin}/grouping-level.html`);
     const groupingTitle = await browser.evalJs("document.querySelector('article h1')?.textContent ?? ''");
