@@ -125,3 +125,179 @@ export function betweenLine(by: BridgeBy): string {
   const figures = by.between.map((effect) => `${effect.label} ${signedWhole(effect.value)}`).join(", ");
   return `${BETWEEN_SENTENCE} ${figures}`.trim();
 }
+
+/**
+ * The two stack segments that draw one bar from `low` to `high`.
+ * `strategy` is `all` because a chart's default stack keeps a negative base
+ * apart from a positive height, and the bar would then start at zero.
+ */
+export interface ChartStack {
+  strategy: "all";
+  bases: number[];
+  extents: number[];
+}
+
+export function chartStack(bars: Step[]): ChartStack {
+  return {
+    strategy: "all",
+    bases: bars.map((bar) => bar.low),
+    extents: bars.map((bar) => bar.high - bar.low),
+  };
+}
+
+/** The sentence the page already shows when the calculated bridge is out of date. */
+export const STALE_NOTICE =
+  "The setup changed since this bridge was calculated. Calculate again to update it.";
+
+export function noticesAreStale(texts: readonly string[]): boolean {
+  return texts.includes(STALE_NOTICE);
+}
+
+/** What the grid does for the column the user has chosen. */
+export type GridAction = "clear" | "keep" | "calculate";
+
+/**
+ * The grid is calculated for the bridge on screen. While that bridge is out
+ * of date, a grid that already belongs to it stays, and any other column waits.
+ */
+export function gridAction(column: string, stale: boolean, shownFor: string): GridAction {
+  if (column === "") return "clear";
+  if (!stale) return "calculate";
+  if (shownFor === column) return "keep";
+  return "clear";
+}
+
+/** Where keyboard focus goes when a panel opens or closes. */
+export type FocusPlace = "back" | "trigger" | "select";
+
+export function focusPlace(action: "open" | "close", triggerConnected: boolean): FocusPlace {
+  if (action === "open") return "back";
+  return triggerConnected ? "trigger" : "select";
+}
+
+interface Session {
+  jobs: Array<() => Promise<void>>;
+  accepting: boolean;
+}
+
+/**
+ * One connection's statements, never overlapping. Statements a caller awaits
+ * one after another join one session, so an engine call is not split by
+ * another caller. A call that arrives while a statement is still running
+ * waits for a later session.
+ */
+export function createConnectionQueue(): {
+  schedule<T>(work: () => Promise<T>): Promise<T>;
+} {
+  let current: Session | null = null;
+  let tail: Promise<void> = Promise.resolve();
+
+  function schedule<T>(work: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      // Resolve only after `accepting` is set, in this function. Resolving
+      // inside `work` would run the caller's next statement before this
+      // session could claim it.
+      const launch = (session: Session) => async () => {
+        session.accepting = false;
+        try {
+          const value = await work();
+          session.accepting = true;
+          resolve(value);
+          await takeContinuations(session);
+        } catch (error) {
+          session.accepting = true;
+          reject(error);
+          await takeContinuations(session);
+        } finally {
+          session.accepting = false;
+        }
+      };
+      if (current?.accepting) {
+        current.jobs.push(launch(current));
+        return;
+      }
+      const session: Session = { jobs: [], accepting: false };
+      session.jobs.push(launch(session));
+      const run = tail.then(() => drain(session));
+      tail = run.then(
+        () => undefined,
+        () => undefined,
+      );
+    });
+  }
+
+  async function drain(session: Session): Promise<void> {
+    current = session;
+    try {
+      while (session.jobs.length > 0) {
+        const job = session.jobs.shift();
+        if (!job) break;
+        await job();
+      }
+    } finally {
+      if (current === session) current = null;
+    }
+  }
+
+  async function takeContinuations(session: Session): Promise<void> {
+    for (let hop = 0; hop < 16; hop += 1) {
+      const before = session.jobs.length;
+      await Promise.resolve();
+      if (session.jobs.length > before) return;
+    }
+  }
+
+  return { schedule };
+}
+
+/**
+ * Remembers only the latest column. A column replaced before its turn
+ * started never runs. The column already running finishes, then the latest
+ * one runs.
+ */
+export function createSplitRunner(work: (column: string) => Promise<void>): {
+  request(column: string): void;
+  settled(): Promise<void>;
+} {
+  let pending: string | null = null;
+  let running = false;
+  let idle: Promise<void> = Promise.resolve();
+  let resolveIdle: () => void = () => {};
+
+  function request(column: string): void {
+    pending = column;
+    if (running) return;
+    running = true;
+    idle = new Promise<void>((resolve) => {
+      resolveIdle = resolve;
+    });
+    queueMicrotask(() => {
+      void pump();
+    });
+  }
+
+  async function pump(): Promise<void> {
+    try {
+      while (pending !== null) {
+        const column = pending;
+        pending = null;
+        await work(column);
+      }
+    } finally {
+      running = false;
+      if (pending !== null) {
+        running = true;
+        queueMicrotask(() => {
+          void pump();
+        });
+        return;
+      }
+      resolveIdle();
+    }
+  }
+
+  return {
+    request,
+    settled: () => idle,
+  };
+}
