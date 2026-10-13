@@ -1,5 +1,5 @@
 //   npm run build            && npm run smoke:preview    (serves dist/ itself)
-//   npm run build:cloudflare && npm run smoke:wrangler   (local wrangler dev)
+//   npm run build:cloudflare && npm run smoke:wrangler   (local wrangler dev, accounts on)
 //   npm run dev   (in another terminal)
 //   npm run smoke [-- http://localhost:5173] [rows]
 //   CHROMIUM=/path/to/chrome starts that browser. The default is chromium on PATH.
@@ -56,7 +56,14 @@ const BUILDS = {
     rebuild: "npm run build:cloudflare",
     secrets: ["BETTER_AUTH_SECRET"],
     prepare: (dir) => [[bin("wrangler"), "d1", "migrations", "apply", "bridgekit", "--local", ...local(dir)]],
-    command: (dir) => [bin("wrangler"), "dev", "--port", devPort(), "--ip", "127.0.0.1", ...local(dir)],
+    // The Cloudflare build asks for the session on load, and the Worker answers
+    // account routes with 404 unless ACCOUNTS is exactly "on", so this local run
+    // starts it open. LOCAL_EMAIL_LOG writes a sign-in link to the log instead of
+    // refusing it. Both are constants for this test; they protect nothing.
+    command: (dir) => [
+      bin("wrangler"), "dev", "--port", devPort(), "--ip", "127.0.0.1", ...local(dir),
+      "--var", "ACCOUNTS:on", "--var", "LOCAL_EMAIL_LOG:on",
+    ],
     policies: 2, // the meta tag, and the header from public/_headers
   },
 };
