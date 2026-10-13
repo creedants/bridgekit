@@ -1,0 +1,2 @@
+- The smoke test judges every request the self-check browser records by the rule the application run uses; only the eight control requests, matched exactly by URL, are exempt.
+- The request check accepts only `GET`. `HEAD` and every other method fail and name the request.

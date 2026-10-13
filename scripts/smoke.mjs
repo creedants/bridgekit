@@ -188,6 +188,14 @@ function leak({ url, method, hasBody, blocked }, origin, { devServer }) {
   return null;
 }
 
+/** Every recorded request that could carry data off this origin, named. The caller removes the records it means to exempt. */
+function strays(entries, origin, devServer) {
+  return entries.flatMap((entry) => {
+    const why = leak(entry, origin, { devServer });
+    return why ? [`[${entry.from}] ${entry.method} ${entry.url} (${why})`] : [];
+  });
+}
+
 const blob = (source) => `URL.createObjectURL(new Blob([${JSON.stringify(source)}], { type: "text/javascript" }))`;
 
 const PROVEN = {
@@ -243,7 +251,8 @@ async function ask(browser, origin) {
 }
 
 /**
- * Why this record does not prove the recorder, or null.
+ * Why this record does not prove the recorder, or null. Every control attempt must leave exactly what
+ * CONTROL says, and every other request or refusal in this browser is judged by the rule the application run uses.
  * @param {Recording} record
  * @param {string} origin
  * @param {number} policies
@@ -263,6 +272,12 @@ function proves(record, origin, policies) {
     }
     if (reports.length !== expect.reports) return `${reports.length} policy reports of the ${item.from}'s ${item.how}, expected ${expect.reports} (${reports.map((entry) => `${entry.from} ${entry.directive} ${entry.url}`).join("; ")})`;
   }
+  // The control URLs are the only requests this browser may make off its origin or with a method other than GET.
+  const control = new Set(asks(origin).map((item) => item.url));
+  const stray = strays(record.network.filter((entry) => !control.has(entry.url)), origin, policies === 0);
+  if (stray.length) return `requests that could carry data: ${stray.slice(0, 5).join("; ")}`;
+  const refused = record.violations.filter((entry) => !control.has(entry.url));
+  if (refused.length) return `content policy violations: ${[...new Set(refused.map((entry) => `[${entry.from}] ${entry.directive} ${entry.url}`))].join("; ")}`;
   return null;
 }
 
@@ -400,7 +415,7 @@ async function drive(browser, origin, rows) {
 }
 
 /**
- * Every rule that decides pass or fail, over the whole record.
+ * Every rule that decides pass or fail for the application's record, over the whole record.
  * @param {Recording} record
  * @param {string} origin
  * @param {{ devServer: boolean }} opts
@@ -409,11 +424,8 @@ async function drive(browser, origin, rows) {
 function judge(record, origin, { devServer }) {
   const failures = [];
   const notes = [];
-  const leaks = record.network.flatMap((entry) => {
-    const why = leak(entry, origin, { devServer });
-    return why ? [`[${entry.from}] ${entry.method} ${entry.url} (${why})`] : [];
-  });
-  if (leaks.length) failures.push(`requests that could carry data: ${leaks.slice(0, 5).join("; ")}`);
+  const leaky = strays(record.network, origin, devServer);
+  if (leaky.length) failures.push(`requests that could carry data: ${leaky.slice(0, 5).join("; ")}`);
   else {
     const bySource = [...new Set(record.network.map((entry) => entry.from))].map((from) => `${record.network.filter((entry) => entry.from === from).length} ${from}`);
     notes.push(`ok  network: ${record.network.length} requests (${bySource.join(", ")}), all GET to ${origin}`);
