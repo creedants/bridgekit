@@ -13,17 +13,22 @@ import {
   createAttemptCache,
   createConnectionQueue,
   createSplitRunner,
+  displayedIdentity,
   focusPlace,
   gridAction,
+  IDLE_SPLIT_PHASE,
+  noteDisplayedRun,
   noticesAreStale,
+  paintSplit,
   panelStatusLabel,
   panelTitle,
+  readLiveGeneration,
+  reduceSplitPhase,
   sharedScale,
   SPLIT_FAILURE_SENTENCE,
-  splitBelongs,
   statementStartsTurn,
   steps,
-  type ScreenBridge,
+  type SplitIdentity,
   type Step,
 } from "../src/app/small-bridges.ts";
 import { compact } from "../src/app/format.ts";
@@ -294,21 +299,108 @@ test("a split replaced before it starts never runs, and only the latest follows 
   assert.deepEqual(followed, ["design:start", "design:end", "customer:start", "customer:end"]);
 });
 
-const screen = (over: Partial<ScreenBridge> = {}): ScreenBridge => ({
-  column: "coating",
-  calculation: 1,
-  rows: 0,
-  ...over,
+function sampleGrid(): BridgeBy {
+  return { column: "coating", total: bridge(0, []), panels: [], between: [] };
+}
+
+test("a split is shown only while the generation stamped on the run is still live", () => {
+  // Equal live readings do not belong. The stamp is the first render of the run object.
+  const run = {};
+  const stamp = noteDisplayedRun(null, run, 0);
+  const again = noteDisplayedRun(stamp, run, 1);
+  assert.equal(again, stamp);
+  assert.equal(again.calculation, 1);
+  assert.equal(again.stampedGeneration.value, 0);
+
+  const displayed = displayedIdentity(again, "coating");
+  const calculating = reduceSplitPhase(IDLE_SPLIT_PHASE, {
+    type: "inputs",
+    column: "coating",
+    displayed,
+    stale: false,
+  });
+  assert.equal(calculating.kind, "calculating");
+
+  const grid = sampleGrid();
+  const refused = reduceSplitPhase(calculating, {
+    type: "settled",
+    request: displayed,
+    outcome: { status: "grid", result: grid },
+    displayed,
+    liveGeneration: readLiveGeneration(1),
+    stale: false,
+  });
+  assert.equal(refused, calculating);
+  assert.deepEqual(
+    paintSplit({ phase: refused, displayed, liveGeneration: readLiveGeneration(1), stale: false }),
+    { view: "nothing" },
+  );
+
+  const ready = reduceSplitPhase(calculating, {
+    type: "settled",
+    request: displayed,
+    outcome: { status: "grid", result: grid },
+    displayed,
+    liveGeneration: readLiveGeneration(0),
+    stale: false,
+  });
+  assert.equal(ready.kind, "ready");
+  if (ready.kind === "ready") assert.equal(ready.grid, grid);
+  assert.deepEqual(
+    paintSplit({ phase: ready, displayed, liveGeneration: readLiveGeneration(1), stale: false }),
+    { view: "nothing" },
+  );
+  assert.deepEqual(
+    paintSplit({ phase: ready, displayed, liveGeneration: readLiveGeneration(0), stale: true }),
+    { view: "grid", grid },
+  );
+
+  const failed = reduceSplitPhase(calculating, {
+    type: "settled",
+    request: displayed,
+    outcome: { status: "fail" },
+    displayed,
+    liveGeneration: readLiveGeneration(0),
+    stale: false,
+  });
+  const failedPaint = {
+    phase: failed,
+    displayed,
+    liveGeneration: readLiveGeneration(0),
+    stale: false,
+  };
+  const sentence = "The small bridges could not be calculated.";
+  assert.deepEqual(paintSplit(failedPaint), { view: "failed", sentence });
+  assert.deepEqual(paintSplit(failedPaint), { view: "failed", sentence });
+  assert.equal(failed.kind, "failed");
 });
 
-test("a split result belongs only to the bridge and the rows it started with", () => {
-  const started = screen();
-  assert.equal(splitBelongs(started, screen(), false), true);
-  assert.equal(splitBelongs(started, screen({ column: "design" }), false), false);
-  assert.equal(splitBelongs(started, screen({ calculation: 2 }), false), false);
-  assert.equal(splitBelongs(started, screen({ rows: 1 }), false), false);
-  assert.equal(splitBelongs(started, screen(), true), false);
-  assert.equal(splitBelongs(screen({ column: "" }), screen({ column: "" }), false), false);
+test("a split is dropped when the column, the calculation, or the notice does not match", async () => {
+  const run = {};
+  const stamp = noteDisplayedRun(null, run, 4);
+  const request = displayedIdentity(stamp, "coating");
+  const live = () => readLiveGeneration(4);
+  const runSplit = (wanted: SplitIdentity, shown: SplitIdentity, stale: boolean) =>
+    attemptSplit({
+      request: wanted,
+      displayed: () => shown,
+      liveGeneration: live,
+      stale: () => stale,
+      install: async () => {},
+      prepare: async () => "query",
+      calculate: async () => "grid",
+    });
+
+  assert.deepEqual(await runSplit(request, displayedIdentity(stamp, "design"), false), { status: "drop" });
+
+  const nextRun = noteDisplayedRun(stamp, {}, 4);
+  assert.equal(nextRun.calculation, stamp.calculation + 1);
+  assert.deepEqual(await runSplit(request, displayedIdentity(nextRun, "coating"), false), { status: "drop" });
+
+  assert.deepEqual(await runSplit(request, request, true), { status: "drop" });
+
+  const empty = displayedIdentity(stamp, "");
+  assert.deepEqual(await runSplit(empty, empty, false), { status: "drop" });
 });
 
 test("replacing the loaded table takes its own turn, and a temporary table does not", () => {
@@ -368,10 +460,15 @@ test("a failed queue install is forgotten, and the split ends on the existing se
   assert.equal(SPLIT_FAILURE_SENTENCE, "The small bridges could not be calculated.");
   const cache = createAttemptCache();
   let opens = 0;
-  const here = screen();
+  const run = {};
+  const stamp = noteDisplayedRun(null, run, 0);
+  const request = displayedIdentity(stamp, "coating");
+  const displayed = () => displayedIdentity(stamp, "coating");
+  const live = () => readLiveGeneration(0);
   const fail = await attemptSplit({
-    started: here,
-    screen: () => here,
+    request,
+    displayed,
+    liveGeneration: live,
     stale: () => false,
     install: () => cache.run(async () => {
       opens += 1;
@@ -382,8 +479,9 @@ test("a failed queue install is forgotten, and the split ends on the existing se
   });
   assert.deepEqual(fail, { status: "fail" });
   const again = await attemptSplit({
-    started: here,
-    screen: () => here,
+    request,
+    displayed,
+    liveGeneration: live,
     stale: () => false,
     install: () => cache.run(async () => {
       opens += 1;
@@ -394,10 +492,10 @@ test("a failed queue install is forgotten, and the split ends on the existing se
   assert.deepEqual(again, { status: "grid", result: "query" });
   assert.equal(opens, 2);
 
-  const moved = screen({ rows: 1 });
   const dropped = await attemptSplit({
-    started: here,
-    screen: () => moved,
+    request,
+    displayed,
+    liveGeneration: () => readLiveGeneration(1),
     stale: () => false,
     install: async () => {
       throw new Error("worker did not start");

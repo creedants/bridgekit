@@ -183,43 +183,247 @@ export function gridAction(column: string, stale: boolean, shownFor: string): Gr
 /** The one sentence shown when the split cannot be calculated. */
 export const SPLIT_FAILURE_SENTENCE = "The small bridges could not be calculated.";
 
+const stampedGenerationBrand = Symbol("StampedGeneration");
+const liveGenerationBrand = Symbol("LiveGeneration");
+
 /**
- * The bridge a split result has to match. The calculation counter changes when
- * a different run is rendered. The row generation changes when a load is queued.
+ * Queue generation at the first render of a run object.
+ * Built only by `noteDisplayedRun`. A live reading does not satisfy this type.
  */
-export interface ScreenBridge {
-  column: string;
-  calculation: number;
-  rows: number;
+export interface StampedGeneration {
+  readonly [stampedGenerationBrand]: "StampedGeneration";
+  readonly value: number;
 }
 
-/** True only when the result is still the bridge, the rows, and the column on screen, and the setup notice is absent. */
-export function splitBelongs(started: ScreenBridge, screen: ScreenBridge, stale: boolean): boolean {
-  return !stale
-    && started.column !== ""
-    && started.column === screen.column
-    && started.calculation === screen.calculation
-    && started.rows === screen.rows;
+/**
+ * `pageQueue.generation()` at a settle or a paint.
+ * Built only by `readLiveGeneration`. Never stored on a phase.
+ */
+export interface LiveGeneration {
+  readonly [liveGenerationBrand]: "LiveGeneration";
+  readonly value: number;
 }
+
+/** The run on screen, plus the generation stamped the first time that object rendered. */
+export interface RunStamp {
+  /** The same object `Results` passes down. Identity, not `run.id`, is the change. */
+  readonly run: object;
+  /** Increments once per new run object. Starts at 1 for the first run. */
+  readonly calculation: number;
+  readonly stampedGeneration: StampedGeneration;
+}
+
+/**
+ * Column plus the displayed run's calculation and stamp.
+ * This object has no field for the generation at the start of a split.
+ */
+export interface SplitIdentity {
+  readonly column: string;
+  readonly calculation: number;
+  readonly stampedGeneration: StampedGeneration;
+}
+
+/**
+ * The grid, the failure, and the column the grid was shown for.
+ * One variant is stored. Paint reads it and does not write it.
+ */
+export type SplitPhase =
+  | { readonly kind: "idle" }
+  | { readonly kind: "calculating"; readonly identity: SplitIdentity }
+  | { readonly kind: "ready"; readonly identity: SplitIdentity; readonly grid: BridgeBy }
+  | { readonly kind: "failed"; readonly identity: SplitIdentity };
+
+export const IDLE_SPLIT_PHASE: SplitPhase = { kind: "idle" };
+
+/**
+ * What the shell renders. `failed` carries the existing sentence and no other.
+ * `nothing` is an empty body under the select.
+ */
+export type SplitPaint =
+  | { readonly view: "nothing" }
+  | { readonly view: "calculating" }
+  | { readonly view: "grid"; readonly grid: BridgeBy }
+  | { readonly view: "failed"; readonly sentence: typeof SPLIT_FAILURE_SENTENCE };
 
 export type SplitOutcome<T> =
-  | { status: "grid"; result: T }
-  | { status: "drop" }
-  | { status: "fail" };
+  | { readonly status: "grid"; readonly result: T }
+  | { readonly status: "drop" }
+  | { readonly status: "fail" };
+
+/**
+ * One transition. `inputs` runs from the effect on column, stale, run, and rowsEpoch.
+ * `settled` runs from the split runner.
+ */
+export type SplitEvent =
+  | {
+      readonly type: "inputs";
+      readonly column: string;
+      readonly displayed: SplitIdentity;
+      readonly stale: boolean;
+    }
+  | {
+      readonly type: "settled";
+      /** Copied from the run stamp when the runner took the column. */
+      readonly request: SplitIdentity;
+      readonly outcome: SplitOutcome<BridgeBy>;
+      readonly displayed: SplitIdentity;
+      readonly liveGeneration: LiveGeneration;
+      readonly stale: boolean;
+    };
+
+/**
+ * Records the queue generation when `run` first differs from `prior.run`.
+ * A later call with the same object returns `prior`, whatever `generationAtRender` is.
+ */
+export function noteDisplayedRun(
+  prior: RunStamp | null,
+  run: object,
+  generationAtRender: number,
+): RunStamp {
+  if (prior !== null && prior.run === run) return prior;
+  return {
+    run,
+    calculation: (prior?.calculation ?? 0) + 1,
+    stampedGeneration: stampGeneration(generationAtRender),
+  };
+}
+
+/** Call at settle and at paint with `pageQueue.generation()`. */
+export function readLiveGeneration(generation: number): LiveGeneration {
+  return { [liveGenerationBrand]: "LiveGeneration", value: generation };
+}
+
+/** Copies the stamp off the run. The column is the select, or the column the runner took. */
+export function displayedIdentity(stamp: RunStamp, column: string): SplitIdentity {
+  return {
+    column,
+    calculation: stamp.calculation,
+    stampedGeneration: stamp.stampedGeneration,
+  };
+}
+
+/**
+ * Stores a grid or a failure only when `splitBelongs` is true.
+ * A result that fails that test leaves `phase` as it was.
+ * `inputs` asks `gridAction`. The ready column is `shownFor`, and every other phase passes `""`.
+ */
+export function reduceSplitPhase(phase: SplitPhase, event: SplitEvent): SplitPhase {
+  switch (event.type) {
+    case "inputs": {
+      const shownFor = phase.kind === "ready" ? phase.identity.column : "";
+      const action = gridAction(event.column, event.stale, shownFor);
+      if (action === "keep") return phase;
+      if (action === "clear") return phase.kind === "idle" ? phase : IDLE_SPLIT_PHASE;
+      const identity: SplitIdentity = {
+        column: event.column,
+        calculation: event.displayed.calculation,
+        stampedGeneration: event.displayed.stampedGeneration,
+      };
+      if (phase.kind === "calculating" && sameIdentity(phase.identity, identity)) return phase;
+      return { kind: "calculating", identity };
+    }
+    case "settled": {
+      if (event.outcome.status === "drop") return phase;
+      if (!splitBelongs(event.request, event.displayed, event.liveGeneration, event.stale)) return phase;
+      if (event.outcome.status === "fail") {
+        if (phase.kind === "failed" && sameIdentity(phase.identity, event.request)) return phase;
+        return { kind: "failed", identity: event.request };
+      }
+      if (
+        phase.kind === "ready"
+        && sameIdentity(phase.identity, event.request)
+        && phase.grid === event.outcome.result
+      ) {
+        return phase;
+      }
+      return { kind: "ready", identity: event.request, grid: event.outcome.result };
+    }
+    default: {
+      const _exhaustive: never = event;
+      return _exhaustive;
+    }
+  }
+}
+
+/**
+ * Reads the phase and does not write it.
+ * An empty column, or a stamp that differs from the live generation, paints nothing.
+ * That includes a grid stored while it belonged, and a calculation still in flight.
+ * A matching ready grid paints while the stale notice is up.
+ * A matching failed phase paints the sentence while the notice is absent, and the same inputs paint it again.
+ */
+export function paintSplit(input: {
+  phase: SplitPhase;
+  displayed: SplitIdentity;
+  liveGeneration: LiveGeneration;
+  stale: boolean;
+}): SplitPaint {
+  if (input.displayed.column === "") return { view: "nothing" };
+  if (input.displayed.stampedGeneration.value !== input.liveGeneration.value) return { view: "nothing" };
+  if (input.phase.kind === "ready" && sameIdentity(input.phase.identity, input.displayed)) {
+    return { view: "grid", grid: input.phase.grid };
+  }
+  if (
+    input.phase.kind === "failed"
+    && sameIdentity(input.phase.identity, input.displayed)
+    && !input.stale
+  ) {
+    return { view: "failed", sentence: SPLIT_FAILURE_SENTENCE };
+  }
+  if (input.stale) return { view: "nothing" };
+  return { view: "calculating" };
+}
+
+/**
+ * True when the request column is non-empty and equals the displayed column,
+ * the calculation counters are equal, the request stamp is the displayed stamp,
+ * that stamp's value equals the live generation, and the stale notice is absent.
+ * Compares the run's stamp with the live generation. Does not compare two live readings.
+ */
+function splitBelongs(
+  request: SplitIdentity,
+  displayed: SplitIdentity,
+  liveGeneration: LiveGeneration,
+  stale: boolean,
+): boolean {
+  return !stale
+    && request.column !== ""
+    && request.column === displayed.column
+    && request.calculation === displayed.calculation
+    && request.stampedGeneration === displayed.stampedGeneration
+    && request.stampedGeneration.value === liveGeneration.value;
+}
+
+function sameIdentity(left: SplitIdentity, right: SplitIdentity): boolean {
+  return left.column === right.column
+    && left.calculation === right.calculation
+    && left.stampedGeneration.value === right.stampedGeneration.value;
+}
+
+function stampGeneration(value: number): StampedGeneration {
+  return { [stampedGenerationBrand]: "StampedGeneration", value };
+}
 
 /**
  * Runs one split and keeps the result only while `splitBelongs` stays true.
  * A failed install is a failure, not a hang, because the await sits in this try.
+ * `fail` is returned only while the split still belongs. A mismatch is a drop.
  */
 export async function attemptSplit<Q, T>(input: {
-  started: ScreenBridge;
-  screen: () => ScreenBridge;
+  request: SplitIdentity;
+  displayed: () => SplitIdentity;
+  liveGeneration: () => LiveGeneration;
   stale: () => boolean;
   install: () => Promise<void>;
   prepare: () => Promise<Q>;
   calculate: (prepared: Q) => Promise<T>;
 }): Promise<SplitOutcome<T>> {
-  const belongs = () => splitBelongs(input.started, input.screen(), input.stale());
+  const belongs = () => splitBelongs(
+    input.request,
+    input.displayed(),
+    input.liveGeneration(),
+    input.stale(),
+  );
   try {
     await input.install();
     if (!belongs()) return { status: "drop" };
