@@ -7,9 +7,8 @@ import { handleCommentary, type CommentarySpender } from "./commentary.ts";
 import { countPageView, pageView } from "./counts.ts";
 import { canSendEmail, EMAIL_NOT_SET_UP } from "./email.ts";
 import type { Env } from "./env.ts";
-import { createCheckout, createPortalSession, parseSubscriptionEvent, verifyPaddleSignature, type PaddleEnvironment } from "./paddle.ts";
+import { createCheckout, createPortalSession, parseSubscriptionEvent, PaddleReadError, verifyPaddleSignature, type PaddleAccount, type PaddleEnvironment } from "./paddle.ts";
 import {
-  applySubscription,
   assertCheckoutOpen,
   deleteSaved,
   invitationHasSeat,
@@ -21,6 +20,7 @@ import {
   saveBridge,
   saveSetup,
   SEAT_LIMIT_SENTENCE,
+  syncSubscription,
   userHasPro,
   WORKSPACE_LIMIT_SENTENCE,
   WorkspaceError,
@@ -281,17 +281,27 @@ open.delete("/api/workspaces/:id/bridges/:item", async (c) => {
   return c.body(null, 204);
 });
 
+function seatPrices(env: Env): readonly string[] | undefined {
+  return env.PADDLE_PRICE_ID ? [env.PADDLE_PRICE_ID] : undefined;
+}
+
+function paddleAccount(env: Env): PaddleAccount | null {
+  if (!env.PADDLE_API_KEY) return null;
+  return { apiKey: env.PADDLE_API_KEY, environment: env.PADDLE_ENVIRONMENT === "live" ? "live" : "sandbox", seatPriceIds: seatPrices(env) };
+}
+
 open.post("/api/workspaces/:id/checkout", async (c) => {
   const id = c.req.param("id");
   const role = await membership(c.env.DB, await userId(c), id);
   if (role !== "owner" && role !== "admin") throw new WorkspaceError(403, "Only a workspace owner or admin can subscribe.");
-  if (!c.env.PADDLE_API_KEY || !c.env.PADDLE_PRICE_ID) throw new WorkspaceError(404, "Subscriptions are not set up yet.");
+  const prices = seatPrices(c.env);
+  if (!c.env.PADDLE_API_KEY || !prices) throw new WorkspaceError(404, "Subscriptions are not set up yet.");
   const { seats } = ((await json(c)) ?? {}) as { seats?: unknown };
   await assertCheckoutOpen(c.env.DB, id);
   const checkout = await createCheckout({
     apiKey: c.env.PADDLE_API_KEY,
-    environment: (c.env.PADDLE_ENVIRONMENT === "live" ? "live" : "sandbox") as PaddleEnvironment,
-    priceId: c.env.PADDLE_PRICE_ID,
+    environment: c.env.PADDLE_ENVIRONMENT === "live" ? "live" : "sandbox",
+    priceId: prices[0],
     seats: typeof seats === "number" ? seats : 1,
     workspaceId: id,
   });
@@ -324,9 +334,20 @@ open.post("/api/paddle/webhook", async (c) => {
   if (!c.env.PADDLE_WEBHOOK_SECRET || !(await verifyPaddleSignature(raw, c.req.header("paddle-signature") ?? null, c.env.PADDLE_WEBHOOK_SECRET))) {
     return c.json({ error: "Bad signature." }, 401);
   }
-  const change = parseSubscriptionEvent(parseWebhookBody(raw), c.env.PADDLE_PRICE_ID ? [c.env.PADDLE_PRICE_ID] : undefined);
+  const event = parseSubscriptionEvent(parseWebhookBody(raw), seatPrices(c.env));
   // Events we do not use are acknowledged so Paddle does not retry them.
-  return c.json({ result: change ? await applySubscription(c.env.DB, change) : "ignored" });
+  if (!event) return c.json({ result: "ignored" });
+  const paddle = paddleAccount(c.env);
+  // Without a key this deployment cannot check out or reconcile, so asking
+  // Paddle to retry is the honest answer; the payload is never stored as state.
+  if (!paddle) return c.json({ error: "Subscriptions are not set up yet." }, 503);
+  try {
+    return c.json({ result: await syncSubscription(c.env.DB, event, paddle) });
+  } catch (error) {
+    if (!(error instanceof PaddleReadError)) throw error;
+    console.error(error);
+    return c.json({ error: "Could not read the subscription from Paddle." }, 502);
+  }
 });
 
 async function commentarySpender(c: Context<App>): Promise<CommentarySpender | null> {

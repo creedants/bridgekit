@@ -1,0 +1,1 @@
+- Webhook events now read the workspace's subscriptions from Paddle and store what Paddle reports, so a late or out-of-order event cannot replace a paying subscription and a second paid subscription is elected deterministically; a Paddle read failure answers 502 with the row untouched so Paddle retries, and the signature window now covers Paddle's documented retry schedule.
