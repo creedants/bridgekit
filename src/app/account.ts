@@ -415,9 +415,8 @@ export function useCheckoutReturn(options: {
   }, [state?.workspace, state?.phase, checkoutPro]);
 
   // Poll the checkout workspace until its plan is Pro or the deadline passes.
-  // A reply changes nothing once it is superseded by a newer reply, once Pro
-  // is accepted, or after expiry or unmount: every resolved response passes
-  // the check below before it may reach onPlan.
+  // Ignore replies after a newer poll reply has been applied, after this
+  // effect has accepted Pro, or after its cleanup has run.
   useEffect(() => {
     if (!state || state.phase !== "pending" || !options.enabled || !state.workspace) return;
     const target = state.workspace;

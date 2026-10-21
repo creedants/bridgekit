@@ -1,3 +1,3 @@
 - A workspace with a subscription shows Manage billing instead of Subscribe, opening Paddle's customer portal; a paused workspace says its subscription is paused and how to resume it, and the checkout return polls the plan until Pro is on and stays on the workspace that was paid for.
 - A canceled workspace with paid time left cannot start a second subscription, and one whose paid time has ended can.
-- A poll reply for the checkout workspace is applied only while the return is still waiting and only when no newer reply has already been applied, so a delayed free reply can never overwrite confirmed Pro.
+- A delayed free poll reply cannot overwrite Pro accepted by another poll, and replies from an earlier request are ignored once a later poll reply has been applied.
