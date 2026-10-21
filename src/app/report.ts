@@ -13,7 +13,8 @@ const cell = (value: unknown) => {
 
 /**
  * A single self-contained HTML file with the chart, bridge, coverage, summary
- * and top movers. It holds totals only, so it can be emailed without the data.
+ * and top movers. It holds totals and a written summary, names the file, the
+ * setup and its filter values, and holds no rows, so it can be emailed.
  */
 export function buildReport(input: {
   config: BridgeConfig;
