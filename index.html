@@ -298,7 +298,7 @@
         <h2>Questions</h2>
         <dl>
           <dt>Does it work for an ordinary product list?</dt>
-          <dd>Yes. Use a single attribute, such as product or SKU, and you get the standard volume, mix and price bridge.</dd>
+          <dd>Yes. Use a single attribute, such as product or SKU, and you get the standard volume, mix and price bridge. <a href="/app/?sample=sku">See a made-up product list</a>.</dd>
           <dt>Which calculation method does it use?</dt>
           <dd>Volume at the prior average price, mix as the change in units valued against the group average, and price on exact matches only. The <a href="/method.html">method page</a> has the formulas and a worked example.</dd>
           <dt>Does the attribute order change the result?</dt>
@@ -308,7 +308,7 @@
           <dt>What about Excel files?</dt>
           <dd>An .xlsx file works: the first sheet is read, with the header in the first row. You can also copy a range of cells and paste it straight into the tool. For more than a few hundred thousand rows, CSV or Parquet is faster.</dd>
           <dt>Can I bridge budget to actual?</dt>
-          <dd>Yes. Put both in one file with a column that says which is which, and choose that column as the period. Budget becomes the prior period and actual the current one. The same works for forecast against actual, or one region against another.</dd>
+          <dd>Yes. Put both in one file with a column that says which is which, and choose that column as the period. Budget becomes the prior period and actual the current one. The same works for forecast against actual, or one region against another. <a href="/app/?sample=budget">See a made-up budget and actual file</a>.</dd>
           <dt>Is it a margin bridge?</dt>
           <dd>It can be. Add a cost column and the bridge is on margin, with the rate effect split into price and unit cost.</dd>
         </dl>
