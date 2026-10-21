@@ -799,8 +799,7 @@ test("money tie-out in whole dollars does not move with the bridge's grouping", 
   const moneyGroup = await periodMoney(query, byGroup, { table: "data_all", periodColumn: PERIOD });
   // The file and filter measurements do not group, so both configs measure the same.
   assert.deepEqual(moneyProduct, moneyGroup);
-  // Prior 30.13 on the file, 30.075 kept: both round to 30. Excluded is 0 because
-  // the three dropped rows net 0.055, which rounds to 0.
+  // Prior 30.13 on the file, 30.075 kept: both round to 30, so excluded is 0.
   assert.deepEqual([moneyProduct.prior.inFile, moneyProduct.current.inFile], [30, 0]);
 
   const resultProduct = await runBridge(query, byProduct);
