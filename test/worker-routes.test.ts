@@ -454,6 +454,7 @@ const OLDER_KEY = "design|sales|units|year";
 const NO_COLUMNS = { error: "This request does not take column names." };
 const SIGN_IN_FIRST = { error: "Sign in first." };
 const NOT_FOUND = { error: "Workspace not found." };
+const SETUP_FULL = { error: "This workspace has 50 saved setups. Delete one to save another." };
 
 const NEWER_SETUP = {
   periodColumn: "year",
@@ -506,6 +507,97 @@ async function storeSetups(db: Env["DB"], workspaceId: string): Promise<string> 
       .run();
   }
   return owner.id;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function savedId(body: unknown): string {
+  assert.ok(isRecord(body));
+  assert.deepEqual(Object.keys(body), ["id"]);
+  const id = body.id;
+  assert.equal(typeof id, "string");
+  if (typeof id !== "string") throw new Error("saved setup id");
+  return id;
+}
+
+function listedSetups(body: unknown): { id: string; name: string }[] {
+  assert.ok(Array.isArray(body));
+  return body.map((row) => {
+    assert.ok(isRecord(row));
+    const id = row.id;
+    const name = row.name;
+    assert.equal(typeof id, "string");
+    assert.equal(typeof name, "string");
+    if (typeof id !== "string" || typeof name !== "string") throw new Error("saved setup row");
+    return { id, name };
+  });
+}
+
+async function plantSetups(db: Env["DB"], workspaceId: string, count: number, start = 0): Promise<string[]> {
+  const owner = await db.prepare("SELECT id FROM user WHERE email = ?").bind(OWNER).first<{ id: string }>();
+  assert.ok(owner);
+  const ids: string[] = [];
+  for (let index = start; index < start + count; index++) {
+    const id = `planted-${workspaceId}-${index}`;
+    const createdAt = new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString();
+    await db
+      .prepare(
+        `INSERT INTO saved_setup (id, organizationId, name, columnsKey, setup, createdBy, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(id, workspaceId, `Planted ${index}`, OLDER_KEY, JSON.stringify(OLDER_SETUP), owner.id, createdAt)
+      .run();
+    ids.push(id);
+  }
+  return ids;
+}
+
+async function secondWorkspace(db: Env["DB"]): Promise<string> {
+  const owner = await db.prepare("SELECT id FROM user WHERE email = ?").bind(OWNER).first<{ id: string }>();
+  assert.ok(owner);
+  const id = "capped-workspace";
+  const createdAt = "2026-10-04T03:00:00.000Z";
+  await db
+    .prepare("INSERT INTO organization (id, name, slug, createdAt) VALUES (?, ?, ?, ?)")
+    .bind(id, "Capped", "capped-workspace", createdAt)
+    .run();
+  await db
+    .prepare("INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES (?, ?, ?, 'owner', ?)")
+    .bind(`member-${id}`, id, owner.id, createdAt)
+    .run();
+  await db
+    .prepare("INSERT INTO subscription VALUES (?, 'sub_review', 'ctm_review', 'active', 'pri_review', 2, '2099-01-01T00:00:00Z', '2026-10-12T00:00:00Z')")
+    .bind(id)
+    .run();
+  return id;
+}
+
+function postSetup(env: Env, workspaceId: string, cookie: string, name: string): Promise<Response> {
+  return call(`${ORIGIN}/api/workspaces/${workspaceId}/setups`, env, {
+    method: "POST",
+    headers: { cookie, origin: ORIGIN, "content-type": "application/json" },
+    body: JSON.stringify({
+      name,
+      columns: ["year", "units", "sales", "design"],
+      setup: OLDER_SETUP,
+    }),
+  });
+}
+
+function deleteSetup(env: Env, workspaceId: string, cookie: string, id: string): Promise<Response> {
+  return call(`${ORIGIN}/api/workspaces/${workspaceId}/setups/${id}`, env, {
+    method: "DELETE",
+    headers: { cookie, origin: ORIGIN },
+  });
+}
+
+async function readSetups(env: Env, workspaceId: string, cookie: string): Promise<{ id: string; name: string }[]> {
+  const response = await call(`${ORIGIN}/api/workspaces/${workspaceId}/setups`, env, {
+    headers: { cookie, origin: ORIGIN },
+  });
+  assert.equal(response.status, 200);
+  return listedSetups(await response.json());
 }
 
 type OtherWorkspace = {
@@ -650,6 +742,142 @@ test("a member whose member row is then deleted is refused with and without a co
     { status: 404, body: NOT_FOUND, echoed: false },
     { status: 404, body: NOT_FOUND, echoed: false },
   ]);
+});
+
+test("a workspace with 49 saved setups accepts one more and refuses the next", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, {});
+  await plantSetups(db, workspaceId, 49);
+  const first = await postSetup(env, workspaceId, cookie, "Fiftieth");
+  assert.equal(first.status, 201);
+  const firstId = savedId(await first.json());
+  const second = await postSetup(env, workspaceId, cookie, "Fifty-first");
+  assert.equal(second.status, 409);
+  assert.deepEqual(await second.json(), SETUP_FULL);
+  const filled = await readSetups(env, workspaceId, cookie);
+  assert.equal(filled.length, 50);
+  assert.ok(filled.some((row) => row.id === firstId));
+  const deleted = await deleteSetup(env, workspaceId, cookie, firstId);
+  assert.equal(deleted.status, 204);
+  const third = await postSetup(env, workspaceId, cookie, "Replacement");
+  assert.equal(third.status, 201);
+  const thirdId = savedId(await third.json());
+  const after = await readSetups(env, workspaceId, cookie);
+  assert.equal(after.length, 50);
+  assert.equal(after.some((row) => row.id === firstId), false);
+  assert.ok(after.some((row) => row.id === thirdId));
+});
+
+test("a save into 50 stored setups is refused, and rows already past 50 stay listed", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, {});
+  const planted = await plantSetups(db, workspaceId, 50);
+  const atCap = await postSetup(env, workspaceId, cookie, "At the cap");
+  assert.equal(atCap.status, 409);
+  assert.deepEqual(await atCap.json(), SETUP_FULL);
+  const extra = await plantSetups(db, workspaceId, 1, 50);
+  const stored = [...planted, ...extra];
+  const before = await readSetups(env, workspaceId, cookie);
+  assert.equal(before.length, 51);
+  assert.deepEqual(before.map((row) => row.id).toSorted(), stored.toSorted());
+  const refused = await postSetup(env, workspaceId, cookie, "One more");
+  assert.equal(refused.status, 409);
+  assert.deepEqual(await refused.json(), SETUP_FULL);
+  const after = await readSetups(env, workspaceId, cookie);
+  assert.equal(after.length, 51);
+  assert.deepEqual(after.map((row) => row.id).toSorted(), stored.toSorted());
+});
+
+test("deleting one of 51 saved setups still leaves the next save refused", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, {});
+  const planted = await plantSetups(db, workspaceId, 51);
+  const deleted = await deleteSetup(env, workspaceId, cookie, planted[0]);
+  assert.equal(deleted.status, 204);
+  const refused = await postSetup(env, workspaceId, cookie, "After delete");
+  assert.equal(refused.status, 409);
+  assert.deepEqual(await refused.json(), SETUP_FULL);
+  const rows = await readSetups(env, workspaceId, cookie);
+  assert.equal(rows.length, 50);
+  assert.deepEqual(rows.map((row) => row.id).toSorted(), planted.slice(1).toSorted());
+});
+
+test("fifty saved setups block only the workspace that holds them", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, {});
+  const second = await secondWorkspace(db);
+  const planted = await plantSetups(db, second, 50);
+  const saved = await postSetup(env, workspaceId, cookie, "In the first");
+  assert.equal(saved.status, 201);
+  const savedRow = savedId(await saved.json());
+  const open = await readSetups(env, workspaceId, cookie);
+  assert.deepEqual(open.map((row) => row.id), [savedRow]);
+  const refused = await postSetup(env, second, cookie, "In the second");
+  assert.equal(refused.status, 409);
+  assert.deepEqual(await refused.json(), SETUP_FULL);
+  const rows = await readSetups(env, second, cookie);
+  assert.equal(rows.length, 50);
+  assert.deepEqual(rows.map((row) => row.id).toSorted(), planted.toSorted());
+});
+
+test("two saves sent together when 49 setups are stored keep one", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, {});
+  await plantSetups(db, workspaceId, 49);
+  const [north, south] = await Promise.all([
+    postSetup(env, workspaceId, cookie, "Posted north"),
+    postSetup(env, workspaceId, cookie, "Posted south"),
+  ]);
+  const outcomes = [
+    { status: north.status, body: await north.json() },
+    { status: south.status, body: await south.json() },
+  ].toSorted((left, right) => left.status - right.status);
+  assert.deepEqual(
+    outcomes.map((outcome) => outcome.status),
+    [201, 409],
+  );
+  assert.deepEqual(outcomes[1]?.body, SETUP_FULL);
+  savedId(outcomes[0]?.body);
+  const rows = await readSetups(env, workspaceId, cookie);
+  assert.equal(rows.length, 50);
+  const posted = rows.filter((row) => row.name === "Posted north" || row.name === "Posted south");
+  assert.equal(posted.length, 1);
+});
+
+test("a full workspace without a subscription answers 402, and 409 once Pro returns", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, {});
+  const planted = await plantSetups(db, workspaceId, 50);
+  const removed = await db.prepare("DELETE FROM subscription WHERE organizationId = ?").bind(workspaceId).run();
+  assert.equal(removed.meta.changes, 1);
+  const needsPro = await postSetup(env, workspaceId, cookie, "Needs Pro");
+  assert.equal(needsPro.status, 402);
+  assert.deepEqual(await needsPro.json(), { error: "Saving to a workspace needs a Pro subscription." });
+  await db
+    .prepare("INSERT INTO subscription VALUES (?, 'sub_review', 'ctm_review', 'active', 'pri_review', 2, '2099-01-01T00:00:00Z', '2026-10-12T00:00:00Z')")
+    .bind(workspaceId)
+    .run();
+  const refused = await postSetup(env, workspaceId, cookie, "After Pro");
+  assert.equal(refused.status, 409);
+  assert.deepEqual(await refused.json(), SETUP_FULL);
+  const rows = await readSetups(env, workspaceId, cookie);
+  assert.equal(rows.length, 50);
+  assert.deepEqual(rows.map((row) => row.id).toSorted(), planted.toSorted());
+});
+
+test("a full workspace refuses an empty name, then refuses a named save", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, {});
+  const planted = await plantSetups(db, workspaceId, 50);
+  const empty = await postSetup(env, workspaceId, cookie, "");
+  assert.equal(empty.status, 400);
+  assert.deepEqual(await empty.json(), { error: "Give the setup a name of up to 120 characters." });
+  const refused = await postSetup(env, workspaceId, cookie, "Named");
+  assert.equal(refused.status, 409);
+  assert.deepEqual(await refused.json(), SETUP_FULL);
+  const rows = await readSetups(env, workspaceId, cookie);
+  assert.equal(rows.length, 50);
+  assert.deepEqual(rows.map((row) => row.id).toSorted(), planted.toSorted());
 });
 
 test("the config reports whether an email can be sent", async () => {

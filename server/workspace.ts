@@ -161,6 +161,9 @@ export async function listSetups(db: D1Database, userId: string, workspaceId: st
   return results.map((r) => ({ ...r, setup: JSON.parse(r.setup) as Setup }));
 }
 
+const SAVED_SETUP_CAP = 50;
+const SAVED_SETUP_FULL = `This workspace has ${SAVED_SETUP_CAP} saved setups. Delete one to save another.`;
+
 export async function saveSetup(db: D1Database, userId: string, workspaceId: string, body: unknown, now = new Date()): Promise<{ id: string }> {
   await membership(db, userId, workspaceId);
   await requirePro(db, workspaceId);
@@ -169,10 +172,15 @@ export async function saveSetup(db: D1Database, userId: string, workspaceId: str
   const columns = parseColumns(input.columns);
   const setup = parseSetup(input.setup, columns);
   const id = crypto.randomUUID();
-  await db
-    .prepare(`INSERT INTO saved_setup (id, organizationId, name, columnsKey, setup, createdBy, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-    .bind(id, workspaceId, input.name.trim(), columnsKey(columns), JSON.stringify(setup), userId, now.toISOString())
+  const { meta } = await db
+    .prepare(
+      `INSERT INTO saved_setup (id, organizationId, name, columnsKey, setup, createdBy, createdAt)
+       SELECT ?, ?, ?, ?, ?, ?, ?
+       WHERE (SELECT COUNT(*) FROM saved_setup WHERE organizationId = ?) < ?`,
+    )
+    .bind(id, workspaceId, input.name.trim(), columnsKey(columns), JSON.stringify(setup), userId, now.toISOString(), workspaceId, SAVED_SETUP_CAP)
     .run();
+  if (meta.changes !== 1) throw new WorkspaceError(409, SAVED_SETUP_FULL);
   return { id };
 }
 
