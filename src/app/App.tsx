@@ -5,6 +5,7 @@ import { resolveSample, type Sample } from "../synth.ts";
 import {
   lazyChunk,
   openBrowserDatabase,
+  PARQUET_REFUSAL,
   scheduleSpeculative,
   type BrowserDatabase,
   type ChunkSentences,
@@ -66,6 +67,35 @@ const RESULTS_PREFETCH_SETTLE_MS = 150;
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function previewCell(type: string, value: unknown): string {
+  if (value === null || value === undefined) return "";
+  const normalized = type.trim().toUpperCase();
+  if (normalized === "DATE") {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      const date = new Date(value);
+      if (!Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
+    }
+    if (typeof value === "bigint") {
+      const date = new Date(Number(value));
+      if (!Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
+    }
+    if (value instanceof Date) {
+      return value.toISOString().slice(0, 10);
+    }
+  }
+  if (normalized.includes("TIMESTAMP")) {
+    let ms: number | null = null;
+    if (typeof value === "number" && Number.isFinite(value)) ms = value;
+    else if (typeof value === "bigint") ms = Number(value);
+    else if (value instanceof Date) ms = value.getTime();
+    if (ms !== null) {
+      const date = new Date(ms);
+      if (!Number.isNaN(date.getTime())) return date.toISOString().replace("T", " ").slice(0, 19);
+    }
+  }
+  return String(value);
 }
 
 function describeSetup(setup: Setup, prior: string, current: string, source: string): string[] {
@@ -158,6 +188,11 @@ export function App() {
   };
 
   const loadFile = (file: File) => {
+    if (/\.parquet$/i.test(file.name)) {
+      return task(`Reading ${file.name}…`, async () => {
+        throw new Error(PARQUET_REFUSAL);
+      });
+    }
     prefetchResults();
     return task(`Reading ${file.name}…`, async () => {
       await (await db()).loadFile(file, TABLE);
@@ -304,7 +339,7 @@ export function App() {
       Choose file
       <input
         type="file"
-        accept=".csv,.tsv,.txt,.parquet,.xlsx"
+        accept=".csv,.tsv,.txt,.xlsx"
         className="file-input"
         onChange={(e) => {
           if (e.target.files?.[0]) loadFile(e.target.files[0]);
@@ -357,7 +392,7 @@ export function App() {
         <main className="empty">
           <h1>Load a sales file</h1>
           <p>
-            Drop a CSV, Excel or Parquet file anywhere on this page, or paste cells copied from a spreadsheet (Ctrl+V), one row per sales line. It needs a period or date
+            Drop a CSV or Excel file anywhere on this page, or paste cells copied from a spreadsheet (Ctrl+V), one row per sales line. It needs a period or date
             column, units, sales, and the product attributes you want in the bridge.
           </p>
           <p className="row">
@@ -490,7 +525,7 @@ export function App() {
                         <tr key={i}>
                           {columns.map((c) => (
                             <td key={c.name} className={/INT|DOUBLE|DECIMAL|FLOAT|REAL/i.test(c.type) ? "num" : ""}>
-                              {row[c.name] === null ? "" : String(row[c.name])}
+                              {previewCell(c.type, row[c.name])}
                             </td>
                           ))}
                         </tr>

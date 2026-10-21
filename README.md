@@ -36,7 +36,7 @@ mix between attributes does.
 
 ## What the tool does
 
-- Reads a CSV, Excel (.xlsx) or Parquet file in the browser tab. Nothing is uploaded.
+- Reads a CSV or Excel (.xlsx) file in the browser tab. Nothing is uploaded.
 - Bridge: waterfall, bridge table, match coverage and a written summary.
 - Optional gross sales column splits price into list price and discounts.
 - Optional cost column turns it into a margin bridge with price and unit cost.
@@ -109,7 +109,7 @@ npm run demo     # 3 million made-up rows on the command line
 npm run smoke    # drives the tool in headless Chromium; needs `npm run dev` running
 ```
 
-The app reads CSV and Parquet files. "Load sample data" generates made-up
+The app reads CSV and Excel files. "Load sample data" generates made-up
 prescription lens sales so you can try it without a file.
 
 ## Deploying

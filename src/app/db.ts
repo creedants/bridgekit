@@ -178,7 +178,7 @@ function networkSaveData(): boolean {
 
 export interface BrowserDatabase {
   query: Query;
-  /** Loads a CSV, Excel or Parquet file into `table` without it leaving the browser. */
+  /** Loads a CSV or Excel file into `table` without it leaving the browser. */
   loadFile(file: File, table: string): Promise<void>;
 }
 
@@ -406,6 +406,8 @@ const LIBRARY_FAILURE: ChunkSentences = {
   gone: "Reload the page to start again.",
 };
 
+export const PARQUET_REFUSAL = "Parquet files are not supported. Save the file as CSV or Excel and try again.";
+
 const duckdbChunk = lazyChunk({
   importer: () => import("@duckdb/duckdb-wasm"),
   parse: (module) => (isDuckDBLibrary(module) ? module : undefined),
@@ -446,19 +448,19 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
     return {
       query,
       async loadFile(file, table) {
-        const isParquet = /\.parquet$/i.test(file.name);
-        const isExcel = /\.xlsx$/i.test(file.name);
-        if (!isParquet && !isExcel && !/\.(csv|tsv|txt)$/i.test(file.name)) {
-          throw new Error("Use a CSV, Excel (.xlsx) or Parquet file");
+        if (/\.parquet$/i.test(file.name)) {
+          throw new Error(PARQUET_REFUSAL);
         }
-        const registered = isParquet ? "upload.parquet" : "upload.csv";
+        const isExcel = /\.xlsx$/i.test(file.name);
+        if (!isExcel && !/\.(csv|tsv|txt)$/i.test(file.name)) {
+          throw new Error("Use a CSV or Excel (.xlsx) file");
+        }
+        const registered = "upload.csv";
         let excelHoles: readonly number[] = [];
         if (isExcel) {
           const sheet = await firstSheetAsCsv(file);
           excelHoles = sheet.holes;
           await db.registerFileText(registered, sheet.csv);
-        } else if (isParquet) {
-          await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
         } else {
           const prefix = new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer());
           const continues = prefix.byteLength < file.size;
@@ -470,7 +472,7 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
             else await db.registerFileText(registered, decision.text);
           }
         }
-        const reader = isParquet ? `read_parquet('${registered}')` : `read_csv('${registered}')`;
+        const reader = `read_csv('${registered}')`;
         try {
           await query(`CREATE OR REPLACE TABLE "${table}" AS SELECT * FROM ${reader}`);
         } catch (error) {

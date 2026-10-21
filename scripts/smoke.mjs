@@ -39,6 +39,10 @@ const fail = (message) => {
   throw new Failure(message);
 };
 
+// The owner decided this sentence. Hardcoded here so the check pins the
+// wording users see, not whatever the code happens to hold.
+const PARQUET_SENTENCE = "Parquet files are not supported. Save the file as CSV or Excel and try again.";
+
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 function parseBridgeAmount(raw, where) {
@@ -581,6 +585,134 @@ function proves(record, origin, policies) {
   return null;
 }
 
+/**
+ * A fresh tool page left to settle until its speculative chunk, worker and
+ * wasm requests finish, so anything a later file choice adds stands out
+ * against it. A cooler page is built below with blocked asset URLs instead:
+ * Save-Data emulation cannot switch `navigator.connection.saveData` through
+ * this harness, so blocks hold speculative loading off until the choice.
+ */
+const COLD_SETTLE_MS = 10000;
+const COLD_BLOCKED_SETTLE_MS = 4000;
+const COLD_BLOCKS = ["*duckdb*", "*Results*", "*.wasm"];
+
+async function coldLoad(browser, origin) {
+  await browser.goto(`${origin}/app/`);
+  await browser.waitFor("document.body.innerText.includes('Load a sales file')");
+  await browser.sleep(COLD_SETTLE_MS);
+}
+
+/** A fresh page whose speculative loads are blocked, so nothing loads before the choice. */
+async function coldBlockedLoad(browser, origin) {
+  await browser.send("Network.setBlockedURLs", { urls: COLD_BLOCKS });
+  await browser.goto(`${origin}/app/`);
+  await browser.waitFor("document.body.innerText.includes('Load a sales file')");
+  await browser.sleep(COLD_BLOCKED_SETTLE_MS);
+}
+
+// A checkpoint of every request occurrence, keyed by asker, method and
+// address, with multiplicity kept. Two volatile parts of an address are
+// normalized so the comparison measures the refusal, not session noise: a
+// per-session blob worker address and the ?retry= stamp the chunk retry adds.
+const normalizeUrl = (url) =>
+  String(url ?? "")
+    .replace(/^(blob:[^/]+\/).*$/, "$1<blob>")
+    .replace(/([?&]retry=)\d+\.\d+/, "$1<stamp>");
+
+const countRequests = (record) => {
+  const counts = new Map();
+  for (const entry of record.network) {
+    const key = `${entry.from}|${entry.method}|${normalizeUrl(entry.url)}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+};
+
+const countByAsker = (record) => {
+  const counts = {};
+  for (const entry of record.network) counts[entry.from] = (counts[entry.from] ?? 0) + 1;
+  return counts;
+};
+
+/**
+ * The refusal must add no request at all: every key's count in `after` has to
+ * equal the checkpoint's count. A repeat of an address the checkpoint already
+ * holds fails, which a unique-URL comparison would have accepted.
+ */
+function assertNoRequestGrowth(before, after, step) {
+  const base = countRequests(before);
+  const now = countRequests(after);
+  const grown = [];
+  for (const [key, count] of now) {
+    const was = base.get(key) ?? 0;
+    if (count > was) grown.push(`${count - was} extra of ${key} (was ${was}, now ${count})`);
+  }
+  if (grown.length) fail(`${step}: the refusal made requests: ${grown.slice(0, 5).join("; ")}`);
+  const missing = [...base].filter(([key, count]) => (now.get(key) ?? 0) < count);
+  if (missing.length) {
+    fail(`${step}: the refusal twin lost requests the checkpoint held, so the twins are not comparable: ${missing.slice(0, 3).map(([key, count]) => `${key} (was ${count})`).join("; ")}`);
+  }
+}
+
+const violationKey = (entry) => `${entry.from}|${entry.directive}|${entry.url}`;
+
+function assertNoNewViolations(record, base, step) {
+  const known = new Set(base.violations.map(violationKey));
+  const extra = record.violations.filter((entry) => !known.has(violationKey(entry)));
+  if (extra.length) {
+    fail(`${step}: new policy violations: ${extra.slice(0, 3).map((entry) => `[${entry.from}] ${entry.directive} ${entry.url}`).join("; ")}`);
+  }
+}
+
+function assertAllOrigin(record, origin, step) {
+  const stray = record.network.filter((entry) => {
+    if (/^(blob|data):/.test(entry.url)) return false;
+    const to = URL.canParse(entry.url) ? new URL(entry.url) : null;
+    return to?.origin !== origin;
+  });
+  if (stray.length) fail(`${step}: requests off this origin: ${stray.slice(0, 5).map((e) => `${e.method} ${e.url}`).join("; ")}`);
+}
+
+function assertNoThirdPartyExtension(record, step) {
+  const ext = record.network.find((entry) => (entry.url || "").includes("extensions.duckdb.org"));
+  if (ext) fail(`${step}: asked a third-party host: ${ext.method} ${ext.url}`);
+}
+
+async function coldBaseline(browser, origin) {
+  await coldLoad(browser, origin);
+}
+
+async function coldRefused(browser, origin, parquetPath) {
+  await coldLoad(browser, origin);
+  const { root } = await browser.send("DOM.getDocument");
+  const { nodeId } = await browser.send("DOM.querySelector", { nodeId: root.nodeId, selector: "input[type=file][accept*=csv]" });
+  await browser.send("DOM.setFileInputFiles", { nodeId, files: [parquetPath] });
+  await browser.waitFor("!!document.querySelector('.error')");
+  const text = (await browser.evalJs("document.querySelector('.error').textContent.trim()")).trim();
+  if (text !== PARQUET_SENTENCE) fail(`cold parquet: error is ${JSON.stringify(text)}`);
+  console.log("ok  cold parquet: refused with one plain sentence before any database work");
+}
+
+async function coldBlockedBaseline(browser, origin) {
+  await coldBlockedLoad(browser, origin);
+}
+
+async function coldBlocked(browser, origin) {
+  await coldBlockedLoad(browser, origin);
+  await browser.evalJs(`(async () => {
+    const file = new File(["not a parquet file\\n"], "REFUSED.PARQUET", { type: "application/octet-stream" });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    const event = new DragEvent("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "dataTransfer", { value: dt });
+    document.querySelector(".shell").dispatchEvent(event);
+  })()`);
+  await browser.waitFor("!!document.querySelector('.error')");
+  const text = (await browser.evalJs("document.querySelector('.error').textContent.trim()")).trim();
+  if (text !== PARQUET_SENTENCE) fail(`blocked parquet: error is ${JSON.stringify(text)}`);
+  console.log("ok  blocked parquet: refused with one plain sentence while database assets are unavailable");
+}
+
 async function drive(browser, origin, rows) {
   console.log(`browser: ${(await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/version`)).json()).Browser}`);
   await browser.size(1360, 1000);
@@ -851,9 +983,8 @@ async function drive(browser, origin, rows) {
     };
 
     const totalsByFormat = {};
-    // Parquet stays out: loading one makes the browser fetch its DuckDB parquet
-    // extension from extensions.duckdb.org, which the request policy refuses.
-    // Reported separately.
+    // CSV and Excel give the same bridge. Parquet is refused below with one
+    // plain sentence before the database sees it, so no extension is fetched.
     for (const [name, path] of [["csv", fixtures.csvPath], ["xlsx", fixtures.xlsxPath]]) {
       await setDataFile(path);
       await addFixtureLevels();
@@ -864,6 +995,51 @@ async function drive(browser, origin, rows) {
     sameTotals(totalsByFormat.xlsx, totalsByFormat.csv, "file paths: xlsx totals differ from csv");
     sameTotals(totalsByFormat.csv, expectedAmounts, "file paths: csv totals differ from the engine in Node");
     console.log("ok  file paths: csv and xlsx give equal totals matching the engine in Node");
+
+    const pickerAccepts = JSON.parse(
+      await browser.evalJs("JSON.stringify([...document.querySelectorAll('input[type=file][accept*=csv]')].map((i) => i.accept))"),
+    );
+    if (pickerAccepts.some((accept) => accept.includes(".parquet"))) fail("file picker still offers .parquet");
+    console.log("ok  file picker: no .parquet in accept");
+
+    await browser.goto(`${origin}/app/`);
+    {
+      const { root } = await browser.send("DOM.getDocument");
+      const { nodeId } = await browser.send("DOM.querySelector", { nodeId: root.nodeId, selector: "input[type=file][accept*=csv]" });
+      await browser.send("DOM.setFileInputFiles", { nodeId, files: [fixtures.csvPath] });
+      await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent");
+    }
+    const previewFirst = JSON.parse(
+      await browser.evalJs(
+        "JSON.stringify([...document.querySelectorAll('.dense tbody tr')].slice(0, 3).map((tr) => tr.cells[0] ? tr.cells[0].innerText.trim() : ''))",
+      ),
+    );
+    if (!previewFirst.length) fail("preview: no rows in the data preview");
+    for (const cell of previewFirst) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(cell)) fail(`preview: date cell is ${JSON.stringify(cell)}, expected YYYY-MM-DD`);
+    }
+    console.log(`ok  preview: dates show as ${previewFirst[0]} style dates`);
+
+    const refusedPath = join(fixtureDir, "refused.parquet");
+    writeFileSync(refusedPath, "not a parquet file\n");
+    await browser.goto(`${origin}/app/`);
+    {
+      const { root } = await browser.send("DOM.getDocument");
+      const { nodeId } = await browser.send("DOM.querySelector", { nodeId: root.nodeId, selector: "input[type=file][accept*=csv]" });
+      await browser.send("DOM.setFileInputFiles", { nodeId, files: [refusedPath] });
+      await browser.waitFor("!!document.querySelector('.error')");
+    }
+    const parquetError = (await browser.evalJs("document.querySelector('.error').textContent.trim()")).trim();
+    if (parquetError !== PARQUET_SENTENCE) {
+      fail(`parquet: error is ${JSON.stringify(parquetError)}`);
+    }
+    console.log("ok  parquet: refused with one plain sentence");
+    await setDataFile(fixtures.csvPath);
+    await addFixtureLevels();
+    await waitReady();
+    await calculate();
+    sameTotals(await readBridge("parquet reuse"), totalsByFormat.csv, "parquet: the tool did not stay usable for the next file");
+    console.log("ok  parquet: the tool stays usable for the next file");
 
     const pasteTsv = toTsvText(FIXTURE_HEADER, fixtures.rows);
     await browser.goto(`${origin}/app/`);
@@ -1216,6 +1392,62 @@ try {
   const unproven = proves(control.record, origin, policies);
   if (unproven) fail(`canary: ${unproven}, so a request to another host could go unseen`);
   console.log(`ok  canary: a worker, a shared worker and the page each asked http://127.0.0.1:${DEBUG_PORT} by fetch and by XMLHttpRequest, and each attempt was ${policies ? "refused by the policy and reported" : "recorded and flagged"}`);
+  const coldDir = mkdtempSync(join(tmpdir(), "bridgekit-cold-"));
+  const coldFailures = [];
+  const coldRecords = {};
+  try {
+    const coldLower = join(coldDir, "refused.parquet");
+    writeFileSync(coldLower, "not a parquet file\n");
+    for (const [name, steps] of [
+      ["baseline", (browser) => coldBaseline(browser, origin)],
+      ["refused", (browser) => coldRefused(browser, origin, coldLower)],
+      ["blocked baseline", (browser) => coldBlockedBaseline(browser, origin)],
+      ["blocked refused", (browser) => coldBlocked(browser, origin)],
+    ]) {
+      try {
+        coldRecords[name] = (await recorded(steps)).record;
+      } catch (error) {
+        coldFailures.push(`cold ${name}: ${error instanceof Failure ? error.message : error.stack}`);
+      }
+    }
+    const coldCheck = (name, fn) => {
+      try {
+        fn();
+      } catch (error) {
+        coldFailures.push(`${name}: ${error instanceof Failure ? error.message : error.stack}`);
+      }
+    };
+    const has = (record, from, file) => record.network.some((entry) => entry.from === from && URL.canParse(entry.url) && file.test(new URL(entry.url).pathname));
+    if (coldRecords.baseline && coldRecords.refused) coldCheck("picker parquet", () => {
+      // The quiet twin must have finished speculative loading, or equality proves nothing.
+      if (!has(coldRecords.baseline, "worker", /\/duckdb-browser-[^/]*\.worker[^/]*\.js$/) || !has(coldRecords.baseline, "worker", /\/duckdb-[^/]*\.wasm$/)) {
+        fail("picker baseline: the quiet page never loaded its worker script and wasm, so the comparison proves nothing");
+      }
+      assertNoRequestGrowth(coldRecords.baseline, coldRecords.refused, "picker parquet");
+      assertNoNewViolations(coldRecords.refused, coldRecords.baseline, "picker parquet");
+      assertAllOrigin(coldRecords.refused, origin, "picker parquet");
+      assertNoThirdPartyExtension(coldRecords.refused, "picker parquet");
+      const quiet = countByAsker(coldRecords.baseline);
+      const after = countByAsker(coldRecords.refused);
+      console.log(`ok  picker record: the refusal added no request (${JSON.stringify(quiet)} to ${JSON.stringify(after)}, ${coldRecords.baseline.network.length} to ${coldRecords.refused.network.length})`);
+    });
+    if (coldRecords["blocked baseline"] && coldRecords["blocked refused"]) coldCheck("blocked drop parquet", () => {
+      // Nothing may have loaded on the blocked twin, or its comparison proves nothing either.
+      if (coldRecords["blocked baseline"].askers.some((asker) => asker.kind === "worker" || asker.kind === "shared_worker")) {
+        fail("blocked baseline: the blocked page started a worker, so it was never cold");
+      }
+      assertNoRequestGrowth(coldRecords["blocked baseline"], coldRecords["blocked refused"], "blocked drop parquet");
+      assertNoNewViolations(coldRecords["blocked refused"], coldRecords["blocked baseline"], "blocked drop parquet");
+      assertAllOrigin(coldRecords["blocked refused"], origin, "blocked drop parquet");
+      assertNoThirdPartyExtension(coldRecords["blocked refused"], "blocked drop parquet");
+      const quiet = countByAsker(coldRecords["blocked baseline"]);
+      const after = countByAsker(coldRecords["blocked refused"]);
+      console.log(`ok  blocked drop record: the refusal added no request (${JSON.stringify(quiet)} to ${JSON.stringify(after)}, ${coldRecords["blocked baseline"].network.length} to ${coldRecords["blocked refused"].network.length})`);
+    });
+  } finally {
+    rmSync(coldDir, { recursive: true, force: true, maxRetries: 3 });
+  }
+  if (coldFailures.length) fail(coldFailures.join("\n"));
   const app = await recorded((browser) => drive(browser, origin, rows));
   const judged = judge(app.record, origin, { devServer: policies === 0 });
   for (const note of judged.notes) console.log(note);
