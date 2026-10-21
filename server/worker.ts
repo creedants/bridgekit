@@ -288,8 +288,6 @@ open.post("/api/workspaces/:id/checkout", async (c) => {
   if (!c.env.PADDLE_API_KEY || !c.env.PADDLE_PRICE_ID) throw new WorkspaceError(404, "Subscriptions are not set up yet.");
   const { seats } = ((await json(c)) ?? {}) as { seats?: unknown };
   await assertCheckoutOpen(c.env.DB, id);
-  const current = await plan(c.env.DB, id);
-  if (current.status === "canceled" && current.pro) throw new WorkspaceError(409, "This workspace already has a subscription.");
   const checkout = await createCheckout({
     apiKey: c.env.PADDLE_API_KEY,
     environment: (c.env.PADDLE_ENVIRONMENT === "live" ? "live" : "sandbox") as PaddleEnvironment,

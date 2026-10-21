@@ -1370,7 +1370,7 @@ test("an owner with no subscription row can open a checkout", async () => {
   assert.equal(await subscriptionRow(db, workspaceId), null);
 });
 
-test("an owner can open a checkout when the subscription is canceled and the period has not ended", async () => {
+test("an owner cannot open a second checkout when the subscription is canceled and the period has not ended", async () => {
   const { db, cookie, workspaceId } = await session();
   const updated = await db.prepare("UPDATE subscription SET status = 'canceled' WHERE organizationId = ?").bind(workspaceId).run();
   assert.equal(updated.meta.changes, 1);
@@ -1378,9 +1378,9 @@ test("an owner can open a checkout when the subscription is canceled and the per
   assert.equal(before?.status, "canceled");
   assert.equal(before?.currentPeriodEnd, "2099-01-01T00:00:00Z");
   const result = await postCheckout(checkoutEnv(db), workspaceId, cookie);
-  assert.equal(result.status, 200);
-  assert.deepEqual(result.body, { checkoutUrl: CHECKOUT_URL });
-  assert.equal(result.paddleCalls, 1);
+  assert.equal(result.status, 409);
+  assert.deepEqual(result.body, { error: "This workspace already has a subscription." });
+  assert.equal(result.paddleCalls, 0);
   assert.deepEqual(await subscriptionRow(db, workspaceId), before);
 });
 
