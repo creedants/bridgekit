@@ -220,8 +220,8 @@ export async function exportExcel(
   setup.addRow([]);
   setup.addRow(["Money tie-out"]).font = bold;
   for (const line of tieOutLines(config, tieOut, result)) {
-    const row = setup.addRow([line.label, line.value]);
-    row.getCell(2).numFmt = "#,##0.00";
+    const row = setup.addRow([line.label, Number.isFinite(line.value) ? line.value : null]);
+    row.getCell(2).numFmt = "#,##0";
   }
   setup.addRow([]);
   setup.addRow(["Rows read", check.rows]);

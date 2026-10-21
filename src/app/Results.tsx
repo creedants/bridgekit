@@ -47,7 +47,7 @@ export interface Run {
   config: BridgeConfig;
   result: BridgeResult;
   check: DataCheck;
-  /** Money on the file and after the filters, for the tie-out on the Data check tab. */
+  /** Money on the file and after the filters, in whole dollars, for the tie-out on the Data check tab. */
   tieOut: TieOut;
   ms: number;
 }
@@ -1068,7 +1068,7 @@ function Check(props: { run: Run; warnings: string[]; query: () => Promise<Query
       <table className="narrow tieout">
         <tbody>
           {tieOut.map((line) => (
-            <tr key={line.label}><td>{line.label}</td><td className="num">{price(line.value)}</td></tr>
+            <tr key={line.label}><td>{line.label}</td><td className="num">{Number.isFinite(line.value) ? whole(line.value) : ""}</td></tr>
           ))}
         </tbody>
       </table>
