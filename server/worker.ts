@@ -342,7 +342,22 @@ open.post("/api/paddle/webhook", async (c) => {
   // Paddle to retry is the honest answer; the payload is never stored as state.
   if (!paddle) return c.json({ error: "Subscriptions are not set up yet." }, 503);
   try {
-    return c.json({ result: await syncSubscription(c.env.DB, event, paddle) });
+    const result = await syncSubscription(c.env.DB, event, paddle);
+    switch (result) {
+      case "applied":
+      case "stale":
+      case "unknown-workspace":
+        return c.json({ result });
+      case "conflict":
+        console.error({
+          message: "A concurrent read stored a different subscription state.",
+          workspaceId: event.workspaceId,
+          subscriptionId: event.subscriptionId,
+        });
+        return c.json({ error: "The subscription changed while reconciling." }, 503);
+      default:
+        throw new Error(`Unhandled subscription sync result: ${result satisfies never}`);
+    }
   } catch (error) {
     if (!(error instanceof PaddleReadError)) throw error;
     console.error(error);

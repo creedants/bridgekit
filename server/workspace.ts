@@ -308,27 +308,32 @@ export async function applySubscription(db: D1Database, change: SubscriptionChan
   return meta.changes ? "applied" : "stale";
 }
 
+export type SubscriptionSync = "applied" | "stale" | "conflict" | "unknown-workspace";
+
 /**
  * Reconciles a workspace's subscription with Paddle's current state. The
- * webhook body only says where to look; Paddle's list decides what to store,
- * so a late or out-of-order event cannot replace a paying subscription. A
- * missing subscription or an unreadable list throws PaddleReadError before
- * anything is written, and the caller asks Paddle to retry.
+ * webhook body only says where to look; Paddle's list of the whole account,
+ * filtered to this workspace, decides what to store, so a late or out-of-order
+ * event cannot replace a paying subscription and no earlier customer is
+ * forgotten. A missing subscription or an unreadable list throws
+ * PaddleReadError before anything is written, and the caller asks Paddle to
+ * retry.
+ *
+ * A write the strict lastEventAt guard rejects is acknowledged as "stale" only
+ * when the stored row already holds the state that read reported. Otherwise it
+ * is a "conflict" and the caller refuses with 503, so Paddle's retry
+ * reconciles again with a later read start and wins the guard once Paddle's
+ * state has moved.
  */
 export async function syncSubscription(
   db: D1Database,
   event: SubscriptionEvent,
   paddle: PaddleAccount,
   now: Date = new Date(),
-): Promise<"applied" | "stale" | "unknown-workspace"> {
+): Promise<SubscriptionSync> {
   const workspace = await db.prepare(`SELECT id FROM organization WHERE id = ?`).bind(event.workspaceId).first();
   if (!workspace) return "unknown-workspace";
-  const stored = await db
-    .prepare(`SELECT paddleCustomerId FROM subscription WHERE organizationId = ?`)
-    .bind(event.workspaceId)
-    .first<{ paddleCustomerId: string | null }>();
-  const customerIds = [event.customerId, stored?.paddleCustomerId].filter((id): id is string => typeof id === "string" && id !== "");
-  const candidates = await listWorkspaceSubscriptions(paddle, event.workspaceId, customerIds);
+  const candidates = await listWorkspaceSubscriptions(paddle, event.workspaceId);
   const containing = candidates.find((candidate) => candidate.subscriptionId === event.subscriptionId);
   if (!containing) {
     // Paddle sends the webhook after it commits, so a missing id is lag or a
@@ -348,7 +353,7 @@ export async function syncSubscription(
         .map((candidate) => candidate.subscriptionId),
     });
   }
-  return applySubscription(db, {
+  const change: SubscriptionChange = {
     subscriptionId: elected.subscriptionId,
     customerId: elected.customerId,
     workspaceId: elected.workspaceId,
@@ -358,7 +363,35 @@ export async function syncSubscription(
     currentPeriodEnd: elected.currentPeriodEnd,
     eventId: event.eventId,
     occurredAt: now.toISOString(),
-  });
+  };
+  const applied = await applySubscription(db, change);
+  if (applied !== "stale") return applied;
+  return (await storesSameState(db, change)) ? "stale" : "conflict";
+}
+
+/**
+ * Whether the stored row already holds the state a rejected write tried to
+ * record. One SELECT over the six state columns, so no second row type has to
+ * track them. A matching row makes a duplicate delivery safe to acknowledge.
+ */
+async function storesSameState(db: D1Database, change: SubscriptionChange): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT 1 AS same FROM subscription
+       WHERE organizationId = ? AND paddleSubscriptionId IS ? AND paddleCustomerId IS ? AND status IS ?
+         AND priceId IS ? AND seats IS ? AND currentPeriodEnd IS ?`,
+    )
+    .bind(
+      change.workspaceId,
+      change.subscriptionId,
+      change.customerId,
+      change.status,
+      change.priceId,
+      change.seats,
+      change.currentPeriodEnd,
+    )
+    .first();
+  return row !== null;
 }
 
 /** Before an account is deleted: workspaces it is the only member of go with it, saved items included. */

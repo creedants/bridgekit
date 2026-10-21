@@ -1346,16 +1346,19 @@ function paddleEntity(workspaceId: string, fields: Partial<PaddleEntity> & { id:
 type PaddleFake = {
   subscriptions: PaddleEntity[];
   down: boolean;
+  /** Replaces the list answer when set, for a malformed or failing response. */
+  answer: (() => Response) | null;
   reads: string[];
   restore(): void;
 };
 
-/** Answers Paddle's subscription list from `subscriptions`, and nothing else. */
+/** Answers Paddle's account-wide subscription list from `subscriptions`, and nothing else. */
 function installPaddleSubscriptions(subscriptions: PaddleEntity[]): PaddleFake {
   const original = globalThis.fetch;
   const fake: PaddleFake = {
     subscriptions,
     down: false,
+    answer: null,
     reads: [],
     restore() {
       globalThis.fetch = original;
@@ -1370,10 +1373,9 @@ function installPaddleSubscriptions(subscriptions: PaddleEntity[]): PaddleFake {
     assert.equal(headers.get("authorization"), "Bearer pdl_test_key", url);
     assert.equal(headers.get("paddle-version"), "1", url);
     fake.reads.push(url);
+    if (fake.answer) return fake.answer();
     if (fake.down) return new Response("{}", { status: 500 });
-    const customerIds = (parsed.searchParams.get("customer_id") ?? "").split(",").filter(Boolean);
-    const data = fake.subscriptions.filter((subscription) => customerIds.includes(subscription.customer_id));
-    return Response.json({ data, meta: { pagination: { has_more: false } } });
+    return Response.json({ data: fake.subscriptions, meta: { pagination: { has_more: false } } });
   };
   return fake;
 }
@@ -1387,6 +1389,7 @@ function webhookBody(
     eventId: string;
     eventType?: string;
     periodEnd?: string | null;
+    customerId?: string;
   },
 ): string {
   const periodEnd = fields.periodEnd === undefined ? "2099-01-01T00:00:00Z" : fields.periodEnd;
@@ -1398,7 +1401,7 @@ function webhookBody(
     data: {
       id: fields.id,
       status: fields.status,
-      customer_id: PADDLE_CUSTOMER,
+      customer_id: fields.customerId ?? PADDLE_CUSTOMER,
       items: [{ price: { id: SEAT_PRICE }, quantity: 2 }],
       custom_data: { workspace_id: workspaceId },
       current_billing_period: periodEnd === null ? null : { starts_at: "2026-10-12T00:00:00Z", ends_at: periodEnd },
@@ -1831,6 +1834,202 @@ test("a retry signed two hours ago applies, and a replay older than the window i
     );
     assert.equal(replay.status, 401);
     assert.deepEqual(await replay.json(), { error: "Bad signature." });
+    assert.equal(paddle.reads.length, 1);
+    assert.deepEqual(await subscriptionColumns(db, workspaceId), before);
+  } finally {
+    paddle.restore();
+  }
+});
+
+test("a subscription on another Paddle customer keeps Pro when the newer one cancels", async () => {
+  const { db, workspaceId } = await session();
+  const a = paddleEntity(workspaceId, { id: "sub_a", customer_id: "ctm_a", created_at: "2026-10-01T00:00:00Z" });
+  const b = paddleEntity(workspaceId, { id: "sub_b", customer_id: "ctm_b", created_at: "2026-10-05T00:00:00Z" });
+  const paddle = installPaddleSubscriptions([a]);
+  try {
+    const activatedA = await postWebhook(
+      db,
+      webhookBody(workspaceId, {
+        id: "sub_a",
+        customerId: "ctm_a",
+        status: "active",
+        eventType: "subscription.created",
+        occurredAt: "2026-10-01T00:00:01.000000Z",
+        eventId: "evt_a_created",
+      }),
+    );
+    assert.equal(activatedA.status, 200);
+    assert.deepEqual(await activatedA.json(), { result: "applied" });
+    assert.equal((await subscriptionRow(db, workspaceId))?.paddleSubscriptionId, "sub_a");
+
+    paddle.subscriptions.push(b);
+    const activatedB = await postWebhook(
+      db,
+      webhookBody(workspaceId, {
+        id: "sub_b",
+        customerId: "ctm_b",
+        status: "active",
+        eventType: "subscription.created",
+        occurredAt: "2026-10-05T00:00:01.000000Z",
+        eventId: "evt_b_created",
+      }),
+    );
+    assert.equal(activatedB.status, 200);
+    assert.deepEqual(await activatedB.json(), { result: "applied" });
+    assert.equal((await subscriptionRow(db, workspaceId))?.paddleSubscriptionId, "sub_b");
+
+    b.status = "canceled";
+    b.current_billing_period = null;
+    const canceledB = await postWebhook(
+      db,
+      webhookBody(workspaceId, {
+        id: "sub_b",
+        customerId: "ctm_b",
+        status: "canceled",
+        eventType: "subscription.canceled",
+        periodEnd: null,
+        occurredAt: "2026-10-06T00:00:01.000000Z",
+        eventId: "evt_b_canceled",
+      }),
+    );
+    assert.equal(canceledB.status, 200);
+    assert.deepEqual(await canceledB.json(), { result: "applied" });
+    const row = await subscriptionRow(db, workspaceId);
+    assert.equal(row?.paddleSubscriptionId, "sub_a");
+    assert.equal(row?.status, "active");
+    assert.equal((await plan(db, workspaceId)).pro, true);
+  } finally {
+    paddle.restore();
+  }
+});
+
+test("a write rejected inside one millisecond is retried when its state differs", async (t) => {
+  const { db, workspaceId } = await session();
+  const entity = paddleEntity(workspaceId, { id: "sub_review" });
+  const paddle = installPaddleSubscriptions([entity]);
+  const fixed = Date.parse("2026-10-21T10:00:00.123Z");
+  t.mock.timers.enable({ apis: ["Date"], now: fixed });
+  try {
+    // postWebhook signs with Date.now(), so both signature halves share the
+    // fixed instant and the duplicate is a genuine replay of the same stamp.
+    const active = webhookBody(workspaceId, {
+      id: "sub_review",
+      status: "active",
+      occurredAt: "2026-10-21T10:00:00.123Z",
+      eventId: "evt_same_clock",
+    });
+    const first = await postWebhook(db, active);
+    assert.equal(first.status, 200);
+    assert.deepEqual(await first.json(), { result: "applied" });
+    const stored = await subscriptionColumns(db, workspaceId);
+    assert.equal(stored?.status, "active");
+    assert.equal((await plan(db, workspaceId)).pro, true);
+
+    const duplicate = await postWebhook(db, active);
+    assert.equal(duplicate.status, 200);
+    assert.deepEqual(await duplicate.json(), { result: "stale" });
+    assert.deepEqual(await subscriptionColumns(db, workspaceId), stored);
+    assert.equal((await plan(db, workspaceId)).pro, true);
+
+    entity.status = "canceled";
+    entity.current_billing_period = null;
+    const canceled = webhookBody(workspaceId, {
+      id: "sub_review",
+      status: "canceled",
+      eventType: "subscription.canceled",
+      periodEnd: null,
+      occurredAt: "2026-10-21T10:00:00.123Z",
+      eventId: "evt_same_clock_canceled",
+    });
+    const conflict = await postWebhook(db, canceled);
+    assert.equal(conflict.status, 503);
+    assert.deepEqual(await conflict.json(), { error: "The subscription changed while reconciling." });
+    assert.deepEqual(await subscriptionColumns(db, workspaceId), stored);
+    assert.equal((await plan(db, workspaceId)).pro, true);
+
+    t.mock.timers.setTime(fixed + 1);
+    const retried = await postWebhook(db, canceled);
+    assert.equal(retried.status, 200);
+    assert.deepEqual(await retried.json(), { result: "applied" });
+    const after = await subscriptionColumns(db, workspaceId);
+    assert.equal(after?.status, "canceled");
+    assert.equal((await plan(db, workspaceId)).pro, false);
+  } finally {
+    paddle.restore();
+    t.mock.timers.reset();
+  }
+});
+
+test("a Paddle redirect is not followed to another host, and the failure leaves the row unchanged", async () => {
+  const { db, workspaceId } = await session();
+  const before = await subscriptionColumns(db, workspaceId);
+  const requests: string[] = [];
+  const original = globalThis.fetch;
+  // A platform that follows redirects re-requests the location itself. This
+  // double does the same unless the request says redirect: "manual", so a
+  // missing manual mode shows up as a request to the foreign host.
+  const answer = async (url: string, init?: RequestInit): Promise<Response> => {
+    requests.push(url);
+    if (new URL(url).hostname === "evil.example") {
+      return Response.json({
+        data: [paddleEntity(workspaceId, { id: "sub_review", status: "canceled", current_billing_period: null })],
+        meta: { pagination: { has_more: false } },
+      });
+    }
+    if (init?.redirect !== "manual") return answer("https://evil.example/subscriptions", init);
+    return new Response(null, { status: 302, headers: { location: "https://evil.example/subscriptions" } });
+  };
+  globalThis.fetch = ((input: Request | string | URL, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : input instanceof URL ? input.href : String(input);
+    return answer(url, init);
+  }) as typeof fetch;
+  try {
+    const response = await postWebhook(
+      db,
+      webhookBody(workspaceId, {
+        id: "sub_review",
+        status: "canceled",
+        eventType: "subscription.canceled",
+        periodEnd: null,
+        occurredAt: "2026-10-21T00:00:00.000000Z",
+        eventId: "evt_redirect",
+      }),
+    );
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), { error: "Could not read the subscription from Paddle." });
+    assert.deepEqual(requests, ["https://sandbox-api.paddle.com/subscriptions?per_page=200"]);
+    assert.deepEqual(await subscriptionColumns(db, workspaceId), before);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("a non-2xx Paddle answer carrying a valid-looking list answers 502 and leaves the row unchanged", async () => {
+  const { db, workspaceId } = await session();
+  const before = await subscriptionColumns(db, workspaceId);
+  const paddle = installPaddleSubscriptions([]);
+  paddle.answer = () =>
+    Response.json(
+      {
+        data: [paddleEntity(workspaceId, { id: "sub_review", status: "canceled", current_billing_period: null })],
+        meta: { pagination: { has_more: false } },
+      },
+      { status: 500 },
+    );
+  try {
+    const response = await postWebhook(
+      db,
+      webhookBody(workspaceId, {
+        id: "sub_review",
+        status: "canceled",
+        eventType: "subscription.canceled",
+        periodEnd: null,
+        occurredAt: "2026-10-21T00:00:00.000000Z",
+        eventId: "evt_bad_status",
+      }),
+    );
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), { error: "Could not read the subscription from Paddle." });
     assert.equal(paddle.reads.length, 1);
     assert.deepEqual(await subscriptionColumns(db, workspaceId), before);
   } finally {

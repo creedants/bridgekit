@@ -28,8 +28,7 @@ export type PaddleEnvironment = keyof typeof PADDLE_API;
  * hour. It does not promise that a retry carries a freshly signed ts, so a
  * window shorter than the documented schedule can refuse a genuine retry and
  * the delayed event never applies. Three days covers that schedule with a day
- * of margin, and a delivery older than that is not a genuine retry but a
- * replay.
+ * of margin. Deliveries signed more than three days ago are refused.
  */
 export const SIGNATURE_TOLERANCE_SECONDS = 259200;
 
@@ -202,23 +201,17 @@ function parseSubscriptionEntity(data: unknown, seatPriceIds?: readonly string[]
 const PAGE_LIMIT = 5;
 
 /**
- * Reads every subscription Paddle has for these customers and keeps the ones
- * tagged for this workspace. The URL is built here; nothing the response says
- * is fetched, so the API key only ever goes to Paddle's own address. A sixth
- * page means the account is larger than this deployment should page through,
- * so it fails rather than returning a partial list.
+ * Reads the account's subscriptions and keeps the ones tagged for this
+ * workspace. Pagination URLs are built here rather than taken from response-body
+ * links. A sixth page means the account is larger than this deployment should
+ * page through, so it fails rather than returning a partial list.
  */
-export async function listWorkspaceSubscriptions(
-  account: PaddleAccount,
-  workspaceId: string,
-  customerIds: readonly string[],
-): Promise<PaddleSubscription[]> {
-  const customers = [...new Set(customerIds.filter((id) => id !== ""))].map(encodeURIComponent);
+export async function listWorkspaceSubscriptions(account: PaddleAccount, workspaceId: string): Promise<PaddleSubscription[]> {
   const subscriptions: PaddleSubscription[] = [];
   let after: string | undefined;
   for (let page = 1; ; page++) {
     if (page > PAGE_LIMIT) throw new PaddleReadError(`Paddle served more than ${PAGE_LIMIT} pages of subscriptions.`);
-    const query = `customer_id=${customers.join(",")}&per_page=200${after === undefined ? "" : `&after=${encodeURIComponent(after)}`}`;
+    const query = `per_page=200${after === undefined ? "" : `&after=${encodeURIComponent(after)}`}`;
     const { data, hasMore } = await readSubscriptionsPage(account, `${PADDLE_API[account.environment]}/subscriptions?${query}`);
     for (const raw of data) {
       const createdAt = isRecord(raw) && typeof raw.created_at === "string" ? raw.created_at : undefined;
@@ -241,6 +234,9 @@ async function readSubscriptionsPage(account: PaddleAccount, url: string): Promi
   try {
     response = await doFetch(url, {
       headers: { authorization: `Bearer ${account.apiKey}`, "paddle-version": "1" },
+      // A followed redirect could carry the API key to another host, so a 3xx
+      // fails the ok check below instead.
+      redirect: "manual",
     });
   } catch {
     throw new PaddleReadError("Paddle could not be reached.");
@@ -365,6 +361,7 @@ export async function createPortalSession(options: PortalSessionOptions): Promis
         "paddle-version": "1",
       },
       body: JSON.stringify({}),
+      redirect: "manual",
     },
   );
   if (!response.ok) throw new Error(`Paddle returned ${response.status} when creating a portal session.`);
@@ -397,6 +394,7 @@ export async function createCheckout(options: CheckoutOptions): Promise<{ transa
       "paddle-version": "1",
     },
     body: JSON.stringify(body),
+    redirect: "manual",
   });
   if (!response.ok) throw new Error(`Paddle returned ${response.status} when creating a transaction.`);
   const json: unknown = await response.json();

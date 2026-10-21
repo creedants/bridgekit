@@ -35,12 +35,14 @@ test("a tampered body or wrong secret fails", async () => {
   assert.equal(await verifyPaddleSignature(BODY, header, "another-secret", TS), false);
 });
 
-test("a delivery inside the window verifies, one older than it is refused, and a future ts verifies", async () => {
+test("the past-only signature window refuses an old delivery and still verifies a future stamp", async () => {
   const header = `ts=${TS};h1=${sign(TS, BODY)}`;
   assert.equal(await verifyPaddleSignature(BODY, header, SECRET, TS + 7200), true);
   assert.equal(await verifyPaddleSignature(BODY, header, SECRET, TS + SIGNATURE_TOLERANCE_SECONDS), true);
   assert.equal(await verifyPaddleSignature(BODY, header, SECRET, TS + SIGNATURE_TOLERANCE_SECONDS + 1), false);
+  // Only Paddle can sign a future stamp, so the window is not symmetric.
   assert.equal(await verifyPaddleSignature(BODY, header, SECRET, TS - 86400), true);
+  assert.equal(await verifyPaddleSignature(BODY, header, SECRET, TS - SIGNATURE_TOLERANCE_SECONDS - 1), true);
 });
 
 test("missing or malformed headers fail", async () => {
@@ -138,16 +140,17 @@ const listedSubscription = (over: Partial<PaddleSubscription> = {}): PaddleSubsc
   ...over,
 });
 
-test("listWorkspaceSubscriptions reads each customer's subscriptions once with the key", async () => {
+test("listWorkspaceSubscriptions reads the account's list once with the key and refuses redirects", async () => {
   const calls: { url: string; init: RequestInit }[] = [];
   const fake = (async (url: string, init: RequestInit) => {
     calls.push({ url, init });
     return Response.json({ data: [listed()], meta: { pagination: { has_more: false } } });
   }) as unknown as typeof fetch;
-  const list = await listWorkspaceSubscriptions(account(fake), "org_1", ["ctm_1", "ctm_1", "", "ctm_2"]);
+  const list = await listWorkspaceSubscriptions(account(fake), "org_1");
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, "https://sandbox-api.paddle.com/subscriptions?customer_id=ctm_1,ctm_2&per_page=200");
+  assert.equal(calls[0].url, "https://sandbox-api.paddle.com/subscriptions?per_page=200");
   assert.deepEqual(calls[0].init.headers, { authorization: "Bearer pdl_sdbx_key", "paddle-version": "1" });
+  assert.equal(calls[0].init.redirect, "manual");
   assert.deepEqual(list, [
     {
       subscriptionId: "sub_1",
@@ -162,31 +165,24 @@ test("listWorkspaceSubscriptions reads each customer's subscriptions once with t
   ]);
 });
 
-test("listWorkspaceSubscriptions percent-encodes each customer id", async () => {
-  const urls: string[] = [];
-  const fake = (async (url: string) => {
-    urls.push(url);
-    return Response.json({ data: [], meta: { pagination: { has_more: false } } });
-  }) as unknown as typeof fetch;
-  const empty = await listWorkspaceSubscriptions(account(fake), "org_1", ["ctm_a/b"]);
-  assert.deepEqual(empty, []);
-  assert.deepEqual(urls, ["https://sandbox-api.paddle.com/subscriptions?customer_id=ctm_a%2Fb&per_page=200"]);
-});
-
-test("listWorkspaceSubscriptions keeps only complete subscriptions tagged for the asked workspace", async () => {
+test("listWorkspaceSubscriptions keeps every subscription tagged for the asked workspace, whatever its customer", async () => {
   const fake = (async () =>
     Response.json({
       data: [
-        listed({ id: "sub_1" }),
-        listed({ id: "sub_2", custom_data: { workspace_id: "org_other" } }),
-        listed({ id: "sub_3", created_at: "not a time" }),
+        listed({ id: "sub_1", customer_id: "ctm_1" }),
+        listed({ id: "sub_2", customer_id: "ctm_2" }),
+        listed({ id: "sub_3", customer_id: "ctm_1", custom_data: { workspace_id: "org_other" } }),
+        listed({ id: "sub_4", created_at: "not a time" }),
       ],
       meta: { pagination: { has_more: false } },
     })) as unknown as typeof fetch;
-  const list = await listWorkspaceSubscriptions(account(fake), "org_1", ["ctm_1"]);
+  const list = await listWorkspaceSubscriptions(account(fake), "org_1");
   assert.deepEqual(
-    list.map((subscription) => subscription.subscriptionId),
-    ["sub_1"],
+    list.map((subscription) => [subscription.subscriptionId, subscription.customerId]),
+    [
+      ["sub_1", "ctm_1"],
+      ["sub_2", "ctm_2"],
+    ],
   );
 });
 
@@ -200,10 +196,10 @@ test("listWorkspaceSubscriptions follows the next page from the last entity id",
     urls.push(url);
     return Response.json(pages[urls.length - 1]);
   }) as unknown as typeof fetch;
-  const list = await listWorkspaceSubscriptions(account(fake), "org_1", ["ctm_1"]);
+  const list = await listWorkspaceSubscriptions(account(fake), "org_1");
   assert.deepEqual(urls, [
-    "https://sandbox-api.paddle.com/subscriptions?customer_id=ctm_1&per_page=200",
-    "https://sandbox-api.paddle.com/subscriptions?customer_id=ctm_1&per_page=200&after=sub_2",
+    "https://sandbox-api.paddle.com/subscriptions?per_page=200",
+    "https://sandbox-api.paddle.com/subscriptions?per_page=200&after=sub_2",
   ]);
   assert.deepEqual(
     list.map((subscription) => subscription.subscriptionId),
@@ -214,14 +210,14 @@ test("listWorkspaceSubscriptions follows the next page from the last entity id",
 test("listWorkspaceSubscriptions rejects when Paddle cannot answer", async () => {
   for (const status of [404, 429, 500]) {
     const failing = (async () => new Response("{}", { status })) as unknown as typeof fetch;
-    await assert.rejects(listWorkspaceSubscriptions(account(failing), "org_1", ["ctm_1"]), PaddleReadError);
+    await assert.rejects(listWorkspaceSubscriptions(account(failing), "org_1"), PaddleReadError);
   }
   const noData = (async () => Response.json({ meta: { pagination: { has_more: false } } })) as unknown as typeof fetch;
-  await assert.rejects(listWorkspaceSubscriptions(account(noData), "org_1", ["ctm_1"]), PaddleReadError);
+  await assert.rejects(listWorkspaceSubscriptions(account(noData), "org_1"), PaddleReadError);
   const offline = (async () => {
     throw new Error("offline");
   }) as unknown as typeof fetch;
-  await assert.rejects(listWorkspaceSubscriptions(account(offline), "org_1", ["ctm_1"]), PaddleReadError);
+  await assert.rejects(listWorkspaceSubscriptions(account(offline), "org_1"), PaddleReadError);
 });
 
 test("listWorkspaceSubscriptions refuses a sixth page", async () => {
@@ -230,7 +226,7 @@ test("listWorkspaceSubscriptions refuses a sixth page", async () => {
     reads += 1;
     return Response.json({ data: [listed({ id: `sub_${reads}` })], meta: { pagination: { has_more: true } } });
   }) as unknown as typeof fetch;
-  await assert.rejects(listWorkspaceSubscriptions(account(fake), "org_1", ["ctm_1"]), PaddleReadError);
+  await assert.rejects(listWorkspaceSubscriptions(account(fake), "org_1"), PaddleReadError);
   assert.equal(reads, 5);
 });
 
@@ -244,8 +240,8 @@ test("listWorkspaceSubscriptions never fetches a URL from the response body", as
       links: { next: "https://evil.example/subscriptions" },
     });
   }) as unknown as typeof fetch;
-  await listWorkspaceSubscriptions(account(fake), "org_1", ["ctm_1"]);
-  assert.deepEqual(urls, ["https://sandbox-api.paddle.com/subscriptions?customer_id=ctm_1&per_page=200"]);
+  await listWorkspaceSubscriptions(account(fake), "org_1");
+  assert.deepEqual(urls, ["https://sandbox-api.paddle.com/subscriptions?per_page=200"]);
 });
 
 test("chooseSubscription prefers a paying subscription over a newer canceled one", () => {
@@ -328,6 +324,7 @@ test("createCheckout posts a tagged transaction and returns Paddle's checkout UR
     "content-type": "application/json",
     "paddle-version": "1",
   });
+  assert.equal(calls[0].init.redirect, "manual");
   assert.deepEqual(JSON.parse(String(calls[0].init.body)), {
     items: [{ price_id: "pri_01gsz8x8sawmvhz1pv30nge1ke", quantity: 5 }],
     custom_data: { workspace_id: "org_abc123" },
@@ -363,6 +360,7 @@ test("createPortalSession posts to the customer portal endpoint and returns the 
     "content-type": "application/json",
     "paddle-version": "1",
   });
+  assert.equal(calls[0].init.redirect, "manual");
 });
 
 test("createPortalSession throws when Paddle errors or omits the URL", async () => {
