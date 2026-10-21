@@ -952,7 +952,7 @@ test("money tie-out counts money with more than three decimals exactly", async (
   const byGroup: BridgeConfig = { ...base, levels: [{ name: "Group", columns: ["all_group"] }] };
 
   // The file holds 2.9115, the kept rows 2.1111: 3 and 2, so the excluded line is 1.
-  await checkBoth(query, "four-decimal money", "Sales", byProduct, byGroup, {
+  await checkBoth(query, "four- and five-decimal money", "Sales", byProduct, byGroup, {
     lines: [3, 1, 2, 1, 0, 1],
     inFile: [3, 1],
   });
@@ -1006,7 +1006,7 @@ test("money tie-out: the allowed one-dollar boundary when the bridge itself roun
   // the bridge's DOUBLE total lands just above 5.5 and shows 6; in one group it
   // lands just below and shows 5. Nothing is excluded, so the file line follows the
   // bridge line. That is the one case where the file line may sit one dollar from
-  // the exact file total, and it is allowed.
+  // the exact file total rounded to whole dollars, and it is allowed.
   await query(`CREATE TABLE data AS
     SELECT 2025 AS year, (i % 2)::VARCHAR AS product, 'all' AS all_group, 1 AS units, 0.1::DOUBLE AS sales
     FROM range(55) t(i)

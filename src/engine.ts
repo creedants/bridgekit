@@ -569,7 +569,7 @@ function readableSql(column: string): string {
   return `(isfinite(${value}) AND abs(${value}) < 1e19)`;
 }
 
-/** A money column in billionths of a dollar, read from the DOUBLE the file produced. Amounts below 2^21 dollars are exact to the billionth. Larger amounts round at the billionth of the value, which puts the row under a millionth of a dollar out below a billion dollars. A blank is NULL and adds nothing. A non-finite or absurd value is NULL, so it can never throw. */
+/** A money column in billionths of a dollar, read from the DOUBLE the file produced. Amounts below 2^21 dollars are exact to the billionth. Larger amounts carry the DOUBLE's own rounding error, which stays under a millionth of a dollar per row below a billion dollars. A blank is NULL and adds nothing. A non-finite or absurd value is NULL, so it can never throw. */
 function nanosSql(column: string): string {
   return `(CASE WHEN ${readableSql(column)} THEN CAST(ROUND(CAST(${ident(column)} AS DOUBLE) * 1000000000) AS HUGEINT) END)`;
 }
