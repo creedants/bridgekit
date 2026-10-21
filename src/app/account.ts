@@ -1,5 +1,5 @@
 import type { BridgeSummary } from "../summary.ts";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { columnsKey, type Setup } from "./setup.ts";
 import {
   beginRead,
@@ -272,7 +272,14 @@ export const CHECKOUT_RETURN_MS = 90_000;
 export const CHECKOUT_POLL_MS = 3000;
 
 const CHECKOUT_WORKSPACE_KEY = "bridgekit.checkout-workspace";
-let rememberedCheckoutWorkspace: string | null = null;
+
+/** A checkout this tab started: which workspace, and which checkout owns it. */
+export interface CheckoutMarker {
+  workspace: string;
+  token: string;
+}
+
+let storedMarker: CheckoutMarker | null = null;
 
 function session(): Storage | null {
   try {
@@ -282,33 +289,51 @@ function session(): Storage | null {
   }
 }
 
-/**
- * Remembers which workspace the browser left for Paddle. It lives in
- * sessionStorage so the return lands on the workspace that was paid for, and
- * it never leaves this tab. A browser that refuses storage still gets the
- * in-memory copy.
- */
-export function rememberCheckoutWorkspace(id: string): void {
-  rememberedCheckoutWorkspace = id;
+function readStored(): CheckoutMarker | null {
   try {
-    session()?.setItem(CHECKOUT_WORKSPACE_KEY, id);
+    const raw = session()?.getItem(CHECKOUT_WORKSPACE_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed === "object" && parsed !== null) {
+      const { workspace, token } = parsed as { workspace?: unknown; token?: unknown };
+      if (typeof workspace === "string" && typeof token === "string") return { workspace, token };
+    }
+  } catch {
+    // A malformed record is treated as no record.
+  }
+  return null;
+}
+
+/**
+ * Records the workspace this tab is about to pay for, and returns the token
+ * that owns the record. It lives in sessionStorage, so the return lands on the
+ * workspace that was paid for and it never leaves this tab. A browser that
+ * refuses storage still gets the in-memory copy. Call it only after the
+ * checkout request has succeeded, immediately before navigation.
+ */
+export function rememberCheckoutWorkspace(workspace: string): string {
+  const token = crypto.randomUUID();
+  storedMarker = { workspace, token };
+  try {
+    session()?.setItem(CHECKOUT_WORKSPACE_KEY, JSON.stringify(storedMarker));
   } catch {
     // Storage may be full or denied; the in-memory copy still holds it.
   }
+  return token;
 }
 
-export function recallCheckoutWorkspace(): string | null {
-  try {
-    const found = session()?.getItem(CHECKOUT_WORKSPACE_KEY);
-    if (found) return found;
-  } catch {
-    // Fall through to the in-memory copy.
-  }
-  return rememberedCheckoutWorkspace;
+export function recallCheckoutWorkspace(): CheckoutMarker | null {
+  return readStored() ?? storedMarker;
 }
 
-export function forgetCheckoutWorkspace(): void {
-  rememberedCheckoutWorkspace = null;
+/**
+ * Clears the record, but only the one this token owns. A slower checkout that
+ * finishes, times out or unmounts after a newer one started cannot remove the
+ * newer checkout's record.
+ */
+export function forgetCheckoutWorkspace(token: string): void {
+  if (recallCheckoutWorkspace()?.token !== token) return;
+  storedMarker = null;
   try {
     session()?.removeItem(CHECKOUT_WORKSPACE_KEY);
   } catch {
@@ -316,67 +341,39 @@ export function forgetCheckoutWorkspace(): void {
   }
 }
 
-/**
- * Checks the plan every 3 s for up to 90 s after a checkout return, until
- * Pro is on. Returns a stop function the panel calls when it unmounts or
- * when Pro arrives. A failed plan read never stops the wait.
- */
-export function pollForPro(
-  workspaceId: string,
-  onPro: (found: { role: string; plan: Plan }) => void,
-  opts?: {
-    intervalMs?: number;
-    timeoutMs?: number;
-    getPlan?: (id: string) => Promise<{ role: string; plan: Plan }>;
-  },
-): () => void {
-  const intervalMs = opts?.intervalMs ?? 3000;
-  const timeoutMs = opts?.timeoutMs ?? 90000;
-  const read = opts?.getPlan ?? getPlan;
-  let stopped = false;
-  const timer = setInterval(async () => {
-    if (stopped) return;
-    try {
-      const found = await read(workspaceId);
-      if (stopped) return;
-      if (found.plan.pro) {
-        stopped = true;
-        clearInterval(timer);
-        clearTimeout(limit);
-        onPro(found);
-      }
-    } catch {
-      // Keep polling through a transient plan read failure.
-    }
-  }, intervalMs);
-  const limit = setTimeout(() => {
-    stopped = true;
-    clearInterval(timer);
-  }, timeoutMs);
-  return () => {
-    stopped = true;
-    clearInterval(timer);
-    clearTimeout(limit);
-  };
+/** The phase of a checkout return. */
+type ReturnPhase = "pending" | "paid" | "expired";
+
+interface ReturnState {
+  workspace: string;
+  /** The token that owns the marker, or null for a return with no marker. */
+  token: string | null;
+  deadline: number;
+  phase: ReturnPhase;
 }
 
 /**
  * The checkout return. Paddle sends the browser back to `?subscribed=1` for
- * every purchase, so the workspace is taken from the one the panel remembered
- * before it left for checkout. The 90 s deadline starts once, at the return,
- * and a workspace switch neither changes the workspace being watched nor
- * restarts the deadline. When that workspace's plan turns Pro, its plan is
- * handed to the panel and the sentence becomes the confirmation.
+ * every purchase, so the workspace comes from the record the panel wrote
+ * before it left for checkout. Plans are keyed by workspace, so this hook
+ * looks only at the checkout workspace's own plan, never the plan of whatever
+ * is on screen, and it settles only on that plan turning Pro.
+ *
+ * One deadline starts at the return. It neither moves when another workspace
+ * is selected nor restarts, and at the deadline the poll stops and the record
+ * is cleared. The record is also cleared when the workspace has Pro, and when
+ * the panel unmounts. Every clear is by token, so an older return cannot
+ * remove a newer checkout's record.
  */
 export function useCheckoutReturn(options: {
-  /** The workspace on screen. */
+  /** The workspace on screen, used only when a return carried no record. */
   active: string;
-  /** The plan last read for the workspace on screen, if any. */
-  activePlan: Plan | null;
+  /** Plans read so far, keyed by workspace. */
+  plans: Record<string, { role: string; plan: Plan }>;
+  /** Applies a plan read to the workspace it was read for. */
+  onPlan: (workspaceId: string, found: { role: string; plan: Plan }) => void;
   /** Whether an answer may be asked for yet, that is, the person is signed in. */
   enabled: boolean;
-  /** Called with the plan of the paid workspace once it is Pro. */
-  onPro: (found: { role: string; plan: Plan }) => void;
   /** The query string to read the return from. Defaults to the page's. */
   search?: string;
   now?: () => number;
@@ -390,51 +387,89 @@ export function useCheckoutReturn(options: {
   sentence: string | null;
 } {
   const now = options.now ?? (() => Date.now());
-  const windowMs = options.windowMs ?? CHECKOUT_RETURN_MS;
   const pollMs = options.pollMs ?? CHECKOUT_POLL_MS;
+  const windowMs = options.windowMs ?? CHECKOUT_RETURN_MS;
   const read = options.getPlan ?? getPlan;
   const search = options.search ?? (typeof location === "undefined" ? "" : location.search);
-  const [state, setState] = useState<{ workspace: string; deadline: number; paid: boolean } | null>(() => {
+  const mounted = useRef(false);
+  const [state, setState] = useState<ReturnState | null>(() => {
     if (!new URLSearchParams(search).has("subscribed")) return null;
-    return { workspace: recallCheckoutWorkspace() ?? "", deadline: now() + windowMs, paid: false };
+    const marker = recallCheckoutWorkspace();
+    if (!marker) return { workspace: "", token: null, deadline: now() + windowMs, phase: "pending" };
+    return { workspace: marker.workspace, token: marker.token, deadline: now() + windowMs, phase: "pending" };
   });
 
-  function settle(workspace: string, found?: { role: string; plan: Plan }) {
-    forgetCheckoutWorkspace();
-    setState((current) => (current && current.workspace === workspace ? { ...current, paid: true } : current));
-    if (found) options.onPro(found);
-  }
-
-  // Adopt the workspace already on screen when the return carried no
-  // remembered one, for example an older checkout link opened in a new tab.
+  // Adopt the workspace already on screen when the return carried no record,
+  // for example an older checkout link opened in a new tab.
   useEffect(() => {
     if (!state || state.workspace || !options.active) return;
     setState({ ...state, workspace: options.active });
   }, [state?.workspace, options.active]);
 
-  // A plan read the panel already made for the paid workspace settles the
-  // return without another request.
+  // Settle only on the checkout workspace's own plan.
+  const checkoutPro = state?.workspace ? options.plans[state.workspace]?.plan.pro === true : false;
   useEffect(() => {
-    if (!state || state.paid || !state.workspace) return;
-    if (options.active !== state.workspace || !options.activePlan?.pro) return;
-    settle(state.workspace);
-  }, [state?.workspace, state?.paid, options.active, options.activePlan?.pro]);
+    if (!state || state.phase !== "pending" || !state.workspace || !checkoutPro) return;
+    if (state.token) forgetCheckoutWorkspace(state.token);
+    setState({ ...state, phase: "paid" });
+  }, [state?.workspace, state?.phase, checkoutPro]);
 
-  // Poll the paid workspace, whatever is on screen, until Pro arrives or the
-  // single deadline that started at the return passes.
+  // Poll the checkout workspace until its plan is Pro or the deadline passes.
   useEffect(() => {
-    if (!state || state.paid || !options.enabled || !state.workspace) return;
+    if (!state || state.phase !== "pending" || !options.enabled || !state.workspace) return;
+    const target = state.workspace;
+    const poll = setInterval(() => {
+      void read(target).then(
+        (found) => {
+          options.onPlan(target, found);
+          if (found.plan.pro) {
+            if (state.token) forgetCheckoutWorkspace(state.token);
+            setState((current) => (current && current.phase === "pending" ? { ...current, phase: "paid" } : current));
+          }
+        },
+        () => {
+          // A failed read keeps the wait going until the deadline.
+        },
+      );
+    }, pollMs);
+    return () => clearInterval(poll);
+  }, [state?.workspace, state?.phase, state?.deadline, options.enabled]);
+
+  // One deadline for the whole return, started when it first ran.
+  useEffect(() => {
+    if (!state || state.phase !== "pending") return;
     const remaining = state.deadline - now();
-    if (remaining <= 0) return;
-    return pollForPro(
-      state.workspace,
-      (found) => settle(state.workspace, found),
-      { intervalMs: pollMs, timeoutMs: remaining, getPlan: read },
-    );
-  }, [state?.workspace, state?.paid, state?.deadline, options.enabled]);
+    if (remaining <= 0) {
+      if (state.token) forgetCheckoutWorkspace(state.token);
+      setState({ ...state, phase: "expired" });
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (state.token) forgetCheckoutWorkspace(state.token);
+      setState((current) => (current && current.phase === "pending" ? { ...current, phase: "expired" } : current));
+    }, remaining);
+    return () => clearTimeout(timer);
+  }, [state?.phase, state?.deadline]);
+
+  // A real unmount clears the record. The cleanup runs only on unmount, never
+  // on a phase change, and it clears the record in a microtask so StrictMode's
+  // immediate remount, which runs a cleanup and an effect back to back, does
+  // not clear a record the second mount still needs.
+  const tokenRef = useRef<string | null>(null);
+  tokenRef.current = state?.token ?? null;
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      const token = tokenRef.current;
+      queueMicrotask(() => {
+        if (!mounted.current && token) forgetCheckoutWorkspace(token);
+      });
+    };
+  }, []);
 
   return {
     returning: state?.workspace || null,
-    sentence: state ? (state.paid ? PRO_ON_SENTENCE : PRO_WAITING_SENTENCE) : null,
+    sentence: !state ? null : state.phase === "paid" ? PRO_ON_SENTENCE : PRO_WAITING_SENTENCE,
   };
 }

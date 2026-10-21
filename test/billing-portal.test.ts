@@ -1,16 +1,15 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { registerHooks } from "node:module";
 import { mock, test } from "node:test";
+import { transformSync } from "esbuild";
 import type { Fetcher } from "../server/cloudflare.ts";
 import type { Env } from "../server/env.ts";
 import app from "../server/worker.ts";
 import {
-  billingView,
-  forgetCheckoutWorkspace,
   hasManageBilling,
-  preferredWorkspace,
+  recallCheckoutWorkspace,
   rememberCheckoutWorkspace,
-  useCheckoutReturn,
 } from "../src/app/account.ts";
 import { testDatabase } from "./support/d1.ts";
 
@@ -309,11 +308,10 @@ test("hasManageBilling covers existing subscriptions, no row, and expired cancel
   assert.equal(hasManageBilling("canceled", false), false);
 });
 
-// A panel over the same state the Workspace panel renders, so the effects,
-// the polling deadline and the sentences are exercised as a mounted tree. The
-// panel's own file is .tsx, which this runner cannot import, so its shell is
-// a thin call into the hook and view model below and a source check keeps it
-// that way.
+// The real WorkspacePanel.tsx is mounted below. This runner cannot load a
+// .tsx file by itself, so a load hook transforms it with the esbuild copy the
+// build already depends on, and the panel then runs exactly as the app runs
+// it: same effects, same polling, same markup.
 
 class ShimNode {
   nodeType: number;
@@ -447,6 +445,14 @@ class ShimElement extends ShimNode {
     this.attributes.delete(String(name));
   }
 
+  get options(): ShimElement[] {
+    return this.childNodes.filter((child) => child.nodeName === "OPTION") as ShimElement[];
+  }
+
+  get selectedOptions(): ShimElement[] {
+    return this.options.filter((option) => (option as unknown as { selected?: boolean }).selected);
+  }
+
   get textContent(): string {
     return this.childNodes.map((child) => (child as ShimElement).textContent ?? "").join("");
   }
@@ -523,96 +529,175 @@ function installDom(): ShimDocument {
   return doc;
 }
 
+
+// The panel is loaded through esbuild, which the build already installs, so a
+// .tsx file reaches this runner as the same module the app ships.
+registerHooks({
+  load(url, context, nextLoad) {
+    if (url.endsWith(".tsx")) {
+      const source = readFileSync(new URL(url), "utf8");
+      const { code } = transformSync(source, { loader: "tsx", format: "esm", jsx: "automatic" });
+      return { format: "module", source: code, shortCircuit: true };
+    }
+    return nextLoad(url, context);
+  },
+});
+
 type PlanRow = { role: string; plan: import("../src/app/account.ts").Plan };
 
-interface PanelOptions {
+interface FakeServer {
   workspaces: { id: string; name: string }[];
-  /** The plan each workspace answers with, or a function of the read count. */
-  plans: Record<string, PlanRow | ((reads: number, clock: number) => PlanRow)>;
-  search: string;
-  clock: { t: number };
-  initialActive?: string;
+  plans: Record<string, PlanRow | "defer">;
+  planReads: string[];
+  checkout: "ok" | "fail" | "defer";
+  checkoutReads: string[];
+  fetch(path: string, init?: RequestInit): Promise<Response>;
+  setPlan(id: string, row: PlanRow): void;
+  releaseDeferred(id: string): void;
+  releaseCheckout(): void;
 }
 
-/** Mounts the panel over the workspace state and returns what it shows. */
-async function mountPanel(options: PanelOptions) {
-  installDom();
+const free = (): PlanRow => ({ role: "owner", plan: { pro: false, status: null, seats: 1, currentPeriodEnd: null } });
+const pro = (seats = 2): PlanRow => ({ role: "owner", plan: { pro: true, status: "active", seats, currentPeriodEnd: null } });
+
+/** The panel's own API, answered in memory, with reads and replies the test controls. */
+function fakeServer(options: {
+  workspaces: { id: string; name: string }[];
+  plans: Record<string, PlanRow | "defer">;
+  checkout?: "ok" | "fail" | "defer";
+}): FakeServer {
+  const server: FakeServer = {
+    workspaces: options.workspaces,
+    plans: { ...options.plans },
+    planReads: [],
+    checkout: options.checkout ?? "ok",
+    checkoutReads: [],
+    setPlan(id, row) {
+      server.plans[id] = row;
+    },
+    releaseDeferred(id) {
+      const waiting = deferred.get(id) ?? [];
+      deferred.delete(id);
+      for (const release of waiting) release();
+    },
+    releaseCheckout() {
+      const waiting = pendingCheckout.splice(0);
+      for (const release of waiting) release();
+    },
+    async fetch(path: string, init?: RequestInit): Promise<Response> {
+      const url = String(path);
+      const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+      if (url === "/api/config") return json({ providers: [], email: true, commentary: false, billing: true });
+      if (url === "/api/auth/get-session") return json({ user: { id: "u1", email: "a@b.c", name: "A" } });
+      if (url === "/api/auth/organization/list") return json(server.workspaces);
+      const plan = url.match(/^\/api\/workspaces\/([^/]+)$/);
+      if (plan) {
+        const id = plan[1];
+        server.planReads.push(id);
+        if (server.plans[id] === "defer") {
+          await new Promise<void>((resolve) => {
+            const waiting = deferred.get(id) ?? [];
+            waiting.push(resolve);
+            deferred.set(id, waiting);
+          });
+        }
+        const row = server.plans[id];
+        return json(typeof row === "string" ? free() : row);
+      }
+      const bridges = url.match(/^\/api\/workspaces\/([^/]+)\/bridges$/);
+      if (bridges) return json([]);
+      const checkout = url.match(/^\/api\/workspaces\/([^/]+)\/checkout$/);
+      if (checkout) {
+        server.checkoutReads.push(checkout[1]);
+        if (server.checkout === "defer") {
+          await new Promise<void>((resolve) => pendingCheckout.push(resolve));
+          return json({ checkoutUrl: "https://pay.example.com/checkout?_ptxn=txn_test" });
+        }
+        if (server.checkout === "fail") return json({ error: "The server returned 502." }, 502);
+        return json({ checkoutUrl: "https://pay.example.com/checkout?_ptxn=txn_test" });
+      }
+      if (init?.method === "POST" && url.endsWith("/portal")) return json({ portalUrl: "https://paddle.com/portal/session" });
+      return json({ error: `unexpected ${url}` }, 500);
+    },
+  };
+  const deferred = new Map<string, (() => void)[]>();
+  const pendingCheckout: (() => void)[] = [];
+  return server;
+}
+
+/** Mounts the real WorkspacePanel over the fake server and returns handles on it. */
+async function mountPanel(options: { server: FakeServer; search: string; strict?: boolean }) {
+  const doc = installDom();
   const React = await import("react");
   const { createRoot } = await import("react-dom/client");
-  const h = React.createElement;
-  const reads: Record<string, number> = {};
-  const getPlan = async (id: string) => {
-    reads[id] = (reads[id] ?? 0) + 1;
-    const row = options.plans[id];
-    if (!row) return { role: "owner", plan: { pro: false, status: null, seats: 1, currentPeriodEnd: null } };
-    return typeof row === "function" ? row(reads[id], options.clock.t) : row;
-  };
-  const switchTo: { current: ((id: string) => void) | null } = { current: null };
+  const { default: WorkspacePanel } = await import("../src/app/Workspace.tsx");
+  const globals = globalThis as unknown as Record<string, unknown>;
+  const clock = { t: 0 };
+  const location = { href: `http://127.0.0.1:8790/app/${options.search}`, pathname: "/app/", search: options.search };
+  globals.location = location;
+  globals.history = { replaceState() {}, pushState() {} };
+  globals.fetch = options.server.fetch as unknown as typeof fetch;
+  void clock;
 
-  function Panel() {
-    const [active, setActive] = React.useState(options.initialActive ?? options.workspaces[0]?.id ?? "");
-    const [plan, setPlan] = React.useState<PlanRow | null>(null);
-    switchTo.current = setActive;
-    const checkoutReturn = useCheckoutReturn({
-      active,
-      activePlan: plan?.plan ?? null,
-      enabled: true,
-      onPro: (found) => setPlan(found),
-      search: options.search,
-      now: () => options.clock.t,
-      getPlan,
-    });
-    React.useEffect(() => {
-      setActive((current) => preferredWorkspace(options.workspaces, checkoutReturn.returning, current));
-    }, [checkoutReturn.returning]);
-    React.useEffect(() => {
-      let live = true;
-      void getPlan(active).then((found) => {
-        if (live) setPlan(found);
-      });
-      return () => {
-        live = false;
-      };
-    }, [active]);
-    const view = billingView(plan?.plan ?? null, plan?.role ?? null, true);
-    return h(
-      "div",
-      null,
-      view.pro ? h("p", { className: "hint" }, view.pro) : null,
-      view.paused ? h("p", { className: "hint" }, view.paused) : null,
-      view.manage ? h("button", null, "Manage billing") : null,
-      view.subscribe ? h("div", null, h("button", null, "Subscribe")) : null,
-      checkoutReturn.sentence ? h("p", { role: "status" }, checkoutReturn.sentence) : null,
-    );
-  }
-
-  const doc = installDom();
   const container = doc.createElement("div");
   doc.body.appendChild(container as unknown as ShimNode);
   const root = createRoot(container as unknown as Element);
-  await React.act(async () => {
-    root.render(h(Panel));
-  });
   const act = async (work: () => void | Promise<void>) => {
     await React.act(async () => {
       await work();
     });
   };
+  const panel = React.createElement(WorkspacePanel, { columns: [], setup: null, bridge: null, onUseSetup() {} });
+  await act(async () => {
+    root.render(options.strict ? React.createElement(React.StrictMode, null, panel) : panel);
+  });
+  const flush = async () => {
+    await act(async () => {});
+    await act(async () => {});
+  };
   const text = () => (container as unknown as ShimElement).textContent;
+  const find = (node: ShimNode | null, name: string): ShimNode | null => {
+    if (!node) return null;
+    if (node.nodeName === name) return node;
+    for (const child of node.childNodes) {
+      const found = find(child, name);
+      if (found) return found;
+    }
+    return null;
+  };
+  const collect = (node: ShimNode | null, name: string, out: ShimNode[] = []): ShimNode[] => {
+    if (!node) return out;
+    if (node.nodeName === name) out.push(node);
+    for (const child of node.childNodes) collect(child, name, out);
+    return out;
+  };
   return {
-    shows: (sentence: string) => text().includes(sentence),
     text,
-    reads,
-    act,
-    async switchTo(id: string) {
-      await act(() => switchTo.current?.(id));
+    shows: (sentence: string) => text().includes(sentence),
+    chose: async (id: string) => {
+      const select = find(container, "SELECT") as unknown as ShimElement & { value: string };
+      assert.ok(select, "the workspace selector is on screen");
+      // Replace React's value tracker with a plain property, so the change is
+      // seen the way a person's selection would be.
+      Object.defineProperty(select, "value", { value: id, writable: true, configurable: true });
+      await act(async () => {
+        select.dispatchEvent({ type: "change", bubbles: true, target: select });
+      });
+      await flush();
     },
-    /** Advances the fake timers and the return clock together. */
+    press: async (label: string) => {
+      const button = collect(container, "BUTTON").find((candidate) => (candidate as ShimElement).textContent === label);
+      assert.ok(button, `the panel offers a button named ${label}`);
+      await act(async () => {
+        button.dispatchEvent({ type: "click", bubbles: true, target: button });
+      });
+      await flush();
+    },
     async advance(ms: number) {
-      options.clock.t += ms;
-      await act(() => {
+      await act(async () => {
         mock.timers.tick(ms);
       });
+      await flush();
     },
     async unmount() {
       await React.act(async () => {
@@ -627,137 +712,237 @@ const PRO_SENTENCE = "Thank you. Pro is on.";
 const WAITING_SENTENCE = "Thank you. Pro switches on as soon as Paddle confirms the payment, usually within a minute.";
 const PAUSED_SENTENCE = "Your subscription is paused. Manage billing to resume it.";
 
-const proRow = (seats = 2): PlanRow => ({ role: "owner", plan: { pro: true, status: "active", seats, currentPeriodEnd: null } });
-const freeRow: PlanRow = { role: "owner", plan: { pro: false, status: null, seats: 1, currentPeriodEnd: null } };
+/** The stored checkout marker, read the same way before and after it gains an owner token. */
+function storedMarker(): string | null {
+  const found = recallCheckoutWorkspace() as unknown as { workspace?: string; id?: string } | string | null;
+  if (!found) return null;
+  if (typeof found === "string") return found;
+  return found.workspace ?? found.id ?? null;
+}
+
+function markerFor(id: string): void {
+  rememberCheckoutWorkspace(id);
+}
+
+const TWO = [
+  { id: "w1", name: "First" },
+  { id: "w2", name: "Second" },
+];
 
 test("the checkout return selects the workspace that was paid for", async () => {
   mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
-  forgetCheckoutWorkspace();
-  rememberCheckoutWorkspace("w2");
   try {
-    const panel = await mountPanel({
-      workspaces: [{ id: "w1", name: "First" }, { id: "w2", name: "Second" }],
-      plans: { w1: freeRow, w2: proRow(2) },
-      search: "?subscribed=1",
-      clock: { t: 0 },
-    });
-    await panel.act(async () => {});
+    markerFor("w2");
+    const server = fakeServer({ workspaces: TWO, plans: { w1: free(), w2: pro(2) } });
+    const panel = await mountPanel({ server, search: "?subscribed=1" });
     assert.equal(panel.shows(PRO_SENTENCE), true, panel.text());
     assert.equal(panel.shows("Pro, 2 seats."), true, panel.text());
     assert.equal(panel.shows("Manage billing"), true, panel.text());
     assert.equal(panel.shows("Subscribe"), false, panel.text());
     await panel.unmount();
   } finally {
-    forgetCheckoutWorkspace();
+    mock.timers.reset();
+  }
+});
+
+test("a poll for the checkout workspace never changes the plan on screen", async () => {
+  mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  try {
+    markerFor("w2");
+    const server = fakeServer({ workspaces: TWO, plans: { w1: free(), w2: free() } });
+    const panel = await mountPanel({ server, search: "?subscribed=1" });
+    await panel.chose("w1");
+    assert.equal(panel.shows("Subscribe"), true, panel.text());
+    server.setPlan("w2", pro(9));
+    await panel.advance(3000);
+    assert.equal(panel.shows("Pro, 9 seats."), false, panel.text());
+    assert.equal(panel.shows("Subscribe"), true, panel.text());
+    await panel.chose("w2");
+    assert.equal(panel.shows("Pro, 9 seats."), true, panel.text());
+    assert.equal(panel.shows(PRO_SENTENCE), true, panel.text());
+    await panel.unmount();
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("a previous workspace's plan cannot confirm or stop the return", async () => {
+  mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  try {
+    markerFor("w2");
+    const server = fakeServer({ workspaces: TWO, plans: { w1: pro(2), w2: free() } });
+    const panel = await mountPanel({ server, search: "?subscribed=1" });
+    await panel.chose("w1");
+    assert.equal(panel.shows("Pro, 2 seats."), true, panel.text());
+    assert.equal(panel.shows(PRO_SENTENCE), false, panel.text());
+    server.plans.w2 = "defer";
+    await panel.chose("w2");
+    assert.equal(panel.shows(PRO_SENTENCE), false, panel.text());
+    assert.equal(panel.shows("Pro, 2 seats."), false, panel.text());
+    server.setPlan("w2", free());
+    server.releaseDeferred("w2");
+    await panel.advance(3000);
+    assert.equal(panel.shows(PRO_SENTENCE), false, panel.text());
+    assert.equal(panel.shows(WAITING_SENTENCE), true, panel.text());
+    const readAfterReturn = server.planReads.filter((id) => id === "w2").length;
+    await panel.advance(3000);
+    assert.ok(server.planReads.filter((id) => id === "w2").length > readAfterReturn, "polling must continue for a free checkout workspace");
+    await panel.unmount();
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("the checkout marker is cleared at the deadline", async () => {
+  mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  try {
+    markerFor("w2");
+    const server = fakeServer({ workspaces: TWO, plans: { w1: free(), w2: free() } });
+    const panel = await mountPanel({ server, search: "?subscribed=1" });
+    assert.equal(storedMarker(), "w2");
+    await panel.advance(93_000);
+    assert.equal(storedMarker(), null);
+    assert.equal(panel.shows(WAITING_SENTENCE), true, panel.text());
+    await panel.unmount();
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("an early unmount stops the return and clears its marker", async () => {
+  mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  try {
+    markerFor("w2");
+    const server = fakeServer({ workspaces: TWO, plans: { w1: free(), w2: free() } });
+    const panel = await mountPanel({ server, search: "?subscribed=1" });
+    await panel.advance(3000);
+    const readsAtUnmount = server.planReads.length;
+    await panel.unmount();
+    assert.equal(storedMarker(), null);
+    await panel.advance(120_000);
+    assert.equal(server.planReads.length, readsAtUnmount, "a request followed the unmount");
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("a checkout that fails records no marker", async () => {
+  mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  try {
+    markerFor("sentinel");
+    const server = fakeServer({ workspaces: [{ id: "w1", name: "First" }], plans: { w1: free() }, checkout: "fail" });
+    const panel = await mountPanel({ server, search: "" });
+    await panel.press("Subscribe");
+    assert.equal(server.checkoutReads.join(","), "w1");
+    assert.equal(storedMarker(), "sentinel");
+    await panel.unmount();
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("an older return cannot clear a newer checkout's marker", async () => {
+  mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  try {
+    markerFor("w2");
+    const server = fakeServer({ workspaces: TWO, plans: { w1: free(), w2: free() } });
+    const panel = await mountPanel({ server, search: "?subscribed=1" });
+    await panel.chose("w1");
+    await panel.press("Subscribe");
+    assert.equal(storedMarker(), "w1");
+    server.setPlan("w2", pro(3));
+    await panel.advance(3000);
+    assert.equal(storedMarker(), "w1", "the older return cleared a newer checkout's marker");
+    await panel.unmount();
+  } finally {
     mock.timers.reset();
   }
 });
 
 test("a return keeps the confirmation when Pro is already on", async () => {
   mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
-  forgetCheckoutWorkspace();
-  rememberCheckoutWorkspace("w2");
   try {
-    const panel = await mountPanel({
-      workspaces: [{ id: "w1", name: "First" }, { id: "w2", name: "Second" }],
-      plans: { w1: freeRow, w2: proRow(2) },
-      search: "?subscribed=1",
-      clock: { t: 0 },
-    });
-    await panel.act(async () => {});
+    markerFor("w2");
+    const server = fakeServer({ workspaces: TWO, plans: { w1: free(), w2: pro(2) } });
+    const panel = await mountPanel({ server, search: "?subscribed=1" });
     assert.equal(panel.shows(PRO_SENTENCE), true, panel.text());
     assert.equal(panel.shows(WAITING_SENTENCE), false, panel.text());
     await panel.advance(30_000);
     assert.equal(panel.shows(PRO_SENTENCE), true, panel.text());
     await panel.unmount();
   } finally {
-    forgetCheckoutWorkspace();
     mock.timers.reset();
   }
 });
 
 test("a return replaces the waiting sentence when Pro arrives during polling", async () => {
   mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
-  forgetCheckoutWorkspace();
-  rememberCheckoutWorkspace("w2");
   try {
-    const panel = await mountPanel({
-      workspaces: [{ id: "w1", name: "First" }, { id: "w2", name: "Second" }],
-      plans: { w1: freeRow, w2: (_reads, clock) => (clock >= 6000 ? proRow(2) : freeRow) },
-      search: "?subscribed=1",
-      clock: { t: 0 },
-    });
-    await panel.act(async () => {});
+    markerFor("w2");
+    const server = fakeServer({ workspaces: TWO, plans: { w1: free(), w2: free() } });
+    const panel = await mountPanel({ server, search: "?subscribed=1" });
     assert.equal(panel.shows(WAITING_SENTENCE), true, panel.text());
-    assert.equal(panel.shows(PRO_SENTENCE), false, panel.text());
     await panel.advance(3000);
     assert.equal(panel.shows(WAITING_SENTENCE), true, panel.text());
+    server.setPlan("w2", pro(2));
     await panel.advance(3000);
     assert.equal(panel.shows(PRO_SENTENCE), true, panel.text());
     assert.equal(panel.shows(WAITING_SENTENCE), false, panel.text());
     await panel.unmount();
   } finally {
-    forgetCheckoutWorkspace();
     mock.timers.reset();
   }
 });
 
-test("the return keeps one 90 s deadline across a workspace switch and stops there", async () => {
+test("the return keeps one 90 s deadline across a workspace switch", async () => {
   mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
-  forgetCheckoutWorkspace();
-  rememberCheckoutWorkspace("w2");
   try {
-    const panel = await mountPanel({
-      workspaces: [{ id: "w1", name: "First" }, { id: "w2", name: "Second" }],
-      plans: { w1: freeRow, w2: freeRow },
-      search: "?subscribed=1",
-      clock: { t: 0 },
-    });
-    await panel.act(async () => {});
+    markerFor("w2");
+    const server = fakeServer({ workspaces: TWO, plans: { w1: free(), w2: free() } });
+    const panel = await mountPanel({ server, search: "?subscribed=1" });
     await panel.advance(30_000);
-    assert.ok((panel.reads.w2 ?? 0) >= 10, `reads ${JSON.stringify(panel.reads)}`);
-    await panel.switchTo("w1");
-    const afterSwitch = panel.reads.w2 ?? 0;
+    await panel.chose("w1");
+    const readsAtSwitch = server.planReads.filter((id) => id === "w2").length;
     await panel.advance(60_000);
-    const atLimit = panel.reads.w2 ?? 0;
-    assert.equal(atLimit - afterSwitch, 20, `the remaining 60 s is 20 polls: ${JSON.stringify(panel.reads)}`);
-    assert.ok((panel.reads.w1 ?? 0) <= 2, `switching must not start a poll for w1: ${JSON.stringify(panel.reads)}`);
-    assert.equal(panel.shows(WAITING_SENTENCE), true, panel.text());
+    const atLimit = server.planReads.filter((id) => id === "w2").length;
+    assert.equal(atLimit - readsAtSwitch, 20, `the remaining 60 s is 20 polls: ${server.planReads.join(",")}`);
     await panel.advance(60_000);
-    assert.equal(panel.reads.w2 ?? 0, atLimit, "polling continued past the deadline");
+    assert.equal(server.planReads.filter((id) => id === "w2").length, atLimit, "polling continued past the deadline");
     await panel.unmount();
   } finally {
-    forgetCheckoutWorkspace();
     mock.timers.reset();
   }
 });
 
 test("a paused workspace renders the paused sentence and Manage billing only", async () => {
   mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
-  forgetCheckoutWorkspace();
   try {
     const paused: PlanRow = { role: "owner", plan: { pro: false, status: "paused", seats: 2, currentPeriodEnd: null } };
-    const panel = await mountPanel({
-      workspaces: [{ id: "w1", name: "First" }],
-      plans: { w1: paused },
-      search: "",
-      clock: { t: 0 },
-    });
-    await panel.act(async () => {});
+    const server = fakeServer({ workspaces: [{ id: "w1", name: "First" }], plans: { w1: paused } });
+    const panel = await mountPanel({ server, search: "" });
     assert.equal(panel.shows(PAUSED_SENTENCE), true, panel.text());
     assert.equal(panel.shows("Manage billing"), true, panel.text());
     assert.equal(panel.shows("Subscribe"), false, panel.text());
     await panel.unmount();
   } finally {
-    forgetCheckoutWorkspace();
     mock.timers.reset();
   }
 });
 
-test("the panel wires the return hook and the billing view into its markup", () => {
-  const source = readFileSync(new URL("../src/app/Workspace.tsx", import.meta.url), "utf8");
-  for (const wiring of ["api.useCheckoutReturn(", "checkoutReturn.sentence", "api.billingView(", "api.preferredWorkspace("]) {
-    assert.equal(source.includes(wiring), true, `Workspace.tsx no longer uses ${wiring}`);
+test("StrictMode's double mount keeps the return working and clears its record once", async () => {
+  mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  try {
+    markerFor("w2");
+    const server = fakeServer({ workspaces: TWO, plans: { w1: free(), w2: free() } });
+    const panel = await mountPanel({ server, search: "?subscribed=1", strict: true });
+    assert.equal(storedMarker(), "w2", "the second mount still has the record");
+    assert.equal(panel.shows(WAITING_SENTENCE), true, panel.text());
+    server.setPlan("w2", pro(2));
+    await panel.advance(3000);
+    assert.equal(panel.shows(PRO_SENTENCE), true, panel.text());
+    assert.equal(storedMarker(), null);
+    await panel.unmount();
+  } finally {
+    mock.timers.reset();
   }
-  assert.equal(source.includes("localStorage"), false);
 });

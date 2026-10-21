@@ -20,7 +20,9 @@ export default function WorkspacePanel(props: {
   const [user, setUser] = useState<api.User | null | undefined>(undefined);
   const [workspaces, setWorkspaces] = useState<api.Workspace[]>([]);
   const [active, setActive] = useState("");
-  const [plan, setPlan] = useState<{ role: string; plan: api.Plan } | null>(null);
+  // Plans are keyed by workspace, so a read for one workspace never changes
+  // what another workspace shows.
+  const [plans, setPlans] = useState<Record<string, { role: string; plan: api.Plan }>>({});
   const [setups, setSetups] = useState<api.SavedSetup[]>([]);
   const [bridges, setBridges] = useState<api.SavedBridge[]>([]);
   const [viewing, setViewing] = useState<api.SavedBridge | null>(null);
@@ -52,9 +54,9 @@ export default function WorkspacePanel(props: {
   // never writes over the confirmation.
   const checkoutReturn = api.useCheckoutReturn({
     active,
-    activePlan: plan?.plan ?? null,
+    plans,
+    onPlan: (workspaceId, found) => setPlans((all) => ({ ...all, [workspaceId]: found })),
     enabled: user !== null && user !== undefined && active !== "",
-    onPro: (found) => setPlan(found),
   });
 
   useEffect(() => {
@@ -82,11 +84,12 @@ export default function WorkspacePanel(props: {
   const columnsKey = props.columns.join("|");
   useEffect(() => {
     if (!active) return;
+    const requested = active;
     act(async () => {
-      const [found, saved] = await Promise.all([api.getPlan(active), api.listBridges(active)]);
-      setPlan(found);
+      const [found, saved] = await Promise.all([api.getPlan(requested), api.listBridges(requested)]);
+      setPlans((all) => ({ ...all, [requested]: found }));
       setBridges(saved);
-      setSetups(props.columns.length ? await api.listSetups(active, props.columns) : []);
+      setSetups(props.columns.length ? await api.listSetups(requested, props.columns) : []);
     });
   }, [active, columnsKey]);
 
@@ -95,6 +98,7 @@ export default function WorkspacePanel(props: {
   if (user === undefined) return loadingShell(error);
   if (user === null) return <SignIn config={config} busy={busy} error={error} message={message} act={act} />;
 
+  const plan = plans[active] ?? null;
   const billing = api.billingView(plan?.plan ?? null, plan?.role ?? null, config.billing);
   return (
     <fieldset className="team">
@@ -120,7 +124,20 @@ export default function WorkspacePanel(props: {
               {billing.paused && <p className="hint">{billing.paused}</p>}
               {billing.manage && <ManageBilling busy={busy} onManage={() => act(async () => { location.href = (await api.openPortal(active)).portalUrl; })} />}
               {billing.subscribe && (
-                <Subscribe canManage={billing.canManage} billing={config?.billing ?? false} busy={busy} onSubscribe={(seats) => act(async () => { api.rememberCheckoutWorkspace(active); location.href = (await api.checkout(active, seats)).checkoutUrl; })} />
+                <Subscribe
+                  canManage={billing.canManage}
+                  billing={config?.billing ?? false}
+                  busy={busy}
+                  onSubscribe={(seats) =>
+                    act(async () => {
+                      // Record the workspace only once the checkout exists, then
+                      // leave for it. A refused checkout records nothing.
+                      const { checkoutUrl } = await api.checkout(active, seats);
+                      api.rememberCheckoutWorkspace(active);
+                      location.href = checkoutUrl;
+                    })
+                  }
+                />
               )}
             </>
           )}
