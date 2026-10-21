@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDatabase } from "../src/duckdb.ts";
-import { runBridge, drill, unmatched, dataCheck, priceDistribution, sensitivity, trend, priceRealization, priceGaps, accountBridge, periodMoney, tieOutLines, type BridgeConfig, type BridgeResult, type Level } from "../src/engine.ts";
+import { runBridge, drill, unmatched, dataCheck, priceDistribution, sensitivity, trend, priceRealization, priceGaps, accountBridge, periodMoney, tieOutLines, type BridgeConfig, type BridgeResult, type Level, type Query, type TieOutLine } from "../src/engine.ts";
 import { PERIOD, VIEW, quote, viewSql, type Setup } from "../src/app/setup.ts";
+import { whole } from "../src/app/format.ts";
 import { createSyntheticSales } from "../src/synth.ts";
 
 function effect(result: BridgeResult, key: string): number {
@@ -605,19 +606,81 @@ test("rejects a missing prior period and duplicate columns", async () => {
   );
 });
 
-test("money tie-out: the file's money less the excluded rows equals the bridge, to the cent", async () => {
+interface TieOutExpectation {
+  /** Prior's three values then current's, in whole dollars. */
+  lines: number[];
+  /** The exact whole-dollar figure on the file before the filters, prior then current. */
+  inFile: [number, number];
+  /** The setup has no filter, so nothing can be excluded and the file line equals the bridge line. */
+  noFilter?: boolean;
+}
+
+/** Wires the unfiltered `data_all` relation and the filtered view to the table `data`, as the app does. */
+async function fileViews(query: Query, setup: Setup): Promise<void> {
+  await query(`DROP VIEW IF EXISTS ${quote("data_all")}`);
+  await query(`DROP VIEW IF EXISTS ${quote(VIEW)}`);
+  await query(viewSql({ ...setup, filters: [] }));
+  await query(`ALTER VIEW ${quote(VIEW)} RENAME TO ${quote("data_all")}`);
+  await query(viewSql(setup));
+}
+
+async function loadFile(query: Query, columns: string, rows: string, setup: Setup): Promise<void> {
+  await query(`DROP VIEW IF EXISTS ${quote("data_all")}`);
+  await query(`DROP VIEW IF EXISTS ${quote(VIEW)}`);
+  await query(`DROP TABLE IF EXISTS data`);
+  await query(`CREATE TABLE data (${columns})`);
+  await query(`INSERT INTO data VALUES ${rows}`);
+  await fileViews(query, setup);
+}
+
+/** Checks every property the tie-out must hold for one bridge grouping. */
+async function checkGrouping(
+  query: Query,
+  label: string,
+  measure: "Sales" | "Margin",
+  config: BridgeConfig,
+  expected: TieOutExpectation,
+): Promise<TieOutLine[]> {
+  const result = await runBridge(query, config);
+  const money = await periodMoney(query, config, { table: "data_all", periodColumn: PERIOD });
+  const lines = tieOutLines(config, money, result);
+  const periods = [String(config.prior), String(config.current)];
+  assert.deepEqual(
+    lines.map((line) => line.label),
+    periods.flatMap((period) => [`${measure} in file, ${period}`, `Excluded by filters, ${period}`, `${measure} in the bridge, ${period}`]),
+    `${label}: the tie-out labels changed`,
+  );
+  assert.deepEqual(lines.map((line) => line.value), expected.lines, `${label}: the tie-out lines changed`);
+  assert.deepEqual([money.prior.inFile, money.current.inFile], expected.inFile, `${label}: the money on the file changed`);
+  for (const [index, period] of periods.entries()) {
+    const [inFile, excluded, inBridge] = lines.slice(index * 3, index * 3 + 3).map((line) => line.value);
+    const bridge = index === 0 ? result.priorSales : result.currentSales;
+    assert.equal(inFile - excluded, inBridge, `${label}: ${period} does not foot`);
+    assert.equal(whole(inBridge), whole(bridge), `${label}: the ${period} bridge line does not show the KPI digits`);
+    if (expected.noFilter) {
+      assert.equal(excluded, 0, `${label}: ${period} excludes money with no filter on`);
+      assert.equal(inFile, inBridge, `${label}: ${period} shows a file total the bridge does not`);
+    }
+  }
+  return lines;
+}
+
+/** Checks one measurement under both groupings: two products, and a single group value. */
+async function checkBoth(
+  query: Query,
+  label: string,
+  measure: "Sales" | "Margin",
+  product: BridgeConfig,
+  group: BridgeConfig,
+  expected: TieOutExpectation,
+  groupExpected: TieOutExpectation = expected,
+): Promise<void> {
+  await checkGrouping(query, `${label} by product`, measure, product, expected);
+  await checkGrouping(query, `${label} by group`, measure, group, groupExpected);
+}
+
+test("money tie-out: the file's money less the excluded rows equals the bridge, in whole dollars", async () => {
   const query = await openDatabase();
-  await query(`CREATE TABLE data (
-    order_date DATE, customer VARCHAR, design VARCHAR, units INTEGER, sales DOUBLE, cost DOUBLE
-  )`);
-  await query(`INSERT INTO data VALUES
-    (DATE '2025-02-01', 'keep', 'A', 2, 100.10, 60.00),
-    (DATE '2025-03-01', 'keep', 'B', NULL, 50.05, NULL),
-    (DATE '2025-03-02', 'drop', 'A', 5, 250.25, 100.00),
-    (DATE '2026-02-01', 'keep', 'A', 3, 180.33, 90.00),
-    (DATE '2026-03-01', 'drop', 'A', 1, 999.99, 400.00),
-    (DATE '2027-01-01', 'keep', 'A', 4, 700.00, 300.00)
-  `);
   const setup: Setup = {
     periodColumn: "order_date",
     grain: "year",
@@ -627,28 +690,33 @@ test("money tie-out: the file's money less the excluded rows equals the bridge, 
     levels: [{ name: "Design", columns: ["design"] }],
     filters: [{ column: "customer", mode: "include", values: ["keep"] }],
   };
-  // The app builds its unfiltered relation from the same view definition, so the
-  // period column cannot drift from the one the bridge reads.
-  await query(`DROP VIEW IF EXISTS data_all`);
-  await query(viewSql({ ...setup, filters: [] }));
-  await query(`ALTER VIEW ${quote(VIEW)} RENAME TO ${quote("data_all")}`);
-  await query(viewSql(setup));
+  await loadFile(
+    query,
+    "order_date DATE, customer VARCHAR, design VARCHAR, all_group VARCHAR, units INTEGER, sales DOUBLE, cost DOUBLE",
+    `(DATE '2025-02-01', 'keep', 'A', 'all', 2, 100.10, 60.00),
+     (DATE '2025-03-01', 'keep', 'B', 'all', NULL, 50.05, NULL),
+     (DATE '2025-03-02', 'drop', 'A', 'all', 5, 250.25, 100.00),
+     (DATE '2026-02-01', 'keep', 'A', 'all', 3, 180.33, 90.00),
+     (DATE '2026-03-01', 'drop', 'A', 'all', 1, 999.99, 400.00),
+     (DATE '2027-01-01', 'keep', 'A', 'all', 4, 700.00, 300.00)`,
+    setup,
+  );
 
-  const config: BridgeConfig = {
+  const base: Omit<BridgeConfig, "levels"> = {
     table: VIEW, periodColumn: PERIOD, prior: "2025", current: "2026",
     unitsColumn: "units", salesColumn: "sales",
-    levels: [{ name: "Design", columns: ["design"] }],
   };
+  const config: BridgeConfig = { ...base, levels: [{ name: "Design", columns: ["design"] }] };
+  const byGroup: BridgeConfig = { ...base, levels: [{ name: "Group", columns: ["all_group"] }] };
+
   const result = await runBridge(query, config);
   const check = await dataCheck(query, config);
-  const money = await periodMoney(query, config, { table: "data_all", periodColumn: PERIOD });
 
-  // In the file: 100.10 + 50.05 + 250.25 and 180.33 + 999.99. The 2027 row is another period.
-  near(money.prior.inFile, 400.4);
-  near(money.current.inFile, 1180.32);
-  // After the customer filter: 100.10 + 50.05 and 180.33. The two drop rows are out.
-  near(money.prior.afterFilters, 150.15);
-  near(money.current.afterFilters, 180.33);
+  // In the file: 100.10 + 50.05 + 250.25 and 180.33 + 999.99, as whole dollars.
+  // The 2027 row is another period. After the customer filter: 100.10 + 50.05 and 180.33.
+  const money = await periodMoney(query, config, { table: "data_all", periodColumn: PERIOD });
+  assert.deepEqual([money.prior.inFile, money.current.inFile], [400, 1180]);
+  assert.deepEqual([money.prior.afterFilters, money.current.afterFilters], [150, 180]);
 
   // Existing figures for the same file are unchanged: the no-unit row still counts.
   near(result.priorSales, 150.15);
@@ -665,73 +733,38 @@ test("money tie-out: the file's money less the excluded rows equals the bridge, 
   assert.equal(check.currentRows, 1);
   assert.equal(check.otherPeriodRows, 1);
 
-  const lines = tieOutLines(config, money, result);
-  assert.deepEqual(lines.map((line) => line.label), [
-    "Sales in file, 2025",
-    "Excluded by filters, 2025",
-    "Sales in the bridge, 2025",
-    "Sales in file, 2026",
-    "Excluded by filters, 2026",
-    "Sales in the bridge, 2026",
-  ]);
-  const cents = (value: number) => Math.round(value * 100);
-  assert.deepEqual(lines.map((line) => cents(line.value)), [40040, 25025, 15015, 118032, 99999, 18033]);
-  for (const period of [0, 1]) {
-    // In file minus excluded is in the bridge, to the cent, on the lines themselves.
-    assert.equal(
-      cents(lines[period * 3].value) - cents(lines[period * 3 + 1].value),
-      cents(lines[period * 3 + 2].value),
-    );
-    assert.equal(cents(lines[period * 3 + 2].value), cents(period === 0 ? result.priorSales : result.currentSales));
-  }
+  // In file 400, the two drop rows excluded, the bridge's 150.15 shown as 150.
+  await checkBoth(query, "sales tie-out", "Sales", config, byGroup, {
+    lines: [400, 250, 150, 1180, 1000, 180],
+    inFile: [400, 1180],
+  });
 
   // With no filter there is nothing to exclude, and the file equals the bridge.
   await query(viewSql({ ...setup, filters: [] }));
   const all = await runBridge(query, config);
-  const allMoney = await periodMoney(query, config, { table: "data_all", periodColumn: PERIOD });
-  near(allMoney.prior.inFile, 400.4);
-  near(allMoney.prior.afterFilters, 400.4);
   near(all.priorSales, 400.4);
-  near(allMoney.current.afterFilters, 1180.32);
   near(all.currentSales, 1180.32);
-  const allLines = tieOutLines(config, allMoney, all);
-  assert.deepEqual(allLines.map((line) => cents(line.value)), [40040, 0, 40040, 118032, 0, 118032]);
+  await checkBoth(query, "sales tie-out with no filter", "Sales", config, byGroup, {
+    lines: [400, 0, 400, 1180, 0, 1180],
+    inFile: [400, 1180],
+    noFilter: true,
+  });
 
   // On margin the same identity holds with sales minus cost as the measure.
   await query(viewSql(setup));
   const marginConfig: BridgeConfig = { ...config, costColumn: "cost" };
+  const marginByGroup: BridgeConfig = { ...byGroup, costColumn: "cost" };
   const margin = await runBridge(query, marginConfig);
-  const marginMoney = await periodMoney(query, marginConfig, { table: "data_all", periodColumn: PERIOD });
-  near(marginMoney.prior.inFile, 240.4);
-  near(marginMoney.prior.afterFilters, 90.15);
   near(margin.priorSales, 90.15);
-  near(marginMoney.current.afterFilters, 90.33);
   near(margin.currentSales, 90.33);
-  const marginLines = tieOutLines(marginConfig, marginMoney, margin);
-  assert.deepEqual(marginLines.map((line) => line.label).slice(0, 3), [
-    "Margin in file, 2025",
-    "Excluded by filters, 2025",
-    "Margin in the bridge, 2025",
-  ]);
-  assert.deepEqual(marginLines.map((line) => cents(line.value)), [24040, 15025, 9015, 69032, 59999, 9033]);
+  await checkBoth(query, "margin tie-out", "Margin", marginConfig, marginByGroup, {
+    lines: [240, 150, 90, 690, 600, 90],
+    inFile: [240, 690],
+  });
 });
 
-test("money tie-out is stable for fractional cents across grouping orders", async () => {
+test("money tie-out in whole dollars does not move with the bridge's grouping", async () => {
   const query = await openDatabase();
-  await query(`CREATE TABLE data (
-    year INTEGER, product VARCHAR, grp VARCHAR, customer VARCHAR, units INTEGER, sales DOUBLE
-  )`);
-  await query(`INSERT INTO data VALUES
-    (2025, 'A', 'X', 'drop', 1, 0.001),
-    (2025, 'B', 'X', 'drop', 1, 0.003),
-    (2025, 'B', 'Y', 'drop', 1, 0.051),
-    (2025, 'A', 'X', 'keep', 1, 10.001),
-    (2025, 'A', 'Y', 'keep', 1, 10.023),
-    (2025, 'B', 'X', 'keep', 1, 10.051),
-    (2026, 'A', 'X', 'keep', 1, 0.001),
-    (2026, 'B', 'X', 'keep', 1, 0.003),
-    (2026, 'B', 'Y', 'keep', 1, 0.051)
-  `);
   const setup: Setup = {
     periodColumn: "year",
     grain: "value",
@@ -740,55 +773,270 @@ test("money tie-out is stable for fractional cents across grouping orders", asyn
     levels: [{ name: "Product", columns: ["product"] }],
     filters: [{ column: "customer", mode: "include", values: ["keep"] }],
   };
-  await query(`DROP VIEW IF EXISTS data_all`);
-  await query(viewSql({ ...setup, filters: [] }));
-  await query(`ALTER VIEW ${quote(VIEW)} RENAME TO ${quote("data_all")}`);
-  await query(viewSql(setup));
+  await loadFile(
+    query,
+    "year INTEGER, product VARCHAR, grp VARCHAR, all_group VARCHAR, customer VARCHAR, units INTEGER, sales DOUBLE",
+    `(2025, 'A', 'X', 'all', 'drop', 1, 0.001),
+     (2025, 'B', 'X', 'all', 'drop', 1, 0.003),
+     (2025, 'B', 'Y', 'all', 'drop', 1, 0.051),
+     (2025, 'A', 'X', 'all', 'keep', 1, 10.001),
+     (2025, 'A', 'Y', 'all', 'keep', 1, 10.023),
+     (2025, 'B', 'X', 'all', 'keep', 1, 10.051),
+     (2026, 'A', 'X', 'all', 'keep', 1, 0.001),
+     (2026, 'B', 'X', 'all', 'keep', 1, 0.003),
+     (2026, 'B', 'Y', 'all', 'keep', 1, 0.051)`,
+    setup,
+  );
 
   const base: Omit<BridgeConfig, "levels"> = {
     table: VIEW, periodColumn: PERIOD, prior: "2025", current: "2026",
     unitsColumn: "units", salesColumn: "sales",
   };
   const byProduct: BridgeConfig = { ...base, levels: [{ name: "Product", columns: ["product"] }] };
-  const byGrp: BridgeConfig = { ...base, levels: [{ name: "Grp", columns: ["grp"] }] };
+  const byGroup: BridgeConfig = { ...base, levels: [{ name: "Group", columns: ["all_group"] }] };
 
   const moneyProduct = await periodMoney(query, byProduct, { table: "data_all", periodColumn: PERIOD });
-  const moneyGrp = await periodMoney(query, byGrp, { table: "data_all", periodColumn: PERIOD });
+  const moneyGroup = await periodMoney(query, byGroup, { table: "data_all", periodColumn: PERIOD });
   // The file and filter measurements do not group, so both configs measure the same.
-  assert.deepEqual(moneyProduct, moneyGrp);
+  assert.deepEqual(moneyProduct, moneyGroup);
+  // Prior 30.13 on the file, 30.075 kept: both round to 30. Excluded is 0 because
+  // the three dropped rows net 0.055, which rounds to 0.
+  assert.deepEqual([moneyProduct.prior.inFile, moneyProduct.current.inFile], [30, 0]);
 
   const resultProduct = await runBridge(query, byProduct);
-  const resultGrp = await runBridge(query, byGrp);
+  const resultGroup = await runBridge(query, byGroup);
   // Grouping changes the floating-point accumulation inside the bridge but not the money.
-  // The existing bridge totals stay within a fraction of a cent of each other.
-  assert.ok(Math.abs(resultProduct.priorSales - resultGrp.priorSales) < 1e-6);
-  assert.ok(Math.abs(resultProduct.currentSales - resultGrp.currentSales) < 1e-6);
+  assert.ok(Math.abs(resultProduct.priorSales - resultGroup.priorSales) < 1e-6);
+  assert.ok(Math.abs(resultProduct.currentSales - resultGroup.currentSales) < 1e-6);
+  assert.deepEqual(
+    tieOutLines(byProduct, moneyProduct, resultProduct),
+    tieOutLines(byGroup, moneyProduct, resultGroup),
+  );
 
-  const linesProduct = tieOutLines(byProduct, moneyProduct, resultProduct);
-  const linesGrp = tieOutLines(byGrp, moneyGrp, resultGrp);
-  // Stable cent rounding makes the shown lines identical across grouping orders.
-  assert.deepEqual(linesProduct, linesGrp);
+  await checkBoth(query, "fractional-cent tie-out", "Sales", byProduct, byGroup, {
+    lines: [30, 0, 30, 0, 0, 0],
+    inFile: [30, 0],
+  });
+});
 
-  const toCents = (value: number) => Math.round(value * 100);
-  const stableCents = (value: number) => Math.round((value + 1e-6) * 100);
-  for (const lines of [linesProduct, linesGrp]) {
-    for (const period of [0, 1]) {
-      assert.equal(
-        toCents(lines[period * 3].value) - toCents(lines[period * 3 + 1].value),
-        toCents(lines[period * 3 + 2].value),
-      );
-    }
-    // No gap is absorbed into Excluded: the bridge line equals the measured
-    // filtered total, and Excluded is the measured file minus that filtered total.
-    assert.equal(toCents(lines[2].value), stableCents(moneyProduct.prior.afterFilters));
-    assert.equal(toCents(lines[5].value), stableCents(moneyProduct.current.afterFilters));
-    assert.equal(toCents(lines[1].value), toCents(lines[0].value) - stableCents(moneyProduct.prior.afterFilters));
-    assert.equal(toCents(lines[4].value), toCents(lines[3].value) - stableCents(moneyProduct.current.afterFilters));
+test("money tie-out stays exact on a large file of fractional rows", async () => {
+  const setup: Setup = {
+    periodColumn: "year",
+    grain: "value",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+    filters: [],
+  };
+  for (const [rows, prior] of [[50_005, 50_055], [100_005, 100_105]] as const) {
+    const query = await openDatabase();
+    await query(`CREATE TABLE data AS
+      SELECT 2025 AS year, (i % 2)::VARCHAR AS product, 'all' AS all_group, 1 AS units, 1.001::DOUBLE AS sales
+      FROM range(${rows}) t(i)
+      UNION ALL
+      SELECT 2026, '0', 'all', 1, 1`);
+    await fileViews(query, setup);
+
+    const base: Omit<BridgeConfig, "levels"> = {
+      table: VIEW, periodColumn: PERIOD, prior: 2025, current: 2026,
+      unitsColumn: "units", salesColumn: "sales",
+    };
+    const byProduct: BridgeConfig = { ...base, levels: [{ name: "Product", columns: ["product"] }] };
+    const byGroup: BridgeConfig = { ...base, levels: [{ name: "Group", columns: ["all_group"] }] };
+
+    // Each row holds 1.001, so the exact file total is the row count times 1.001.
+    await checkBoth(query, `${rows} rows of 1.001`, "Sales", byProduct, byGroup, {
+      lines: [prior, 0, prior, 1, 0, 1],
+      inFile: [prior, 1],
+      noFilter: true,
+    });
   }
-  // The fractional-cent prior ties out instead of showing a one-cent gap.
-  // In file 0.001 + 0.003 + 0.051 + 10.001 + 10.023 + 10.051, excluded drops the fractional trio.
-  // The current period is the reviewer's minimal fractional file, with no filter on it.
-  assert.deepEqual(linesProduct.map((line) => toCents(line.value)), [3013, 5, 3008, 6, 0, 6]);
+});
+
+test("money tie-out rounds half a dollar away from zero, on both sides of the measure", async () => {
+  const columns = "year INTEGER, product VARCHAR, all_group VARCHAR, units INTEGER, sales DOUBLE, cost DOUBLE";
+  const setup: Setup = {
+    periodColumn: "year",
+    grain: "value",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+    filters: [],
+  };
+  const base: Omit<BridgeConfig, "levels"> = {
+    table: VIEW, periodColumn: PERIOD, prior: 2025, current: 2026,
+    unitsColumn: "units", salesColumn: "sales",
+  };
+  const byProduct: BridgeConfig = { ...base, levels: [{ name: "Product", columns: ["product"] }] };
+  const byGroup: BridgeConfig = { ...base, levels: [{ name: "Group", columns: ["all_group"] }] };
+  const marginByProduct: BridgeConfig = { ...byProduct, costColumn: "cost" };
+  const marginByGroup: BridgeConfig = { ...byGroup, costColumn: "cost" };
+
+  const query = await openDatabase();
+  // Sales of 100.5 is half a dollar up; one prior row is enough to show it on every line.
+  await loadFile(query, columns, `(2025, 'A', 'all', 1, 100.5, NULL), (2026, 'A', 'all', 1, 1, NULL)`, setup);
+  await checkBoth(query, "half a dollar of sales", "Sales", byProduct, byGroup, {
+    lines: [101, 0, 101, 1, 0, 1],
+    inFile: [101, 1],
+    noFilter: true,
+  });
+
+  // Margin of -100.5 is half a dollar down, and rounds away from zero as well.
+  await loadFile(query, columns, `(2025, 'A', 'all', 1, 0, 100.5), (2026, 'A', 'all', 1, 1, 0)`, setup);
+  await checkBoth(query, "half a dollar of margin", "Margin", marginByProduct, marginByGroup, {
+    lines: [-101, 0, -101, 1, 0, 1],
+    inFile: [-101, 1],
+    noFilter: true,
+  });
+
+  await loadFile(query, columns, `(2025, 'A', 'all', 1, 0, 2.5), (2026, 'A', 'all', 1, 1, 0)`, setup);
+  await checkBoth(query, "two and a half dollars of cost", "Margin", marginByProduct, marginByGroup, {
+    lines: [-3, 0, -3, 1, 0, 1],
+    inFile: [-3, 1],
+    noFilter: true,
+  });
+
+  // 0.4 rounds to zero and keeps the sign, so the file and bridge lines show -0
+  // exactly as the Results KPI does, while the integer difference stays 0.
+  await loadFile(query, columns, `(2025, 'A', 'all', 1, 0, 0.4), (2026, 'A', 'all', 1, 1, 0)`, setup);
+  const justUnder: TieOutExpectation = { lines: [-0, 0, -0, 1, 0, 1], inFile: [0, 1], noFilter: true };
+  const justUnderProduct = await checkGrouping(query, "just under half a dollar of cost by product", "Margin", marginByProduct, justUnder);
+  const justUnderGroup = await checkGrouping(query, "just under half a dollar of cost by group", "Margin", marginByGroup, justUnder);
+  for (const lines of [justUnderProduct, justUnderGroup]) {
+    assert.equal(whole(lines[0].value), "-0");
+    assert.equal(whole(lines[1].value), "0");
+    assert.equal(whole(lines[2].value), "-0");
+  }
+
+  // The reviewer's cost trio: 10.001 + 10.023 + 10.051 is 30.075, so the margin is -30.
+  await loadFile(
+    query,
+    columns,
+    `(2025, 'A', 'all', 1, 0, 10.001),
+     (2025, 'B', 'all', 1, 0, 10.023),
+     (2025, 'A', 'all', 1, 0, 10.051),
+     (2026, 'A', 'all', 1, 1, 0)`,
+    setup,
+  );
+  await checkBoth(query, "the cost trio", "Margin", marginByProduct, marginByGroup, {
+    lines: [-30, 0, -30, 1, 0, 1],
+    inFile: [-30, 1],
+    noFilter: true,
+  });
+});
+
+test("money tie-out counts money with more than three decimals exactly", async () => {
+  const query = await openDatabase();
+  const setup: Setup = {
+    periodColumn: "year",
+    grain: "value",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+    filters: [{ column: "customer", mode: "include", values: ["keep"] }],
+  };
+  await loadFile(
+    query,
+    "year INTEGER, product VARCHAR, all_group VARCHAR, customer VARCHAR, units INTEGER, sales DOUBLE",
+    `(2025, 'A', 'all', 'keep', 1, 0.12345),
+     (2025, 'A', 'all', 'keep', 1, 1.98765),
+     (2025, 'B', 'all', 'drop', 1, 0.4),
+     (2025, 'B', 'all', 'drop', 1, 0.4004),
+     (2026, 'A', 'all', 'keep', 1, 1)`,
+    setup,
+  );
+  const base: Omit<BridgeConfig, "levels"> = {
+    table: VIEW, periodColumn: PERIOD, prior: 2025, current: 2026,
+    unitsColumn: "units", salesColumn: "sales",
+  };
+  const byProduct: BridgeConfig = { ...base, levels: [{ name: "Product", columns: ["product"] }] };
+  const byGroup: BridgeConfig = { ...base, levels: [{ name: "Group", columns: ["all_group"] }] };
+
+  // The file holds 2.9115, the kept rows 2.1111: 3 and 2, so the excluded line is 1.
+  await checkBoth(query, "four-decimal money", "Sales", byProduct, byGroup, {
+    lines: [3, 1, 2, 1, 0, 1],
+    inFile: [3, 1],
+  });
+});
+
+test("money tie-out's excluded line is the difference of the two displayed totals", async () => {
+  const query = await openDatabase();
+  const setup: Setup = {
+    periodColumn: "year",
+    grain: "value",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+    filters: [{ column: "customer", mode: "include", values: ["keep"] }],
+  };
+  await loadFile(
+    query,
+    "year INTEGER, product VARCHAR, all_group VARCHAR, customer VARCHAR, units INTEGER, sales DOUBLE",
+    `(2025, 'A', 'all', 'keep', 1, 0.4),
+     (2025, 'B', 'all', 'drop', 1, 0.4),
+     (2026, 'A', 'all', 'keep', 1, 1)`,
+    setup,
+  );
+  const base: Omit<BridgeConfig, "levels"> = {
+    table: VIEW, periodColumn: PERIOD, prior: 2025, current: 2026,
+    unitsColumn: "units", salesColumn: "sales",
+  };
+  const byProduct: BridgeConfig = { ...base, levels: [{ name: "Product", columns: ["product"] }] };
+  const byGroup: BridgeConfig = { ...base, levels: [{ name: "Group", columns: ["all_group"] }] };
+
+  // The file holds 0.8 and the kept rows 0.4: 1 and 0. The excluded line is the
+  // difference of those two totals, so it shows 1 even though the excluded row
+  // itself rounds to 0.
+  await checkBoth(query, "excluded money rounding to zero", "Sales", byProduct, byGroup, {
+    lines: [1, 1, 0, 1, 0, 1],
+    inFile: [1, 1],
+  });
+});
+
+test("money tie-out: the allowed one-dollar boundary when the bridge itself rounds the other way", async () => {
+  const query = await openDatabase();
+  const setup: Setup = {
+    periodColumn: "year",
+    grain: "value",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+    filters: [],
+  };
+  // 55 rows of 0.1 hold exactly 5.5 dollars, which rounds to 6. Grouped by product
+  // the bridge's DOUBLE total lands just above 5.5 and shows 6; in one group it
+  // lands just below and shows 5. Nothing is excluded, so the file line follows the
+  // bridge line. That is the one case where the file line may sit one dollar from
+  // the exact file total, and it is allowed.
+  await query(`CREATE TABLE data AS
+    SELECT 2025 AS year, (i % 2)::VARCHAR AS product, 'all' AS all_group, 1 AS units, 0.1::DOUBLE AS sales
+    FROM range(55) t(i)
+    UNION ALL
+    SELECT 2026, '0', 'all', 1, 1`);
+  await fileViews(query, setup);
+
+  const base: Omit<BridgeConfig, "levels"> = {
+    table: VIEW, periodColumn: PERIOD, prior: 2025, current: 2026,
+    unitsColumn: "units", salesColumn: "sales",
+  };
+  const byProduct: BridgeConfig = { ...base, levels: [{ name: "Product", columns: ["product"] }] };
+  const byGroup: BridgeConfig = { ...base, levels: [{ name: "Group", columns: ["all_group"] }] };
+
+  const twoProducts = await checkGrouping(query, "two products", "Sales", byProduct, {
+    lines: [6, 0, 6, 1, 0, 1],
+    inFile: [6, 1],
+    noFilter: true,
+  });
+  const oneGroup = await checkGrouping(query, "one group", "Sales", byGroup, {
+    lines: [5, 0, 5, 1, 0, 1],
+    inFile: [6, 1],
+    noFilter: true,
+  });
+
+  for (const lines of [twoProducts, oneGroup]) assert.equal(lines[0].value, lines[2].value);
+  const money = await periodMoney(query, byGroup, { table: "data_all", periodColumn: PERIOD });
+  assert.equal(money.prior.inFile, 6);
+  assert.equal(oneGroup[0].value - money.prior.inFile, -1);
 });
 
 function ident(name: string): string {

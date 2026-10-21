@@ -551,9 +551,9 @@ export async function dataCheck(query: Query, config: BridgeConfig): Promise<Dat
 
 export interface PeriodMoney {
   period: string;
-  /** Money on every row of the file for this period, before the setup's filters. */
+  /** Every row of the file for this period, before the filters: the exact total, rounded once to whole dollars. */
   inFile: number;
-  /** Money on the rows the filters keep for this period. The bridge's total for the period equals this. */
+  /** The rows the filters keep, the same exact rule. */
   afterFilters: number;
 }
 
@@ -563,26 +563,57 @@ export interface TieOut {
   current: PeriodMoney;
 }
 
+/** A money column in billionths of a dollar, read from the DOUBLE the file produced. Amounts below 2^21 dollars are exact to the billionth. Larger amounts round at the billionth of the value, which puts the row under a millionth of a dollar out below a billion dollars. A blank is NULL and adds nothing. A non-finite or absurd value is NULL, so it can never throw. */
+function nanosSql(column: string): string {
+  const value = `CAST(${ident(column)} AS DOUBLE)`;
+  return `(CASE WHEN isfinite(${value}) AND abs(${value}) < 1e19 THEN CAST(ROUND(${value} * 1000000000) AS HUGEINT) END)`;
+}
+
+/** The bridge's measure per row in billionths: sales minus cost on margin, subtracted before any sum, blanks as zero, exactly as measureSql reads it. */
+function exactMeasureSql(config: BridgeConfig): string {
+  const sales = nanosSql(config.salesColumn);
+  if (!config.costColumn) return sales;
+  return `(coalesce(${sales}, 0) - coalesce(${nanosSql(config.costColumn)}, 0))`;
+}
+
+/** A total in billionths as whole dollars, rounding half away from zero with integer arithmetic, symmetric for negatives. */
+const dollarsSql = (n: string) =>
+  `(CASE WHEN ${n} >= 0 THEN (${n} + 500000000) // 1000000000 ELSE -((500000000 - (${n})) // 1000000000) END)`;
+
 /**
- * Money per period on both sides of the setup's filters. The file relation is
- * the same rows as the bridge's table before filtering, with the same period
- * column, so in-file minus after-filters is what the filters removed.
+ * Money per period on both sides of the setup's filters, in whole dollars. The
+ * file relation is the same rows as the bridge's table before filtering, with
+ * the same period column, so in-file minus after-filters is what the filters
+ * removed. Each total is summed as exact integer billionths and rounded once,
+ * so it cannot drift with the number of rows or with how the bridge groups them.
  */
 export async function periodMoney(
   query: Query,
   config: BridgeConfig,
   file: { table: string; periodColumn: string },
 ): Promise<TieOut> {
-  const measure = measureSql(config);
+  const measure = exactMeasureSql(config);
+  const bad = config.costColumn
+    ? `(${ident(config.salesColumn)} IS NOT NULL AND ${nanosSql(config.salesColumn)} IS NULL OR ${ident(config.costColumn)} IS NOT NULL AND ${nanosSql(config.costColumn)} IS NULL)`
+    : `(${ident(config.salesColumn)} IS NOT NULL AND ${nanosSql(config.salesColumn)} IS NULL)`;
   const totals = async (table: string, periodColumn: string) => {
     const period = ident(periodColumn);
     const [row] = await query(
-      `SELECT
-         coalesce(sum(${measure}) FILTER (WHERE ${period} = ${literal(config.prior)}), 0)::DOUBLE AS "prior",
-         coalesce(sum(${measure}) FILTER (WHERE ${period} = ${literal(config.current)}), 0)::DOUBLE AS "current"
-       FROM ${ident(table)}`,
+      `WITH summed AS (
+         SELECT coalesce(sum(${measure}) FILTER (WHERE ${period} = ${literal(config.prior)}), 0) AS "prior",
+                coalesce(sum(${measure}) FILTER (WHERE ${period} = ${literal(config.current)}), 0) AS "current",
+                count(*) FILTER (WHERE ${period} = ${literal(config.prior)} AND ${bad}) AS "priorBad",
+                count(*) FILTER (WHERE ${period} = ${literal(config.current)} AND ${bad}) AS "currentBad"
+         FROM ${ident(table)}
+       )
+       SELECT ${dollarsSql(`"prior"`)}::DOUBLE AS "prior", ${dollarsSql(`"current"`)}::DOUBLE AS "current",
+              "priorBad"::DOUBLE AS "priorBad", "currentBad"::DOUBLE AS "currentBad"
+       FROM summed`,
     );
-    return { prior: Number(row.prior), current: Number(row.current) };
+    return {
+      prior: Number(row.priorBad) > 0 ? NaN : Number(row.prior),
+      current: Number(row.currentBad) > 0 ? NaN : Number(row.current),
+    };
   };
   const inFile = await totals(file.table, file.periodColumn);
   const afterFilters = await totals(config.table, config.periodColumn);
@@ -594,27 +625,32 @@ export async function periodMoney(
 
 export interface TieOutLine {
   label: string;
+  /** Whole dollars. In file - Excluded = In the bridge, exactly. */
   value: number;
 }
 
-/** Money rounded to whole cents with a tiny upward tolerance, so totals that differ only by floating-point accumulation across grouping orders round the same way. The tolerance sits far below half a cent, so it cannot flip a true cent boundary for money with up to three decimal places. */
-const cents = (value: number) => Math.round((value + 1e-6) * 100) / 100;
+/** The integer `whole()` in src/app/format.ts shows for a value: rounded half away from zero, keeping -0 and NaN. */
+export function wholeDollars(value: number): number {
+  return Math.sign(value) * Math.round(Math.abs(value));
+}
 
 /**
  * The money tie-out, three lines per period: what the file holds, what the
  * filters removed, and what the bridge shows. The file and filter figures are
- * measured on their own relations; the bridge figure is the bridge's own total,
- * so a difference between them stays visible instead of being folded in.
+ * measured exactly on their own relations; the bridge figure is the bridge's
+ * own total. The file line is derived from the other two so the three always
+ * foot, and with no filter it shows the same digits as the bridge.
  */
 export function tieOutLines(config: BridgeConfig, tieOut: TieOut, result: BridgeResult): TieOutLine[] {
   const measure = measureName(config);
-  const lines = (money: PeriodMoney, inBridge: number): TieOutLine[] => {
-    const inFile = cents(money.inFile);
-    const afterFilters = cents(money.afterFilters);
+  const lines = (money: PeriodMoney, bridgeTotal: number): TieOutLine[] => {
+    const inBridge = wholeDollars(bridgeTotal);
+    const excluded = money.inFile - money.afterFilters;
     return [
-      { label: `${measure} in file, ${money.period}`, value: inFile },
-      { label: `Excluded by filters, ${money.period}`, value: cents(inFile - afterFilters) },
-      { label: `${measure} in the bridge, ${money.period}`, value: cents(inBridge) },
+      // Adding zero to -0 would show 0 where the Results KPI shows -0.
+      { label: `${measure} in file, ${money.period}`, value: excluded === 0 ? inBridge : inBridge + excluded },
+      { label: `Excluded by filters, ${money.period}`, value: excluded },
+      { label: `${measure} in the bridge, ${money.period}`, value: inBridge },
     ];
   };
   return [...lines(tieOut.prior, result.priorSales), ...lines(tieOut.current, result.currentSales)];
