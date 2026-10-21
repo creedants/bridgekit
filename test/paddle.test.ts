@@ -151,9 +151,13 @@ test("createCheckout throws when Paddle errors or omits the URL", async () => {
 
 test("createPortalSession posts to the customer portal endpoint and returns the URL", async () => {
   const calls: { url: string; init: RequestInit }[] = [];
+  // The documented shape: data.urls.general.overview.
   const fakeFetch = (async (url: string, init: RequestInit) => {
     calls.push({ url, init });
-    return Response.json({ data: { id: "pstl_1", url: "https://paddle.com/portal/abc" } }, { status: 201 });
+    return Response.json(
+      { data: { id: "pstl_1", urls: { general: { overview: "https://paddle.com/portal/abc" } } } },
+      { status: 201 },
+    );
   }) as unknown as typeof fetch;
   const result = await createPortalSession({ apiKey: "k", environment: "sandbox", customerId: "ctm_1", fetch: fakeFetch });
   assert.deepEqual(result, { portalUrl: "https://paddle.com/portal/abc" });
@@ -172,4 +176,6 @@ test("createPortalSession throws when Paddle errors or omits the URL", async () 
   await assert.rejects(createPortalSession({ ...base, fetch: failing }), /Paddle returned 500/);
   const noUrl = (async () => Response.json({ data: { id: "pstl_1" } })) as unknown as typeof fetch;
   await assert.rejects(createPortalSession({ ...base, fetch: noUrl }), /did not return a portal URL/);
+  const flat = (async () => Response.json({ data: { id: "pstl_1", url: "https://paddle.com/portal/flat" } })) as unknown as typeof fetch;
+  assert.deepEqual(await createPortalSession({ ...base, fetch: flat }), { portalUrl: "https://paddle.com/portal/flat" });
 });

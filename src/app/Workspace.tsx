@@ -27,7 +27,6 @@ export default function WorkspacePanel(props: {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [subscribed, setSubscribed] = useState(false);
 
   async function act(work: () => Promise<unknown>, done = "") {
     setBusy(true);
@@ -46,8 +45,17 @@ export default function WorkspacePanel(props: {
   async function loadWorkspaces(prefer?: string) {
     const list = await api.listWorkspaces();
     setWorkspaces(list);
-    setActive((current) => prefer ?? (list.some((w) => w.id === current) ? current : (list[0]?.id ?? "")));
+    setActive((current) => api.preferredWorkspace(list, prefer, current));
   }
+
+  // The checkout return lives in its own state, so a generic action message
+  // never writes over the confirmation.
+  const checkoutReturn = api.useCheckoutReturn({
+    active,
+    activePlan: plan?.plan ?? null,
+    enabled: user !== null && user !== undefined && active !== "",
+    onPro: (found) => setPlan(found),
+  });
 
   useEffect(() => {
     act(async () => {
@@ -63,14 +71,11 @@ export default function WorkspacePanel(props: {
         await api.acceptInvitation(invitation);
         history.replaceState(null, "", location.pathname);
       }
-      await loadWorkspaces();
-      if (invitation) setMessage("You have joined the workspace.");
       // Paddle's checkout returns to /app/?subscribed=1; its confirmation reaches the server separately.
-      if (new URLSearchParams(location.search).has("subscribed")) {
-        history.replaceState(null, "", location.pathname);
-        setSubscribed(true);
-        setMessage("Thank you. Pro switches on as soon as Paddle confirms the payment, usually within a minute.");
-      }
+      const returning = checkoutReturn.returning;
+      await loadWorkspaces(returning ?? undefined);
+      if (new URLSearchParams(location.search).has("subscribed")) history.replaceState(null, "", location.pathname);
+      if (invitation) setMessage("You have joined the workspace.");
     });
   }, []);
 
@@ -80,31 +85,17 @@ export default function WorkspacePanel(props: {
     act(async () => {
       const [found, saved] = await Promise.all([api.getPlan(active), api.listBridges(active)]);
       setPlan(found);
-      if (subscribed && found.plan.pro) {
-        setSubscribed(false);
-        setMessage("Thank you. Pro is on.");
-      }
       setBridges(saved);
       setSetups(props.columns.length ? await api.listSetups(active, props.columns) : []);
     });
   }, [active, columnsKey]);
-
-  useEffect(() => {
-    if (!subscribed || !active) return;
-    return api.pollForPro(active, (found) => {
-      setPlan(found);
-      setSubscribed(false);
-      setMessage("Thank you. Pro is on.");
-    });
-  }, [subscribed, active]);
 
   if (config === null) return loadingShell(error);
   if (!accountsOpen(config)) return closedShell();
   if (user === undefined) return loadingShell(error);
   if (user === null) return <SignIn config={config} busy={busy} error={error} message={message} act={act} />;
 
-  const pro = plan?.plan.pro ?? false;
-  const canManage = plan?.role === "owner" || plan?.role === "admin";
+  const billing = api.billingView(plan?.plan ?? null, plan?.role ?? null, config.billing);
   return (
     <fieldset className="team">
       <legend>Workspace</legend>
@@ -123,28 +114,16 @@ export default function WorkspacePanel(props: {
             </select>
           )}
           {workspaces.length === 1 && <p><b>{workspaces[0].name}</b></p>}
-          {plan && (() => {
-            const manage = api.hasManageBilling(plan.plan.status, plan.plan.pro);
-            if (pro) {
-              return (
-                <>
-                  <p className="hint">Pro, {plan.plan.seats} {plan.plan.seats === 1 ? "seat" : "seats"}{plan.plan.status === "canceled" && plan.plan.currentPeriodEnd ? `, ends ${plan.plan.currentPeriodEnd.slice(0, 10)}` : ""}.</p>
-                  {manage && canManage && <ManageBilling busy={busy} onManage={() => act(async () => { location.href = (await api.openPortal(active)).portalUrl; })} />}
-                </>
-              );
-            }
-            if (manage) {
-              return (
-                <>
-                  {plan.plan.status === "paused" && <p className="hint">Your subscription is paused. Manage billing to resume it.</p>}
-                  {canManage && <ManageBilling busy={busy} onManage={() => act(async () => { location.href = (await api.openPortal(active)).portalUrl; })} />}
-                </>
-              );
-            }
-            return (
-              <Subscribe canManage={canManage} billing={config?.billing ?? false} busy={busy} onSubscribe={(seats) => act(async () => { location.href = (await api.checkout(active, seats)).checkoutUrl; })} />
-            );
-          })()}
+          {plan && (
+            <>
+              {billing.pro && <p className="hint">{billing.pro}</p>}
+              {billing.paused && <p className="hint">{billing.paused}</p>}
+              {billing.manage && <ManageBilling busy={busy} onManage={() => act(async () => { location.href = (await api.openPortal(active)).portalUrl; })} />}
+              {billing.subscribe && (
+                <Subscribe canManage={billing.canManage} billing={config?.billing ?? false} busy={busy} onSubscribe={(seats) => act(async () => { api.rememberCheckoutWorkspace(active); location.href = (await api.checkout(active, seats)).checkoutUrl; })} />
+              )}
+            </>
+          )}
 
           {props.columns.length > 0 && (
             <>
@@ -163,7 +142,7 @@ export default function WorkspacePanel(props: {
                 <SaveForm
                   label="Save setup"
                   initial="Setup"
-                  disabled={!pro || busy}
+                  disabled={!plan?.plan.pro || busy}
                   onSave={(name) =>
                     act(async () => {
                       await api.saveSetup(active, name, props.columns, { ...props.setup!, filters: [] });
@@ -190,7 +169,7 @@ export default function WorkspacePanel(props: {
             <SaveForm
               label="Save this bridge"
               initial={`${props.bridge.summary.prior} to ${props.bridge.summary.current}`}
-              disabled={!pro || busy}
+              disabled={!plan?.plan.pro || busy}
               onSave={(name) =>
                 act(async () => {
                   const { summary, setup } = props.bridge!;
@@ -208,10 +187,11 @@ export default function WorkspacePanel(props: {
           )}
           {props.bridge && <p className="hint">Saves the totals and the setup. Not the file, rows or filter selections.</p>}
 
-          <Members workspace={active} canManage={canManage} seats={plan?.plan.seats ?? 1} act={act} />
+          <Members workspace={active} canManage={billing.canManage} seats={plan?.plan.seats ?? 1} act={act} />
         </>
       )}
 
+      {checkoutReturn.sentence && <p className="hint" role="status">{checkoutReturn.sentence}</p>}
       {message && <p className="hint" role="status">{message}</p>}
       {error && <p className="error">{error}</p>}
 
