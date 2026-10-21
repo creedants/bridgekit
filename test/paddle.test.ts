@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { test } from "node:test";
-import { createCheckout, hasPro, parseSubscriptionEvent, verifyPaddleSignature } from "../server/paddle.ts";
+import { createCheckout, createPortalSession, hasPro, parseSubscriptionEvent, verifyPaddleSignature } from "../server/paddle.ts";
 
 const SECRET = "pdl_ntfset_01gkpjp8bkh3jp2ppmhrmtx3pw_test";
 const TS = 1_671_552_777;
@@ -147,4 +147,29 @@ test("createCheckout throws when Paddle errors or omits the URL", async () => {
   const noUrl = (async () => Response.json({ data: { id: "txn_1", checkout: null } })) as unknown as typeof fetch;
   await assert.rejects(createCheckout({ ...base, fetch: noUrl }), /did not return a checkout URL/);
   await assert.rejects(createCheckout({ ...base, seats: 0, fetch: noUrl }), /at least 1/);
+});
+
+test("createPortalSession posts to the customer portal endpoint and returns the URL", async () => {
+  const calls: { url: string; init: RequestInit }[] = [];
+  const fakeFetch = (async (url: string, init: RequestInit) => {
+    calls.push({ url, init });
+    return Response.json({ data: { id: "pstl_1", url: "https://paddle.com/portal/abc" } }, { status: 201 });
+  }) as unknown as typeof fetch;
+  const result = await createPortalSession({ apiKey: "k", environment: "sandbox", customerId: "ctm_1", fetch: fakeFetch });
+  assert.deepEqual(result, { portalUrl: "https://paddle.com/portal/abc" });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://sandbox-api.paddle.com/customers/ctm_1/portal-sessions");
+  assert.deepEqual(calls[0].init.headers, {
+    authorization: "Bearer k",
+    "content-type": "application/json",
+    "paddle-version": "1",
+  });
+});
+
+test("createPortalSession throws when Paddle errors or omits the URL", async () => {
+  const base = { apiKey: "k", environment: "live" as const, customerId: "ctm_1" };
+  const failing = (async () => new Response("{}", { status: 500 })) as unknown as typeof fetch;
+  await assert.rejects(createPortalSession({ ...base, fetch: failing }), /Paddle returned 500/);
+  const noUrl = (async () => Response.json({ data: { id: "pstl_1" } })) as unknown as typeof fetch;
+  await assert.rejects(createPortalSession({ ...base, fetch: noUrl }), /did not return a portal URL/);
 });

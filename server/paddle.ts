@@ -192,6 +192,47 @@ export interface CheckoutOptions {
  * Paddle.js off the main app, point the default payment link at a separate
  * page, for example a small pay page on its own path or subdomain.
  */
+export interface PortalSessionOptions {
+  apiKey: string;
+  environment: PaddleEnvironment;
+  customerId: string;
+  /** For tests. */
+  fetch?: typeof fetch;
+}
+
+/**
+ * Opens Paddle's customer portal for one customer and returns the URL to
+ * send them to. The browser only ever opens the returned URL; the session
+ * itself is created here, with the existing Paddle key and environment.
+ */
+export async function createPortalSession(options: PortalSessionOptions): Promise<{ portalUrl: string }> {
+  if (!options.customerId) throw new Error("A customer id is needed for a portal session.");
+  const doFetch = options.fetch ?? fetch;
+  const response = await doFetch(
+    `${PADDLE_API[options.environment]}/customers/${encodeURIComponent(options.customerId)}/portal-sessions`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${options.apiKey}`,
+        "content-type": "application/json",
+        "paddle-version": "1",
+      },
+      body: JSON.stringify({}),
+    },
+  );
+  if (!response.ok) throw new Error(`Paddle returned ${response.status} when creating a portal session.`);
+  const json: unknown = await response.json();
+  const data = isRecord(json) && isRecord(json.data) ? json.data : undefined;
+  const direct = data && typeof data.url === "string" ? data.url : undefined;
+  const nested =
+    data && isRecord(data.urls) && isRecord(data.urls.general) && typeof data.urls.general.overview === "string"
+      ? (data.urls.general.overview as string)
+      : undefined;
+  const portalUrl = direct ?? nested;
+  if (!portalUrl) throw new Error("Paddle did not return a portal URL.");
+  return { portalUrl };
+}
+
 export async function createCheckout(options: CheckoutOptions): Promise<{ transactionId: string; checkoutUrl: string }> {
   if (!Number.isInteger(options.seats) || options.seats < 1) throw new Error("Seats must be a whole number of at least 1.");
   const body: Record<string, unknown> = {
