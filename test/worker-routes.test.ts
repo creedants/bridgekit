@@ -535,11 +535,11 @@ function listedSetups(body: unknown): { id: string; name: string }[] {
   });
 }
 
-async function plantSetups(db: Env["DB"], workspaceId: string, count: number): Promise<string[]> {
+async function plantSetups(db: Env["DB"], workspaceId: string, count: number, start = 0): Promise<string[]> {
   const owner = await db.prepare("SELECT id FROM user WHERE email = ?").bind(OWNER).first<{ id: string }>();
   assert.ok(owner);
   const ids: string[] = [];
-  for (let index = 0; index < count; index++) {
+  for (let index = start; index < start + count; index++) {
     const id = `planted-${workspaceId}-${index}`;
     const createdAt = new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString();
     await db
@@ -768,19 +768,24 @@ test("a workspace with 49 saved setups accepts one more and refuses the next", a
   assert.ok(after.some((row) => row.id === thirdId));
 });
 
-test("saved setups already past 50 stay listed and a further save is refused", async () => {
+test("a save into 50 stored setups is refused, and rows already past 50 stay listed", async () => {
   const { db, cookie, workspaceId } = await session();
   const env = mailEnv(db, {});
-  const planted = await plantSetups(db, workspaceId, 51);
+  const planted = await plantSetups(db, workspaceId, 50);
+  const atCap = await postSetup(env, workspaceId, cookie, "At the cap");
+  assert.equal(atCap.status, 409);
+  assert.deepEqual(await atCap.json(), SETUP_FULL);
+  const extra = await plantSetups(db, workspaceId, 1, 50);
+  const stored = [...planted, ...extra];
   const before = await readSetups(env, workspaceId, cookie);
   assert.equal(before.length, 51);
-  assert.deepEqual(before.map((row) => row.id).toSorted(), planted.toSorted());
+  assert.deepEqual(before.map((row) => row.id).toSorted(), stored.toSorted());
   const refused = await postSetup(env, workspaceId, cookie, "One more");
   assert.equal(refused.status, 409);
   assert.deepEqual(await refused.json(), SETUP_FULL);
   const after = await readSetups(env, workspaceId, cookie);
   assert.equal(after.length, 51);
-  assert.deepEqual(after.map((row) => row.id).toSorted(), planted.toSorted());
+  assert.deepEqual(after.map((row) => row.id).toSorted(), stored.toSorted());
 });
 
 test("deleting one of 51 saved setups still leaves the next save refused", async () => {
@@ -797,14 +802,19 @@ test("deleting one of 51 saved setups still leaves the next save refused", async
   assert.deepEqual(rows.map((row) => row.id).toSorted(), planted.slice(1).toSorted());
 });
 
-test("fifty saved setups in a second workspace do not block a save in the first", async () => {
+test("fifty saved setups block only the workspace that holds them", async () => {
   const { db, cookie, workspaceId } = await session();
   const env = mailEnv(db, {});
   const second = await secondWorkspace(db);
   const planted = await plantSetups(db, second, 50);
   const saved = await postSetup(env, workspaceId, cookie, "In the first");
   assert.equal(saved.status, 201);
-  savedId(await saved.json());
+  const savedRow = savedId(await saved.json());
+  const open = await readSetups(env, workspaceId, cookie);
+  assert.deepEqual(open.map((row) => row.id), [savedRow]);
+  const refused = await postSetup(env, second, cookie, "In the second");
+  assert.equal(refused.status, 409);
+  assert.deepEqual(await refused.json(), SETUP_FULL);
   const rows = await readSetups(env, second, cookie);
   assert.equal(rows.length, 50);
   assert.deepEqual(rows.map((row) => row.id).toSorted(), planted.toSorted());
@@ -834,24 +844,37 @@ test("two saves sent together when 49 setups are stored keep one", async () => {
   assert.equal(posted.length, 1);
 });
 
-test("a workspace with 50 saved setups and no subscription still needs Pro", async () => {
-  const { db, cookie, workspaceId } = await session();
-  const env = mailEnv(db, {});
-  await plantSetups(db, workspaceId, 50);
-  const removed = await db.prepare("DELETE FROM subscription WHERE organizationId = ?").bind(workspaceId).run();
-  assert.equal(removed.meta.changes, 1);
-  const refused = await postSetup(env, workspaceId, cookie, "Needs Pro");
-  assert.equal(refused.status, 402);
-  assert.deepEqual(await refused.json(), { error: "Saving to a workspace needs a Pro subscription." });
-});
-
-test("a workspace with 50 saved setups refuses an empty name", async () => {
+test("a full workspace without a subscription answers 402, and 409 once Pro returns", async () => {
   const { db, cookie, workspaceId } = await session();
   const env = mailEnv(db, {});
   const planted = await plantSetups(db, workspaceId, 50);
-  const refused = await postSetup(env, workspaceId, cookie, "");
-  assert.equal(refused.status, 400);
-  assert.deepEqual(await refused.json(), { error: "Give the setup a name of up to 120 characters." });
+  const removed = await db.prepare("DELETE FROM subscription WHERE organizationId = ?").bind(workspaceId).run();
+  assert.equal(removed.meta.changes, 1);
+  const needsPro = await postSetup(env, workspaceId, cookie, "Needs Pro");
+  assert.equal(needsPro.status, 402);
+  assert.deepEqual(await needsPro.json(), { error: "Saving to a workspace needs a Pro subscription." });
+  await db
+    .prepare("INSERT INTO subscription VALUES (?, 'sub_review', 'ctm_review', 'active', 'pri_review', 2, '2099-01-01T00:00:00Z', '2026-10-12T00:00:00Z')")
+    .bind(workspaceId)
+    .run();
+  const refused = await postSetup(env, workspaceId, cookie, "After Pro");
+  assert.equal(refused.status, 409);
+  assert.deepEqual(await refused.json(), SETUP_FULL);
+  const rows = await readSetups(env, workspaceId, cookie);
+  assert.equal(rows.length, 50);
+  assert.deepEqual(rows.map((row) => row.id).toSorted(), planted.toSorted());
+});
+
+test("a full workspace refuses an empty name, then refuses a named save", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, {});
+  const planted = await plantSetups(db, workspaceId, 50);
+  const empty = await postSetup(env, workspaceId, cookie, "");
+  assert.equal(empty.status, 400);
+  assert.deepEqual(await empty.json(), { error: "Give the setup a name of up to 120 characters." });
+  const refused = await postSetup(env, workspaceId, cookie, "Named");
+  assert.equal(refused.status, 409);
+  assert.deepEqual(await refused.json(), SETUP_FULL);
   const rows = await readSetups(env, workspaceId, cookie);
   assert.equal(rows.length, 50);
   assert.deepEqual(rows.map((row) => row.id).toSorted(), planted.toSorted());
