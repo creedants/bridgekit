@@ -81,10 +81,10 @@ The tool sends nothing and keeps none of the data:
 The Cloudflare build adds opt-in features (see Deploying). A visitor who does
 not sign in still gets the whole tool. The build also asks its own server which
 features are on and whether anyone is signed in, when the page loads and again
-after each file; those requests carry nothing from the file. The server counts
-the page load, and the smoke test passes against it unchanged. Pages that
-describe the site mark feature-specific wording with `<!-- feature:NAME -->`,
-so each build states only what is true for it.
+when the first file opens; those requests carry nothing from the file. The
+server counts the page load, and the smoke test passes against it unchanged.
+Pages that describe the site mark feature-specific wording with
+`<!-- feature:NAME -->`, so each build states only what is true for it.
 
 ## Optional AI commentary
 
