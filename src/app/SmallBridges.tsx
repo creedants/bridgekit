@@ -8,16 +8,22 @@ import {
   createAttemptCache,
   createConnectionQueue,
   createSplitRunner,
+  displayedIdentity,
   focusPlace,
-  gridAction,
+  IDLE_SPLIT_PHASE,
+  noteDisplayedRun,
   noticesAreStale,
+  paintSplit,
   panelStatusLabel,
   panelTitle,
+  readLiveGeneration,
+  reduceSplitPhase,
   sharedScale,
-  SPLIT_FAILURE_SENTENCE,
   statementStartsTurn,
   steps,
-  type ScreenBridge,
+  type RunStamp,
+  type SplitEvent,
+  type SplitPhase,
   type Step,
   type ValueScale,
 } from "./small-bridges.ts";
@@ -36,20 +42,18 @@ const LIMIT = 12;
  */
 let chosen = "";
 
+/**
+ * The run on screen and the queue generation at its first render.
+ * A later render of that same object keeps this stamp. One results view is mounted.
+ */
+let runStamp: RunStamp | null = null;
+
 // One queue for the page's one connection. bridgeBy replaces bridge_cells, so
 // a second engine call has to wait until the first has finished every statement.
 // A file load, a paste, and a sample's table replacement take a turn that does
 // not join the running call. The row generation records that the rows changed.
 const pageQueue = createConnectionQueue();
 const installs = createAttemptCache();
-let shownRun: object | null = null;
-let calculationOnScreen = 0;
-
-function noteRun(run: object): void {
-  if (shownRun === run) return;
-  shownRun = run;
-  calculationOnScreen += 1;
-}
 
 function installPageQueue(): Promise<void> {
   return installs.run(async () => {
@@ -85,18 +89,22 @@ function bridgeIsStale(): boolean {
  * draws what it is given and formats it.
  */
 export function SmallBridges(props: { run: Run; query: () => Promise<Query> }) {
-  noteRun(props.run);
+  const stamp = noteDisplayedRun(runStamp, props.run, pageQueue.generation());
+  runStamp = stamp;
   const { config, textColumns } = props.run;
   // A file loaded later can have other columns, so a choice that names a column
   // this file has not got is dropped rather than run against it.
   const [column, setColumn] = useState(() => (chosen && textColumns.includes(chosen) ? chosen : ""));
-  const [grid, setGrid] = useState<BridgeBy | null>(null);
-  const [failure, setFailure] = useState("");
+  const [phase, setPhase] = useState<SplitPhase>(IDLE_SPLIT_PHASE);
   /** The panel shown at full size, or null while the grid is on screen. */
   const [open, setOpen] = useState<number | null>(null);
   const [stale, setStale] = useState(false);
   const [rowsEpoch, setRowsEpoch] = useState(0);
-  const shownFor = useRef("");
+  /** Latest phase, so the inputs effect can reduce without listing the phase. */
+  const phaseRef = useRef<SplitPhase>(IDLE_SPLIT_PHASE);
+  /** Lets the runner, created once, read the module stamp after later renders. */
+  const stampRef = useRef(stamp);
+  stampRef.current = stamp;
   const wanted = useRef(column);
   const openRef = useRef<number | null>(null);
   const configRef = useRef(config);
@@ -108,39 +116,35 @@ export function SmallBridges(props: { run: Run; query: () => Promise<Query> }) {
   configRef.current = config;
   queryRef.current = props.query;
   openRef.current = open;
-  const screenRef = useRef<() => ScreenBridge>(() => ({
-    column: wanted.current,
-    calculation: calculationOnScreen,
-    rows: pageQueue.generation(),
-  }));
-  screenRef.current = () => ({
-    column: wanted.current,
-    calculation: calculationOnScreen,
-    rows: pageQueue.generation(),
-  });
+
+  const applyPhase = useCallback((event: SplitEvent): SplitPhase => {
+    const next = reduceSplitPhase(phaseRef.current, event);
+    phaseRef.current = next;
+    setPhase(next);
+    return next;
+  }, []);
 
   const runner = useRef<ReturnType<typeof createSplitRunner> | null>(null);
   if (runner.current === null) {
     runner.current = createSplitRunner(async (next) => {
-      const started = { ...screenRef.current(), column: next };
+      const request = displayedIdentity(stampRef.current, next);
       const outcome = await attemptSplit({
-        started,
-        screen: () => screenRef.current(),
+        request,
+        displayed: () => displayedIdentity(stampRef.current, wanted.current),
+        liveGeneration: () => readLiveGeneration(pageQueue.generation()),
         stale: bridgeIsStale,
         install: installPageQueue,
         prepare: () => queryRef.current(),
         calculate: (query) => bridgeBy(query, configRef.current, next, LIMIT),
       });
-      if (outcome.status === "drop") return;
-      if (outcome.status === "fail") {
-        shownFor.current = "";
-        setGrid(null);
-        setFailure(SPLIT_FAILURE_SENTENCE);
-        return;
-      }
-      shownFor.current = next;
-      setFailure("");
-      setGrid(outcome.result);
+      applyPhase({
+        type: "settled",
+        request,
+        outcome,
+        displayed: displayedIdentity(stampRef.current, wanted.current),
+        liveGeneration: readLiveGeneration(pageQueue.generation()),
+        stale: bridgeIsStale(),
+      });
     });
   }
 
@@ -161,17 +165,17 @@ export function SmallBridges(props: { run: Run; query: () => Promise<Query> }) {
   useEffect(() => {
     wanted.current = column;
     chosen = column;
-    const action = gridAction(column, stale || bridgeIsStale(), shownFor.current);
-    if (action === "keep") return;
-    setFailure("");
-    setGrid(null);
-    shownFor.current = "";
-    if (openRef.current !== null) {
+    const next = applyPhase({
+      type: "inputs",
+      column,
+      displayed: displayedIdentity(stampRef.current, column),
+      stale: stale || bridgeIsStale(),
+    });
+    if (next.kind !== "ready" && openRef.current !== null) {
       pendingFocus.current = "select";
       setOpen(null);
     }
-    if (action === "clear") return;
-    runner.current?.request(column);
+    if (next.kind === "calculating") runner.current?.request(column);
   }, [column, stale, props.run, rowsEpoch]);
 
   useEffect(() => {
@@ -196,7 +200,7 @@ export function SmallBridges(props: { run: Run; query: () => Promise<Query> }) {
     const place = focusPlace("close", button?.isConnected === true);
     if (place === "trigger") button?.focus();
     else selectRef.current?.focus();
-  }, [open, grid]);
+  }, [open, phase]);
 
   const openPanel = useCallback((index: number) => {
     pendingFocus.current = focusPlace("open", true) === "back" ? "back" : "select";
@@ -207,18 +211,12 @@ export function SmallBridges(props: { run: Run; query: () => Promise<Query> }) {
     setOpen(null);
   }, []);
 
-  // Drop a grid that is not the one on screen before paint. The effect below
-  // starts the replacement, and it runs too late to stop this frame.
-  const liveStale = stale || bridgeIsStale();
-  const action = gridAction(column, liveStale, shownFor.current);
-  const drop = action !== "keep" && shownFor.current !== column;
-  if (drop && (grid !== null || open !== null || failure !== "")) {
-    shownFor.current = "";
-    if (open !== null) pendingFocus.current = "select";
-    if (grid !== null) setGrid(null);
-    if (failure !== "") setFailure("");
-    if (open !== null) setOpen(null);
-  }
+  const painted = paintSplit({
+    phase,
+    displayed: displayedIdentity(stamp, column),
+    liveGeneration: readLiveGeneration(pageQueue.generation()),
+    stale: stale || bridgeIsStale(),
+  });
 
   return (
     <section className="split">
@@ -234,17 +232,17 @@ export function SmallBridges(props: { run: Run; query: () => Promise<Query> }) {
         </label>
         <span className="chip">Preview</span>
       </div>
-      {!column ? null : grid === null ? (
-        failure ? (
-          <p className="error" role="alert">{failure}</p>
-        ) : stale || bridgeIsStale() ? null : (
-          <p className="hint" role="status">Calculating…</p>
+      {painted.view === "calculating" ? (
+        <p className="hint" role="status">Calculating…</p>
+      ) : painted.view === "failed" ? (
+        <p className="error" role="alert">{painted.sentence}</p>
+      ) : painted.view === "grid" ? (
+        open === null ? (
+          <Grid by={painted.grid} config={config} onOpen={openPanel} triggers={triggers.current} />
+        ) : (
+          <Opened by={painted.grid} index={open} config={config} onBack={closePanel} backRef={backRef} />
         )
-      ) : open === null ? (
-        <Grid by={grid} config={config} onOpen={openPanel} triggers={triggers.current} />
-      ) : (
-        <Opened by={grid} index={open} config={config} onBack={closePanel} backRef={backRef} />
-      )}
+      ) : null}
     </section>
   );
 }
