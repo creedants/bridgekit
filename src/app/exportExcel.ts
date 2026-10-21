@@ -6,9 +6,11 @@ import {
   effectColumns,
   ident,
   measureName,
+  tieOutLines,
   type BridgeConfig,
   type BridgeResult,
   type DataCheck,
+  type TieOut,
   type Query,
 } from "../engine.ts";
 import { download } from "./files.ts";
@@ -30,6 +32,7 @@ export async function exportExcel(
   config: BridgeConfig,
   result: BridgeResult,
   check: DataCheck,
+  tieOut: TieOut,
   description: string[],
 ): Promise<void> {
   const { default: ExcelJS } = await import("exceljs");
@@ -214,6 +217,12 @@ export async function exportExcel(
   const setup = workbook.addWorksheet("Setup");
   setup.columns = [{ width: 34 }, { width: 60 }];
   for (const line of description) setup.addRow(line.split(": ", 2));
+  setup.addRow([]);
+  setup.addRow(["Money tie-out"]).font = bold;
+  for (const line of tieOutLines(config, tieOut, result)) {
+    const row = setup.addRow([line.label, Number.isFinite(line.value) ? line.value : null]);
+    row.getCell(2).numFmt = "#,##0";
+  }
   setup.addRow([]);
   setup.addRow(["Rows read", check.rows]);
   setup.addRow([`Rows in ${config.prior}`, check.priorRows]);

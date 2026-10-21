@@ -9,11 +9,13 @@ import {
   priceGaps,
   priceRealization,
   sensitivity,
+  tieOutLines,
   trend,
   unmatched,
   type BridgeConfig,
   type BridgeResult,
   type DataCheck,
+  type TieOut,
   type AccountGroup,
   type Alternative,
   type DrillFilter,
@@ -45,6 +47,8 @@ export interface Run {
   config: BridgeConfig;
   result: BridgeResult;
   check: DataCheck;
+  /** Money on the file and after the filters, in whole dollars, for the tie-out on the Data check tab. */
+  tieOut: TieOut;
   ms: number;
 }
 
@@ -1028,7 +1032,8 @@ function checkWarnings(run: Run): string[] {
 }
 
 function Check(props: { run: Run; warnings: string[]; query: () => Promise<Query> }) {
-  const { check, config, ms } = props.run;
+  const { check, config, ms, tieOut: money } = props.run;
+  const tieOut = tieOutLines(config, money, props.run.result);
   const [note, setNote] = useState<string | null>(null);
   useEffect(() => {
     let stale = false;
@@ -1059,6 +1064,14 @@ function Check(props: { run: Run; warnings: string[]; query: () => Promise<Query
   ];
   return (
     <div className="check">
+      <h3>Money tie-out</h3>
+      <table className="narrow tieout">
+        <tbody>
+          {tieOut.map((line) => (
+            <tr key={line.label}><td>{line.label}</td><td className="num">{Number.isFinite(line.value) ? whole(line.value) : ""}</td></tr>
+          ))}
+        </tbody>
+      </table>
       {props.warnings.length === 0 ? (
         <p className="ok">No issues found in the rows used.</p>
       ) : (
