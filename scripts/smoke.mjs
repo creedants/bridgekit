@@ -865,6 +865,51 @@ async function drive(browser, origin, rows) {
     sameTotals(totalsByFormat.csv, expectedAmounts, "file paths: csv totals differ from the engine in Node");
     console.log("ok  file paths: csv and xlsx give equal totals matching the engine in Node");
 
+    const pickerAccepts = JSON.parse(
+      await browser.evalJs("JSON.stringify([...document.querySelectorAll('input[type=file][accept*=csv]')].map((i) => i.accept))"),
+    );
+    if (pickerAccepts.some((accept) => accept.includes(".parquet"))) fail("file picker still offers .parquet");
+    console.log("ok  file picker: no .parquet in accept");
+
+    await browser.goto(`${origin}/app/`);
+    {
+      const { root } = await browser.send("DOM.getDocument");
+      const { nodeId } = await browser.send("DOM.querySelector", { nodeId: root.nodeId, selector: "input[type=file][accept*=csv]" });
+      await browser.send("DOM.setFileInputFiles", { nodeId, files: [fixtures.csvPath] });
+      await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent");
+    }
+    const previewFirst = JSON.parse(
+      await browser.evalJs(
+        "JSON.stringify([...document.querySelectorAll('.dense tbody tr')].slice(0, 3).map((tr) => tr.cells[0] ? tr.cells[0].innerText.trim() : ''))",
+      ),
+    );
+    if (!previewFirst.length) fail("preview: no rows in the data preview");
+    for (const cell of previewFirst) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(cell)) fail(`preview: date cell is ${JSON.stringify(cell)}, expected YYYY-MM-DD`);
+    }
+    console.log(`ok  preview: dates show as ${previewFirst[0]} style dates`);
+
+    const refusedPath = join(fixtureDir, "refused.parquet");
+    writeFileSync(refusedPath, "not a parquet file\n");
+    await browser.goto(`${origin}/app/`);
+    {
+      const { root } = await browser.send("DOM.getDocument");
+      const { nodeId } = await browser.send("DOM.querySelector", { nodeId: root.nodeId, selector: "input[type=file][accept*=csv]" });
+      await browser.send("DOM.setFileInputFiles", { nodeId, files: [refusedPath] });
+      await browser.waitFor("!!document.querySelector('.error')");
+    }
+    const parquetError = (await browser.evalJs("document.querySelector('.error').textContent.trim()")).trim();
+    if (parquetError !== "Parquet files are not supported. Save the file as CSV or Excel and try again.") {
+      fail(`parquet: error is ${JSON.stringify(parquetError)}`);
+    }
+    console.log("ok  parquet: refused with one plain sentence and no network request in the record");
+    await setDataFile(fixtures.csvPath);
+    await addFixtureLevels();
+    await waitReady();
+    await calculate();
+    sameTotals(await readBridge("parquet reuse"), totalsByFormat.csv, "parquet: the tool did not stay usable for the next file");
+    console.log("ok  parquet: the tool stays usable for the next file");
+
     const pasteTsv = toTsvText(FIXTURE_HEADER, fixtures.rows);
     await browser.goto(`${origin}/app/`);
     await browser.evalJs(

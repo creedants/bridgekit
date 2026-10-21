@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { toCsv, toExportCsv, toExportTsv, toTsv } from "../src/app/files.ts";
 
 test("toCsv leaves the Excel upload rows unchanged", () => {
@@ -88,4 +91,32 @@ test("export writers neutralise formula text and the upload writers do not", () 
   );
   assert.equal(toCsv(["=product", "Change"], [["=1+1", -100]]), "=product,Change\n=1+1,-100");
   assert.equal(toTsv(["=product", "Change"], [["=1+1", -100]]), "=product\tChange\n=1+1\t-100");
+});
+
+const root = fileURLToPath(new URL("..", import.meta.url));
+const readRoot = (name: string) => readFileSync(join(root, name), "utf8");
+const PARQUET_REFUSAL = "Parquet files are not supported. Save the file as CSV or Excel and try again.";
+
+test("no site page or empty state promises Parquet", () => {
+  for (const name of ["index.html", "guide.html", "README.md"]) {
+    const text = readRoot(name);
+    assert.equal(/parquet/i.test(text), false, `${name} still mentions Parquet`);
+  }
+  const app = readRoot(join("src", "app", "App.tsx"));
+  assert.equal(/parquet/i.test(app.match(/Drop a .* file anywhere/)?.[0] ?? "parquet"), false, "empty state still mentions Parquet");
+  assert.equal(app.includes(".parquet"), false, "file picker still offers .parquet");
+});
+
+test("the database refuses Parquet without a third-party request", () => {
+  const db = readRoot(join("src", "app", "db.ts"));
+  assert.equal(db.includes(PARQUET_REFUSAL), true, "Parquet refusal sentence is missing");
+  assert.equal(db.includes("read_parquet"), false, "read_parquet can still ask extensions.duckdb.org for code");
+  assert.equal(db.includes("upload.parquet"), false, "parquet upload name remains");
+  assert.equal(db.includes("Use a CSV or Excel (.xlsx) file"), true, "generic file error still names Parquet");
+});
+
+test("the data preview shows dates as dates, not epoch milliseconds", () => {
+  const app = readRoot(join("src", "app", "App.tsx"));
+  assert.equal(app.includes("toISOString().slice(0, 10)"), true, "preview has no DATE to YYYY-MM-DD formatting");
+  assert.equal(app.includes("previewCell"), true, "preview helper is missing");
 });
