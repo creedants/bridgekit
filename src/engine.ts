@@ -597,8 +597,8 @@ export interface TieOutLine {
   value: number;
 }
 
-/** Money rounded to whole cents, so the lines shown next to each other add up exactly. */
-const cents = (value: number) => Math.round(value * 100) / 100;
+/** Money rounded to whole cents with a tiny upward tolerance, so totals that differ only by floating-point accumulation across grouping orders round the same way. The tolerance sits far below half a cent, so it cannot flip a true cent boundary for money with up to three decimal places. */
+const cents = (value: number) => Math.round((value + 1e-6) * 100) / 100;
 
 /**
  * The money tie-out, three lines per period: what the file holds, what the
@@ -613,7 +613,7 @@ export function tieOutLines(config: BridgeConfig, tieOut: TieOut, result: Bridge
     const afterFilters = cents(money.afterFilters);
     return [
       { label: `${measure} in file, ${money.period}`, value: inFile },
-      { label: `Excluded by filters, ${money.period}`, value: Math.round((inFile - afterFilters) * 100) / 100 },
+      { label: `Excluded by filters, ${money.period}`, value: cents(inFile - afterFilters) },
       { label: `${measure} in the bridge, ${money.period}`, value: cents(inBridge) },
     ];
   };

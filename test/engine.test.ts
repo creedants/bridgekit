@@ -716,6 +716,81 @@ test("money tie-out: the file's money less the excluded rows equals the bridge, 
   assert.deepEqual(marginLines.map((line) => cents(line.value)), [24040, 15025, 9015, 69032, 59999, 9033]);
 });
 
+test("money tie-out is stable for fractional cents across grouping orders", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE data (
+    year INTEGER, product VARCHAR, grp VARCHAR, customer VARCHAR, units INTEGER, sales DOUBLE
+  )`);
+  await query(`INSERT INTO data VALUES
+    (2025, 'A', 'X', 'drop', 1, 0.001),
+    (2025, 'B', 'X', 'drop', 1, 0.003),
+    (2025, 'B', 'Y', 'drop', 1, 0.051),
+    (2025, 'A', 'X', 'keep', 1, 10.001),
+    (2025, 'A', 'Y', 'keep', 1, 10.023),
+    (2025, 'B', 'X', 'keep', 1, 10.051),
+    (2026, 'A', 'X', 'keep', 1, 0.001),
+    (2026, 'B', 'X', 'keep', 1, 0.003),
+    (2026, 'B', 'Y', 'keep', 1, 0.051)
+  `);
+  const setup: Setup = {
+    periodColumn: "year",
+    grain: "value",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+    filters: [{ column: "customer", mode: "include", values: ["keep"] }],
+  };
+  await query(`DROP VIEW IF EXISTS data_all`);
+  await query(viewSql({ ...setup, filters: [] }));
+  await query(`ALTER VIEW ${quote(VIEW)} RENAME TO ${quote("data_all")}`);
+  await query(viewSql(setup));
+
+  const base: Omit<BridgeConfig, "levels"> = {
+    table: VIEW, periodColumn: PERIOD, prior: "2025", current: "2026",
+    unitsColumn: "units", salesColumn: "sales",
+  };
+  const byProduct: BridgeConfig = { ...base, levels: [{ name: "Product", columns: ["product"] }] };
+  const byGrp: BridgeConfig = { ...base, levels: [{ name: "Grp", columns: ["grp"] }] };
+
+  const moneyProduct = await periodMoney(query, byProduct, { table: "data_all", periodColumn: PERIOD });
+  const moneyGrp = await periodMoney(query, byGrp, { table: "data_all", periodColumn: PERIOD });
+  // The file and filter measurements do not group, so both configs measure the same.
+  assert.deepEqual(moneyProduct, moneyGrp);
+
+  const resultProduct = await runBridge(query, byProduct);
+  const resultGrp = await runBridge(query, byGrp);
+  // Grouping changes the floating-point accumulation inside the bridge but not the money.
+  // The existing bridge totals stay within a fraction of a cent of each other.
+  assert.ok(Math.abs(resultProduct.priorSales - resultGrp.priorSales) < 1e-6);
+  assert.ok(Math.abs(resultProduct.currentSales - resultGrp.currentSales) < 1e-6);
+
+  const linesProduct = tieOutLines(byProduct, moneyProduct, resultProduct);
+  const linesGrp = tieOutLines(byGrp, moneyGrp, resultGrp);
+  // Stable cent rounding makes the shown lines identical across grouping orders.
+  assert.deepEqual(linesProduct, linesGrp);
+
+  const toCents = (value: number) => Math.round(value * 100);
+  const stableCents = (value: number) => Math.round((value + 1e-6) * 100);
+  for (const lines of [linesProduct, linesGrp]) {
+    for (const period of [0, 1]) {
+      assert.equal(
+        toCents(lines[period * 3].value) - toCents(lines[period * 3 + 1].value),
+        toCents(lines[period * 3 + 2].value),
+      );
+    }
+    // No gap is absorbed into Excluded: the bridge line equals the measured
+    // filtered total, and Excluded is the measured file minus that filtered total.
+    assert.equal(toCents(lines[2].value), stableCents(moneyProduct.prior.afterFilters));
+    assert.equal(toCents(lines[5].value), stableCents(moneyProduct.current.afterFilters));
+    assert.equal(toCents(lines[1].value), toCents(lines[0].value) - stableCents(moneyProduct.prior.afterFilters));
+    assert.equal(toCents(lines[4].value), toCents(lines[3].value) - stableCents(moneyProduct.current.afterFilters));
+  }
+  // The fractional-cent prior ties out instead of showing a one-cent gap.
+  // In file 0.001 + 0.003 + 0.051 + 10.001 + 10.023 + 10.051, excluded drops the fractional trio.
+  // The current period is the reviewer's minimal fractional file, with no filter on it.
+  assert.deepEqual(linesProduct.map((line) => toCents(line.value)), [3013, 5, 3008, 6, 0, 6]);
+});
+
 function ident(name: string): string {
   return `"${name.replaceAll('"', '""')}"`;
 }
