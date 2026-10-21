@@ -771,6 +771,46 @@ async function drive(browser, origin, rows) {
   const sampleTotals = await bridgeTotals("sample");
   console.log(`bridge adds up: ${sampleTotals.prior} + effects = ${sampleTotals.current}`);
 
+  // The money tie-out on the Data check tab, read from its own table so a row
+  // count can never be mistaken for a money line.
+  const readTieOut = async (step) => {
+    const rows = JSON.parse(
+      await browser.evalJs(
+        `JSON.stringify([...document.querySelectorAll('table.tieout tr')].map((row) => [row.cells[0].innerText.trim(), row.cells[1].innerText.trim()]))`,
+      ),
+    );
+    if (rows.length !== 6) fail(`${step}: the money tie-out shows ${rows.length} lines, expected six`);
+    const amount = (raw, label) => {
+      const text = raw.split(",").join("");
+      const value = Number(text);
+      if (!/^-?\d+\.\d{2}$/.test(text) || !Number.isFinite(value)) fail(`${step}: ${label} is ${JSON.stringify(raw)}, expected an amount to the cent`);
+      return value;
+    };
+    const pick = (pattern) =>
+      rows.flatMap(([label, raw]) => {
+        const match = pattern.exec(label);
+        return match ? [{ period: match[1], value: amount(raw, label) }] : [];
+      });
+    const inFile = pick(/^(?:Sales|Margin) in file, (.+)$/);
+    const excluded = pick(/^Excluded by filters, (.+)$/);
+    const inBridge = pick(/^(?:Sales|Margin) in the bridge, (.+)$/);
+    if (inFile.length !== 2 || excluded.length !== 2 || inBridge.length !== 2) {
+      fail(`${step}: the money tie-out is ${JSON.stringify(rows.map(([label]) => label))}, expected three lines for each of two periods`);
+    }
+    for (let i = 0; i < 2; i++) {
+      if (inFile[i].period !== excluded[i].period || inFile[i].period !== inBridge[i].period) {
+        fail(`${step}: the money tie-out lists different periods across its lines`);
+      }
+      const off = inFile[i].value - excluded[i].value - inBridge[i].value;
+      if (Math.abs(off) > 0.005) {
+        fail(`${step}: ${inFile[i].period} has ${inFile[i].value} in the file, ${excluded[i].value} excluded and ${inBridge[i].value} in the bridge, which does not tie out`);
+      }
+    }
+    return { inFile, excluded, inBridge };
+  };
+  // The period a bridge total line names, from "Sales 2025".
+  const periodOf = (label) => label.replace(/^(?:Sales|Margin) /, "");
+
   const tabs = ["Movers", "Accounts", "Price changes", "Price gaps", "Trend", "Unmatched", "Setup check", "Data check", "Bridge"];
   for (const tab of tabs) {
     await browser.evalJs(`T.tab(${JSON.stringify(tab)})`);
@@ -785,6 +825,24 @@ async function drive(browser, origin, rows) {
     if (state.overflow > 0) fail(`${tab}: page overflows by ${state.overflow}px`);
     console.log(`ok  ${tab}`);
   }
+
+  // With no filter there is nothing to exclude, and the file's money is the bridge's.
+  await browser.evalJs(`T.tab("Data check")`);
+  await browser.sleep(300);
+  const sampleTie = await readTieOut("sample with no filter");
+  const samplePeriods = [periodOf(sampleTotals.rows[0].label), periodOf(sampleTotals.rows.at(-1).label)];
+  if (sampleTie.inFile.map((line) => line.period).join(",") !== samplePeriods.join(",")) {
+    fail(`sample with no filter: the money tie-out is for ${sampleTie.inFile.map((line) => line.period).join(", ")}, expected ${samplePeriods.join(", ")}`);
+  }
+  if (sampleTie.excluded.some((line) => line.value !== 0)) {
+    fail(`sample with no filter: the money tie-out excludes ${sampleTie.excluded.map((line) => line.value).join(", ")}, expected zero`);
+  }
+  for (const [i, total] of [sampleTotals.prior, sampleTotals.current].entries()) {
+    if (Math.round(sampleTie.inBridge[i].value) !== Math.round(total)) {
+      fail(`sample with no filter: the bridge line for ${sampleTie.inBridge[i].period} is ${sampleTie.inBridge[i].value}, expected the bridge total ${total}`);
+    }
+  }
+  console.log("ok  data check: with no filter, nothing is excluded and the file's money is the bridge's");
 
   const exported = JSON.parse(
     await browser.evalJs(`(async () => {
@@ -814,6 +872,20 @@ async function drive(browser, origin, rows) {
   await browser.evalJs("T.btn('Calculate bridge').click()");
   await browser.waitFor("!!document.querySelector('.kpis')");
   await browser.sleep(1500);
+
+  const filteredTotals = await bridgeTotals("sample with a customer filter");
+  await browser.evalJs(`T.tab("Data check")`);
+  await browser.sleep(300);
+  const filteredTie = await readTieOut("sample with a customer filter");
+  if (!filteredTie.excluded.some((line) => line.value > 0)) {
+    fail(`sample with a customer filter: the money tie-out excludes nothing for ${filteredTie.excluded.map((line) => line.period).join(" or ")}`);
+  }
+  for (const [i, total] of [filteredTotals.prior, filteredTotals.current].entries()) {
+    if (Math.round(filteredTie.inBridge[i].value) !== Math.round(total)) {
+      fail(`sample with a customer filter: the bridge line for ${filteredTie.inBridge[i].period} is ${filteredTie.inBridge[i].value}, expected the bridge total ${total}`);
+    }
+  }
+  console.log(`ok  data check: with a customer filter, the excluded money (${filteredTie.excluded.map((line) => line.value).join(", ")}) is removed from the file total and the lines tie out`);
 
   const selected = await browser.evalJs("document.querySelector('.values input:checked').closest('label').textContent.trim()");
   const stored = JSON.parse(
@@ -1158,6 +1230,32 @@ async function drive(browser, origin, rows) {
       if (!sheetNames.includes(name)) fail(`exported workbook: missing sheet ${name} (has ${sheetNames.join(", ")})`);
     }
     if (!sheetNames.some((name) => name.startsWith("By "))) fail(`exported workbook: no By sheet (has ${sheetNames.join(", ")})`);
+    const setupSheet = workbook.getWorksheet("Setup");
+    const moneyRows = [];
+    setupSheet.eachRow((row) => {
+      const label = String(row.getCell(1).value ?? "");
+      if (/^(?:Sales|Margin) in file, |^Excluded by filters, |^(?:Sales|Margin) in the bridge, /.test(label)) {
+        moneyRows.push({ label, value: row.getCell(2).value });
+      }
+    });
+    const setupLabels = [
+      "Sales in file, 2024", "Excluded by filters, 2024", "Sales in the bridge, 2024",
+      "Sales in file, 2025", "Excluded by filters, 2025", "Sales in the bridge, 2025",
+    ];
+    if (moneyRows.map((row) => row.label).join("|") !== setupLabels.join("|")) {
+      fail(`exported workbook: the Setup money tie-out is ${JSON.stringify(moneyRows.map((row) => row.label))}, expected ${JSON.stringify(setupLabels)}`);
+    }
+    for (const i of [0, 1]) {
+      const [inFile, excluded, inBridge] = [moneyRows[i * 3].value, moneyRows[i * 3 + 1].value, moneyRows[i * 3 + 2].value];
+      if (![inFile, excluded, inBridge].every((value) => typeof value === "number" && Number.isFinite(value))) {
+        fail(`exported workbook: Setup money tie-out line ${JSON.stringify(setupLabels[i * 3])} is not a number`);
+      }
+      if (Math.abs(inFile - excluded - inBridge) > 0.005) {
+        fail(`exported workbook: Setup has ${inFile} in the file, ${excluded} excluded and ${inBridge} in the bridge, which does not tie out`);
+      }
+      if (excluded !== 0) fail(`exported workbook: Setup excludes ${excluded} with no filter on`);
+    }
+    console.log("ok  exported workbook: the Setup sheet ties the file's money to the bridge");
     const bridgeSheet = workbook.getWorksheet("Bridge");
     let checkRowNumber = 0;
     bridgeSheet.eachRow((row, number) => {

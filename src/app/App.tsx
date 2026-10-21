@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
-import { dataCheck, runBridge, type BridgeConfig } from "../engine.ts";
+import { dataCheck, periodMoney, runBridge, type BridgeConfig, type Query } from "../engine.ts";
 import { summarize } from "../summary.ts";
 import { resolveSample, type Sample } from "../synth.ts";
 import {
@@ -114,6 +114,19 @@ function describeSetup(setup: Setup, prior: string, current: string, source: str
   ];
 }
 
+/** The loaded file's rows with the same period column as VIEW, before the filters. */
+const FILE_VIEW = "data_all";
+
+// The two relations the Data check compares. viewSql is the only place a period
+// is derived, so the file's copy is made from it with the filters removed and
+// renamed, which keeps its period column identical to the bridge's.
+async function buildViews(q: Query, setup: Setup): Promise<void> {
+  await q(`DROP VIEW IF EXISTS ${quote(FILE_VIEW)}`);
+  await q(viewSql({ ...setup, filters: [] }));
+  await q(`ALTER VIEW ${quote(VIEW)} RENAME TO ${quote(FILE_VIEW)}`);
+  await q(viewSql(setup));
+}
+
 export function App() {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -215,7 +228,7 @@ export function App() {
     const requested = view;
     task("Reading periods…", async () => {
       const q = await query();
-      await q(viewSql(setup));
+      await buildViews(q, setup);
       const list = await loadPeriodList(q, quote(PERIOD), quote(VIEW));
       if (stale) return;
       const values = [...list.values];
@@ -268,10 +281,12 @@ export function App() {
       const result = await runBridge(q, config);
       const ms = performance.now() - start;
       const check = await dataCheck(q, config);
+      const tieOut = await periodMoney(q, config, { table: FILE_VIEW, periodColumn: PERIOD });
       setRun({
         config,
         result,
         check,
+        tieOut,
         ms,
         periods: offeredPeriods,
         textColumns: columns.filter((c) => !/INT|DOUBLE|DECIMAL|FLOAT|REAL|DATE|TIMESTAMP/i.test(c.type)).map((c) => c.name),
@@ -322,7 +337,7 @@ export function App() {
   const exportWorkbook = () =>
     task("Building Excel file…", async () => {
       if (!run || !setup) return;
-      await exportExcel(await query(), run.config, run.result, run.check, describeSetup(setup, prior, current, source));
+      await exportExcel(await query(), run.config, run.result, run.check, run.tieOut, describeSetup(setup, prior, current, source));
     });
 
   const importSetup = (file: File) =>
