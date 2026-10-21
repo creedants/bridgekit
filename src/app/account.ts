@@ -67,19 +67,6 @@ export interface SavedBridge {
   createdAt: string;
 }
 
-/** A refused call to the site's own server, with the path that was asked and its answer. */
-class CallError extends Error {
-  readonly path: string;
-  readonly status: number;
-
-  constructor(path: string, status: number, message: string) {
-    super(message);
-    this.name = "CallError";
-    this.path = path;
-    this.status = status;
-  }
-}
-
 async function call<T>(path: string, init?: { method?: string; body?: unknown }): Promise<T> {
   const response = await fetch(path, {
     method: init?.method ?? (init?.body === undefined ? "GET" : "POST"),
@@ -88,18 +75,8 @@ async function call<T>(path: string, init?: { method?: string; body?: unknown })
   });
   if (response.status === 204) return undefined as T;
   const body = (await response.json().catch(() => null)) as (T & { error?: string; message?: string }) | null;
-  if (!response.ok) throw new CallError(path, response.status, body?.error ?? body?.message ?? `The server returned ${response.status}.`);
+  if (!response.ok) throw new Error(body?.error ?? body?.message ?? `The server returned ${response.status}.`);
   return body as T;
-}
-
-/**
- * Whether a failure means the deployment runs with accounts closed. The Worker
- * answers 404 on every /api/auth/ route unless its ACCOUNTS switch is exactly
- * on, so only a 404 from that prefix is the switch. A 404 elsewhere, such as a
- * workspace that does not exist, and every other status are real failures.
- */
-export function accountsClosed(error: unknown): boolean {
-  return error instanceof CallError && error.status === 404 && error.path.startsWith("/api/auth/");
 }
 
 // Anything read from the deployment or the session is written to the shared

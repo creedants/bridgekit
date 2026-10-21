@@ -17,9 +17,6 @@ export default function WorkspacePanel(props: {
   onUseSetup: (setup: Setup) => void;
 }) {
   const [config, setConfig] = useState<api.Config | null>(null);
-  // Set when the server says accounts are closed, from the config or from an
-  // account route answering 404. The panel then renders nothing at all.
-  const [closed, setClosed] = useState(false);
   const [user, setUser] = useState<api.User | null | undefined>(undefined);
   const [workspaces, setWorkspaces] = useState<api.Workspace[]>([]);
   const [active, setActive] = useState("");
@@ -66,18 +63,8 @@ export default function WorkspacePanel(props: {
     act(async () => {
       const found = await api.getConfig();
       setConfig(found);
-      if (!accountsOpen(found)) {
-        setClosed(true);
-        return;
-      }
-      let signedIn: api.User | null;
-      try {
-        signedIn = await api.getUser();
-      } catch (error) {
-        if (!api.accountsClosed(error)) throw error;
-        setClosed(true);
-        return;
-      }
+      if (!accountsOpen(found)) return;
+      const signedIn = await api.getUser();
       setUser(signedIn);
       if (!signedIn) return;
       // An invitation link is /app/?invitation=ID; accept it once signed in.
@@ -106,10 +93,10 @@ export default function WorkspacePanel(props: {
     });
   }, [active, columnsKey]);
 
-  if (closed) return null;
   // Nothing is known until the config and the session answer, so nothing
   // renders; a read that really failed keeps its message.
   if (config === null) return error === "" ? null : loadingShell(error);
+  if (!accountsOpen(config)) return null;
   if (user === undefined) return error === "" ? null : loadingShell(error);
   if (user === null) return <SignIn config={config} busy={busy} error={error} message={message} act={act} />;
 
