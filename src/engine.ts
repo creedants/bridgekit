@@ -563,10 +563,15 @@ export interface TieOut {
   current: PeriodMoney;
 }
 
+/** True when a money column holds a finite number the billionth sum can read. */
+function readableSql(column: string): string {
+  const value = `CAST(${ident(column)} AS DOUBLE)`;
+  return `(isfinite(${value}) AND abs(${value}) < 1e19)`;
+}
+
 /** A money column in billionths of a dollar, read from the DOUBLE the file produced. Amounts below 2^21 dollars are exact to the billionth. Larger amounts round at the billionth of the value, which puts the row under a millionth of a dollar out below a billion dollars. A blank is NULL and adds nothing. A non-finite or absurd value is NULL, so it can never throw. */
 function nanosSql(column: string): string {
-  const value = `CAST(${ident(column)} AS DOUBLE)`;
-  return `(CASE WHEN isfinite(${value}) AND abs(${value}) < 1e19 THEN CAST(ROUND(${value} * 1000000000) AS HUGEINT) END)`;
+  return `(CASE WHEN ${readableSql(column)} THEN CAST(ROUND(CAST(${ident(column)} AS DOUBLE) * 1000000000) AS HUGEINT) END)`;
 }
 
 /** The bridge's measure per row in billionths: sales minus cost on margin, subtracted before any sum, blanks as zero, exactly as measureSql reads it. */
@@ -594,8 +599,8 @@ export async function periodMoney(
 ): Promise<TieOut> {
   const measure = exactMeasureSql(config);
   const bad = config.costColumn
-    ? `(${ident(config.salesColumn)} IS NOT NULL AND ${nanosSql(config.salesColumn)} IS NULL OR ${ident(config.costColumn)} IS NOT NULL AND ${nanosSql(config.costColumn)} IS NULL)`
-    : `(${ident(config.salesColumn)} IS NOT NULL AND ${nanosSql(config.salesColumn)} IS NULL)`;
+    ? `(${ident(config.salesColumn)} IS NOT NULL AND NOT ${readableSql(config.salesColumn)} OR ${ident(config.costColumn)} IS NOT NULL AND NOT ${readableSql(config.costColumn)})`
+    : `(${ident(config.salesColumn)} IS NOT NULL AND NOT ${readableSql(config.salesColumn)})`;
   const totals = async (table: string, periodColumn: string) => {
     const period = ident(periodColumn);
     const [row] = await query(
