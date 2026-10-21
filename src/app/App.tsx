@@ -248,6 +248,7 @@ export function App() {
   const problemPeriods = periodsFor(view, loadedPeriods);
 
   const signature = JSON.stringify([setup, prior, current, source]);
+  const fresh = run && run.signature === signature ? run : null;
   const ready =
     setup && setup.unitsColumn && setup.salesColumn && setup.levels.length > 0 && prior && current && prior !== current;
   const problem: FileProblem = setup
@@ -336,13 +337,18 @@ export function App() {
 
   const exportWorkbook = () =>
     task("Building Excel file…", async () => {
-      if (!run || !setup) return;
-      await exportExcel(await query(), run.config, run.result, run.check, run.tieOut, describeSetup(setup, prior, current, source));
+      if (!fresh) return;
+      await exportExcel(await query(), fresh.config, fresh.result, fresh.check, fresh.tieOut, fresh.description);
     });
 
   const importSetup = (file: File) =>
     task("Reading setup…", async () => {
-      const parsed: unknown = JSON.parse(await file.text());
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(await file.text());
+      } catch {
+        throw new Error("That file is not a setup file.");
+      }
       if (!isValidSetup(parsed, columns)) {
         throw new Error("That setup file does not match the columns in this data.");
       }
@@ -387,7 +393,7 @@ export function App() {
         <span className="status" aria-live="polite">{busy}</span>
         <nav>
           {filePicker}
-          <button disabled={!run || !!busy} onClick={exportWorkbook}>Export Excel</button>
+          <button disabled={!fresh || !!busy} onClick={exportWorkbook}>Export Excel</button>
           {setup && (
             <button
               title="Remove the loaded data from this tab"
@@ -509,7 +515,7 @@ export function App() {
                 <WorkspacePanel
                   columns={columns.map((c) => c.name)}
                   setup={setup}
-                  bridge={run && run.signature === signature ? { summary: summarize(run.result, run.config), setup } : null}
+                  bridge={fresh ? { summary: summarize(fresh.result, fresh.config), setup } : null}
                   onUseSetup={(saved) => {
                     if (isValidSetup(saved, columns)) setSetup(saved);
                     else setError("That saved setup does not match the columns in this data.");
@@ -520,7 +526,7 @@ export function App() {
           </aside>
           <main>
             {notice && <p className="notice">{notice}</p>}
-            {run && run.signature !== signature && (
+            {run && !fresh && (
               <p className="notice">The setup changed since this bridge was calculated. Calculate again to update it.</p>
             )}
             {run && Results ? (
