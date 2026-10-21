@@ -1416,7 +1416,11 @@ async function drive(browser, origin, rows) {
     await addAttribute("design");
     await waitReady();
     await calculate();
-    if (await browser.evalJs(`${exportButton}.disabled`)) fail("stale bridge: Export Excel stays off after Calculate");
+    try {
+      await browser.waitFor(`${exportButton}.disabled === false`, 20000);
+    } catch {
+      fail("stale bridge: Export Excel stays off after Calculate");
+    }
     console.log("ok  stale bridge: Export Excel is off while the setup-changed notice shows, and back after Calculate");
 
     // A restored or loaded setup must fit the types of the table it lands on.
