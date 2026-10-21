@@ -1,0 +1,1 @@
+- The privacy page, home page, guide, README and the report now say what the build does: any sign-in sets the cookie, the checkout page loads Paddle, the setup file is an export, the report names the file, the setup, the filter values and the top movers, and a report cell that begins with =, +, - or @ gets a leading apostrophe, as the CSV export already did.
