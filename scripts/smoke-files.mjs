@@ -63,14 +63,5 @@ export async function writeFixtures(dir) {
   const xlsxPath = join(dir, "smoke.xlsx");
   await workbook.xlsx.writeFile(xlsxPath);
 
-  const { DuckDBInstance } = await import("@duckdb/node-api");
-  const instance = await DuckDBInstance.create(":memory:");
-  const connection = await instance.connect();
-  const quoted = (s) => `'${s.replaceAll("'", "''")}'`;
-  await connection.runAndReadAll(
-    `COPY (SELECT * FROM read_csv(${quoted(csvPath)}, header=true)) TO ${quoted(join(dir, "smoke.parquet"))} (FORMAT PARQUET)`,
-  );
-  const parquetPath = join(dir, "smoke.parquet");
-
-  return { rows, csvPath, xlsxPath, parquetPath, formattedPath };
+  return { rows, csvPath, xlsxPath, formattedPath };
 }

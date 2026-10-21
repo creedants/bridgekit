@@ -851,9 +851,8 @@ async function drive(browser, origin, rows) {
     };
 
     const totalsByFormat = {};
-    // Parquet stays out: loading one makes the browser fetch its DuckDB parquet
-    // extension from extensions.duckdb.org, which the request policy refuses.
-    // Reported separately.
+    // CSV and Excel give the same bridge. Parquet is refused below with one
+    // plain sentence before the database sees it, so no extension is fetched.
     for (const [name, path] of [["csv", fixtures.csvPath], ["xlsx", fixtures.xlsxPath]]) {
       await setDataFile(path);
       await addFixtureLevels();
