@@ -107,8 +107,10 @@ export default function WorkspacePanel(props: {
   }, [active, columnsKey]);
 
   if (closed) return null;
-  if (config === null) return loadingShell(error);
-  if (user === undefined) return loadingShell(error);
+  // Nothing is known until the config and the session answer, so nothing
+  // renders; a read that really failed keeps its message.
+  if (config === null) return error === "" ? null : loadingShell(error);
+  if (user === undefined) return error === "" ? null : loadingShell(error);
   if (user === null) return <SignIn config={config} busy={busy} error={error} message={message} act={act} />;
 
   const plan = plans[active] ?? null;

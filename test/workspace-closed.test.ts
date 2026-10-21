@@ -45,7 +45,7 @@ function server(answers: { config: Answer; session?: Answer }): FakeServer {
   };
 }
 
-// The real WorkspacePanel.tsx is mounted below. This runner cannot load a
+// The real Workspace.tsx is mounted below. This runner cannot load a
 // .tsx file by itself, so a load hook transforms it with the esbuild copy the
 // build already depends on, and the panel then runs exactly as the app runs
 // it: same effects, same requests, same markup.
@@ -314,6 +314,7 @@ async function mount(fake: FakeServer) {
     text: () => (container as unknown as ShimElement).textContent,
     error: () => elements().filter((element) => element.getAttribute("class") === "error").map((element) => element.textContent).join(""),
     tags: () => elements().map((element) => element.nodeName),
+    settle: flush,
   };
 }
 
@@ -336,6 +337,45 @@ test("account routes answering 404 show no panel and no error, even when config 
   assert.equal(panel.error(), "", "the panel showed the 404 as an error");
   assert.deepEqual(panel.tags(), [], "the panel rendered elements when the account routes answered 404");
   assert.ok(fake.requests.includes("/api/auth/get-session"), "the session was never asked for");
+});
+
+test("no panel appears while the deployment's config is still being read", async () => {
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const fake = server({ config: { status: 200, body: CLOSED_CONFIG } });
+  const answer = fake.fetch;
+  fake.fetch = async (path: string) => {
+    if (path === "/api/config") await held;
+    return answer(path);
+  };
+  const panel = await mount(fake);
+  assert.deepEqual(panel.tags(), [], "the panel appeared before the config answered");
+  release();
+  await panel.settle();
+  assert.deepEqual(panel.tags(), [], "the panel appeared once a closed config answered");
+});
+
+test("no panel appears while the account routes are still being answered", async () => {
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const fake = server({
+    config: { status: 200, body: OPEN_CONFIG },
+    session: { status: 404, body: { error: "Not found." } },
+  });
+  const answer = fake.fetch;
+  fake.fetch = async (path: string) => {
+    if (path === "/api/auth/get-session") await held;
+    return answer(path);
+  };
+  const panel = await mount(fake);
+  assert.deepEqual(panel.tags(), [], "the panel appeared before the account route answered");
+  release();
+  await panel.settle();
+  assert.deepEqual(panel.tags(), [], "the panel appeared once the account route answered 404");
 });
 
 test("a real failure while accounts are open still shows its message", async () => {
