@@ -15,8 +15,9 @@ import {
 
 /**
  * Calls to the site's own server for Pro workspaces (server/worker.ts). Only
- * used in builds with VITE_WORKSPACES=1, and only after the user opens the
- * Workspace panel or signs in. Everything goes to the same origin.
+ * used in builds with VITE_WORKSPACES=1. The panel mounts with the page, so
+ * these calls happen when the page loads and again after each file. Everything
+ * goes to the same origin.
  */
 
 export interface Config {

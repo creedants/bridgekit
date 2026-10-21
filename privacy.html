@@ -34,7 +34,7 @@
         <ul>
           <li>The tool reads your file inside the browser tab. It is not uploaded to us or to anyone else.</li>
           <li>The calculation runs in your browser, using a database engine that is downloaded as part of the page.</li>
-          <li>Exports (Excel, CSV, PNG and the HTML report) are created in your browser and saved by your browser.</li>
+          <li>Exports (Excel, CSV, PNG and the HTML report) and the setup file are created in your browser and saved by your browser.</li>
         </ul>
 
         <h2>What is stored, and where</h2>
@@ -48,7 +48,7 @@
           <li>The site sets no cookies and has no accounts.</li>
           <!-- /feature:!workspaces -->
           <!-- feature:workspaces -->
-          <li>The site sets no cookies unless you sign in to a Pro workspace. Signing in sets one cookie that keeps you signed in; signing out removes it.</li>
+          <li>The site sets no cookies unless you sign in. Signing in sets one cookie that keeps you signed in; signing out removes it.</li>
           <!-- /feature:workspaces -->
         </ul>
 
@@ -66,10 +66,10 @@
         <h2>Pro workspaces (optional)</h2>
         <p>Nobody needs an account to use the tool. If you sign in to a Pro workspace:</p>
         <ul>
-          <li><b>What is stored:</b> your email address (and your name, if you sign in with Microsoft or Google), the workspaces you belong to, their members and invitations, and what members choose to save: setups and bridge totals. A saved setup holds column names, attribute order and options. A saved bridge holds the totals you see in the bridge table, the attribute names and the names of any filtered columns.</li>
+          <li><b>What is stored:</b> your email address (and your name and the sign-in tokens that Microsoft or Google return, if you sign in with them), the workspaces you belong to, their members and invitations, and what members choose to save: setups and bridge totals. A saved setup holds column names, attribute order and options. A saved bridge holds the totals you see in the bridge table, the attribute names and the names of any filtered columns.</li>
           <li><b>What is not stored:</b> your file, its rows, filter selections or any other value from your data. Sign-in sessions do not record your IP address or browser. Your IP address is used briefly to slow repeated sign-in attempts, and Bridgekit does not store it.</li>
           <li><b>Who sees it:</b> members of the workspace. Any member can delete a saved item.</li>
-          <li><b>Companies involved:</b> Cloudflare hosts the site and the database. Resend sends sign-in and invitation emails. Paddle takes payment as our reseller, on its own checkout page, and holds your billing details; we only receive the subscription status and seat count. If you sign in with Microsoft or Google, they confirm who you are.</li>
+          <li><b>Companies involved:</b> Cloudflare hosts the site and the database. Resend sends sign-in and invitation emails. Paddle takes payment as our reseller, on its own checkout page, and holds your billing details; we receive the subscription id, the customer id, the price id, the status, the seat count and the end date of the paid period. If you sign in with Microsoft or Google, they confirm who you are.</li>
           <li><b>Deleting:</b> <b>Delete account</b> in the tool deletes your account. Workspaces where you are the only member are deleted with everything saved in them.</li>
         </ul>
 
@@ -77,17 +77,17 @@
         <h2>What we can see</h2>
         <ul>
           <!-- feature:!counts -->
-          <li>The site has no analytics or tracking scripts and loads nothing from third parties.</li>
+          <li>The site has no analytics or tracking scripts. The tool loads nothing from third parties.<!-- feature:workspaces --> The checkout page loads Paddle’s script to take payment.<!-- /feature:workspaces --></li>
           <!-- /feature:!counts -->
           <!-- feature:counts -->
-          <li>The site has no tracking scripts and loads nothing from third parties.</li>
+          <li>The site has no tracking scripts. The tool loads nothing from third parties.<!-- feature:workspaces --> The checkout page loads Paddle’s script to take payment.<!-- /feature:workspaces --></li>
           <li>The site’s server counts page loads: for each page, the date and the website you came from, if any. It does not record your IP address, set a cookie or keep anything else about you. In the tool, it counts only that the page was opened.</li>
           <!-- /feature:counts -->
           <li>The company hosting the site can see ordinary web server logs, such as the pages requested and IP addresses. It cannot see your files.</li>
         </ul>
 
         <h2>Checking this yourself</h2>
-        <p>Open your browser’s developer tools, go to the network panel, and load a file. No request carries your data. The pages also carry a content security policy that only allows connections to this site, so the browser itself blocks anything else. The source code is published so anyone can confirm what the page does, and its automated test checks that none of your data is stored or sent.</p>
+        <p>Open your browser’s developer tools, go to the network panel, and load a file. No request carries your data. The pages also carry a content security policy that allows connections only to this site, so the browser itself blocks anything else.<!-- feature:workspaces --> The checkout page allows connections to Paddle, which takes the payment.<!-- /feature:workspaces --> The source code is published so anyone can confirm what the page does, and its automated test checks that none of your data is stored or sent.</p>
 
         <h2>If this changes</h2>
         <!-- feature:!workspaces -->
