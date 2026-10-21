@@ -17,6 +17,7 @@ const SERVER_SENTENCE = "Something went wrong on the server.";
 interface Answer {
   status: number;
   body: unknown;
+  contentType?: string;
 }
 
 interface FakeServer {
@@ -37,9 +38,10 @@ function server(answers: { config: Answer; session?: Answer }): FakeServer {
           : url === "/api/auth/get-session"
             ? (answers.session ?? { status: 404, body: { error: "Not found." } })
             : { status: 404, body: { error: "Not found." } };
-      return new Response(JSON.stringify(answer.body), {
+      const type = answer.contentType ?? "application/json";
+      return new Response(type === "application/json" ? JSON.stringify(answer.body) : String(answer.body), {
         status: answer.status,
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": type },
       });
     },
   };
@@ -327,18 +329,6 @@ test("a deployment with accounts closed shows no Workspace panel and no error", 
   assert.ok(!fake.requests.includes("/api/auth/get-session"), `asked for a session on a closed deployment: ${fake.requests.join(", ")}`);
 });
 
-test("account routes answering 404 show no panel and no error, even when config offers accounts", async () => {
-  const fake = server({
-    config: { status: 200, body: OPEN_CONFIG },
-    session: { status: 404, body: { error: "Not found." } },
-  });
-  const panel = await mount(fake);
-  assert.equal(panel.text(), "", "the panel rendered something when the account routes answered 404");
-  assert.equal(panel.error(), "", "the panel showed the 404 as an error");
-  assert.deepEqual(panel.tags(), [], "the panel rendered elements when the account routes answered 404");
-  assert.ok(fake.requests.includes("/api/auth/get-session"), "the session was never asked for");
-});
-
 test("no panel appears while the deployment's config is still being read", async () => {
   let release: () => void = () => {};
   const held = new Promise<void>((resolve) => {
@@ -357,14 +347,14 @@ test("no panel appears while the deployment's config is still being read", async
   assert.deepEqual(panel.tags(), [], "the panel appeared once a closed config answered");
 });
 
-test("no panel appears while the account routes are still being answered", async () => {
+test("no panel appears while the session is being read, then the sign-in panel appears", async () => {
   let release: () => void = () => {};
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
   const fake = server({
     config: { status: 200, body: OPEN_CONFIG },
-    session: { status: 404, body: { error: "Not found." } },
+    session: { status: 200, body: { user: null } },
   });
   const answer = fake.fetch;
   fake.fetch = async (path: string) => {
@@ -372,10 +362,31 @@ test("no panel appears while the account routes are still being answered", async
     return answer(path);
   };
   const panel = await mount(fake);
-  assert.deepEqual(panel.tags(), [], "the panel appeared before the account route answered");
+  assert.deepEqual(panel.tags(), [], "the panel appeared before the session answered");
   release();
   await panel.settle();
-  assert.deepEqual(panel.tags(), [], "the panel appeared once the account route answered 404");
+  assert.ok(panel.tags().includes("FIELDSET"), "the sign-in panel did not appear once the session answered signed out");
+});
+
+test("a session 404 answered as HTML while accounts are open shows the fallback sentence", async () => {
+  const fake = server({
+    config: { status: 200, body: OPEN_CONFIG },
+    session: { status: 404, body: "<html><body>Not found</body></html>", contentType: "text/html" },
+  });
+  const panel = await mount(fake);
+  assert.ok(panel.tags().includes("FIELDSET"), "a proxy failure left the panel with nowhere to show its message");
+  assert.equal(panel.error(), "The server returned 404.");
+});
+
+test("a session 404 carrying a message while accounts are open shows that message", async () => {
+  const sent = "Auth routing is unavailable.";
+  const fake = server({
+    config: { status: 200, body: OPEN_CONFIG },
+    session: { status: 404, body: { error: sent } },
+  });
+  const panel = await mount(fake);
+  assert.ok(panel.tags().includes("FIELDSET"), "a 404 left the panel with nowhere to show its message");
+  assert.equal(panel.error(), sent);
 });
 
 test("a real failure while accounts are open still shows its message", async () => {
@@ -386,24 +397,4 @@ test("a real failure while accounts are open still shows its message", async () 
   const panel = await mount(fake);
   assert.ok(panel.tags().includes("FIELDSET"), "a real failure left the panel with nowhere to show its message");
   assert.equal(panel.error(), SERVER_SENTENCE);
-});
-
-test("only a 404 from an account route means accounts are closed", async () => {
-  const failure = async (read: () => Promise<unknown>, status: number): Promise<unknown> => {
-    const original = globalThis.fetch;
-    globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ error: "Not found." }), { status, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
-    try {
-      return await read().then(() => null, (error: unknown) => error);
-    } finally {
-      globalThis.fetch = original;
-    }
-  };
-  const api = await import("../src/app/account.ts");
-  const session = await failure(() => api.getUser(), 404);
-  assert.equal(api.accountsClosed(session), true, "a 404 from the session route is a closed deployment");
-  const plan = await failure(() => api.getPlan("w1"), 404);
-  assert.equal(api.accountsClosed(plan), false, "a 404 for a workspace is a real not-found");
-  const broken = await failure(() => api.getUser(), 500);
-  assert.equal(api.accountsClosed(broken), false, "a 500 from the session route is a real failure");
 });
