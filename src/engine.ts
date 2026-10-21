@@ -551,9 +551,9 @@ export async function dataCheck(query: Query, config: BridgeConfig): Promise<Dat
 
 export interface PeriodMoney {
   period: string;
-  /** Every row of the file for this period, before the filters: the exact total, rounded once to whole dollars. */
+  /** File rows for this period before filters, summed in integer billionths and rounded to whole dollars; NaN if any money value is unreadable. */
   inFile: number;
-  /** The rows the filters keep, the same exact rule. */
+  /** Rows the filters keep, measured by the same rule. */
   afterFilters: number;
 }
 
@@ -569,12 +569,12 @@ function readableSql(column: string): string {
   return `(isfinite(${value}) AND abs(${value}) < 1e19)`;
 }
 
-/** A money column in billionths of a dollar, read from the DOUBLE the file produced. Amounts below 2^21 dollars are exact to the billionth. Larger amounts carry the DOUBLE's own rounding error, which stays under a millionth of a dollar per row below a billion dollars. A blank is NULL and adds nothing. A non-finite or absurd value is NULL, so it can never throw. */
+/** A money column read as DOUBLE and rounded per row to integer billionths of a dollar. Values with more than nine decimals lose precision, and larger values can also lose precision in the DOUBLE multiplication. Blanks, non-finite values and magnitudes at least 1e19 yield NULL. */
 function nanosSql(column: string): string {
   return `(CASE WHEN ${readableSql(column)} THEN CAST(ROUND(CAST(${ident(column)} AS DOUBLE) * 1000000000) AS HUGEINT) END)`;
 }
 
-/** The bridge's measure per row in billionths: sales minus cost on margin, subtracted before any sum, blanks as zero, exactly as measureSql reads it. */
+/** Sales in integer billionths, or sales minus cost on margin. Each column is rounded to billionths before subtraction; on margin, blanks contribute zero as in measureSql. */
 function exactMeasureSql(config: BridgeConfig): string {
   const sales = nanosSql(config.salesColumn);
   if (!config.costColumn) return sales;
@@ -641,10 +641,12 @@ export function wholeDollars(value: number): number {
 
 /**
  * The money tie-out, three lines per period: what the file holds, what the
- * filters removed, and what the bridge shows. The file and filter figures are
- * measured exactly on their own relations; the bridge figure is the bridge's
- * own total. The file line is derived from the other two so the three always
- * foot, and with no filter it shows the same digits as the bridge.
+ * filters removed, and what the bridge shows. File and filtered rows are
+ * measured in integer billionths on their own relations; the bridge line uses
+ * the bridge's rounded DOUBLE total. The displayed file line adds the difference
+ * of the two measured whole-dollar totals to the bridge line. For finite totals
+ * within safe integer range, the lines foot; with no filter the file line shows
+ * the bridge's digits. It can differ from the independently rounded file sum.
  */
 export function tieOutLines(config: BridgeConfig, tieOut: TieOut, result: BridgeResult): TieOutLine[] {
   const measure = measureName(config);

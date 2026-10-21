@@ -763,7 +763,7 @@ test("money tie-out: the file's money less the excluded rows equals the bridge, 
   });
 });
 
-test("money tie-out in whole dollars does not move with the bridge's grouping", async () => {
+test("money tie-out gives the same whole dollars for this fractional-cent fixture under both groupings", async () => {
   const query = await openDatabase();
   const setup: Setup = {
     periodColumn: "year",
@@ -924,7 +924,7 @@ test("money tie-out rounds half a dollar away from zero, on both sides of the me
   });
 });
 
-test("money tie-out counts money with more than three decimals exactly", async () => {
+test("money tie-out rounds this four- and five-decimal fixture to the expected whole dollars", async () => {
   const query = await openDatabase();
   const setup: Setup = {
     periodColumn: "year",
@@ -1005,8 +1005,8 @@ test("money tie-out: the allowed one-dollar boundary when the bridge itself roun
   // 55 rows of 0.1 hold exactly 5.5 dollars, which rounds to 6. Grouped by product
   // the bridge's DOUBLE total lands just above 5.5 and shows 6; in one group it
   // lands just below and shows 5. Nothing is excluded, so the file line follows the
-  // bridge line. That is the one case where the file line may sit one dollar from
-  // the exact file total rounded to whole dollars, and it is allowed.
+  // bridge line. This fixture exercises the allowed one-dollar difference at a
+  // half-dollar boundary; it does not establish an error bound for other inputs.
   await query(`CREATE TABLE data AS
     SELECT 2025 AS year, (i % 2)::VARCHAR AS product, 'all' AS all_group, 1 AS units, 0.1::DOUBLE AS sales
     FROM range(55) t(i)
