@@ -547,13 +547,16 @@ type PlanRow = { role: string; plan: import("../src/app/account.ts").Plan };
 
 interface FakeServer {
   workspaces: { id: string; name: string }[];
-  plans: Record<string, PlanRow | "defer">;
+  plans: Record<string, PlanRow>;
   planReads: string[];
   checkout: "ok" | "fail" | "defer";
   checkoutReads: string[];
   fetch(path: string, init?: RequestInit): Promise<Response>;
   setPlan(id: string, row: PlanRow): void;
-  releaseDeferred(id: string): void;
+  /** Holds the next plan reply for id, computed now, until releaseHeld lets it land. */
+  holdPlan(id: string, snapshot: PlanRow): void;
+  /** Lets held plan replies for id land, oldest first. */
+  releaseHeld(id: string): void;
   releaseCheckout(): void;
 }
 
@@ -563,7 +566,7 @@ const pro = (seats = 2): PlanRow => ({ role: "owner", plan: { pro: true, status:
 /** The panel's own API, answered in memory, with reads and replies the test controls. */
 function fakeServer(options: {
   workspaces: { id: string; name: string }[];
-  plans: Record<string, PlanRow | "defer">;
+  plans: Record<string, PlanRow>;
   checkout?: "ok" | "fail" | "defer";
 }): FakeServer {
   const server: FakeServer = {
@@ -575,10 +578,18 @@ function fakeServer(options: {
     setPlan(id, row) {
       server.plans[id] = row;
     },
-    releaseDeferred(id) {
-      const waiting = deferred.get(id) ?? [];
-      deferred.delete(id);
-      for (const release of waiting) release();
+    holdPlan(id, snapshot) {
+      const queue = heldBlueprints.get(id) ?? [];
+      queue.push(structuredClone(snapshot));
+      heldBlueprints.set(id, queue);
+    },
+    releaseHeld(id) {
+      const waiting = inFlight.filter((entry) => entry.id === id);
+      for (const entry of waiting) {
+        const at = inFlight.indexOf(entry);
+        if (at >= 0) inFlight.splice(at, 1);
+      }
+      for (const entry of waiting) entry.release();
     },
     releaseCheckout() {
       const waiting = pendingCheckout.splice(0);
@@ -594,15 +605,23 @@ function fakeServer(options: {
       if (plan) {
         const id = plan[1];
         server.planReads.push(id);
-        if (server.plans[id] === "defer") {
-          await new Promise<void>((resolve) => {
-            const waiting = deferred.get(id) ?? [];
-            waiting.push(resolve);
-            deferred.set(id, waiting);
+        // A held reply was computed when the test held it, so releasing it
+        // later lands that snapshot, never the server's newer state.
+        const blueprints = heldBlueprints.get(id);
+        if (blueprints && blueprints.length > 0) {
+          const snapshot = blueprints.shift()!;
+          if (blueprints.length === 0) heldBlueprints.delete(id);
+          let release!: () => void;
+          const waiter = new Promise<void>((resolve) => {
+            release = resolve;
           });
+          inFlight.push({ id, release, waiter });
+          await waiter;
+          const at = inFlight.findIndex((entry) => entry.release === release);
+          if (at >= 0) inFlight.splice(at, 1);
+          return json(snapshot);
         }
-        const row = server.plans[id];
-        return json(typeof row === "string" ? free() : row);
+        return json(server.plans[id]);
       }
       const bridges = url.match(/^\/api\/workspaces\/([^/]+)\/bridges$/);
       if (bridges) return json([]);
@@ -620,7 +639,8 @@ function fakeServer(options: {
       return json({ error: `unexpected ${url}` }, 500);
     },
   };
-  const deferred = new Map<string, (() => void)[]>();
+  const heldBlueprints = new Map<string, PlanRow[]>();
+  const inFlight: { id: string; release: () => void; waiter: Promise<void> }[] = [];
   const pendingCheckout: (() => void)[] = [];
   return server;
 }
@@ -775,12 +795,11 @@ test("a previous workspace's plan cannot confirm or stop the return", async () =
     await panel.chose("w1");
     assert.equal(panel.shows("Pro, 2 seats."), true, panel.text());
     assert.equal(panel.shows(PRO_SENTENCE), false, panel.text());
-    server.plans.w2 = "defer";
+    server.holdPlan("w2", free());
     await panel.chose("w2");
     assert.equal(panel.shows(PRO_SENTENCE), false, panel.text());
     assert.equal(panel.shows("Pro, 2 seats."), false, panel.text());
-    server.setPlan("w2", free());
-    server.releaseDeferred("w2");
+    server.releaseHeld("w2");
     await panel.advance(3000);
     assert.equal(panel.shows(PRO_SENTENCE), false, panel.text());
     assert.equal(panel.shows(WAITING_SENTENCE), true, panel.text());
@@ -888,6 +907,68 @@ test("a return replaces the waiting sentence when Pro arrives during polling", a
     await panel.advance(3000);
     assert.equal(panel.shows(PRO_SENTENCE), true, panel.text());
     assert.equal(panel.shows(WAITING_SENTENCE), false, panel.text());
+    await panel.unmount();
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("a delayed free reply released after Pro never overwrites it", async () => {
+  mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  try {
+    markerFor("w2");
+    const server = fakeServer({ workspaces: TWO, plans: { w1: free(), w2: free() } });
+    const panel = await mountPanel({ server, search: "?subscribed=1" });
+    assert.equal(panel.shows(WAITING_SENTENCE), true, panel.text());
+    // The first poll's reply is already computed as free when Pro lands.
+    server.holdPlan("w2", free());
+    await panel.advance(3000);
+    server.setPlan("w2", pro(2));
+    await panel.advance(3000);
+    assert.equal(panel.shows(PRO_SENTENCE), true, panel.text());
+    assert.equal(panel.shows("Pro, 2 seats."), true, panel.text());
+    assert.equal(panel.shows("Subscribe"), false, panel.text());
+    assert.equal(storedMarker(), null);
+    // The older free reply lands after the newer Pro reply settled the return.
+    server.releaseHeld("w2");
+    await panel.advance(0);
+    assert.equal(panel.shows("Pro, 2 seats."), true, panel.text());
+    assert.equal(panel.shows(PRO_SENTENCE), true, panel.text());
+    assert.equal(panel.shows("Subscribe"), false, panel.text());
+    assert.equal(panel.shows("Manage billing"), true, panel.text());
+    // No timer remains to repair it: polling stopped with the confirmation.
+    const reads = server.planReads.length;
+    await panel.advance(60_000);
+    assert.equal(server.planReads.length, reads, "polling continued after Pro was confirmed");
+    await panel.unmount();
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("a free reply released in the same turn as Pro never overwrites it", async () => {
+  mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  try {
+    markerFor("w2");
+    const server = fakeServer({ workspaces: TWO, plans: { w1: free(), w2: free() } });
+    const panel = await mountPanel({ server, search: "?subscribed=1" });
+    assert.equal(panel.shows(WAITING_SENTENCE), true, panel.text());
+    // The first poll is already computed as Pro and the second as free, from
+    // before the server changed, and both land in the same turn.
+    server.holdPlan("w2", pro(2));
+    await panel.advance(3000);
+    server.holdPlan("w2", free());
+    await panel.advance(3000);
+    server.releaseHeld("w2");
+    await panel.advance(0);
+    assert.equal(panel.shows("Pro, 2 seats."), true, panel.text());
+    assert.equal(panel.shows(PRO_SENTENCE), true, panel.text());
+    assert.equal(panel.shows("Subscribe"), false, panel.text());
+    assert.equal(panel.shows("Manage billing"), true, panel.text());
+    assert.equal(storedMarker(), null);
+    const reads = server.planReads.length;
+    await panel.advance(60_000);
+    assert.equal(server.planReads.length, reads, "polling continued after Pro was confirmed");
     await panel.unmount();
   } finally {
     mock.timers.reset();

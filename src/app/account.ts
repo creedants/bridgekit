@@ -415,14 +415,28 @@ export function useCheckoutReturn(options: {
   }, [state?.workspace, state?.phase, checkoutPro]);
 
   // Poll the checkout workspace until its plan is Pro or the deadline passes.
+  // A reply changes nothing once it is superseded by a newer reply, once Pro
+  // is accepted, or after expiry or unmount: every resolved response passes
+  // the check below before it may reach onPlan.
   useEffect(() => {
     if (!state || state.phase !== "pending" || !options.enabled || !state.workspace) return;
     const target = state.workspace;
+    let live = true;
+    let settled = false;
+    let latest = 0;
+    let sent = 0;
     const poll = setInterval(() => {
+      sent += 1;
+      const mine = sent;
       void read(target).then(
         (found) => {
+          if (!live || settled || mine < latest) return;
+          latest = mine;
           options.onPlan(target, found);
           if (found.plan.pro) {
+            // Stop synchronously, so a reply released in the same turn after
+            // this one still sees the return as settled.
+            settled = true;
             if (state.token) forgetCheckoutWorkspace(state.token);
             setState((current) => (current && current.phase === "pending" ? { ...current, phase: "paid" } : current));
           }
@@ -432,7 +446,10 @@ export function useCheckoutReturn(options: {
         },
       );
     }, pollMs);
-    return () => clearInterval(poll);
+    return () => {
+      live = false;
+      clearInterval(poll);
+    };
   }, [state?.workspace, state?.phase, state?.deadline, options.enabled]);
 
   // One deadline for the whole return, started when it first ran.
