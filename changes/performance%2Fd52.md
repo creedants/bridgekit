@@ -1,0 +1,1 @@
+- A workspace with a subscription shows Manage billing instead of Subscribe, opening Paddle's customer portal; a paused workspace says its subscription is paused and how to resume it, and the checkout return polls the plan until Pro is on instead of asking for a reload.

@@ -200,3 +200,61 @@ export const deleteSaved = (id: string, kind: "setups" | "bridges", item: string
 
 export const checkout = (id: string, seats: number) =>
   call<{ checkoutUrl: string }>(`/api/workspaces/${id}/checkout`, { body: { seats } });
+
+export const openPortal = (id: string) => call<{ portalUrl: string }>(`/api/workspaces/${id}/portal`, { method: "POST", body: {} });
+
+/**
+ * Whether the panel offers Manage billing instead of Subscribe. Active,
+ * trialing, past due, paused and canceled-with-time-left workspaces manage
+ * their existing subscription; a workspace with no row, or a canceled
+ * workspace whose paid time has ended, can start a new one.
+ */
+export function hasManageBilling(status: string | null, pro: boolean): boolean {
+  if (status === null) return false;
+  if (status === "canceled" && !pro) return false;
+  return true;
+}
+
+/**
+ * Checks the plan every 3 s for up to 90 s after a checkout return, until
+ * Pro is on. Returns a stop function the panel calls when it unmounts or
+ * when Pro arrives. A failed plan read never stops the wait.
+ */
+export function pollForPro(
+  workspaceId: string,
+  onPro: (found: { role: string; plan: Plan }) => void,
+  opts?: {
+    intervalMs?: number;
+    timeoutMs?: number;
+    getPlan?: (id: string) => Promise<{ role: string; plan: Plan }>;
+  },
+): () => void {
+  const intervalMs = opts?.intervalMs ?? 3000;
+  const timeoutMs = opts?.timeoutMs ?? 90000;
+  const read = opts?.getPlan ?? getPlan;
+  let stopped = false;
+  const timer = setInterval(async () => {
+    if (stopped) return;
+    try {
+      const found = await read(workspaceId);
+      if (stopped) return;
+      if (found.plan.pro) {
+        stopped = true;
+        clearInterval(timer);
+        clearTimeout(limit);
+        onPro(found);
+      }
+    } catch {
+      // Keep polling through a transient plan read failure.
+    }
+  }, intervalMs);
+  const limit = setTimeout(() => {
+    stopped = true;
+    clearInterval(timer);
+  }, timeoutMs);
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+    clearTimeout(limit);
+  };
+}

@@ -27,6 +27,7 @@ export default function WorkspacePanel(props: {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [subscribed, setSubscribed] = useState(false);
 
   async function act(work: () => Promise<unknown>, done = "") {
     setBusy(true);
@@ -67,7 +68,8 @@ export default function WorkspacePanel(props: {
       // Paddle's checkout returns to /app/?subscribed=1; its confirmation reaches the server separately.
       if (new URLSearchParams(location.search).has("subscribed")) {
         history.replaceState(null, "", location.pathname);
-        setMessage("Thank you. Pro switches on as soon as Paddle confirms the payment, usually within a minute; reload to check.");
+        setSubscribed(true);
+        setMessage("Thank you. Pro switches on as soon as Paddle confirms the payment, usually within a minute.");
       }
     });
   }, []);
@@ -78,10 +80,23 @@ export default function WorkspacePanel(props: {
     act(async () => {
       const [found, saved] = await Promise.all([api.getPlan(active), api.listBridges(active)]);
       setPlan(found);
+      if (subscribed && found.plan.pro) {
+        setSubscribed(false);
+        setMessage("Thank you. Pro is on.");
+      }
       setBridges(saved);
       setSetups(props.columns.length ? await api.listSetups(active, props.columns) : []);
     });
   }, [active, columnsKey]);
+
+  useEffect(() => {
+    if (!subscribed || !active) return;
+    return api.pollForPro(active, (found) => {
+      setPlan(found);
+      setSubscribed(false);
+      setMessage("Thank you. Pro is on.");
+    });
+  }, [subscribed, active]);
 
   if (config === null) return loadingShell(error);
   if (!accountsOpen(config)) return closedShell();
@@ -108,13 +123,28 @@ export default function WorkspacePanel(props: {
             </select>
           )}
           {workspaces.length === 1 && <p><b>{workspaces[0].name}</b></p>}
-          {plan && (
-            pro ? (
-              <p className="hint">Pro, {plan.plan.seats} {plan.plan.seats === 1 ? "seat" : "seats"}{plan.plan.status === "canceled" && plan.plan.currentPeriodEnd ? `, ends ${plan.plan.currentPeriodEnd.slice(0, 10)}` : ""}.</p>
-            ) : (
+          {plan && (() => {
+            const manage = api.hasManageBilling(plan.plan.status, plan.plan.pro);
+            if (pro) {
+              return (
+                <>
+                  <p className="hint">Pro, {plan.plan.seats} {plan.plan.seats === 1 ? "seat" : "seats"}{plan.plan.status === "canceled" && plan.plan.currentPeriodEnd ? `, ends ${plan.plan.currentPeriodEnd.slice(0, 10)}` : ""}.</p>
+                  {manage && canManage && <ManageBilling busy={busy} onManage={() => act(async () => { location.href = (await api.openPortal(active)).portalUrl; })} />}
+                </>
+              );
+            }
+            if (manage) {
+              return (
+                <>
+                  {plan.plan.status === "paused" && <p className="hint">Your subscription is paused. Manage billing to resume it.</p>}
+                  {canManage && <ManageBilling busy={busy} onManage={() => act(async () => { location.href = (await api.openPortal(active)).portalUrl; })} />}
+                </>
+              );
+            }
+            return (
               <Subscribe canManage={canManage} billing={config?.billing ?? false} busy={busy} onSubscribe={(seats) => act(async () => { location.href = (await api.checkout(active, seats)).checkoutUrl; })} />
-            )
-          )}
+            );
+          })()}
 
           {props.columns.length > 0 && (
             <>
@@ -277,6 +307,14 @@ function Subscribe(props: { canManage: boolean; billing: boolean; busy: boolean;
       </div>
       <p className="hint">Payment is taken by Paddle, our reseller, on its own checkout page.</p>
     </>
+  );
+}
+
+function ManageBilling(props: { busy: boolean; onManage: () => void }) {
+  return (
+    <div className="row">
+      <button disabled={props.busy} onClick={props.onManage}>Manage billing</button>
+    </div>
   );
 }
 
