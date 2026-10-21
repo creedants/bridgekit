@@ -1,3 +1,4 @@
+import type { Setup } from "./app/setup.ts";
 import type { Query } from "./engine.ts";
 
 /**
@@ -71,4 +72,172 @@ SELECT
   ) AS sales
 FROM shaped
 )`);
+}
+
+/** The row count a sample uses when the URL does not name one. */
+export const SAMPLE_ROWS = 1_000_000;
+/** The most `?sample=<number>` may ask for. */
+export const MAX_SAMPLE_ROWS = 5_000_000;
+
+/**
+ * Made-up SKU-level sales in the shape of an ordinary product list: one row per
+ * sales line, a stable SKU, a customer, units and sales. 2026 lifts the price of
+ * the first twenty SKUs by 3%, retires four SKUs and adds two, so the bridge has
+ * volume, mix, price, new and discontinued lines.
+ *
+ * Values come from hashing the row number, so the same row count always
+ * produces the same data in Node and in the browser.
+ */
+export async function createSkuSales(query: Query, rows: number, table = "sales"): Promise<void> {
+  await query(`
+CREATE OR REPLACE TABLE "${table}" AS
+WITH raw AS (
+  SELECT
+    i,
+    CASE WHEN ((hash(i * 16 + 1) % 1000000) / 1000000.0) < 0.5 THEN 2025 ELSE 2026 END AS year,
+    floor(pow(((hash(i * 16 + 2) % 1000000) / 1000000.0), 2.0) * 40)::INT AS sku_i,
+    floor(pow(((hash(i * 16 + 3) % 1000000) / 1000000.0), 2.5) * 120)::INT AS cust_i,
+    ((hash(i * 16 + 4) % 1000000) / 1000000.0) AS units_r
+  FROM range(${Math.floor(rows)}) t(i)
+),
+shaped AS (
+  SELECT
+    i, year, cust_i,
+    CASE WHEN year = 2026 AND sku_i < 2 THEN sku_i + 40 ELSE sku_i END AS sku_i,
+    1 + floor(units_r * 4)::INT AS units
+  FROM raw
+  WHERE NOT (year = 2026 AND sku_i >= 38)
+)
+SELECT
+  year,
+  'SKU-' || lpad((sku_i + 1)::VARCHAR, 3, '0') AS sku,
+  'C' || lpad(cust_i::VARCHAR, 4, '0') AS customer,
+  units,
+  round(units * (CASE WHEN year = 2026 AND sku_i < 20 THEN 1.03 ELSE 1 END)
+    * (20 + ((hash((sku_i + 1) * 16 + 5) % 1000000) / 1000000.0) * 80), 2) AS sales
+FROM shaped`);
+}
+
+/**
+ * Made-up budget against actual by product: one row per product and period, a
+ * column that says which period the row belongs to, units and sales. Actual
+ * volume moves away from budget product by product, prices rise on half of
+ * them, the first product is left out of actual and one new product appears.
+ *
+ * `rows` is split evenly over the two periods, so 24 rows makes twelve
+ * products. Values come from hashing the product number, so the same row count
+ * always produces the same data in Node and in the browser.
+ */
+export async function createBudgetSales(query: Query, rows: number, table = "sales"): Promise<void> {
+  const products = Math.max(4, Math.floor(rows / 2));
+  await query(`
+CREATE OR REPLACE TABLE "${table}" AS
+WITH products AS (
+  SELECT i FROM range(${products}) t(i)
+),
+budget AS (
+  SELECT
+    i,
+    'P' || lpad((i + 1)::VARCHAR, 2, '0') AS product,
+    1 + floor(pow(((hash(i * 16 + 1) % 1000000) / 1000000.0), 2.0) * 400)::INT AS units,
+    40 + ((hash(i * 16 + 2) % 1000000) / 1000000.0) * 60 AS price
+  FROM products
+),
+actual AS (
+  SELECT
+    i, product,
+    greatest(1, round(units * (0.7 + ((hash(i * 16 + 3) % 1000000) / 1000000.0) * 0.6)))::INT AS units,
+    price * (CASE WHEN ((hash(i * 16 + 4) % 1000000) / 1000000.0) < 0.5 THEN 1.02 ELSE 1 END) AS price
+  FROM budget
+)
+SELECT 'Budget' AS period, product, units, round(units * price, 2) AS sales
+FROM budget WHERE i <> 0
+UNION ALL
+SELECT 'Actual' AS period, product, units, round(units * price, 2) AS sales
+FROM actual WHERE i <> ${products - 1}`);
+}
+
+/** One built-in sample: its data, source label, preset setup and optional period pair. */
+export interface Sample {
+  readonly name: "lens" | "sku" | "budget";
+  /** The source label shown in the top bar, the setup description and the Excel export. */
+  readonly label: string;
+  /** Preset setup, so the sample opens ready to calculate. */
+  readonly setup: Setup;
+  /** Prior and current to prefer when the period order would put them the other way round. */
+  readonly periods?: { readonly prior: string; readonly current: string };
+  /** Row count used when the URL does not name one. */
+  readonly rows: number;
+  readonly create: (query: Query, rows: number, table: string) => Promise<void>;
+}
+
+const LENS_SAMPLE: Sample = {
+  name: "lens",
+  label: "Sample data (made-up lens sales)",
+  setup: {
+    periodColumn: "year",
+    grain: "value",
+    unitsColumn: "jobs",
+    salesColumn: "sales",
+    levels: [
+      { name: "Design", columns: ["design"] },
+      { name: "Coating", columns: ["coating"] },
+      { name: "Color", columns: ["photochromic", "polar"] },
+      { name: "Material", columns: ["material"] },
+    ],
+    filters: [],
+  },
+  rows: SAMPLE_ROWS,
+  create: createSyntheticSales,
+};
+
+const SKU_SAMPLE: Sample = {
+  name: "sku",
+  label: "Sample data (made-up product sales)",
+  setup: {
+    periodColumn: "year",
+    grain: "value",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: [{ name: "SKU", columns: ["sku"] }],
+    filters: [],
+  },
+  rows: 250_000,
+  create: createSkuSales,
+};
+
+const BUDGET_SAMPLE: Sample = {
+  name: "budget",
+  label: "Sample data (made-up budget and actual sales)",
+  setup: {
+    periodColumn: "period",
+    grain: "value",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+    filters: [],
+  },
+  // Code-point order puts Actual first, so the pair has to be named.
+  periods: { prior: "Budget", current: "Actual" },
+  rows: 24,
+  create: createBudgetSales,
+};
+
+const SAMPLES = new Map<string, Sample>([
+  [LENS_SAMPLE.name, LENS_SAMPLE],
+  [SKU_SAMPLE.name, SKU_SAMPLE],
+  [BUDGET_SAMPLE.name, BUDGET_SAMPLE],
+]);
+
+/**
+ * `?sample` to a sample and the row count to generate. A number of 1000 or more
+ * keeps its meaning: the lens sample at that many rows, capped. A named sample
+ * loads at its own size. Anything else, including no value, is the lens sample
+ * at its default row count.
+ */
+export function resolveSample(param: string | null): { sample: Sample; rows: number } {
+  const requested = Number(param);
+  if (requested >= 1000) return { sample: LENS_SAMPLE, rows: Math.min(Math.floor(requested), MAX_SAMPLE_ROWS) };
+  const named = param === null ? undefined : SAMPLES.get(param);
+  return named ? { sample: named, rows: named.rows } : { sample: LENS_SAMPLE, rows: LENS_SAMPLE.rows };
 }
