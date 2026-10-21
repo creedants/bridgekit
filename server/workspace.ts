@@ -255,12 +255,14 @@ export async function userHasPro(db: D1Database, userId: string, now = new Date(
   return false;
 }
 
-export async function assertCheckoutOpen(db: D1Database, workspaceId: string): Promise<void> {
-  const held = await db
-    .prepare(`SELECT 1 AS held FROM subscription WHERE organizationId = ? AND NOT (subscription.status = ?)`)
-    .bind(workspaceId, "canceled")
-    .first();
-  if (held) throw new WorkspaceError(409, "This workspace already has a subscription.");
+export async function assertCheckoutOpen(db: D1Database, workspaceId: string, now = new Date()): Promise<void> {
+  const row = await db
+    .prepare(`SELECT status, currentPeriodEnd FROM subscription WHERE organizationId = ?`)
+    .bind(workspaceId)
+    .first<{ status: SubscriptionStatus; currentPeriodEnd: string | null }>();
+  if (!row) return;
+  if (row.status !== "canceled") throw new WorkspaceError(409, "This workspace already has a subscription.");
+  if (hasPro(row.status, row.currentPeriodEnd, now)) throw new WorkspaceError(409, "This workspace already has a subscription.");
 }
 
 /**

@@ -7,7 +7,7 @@ import { handleCommentary, type CommentarySpender } from "./commentary.ts";
 import { countPageView, pageView } from "./counts.ts";
 import { canSendEmail, EMAIL_NOT_SET_UP } from "./email.ts";
 import type { Env } from "./env.ts";
-import { createCheckout, parseSubscriptionEvent, verifyPaddleSignature, type PaddleEnvironment } from "./paddle.ts";
+import { createCheckout, createPortalSession, parseSubscriptionEvent, verifyPaddleSignature, type PaddleEnvironment } from "./paddle.ts";
 import {
   applySubscription,
   assertCheckoutOpen,
@@ -296,6 +296,27 @@ open.post("/api/workspaces/:id/checkout", async (c) => {
     workspaceId: id,
   });
   return c.json({ checkoutUrl: checkout.checkoutUrl });
+});
+
+open.post("/api/workspaces/:id/portal", async (c) => {
+  const id = c.req.param("id");
+  const role = await membership(c.env.DB, await userId(c), id);
+  if (role !== "owner" && role !== "admin") throw new WorkspaceError(403, "Only a workspace owner or admin can subscribe.");
+  if (!c.env.PADDLE_API_KEY) throw new WorkspaceError(404, "Subscriptions are not set up yet.");
+  const row = await c.env.DB.prepare(`SELECT paddleCustomerId FROM subscription WHERE organizationId = ?`)
+    .bind(id)
+    .first<{ paddleCustomerId: string | null }>();
+  if (!row?.paddleCustomerId) return c.json({ error: "Not found." }, 404);
+  try {
+    const portal = await createPortalSession({
+      apiKey: c.env.PADDLE_API_KEY,
+      environment: (c.env.PADDLE_ENVIRONMENT === "live" ? "live" : "sandbox") as PaddleEnvironment,
+      customerId: row.paddleCustomerId,
+    });
+    return c.json({ portalUrl: portal.portalUrl });
+  } catch {
+    return c.json({ error: "Could not open the billing portal. Try again." }, 502);
+  }
 });
 
 open.post("/api/paddle/webhook", async (c) => {
