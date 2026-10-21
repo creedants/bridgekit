@@ -591,12 +591,17 @@ async function drive(browser, origin, rows) {
   console.log(`sample loaded and calculated in ${Date.now() - started} ms`);
 
   const bridgeRowsJs = "JSON.stringify([...document.querySelectorAll('.bridge table')[0].rows].slice(1).map((row) => ({ label: (row.cells[0] ? row.cells[0].innerText : '').trim(), amount: row.cells[1] ? row.cells[1].innerText : '' })))";
-  const bridge = JSON.parse(await browser.evalJs(bridgeRowsJs)).map((row) => parseBridgeAmount(row.amount, `sample: ${row.label || "row"}`));
-  const [prior, ...rest] = bridge;
-  const current = rest.pop();
-  const residual = prior + rest.reduce((a, b) => a + b, 0) - current;
-  if (Math.abs(residual) > rest.length) fail(`bridge does not add up (off by ${residual})`);
-  console.log(`bridge adds up: ${prior} + effects = ${current}`);
+  const bridgeTotals = async (step) => {
+    const rows = JSON.parse(await browser.evalJs(bridgeRowsJs));
+    const amounts = rows.map((row) => parseBridgeAmount(row.amount, `${step}: ${row.label || "row"}`));
+    const [prior, ...effects] = amounts;
+    const current = effects.pop();
+    const residual = prior + effects.reduce((a, b) => a + b, 0) - current;
+    if (Math.abs(residual) > effects.length) fail(`${step}: bridge does not add up (off by ${residual})`);
+    return { rows, prior, current };
+  };
+  const sampleTotals = await bridgeTotals("sample");
+  console.log(`bridge adds up: ${sampleTotals.prior} + effects = ${sampleTotals.current}`);
 
   const tabs = ["Movers", "Accounts", "Price changes", "Price gaps", "Trend", "Unmatched", "Setup check", "Data check", "Bridge"];
   for (const tab of tabs) {
@@ -713,6 +718,33 @@ async function drive(browser, origin, rows) {
   await loadCsv();
   if (!(await browser.evalJs(`!${rememberBox}.checked && localStorage.length === 1`))) fail("remembering turned itself back on after a reload");
   console.log("ok  remember setup: staying off survives a reload");
+
+  // Each built-in sample has to reach a calculated bridge of its own. Remembering
+  // is off here, so these walks also prove that a sample stores nothing.
+  for (const [name, check] of [
+    ["sku", { label: "Sample data (made-up product sales)", mixes: ["Mix: SKU"], first: "Sales 2025", last: "Sales 2026" }],
+    ["budget", { label: "Sample data (made-up budget and actual sales)", mixes: ["Mix: Product"], first: "Sales Budget", last: "Sales Actual" }],
+  ]) {
+    const url = `${origin}/app/?sample=${name}`;
+    await browser.goto(url);
+    try {
+      await browser.waitFor("!!document.querySelector('.kpis')", 600);
+    } catch (error) {
+      fail(`the ${name} sample at ${url} did not load and calculate within 150 s (${error.message})`);
+    }
+    const totals = await bridgeTotals(`${name} sample`);
+    const mixes = totals.rows.filter((row) => row.label.startsWith("Mix:")).map((row) => row.label);
+    if (mixes.join(",") !== check.mixes.join(",")) {
+      fail(`${name} sample: mix lines are ${mixes.join(", ") || "none"}, expected ${check.mixes.join(", ")}`);
+    }
+    const [first, last] = [totals.rows[0].label, totals.rows.at(-1).label];
+    if (first !== check.first || last !== check.last) fail(`${name} sample: bridge runs ${first} to ${last}, expected ${check.first} to ${check.last}`);
+    const shown = await browser.evalJs("document.querySelector('.source').textContent.trim()");
+    if (!shown.startsWith(check.label)) fail(`${name} sample: source label is ${JSON.stringify(shown)}, expected to start with ${JSON.stringify(check.label)}`);
+    console.log(`ok  ${name} sample: ${check.label}, ${totals.rows.length} bridge lines, ${totals.prior} to ${totals.current}`);
+  }
+  if ((await browser.evalJs("localStorage.length")) !== 1) fail("a sample stored something while remembering is off");
+  console.log("ok  samples: sku and budget store nothing while remembering is off");
 
   const fixtureDir = mkdtempSync(join(tmpdir(), "bridgekit-fixtures-"));
   try {

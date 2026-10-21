@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { dataCheck, runBridge, type BridgeConfig } from "../engine.ts";
 import { summarize } from "../summary.ts";
-import { createSyntheticSales } from "../synth.ts";
+import { resolveSample, type Sample } from "../synth.ts";
 import {
   lazyChunk,
   openBrowserDatabase,
@@ -64,29 +64,6 @@ function prefetchResults(): void {
 
 const RESULTS_PREFETCH_SETTLE_MS = 150;
 
-const SAMPLE_ROWS = 1_000_000;
-const MAX_SAMPLE_ROWS = 5_000_000;
-
-/** `?sample` uses the default size; `?sample=3000000` asks for a specific row count. */
-function sampleRows(): number {
-  const requested = Number(new URLSearchParams(location.search).get("sample"));
-  return requested >= 1000 ? Math.min(Math.floor(requested), MAX_SAMPLE_ROWS) : SAMPLE_ROWS;
-}
-
-const SAMPLE_SETUP: Setup = {
-  periodColumn: "year",
-  grain: "value",
-  unitsColumn: "jobs",
-  salesColumn: "sales",
-  levels: [
-    { name: "Design", columns: ["design"] },
-    { name: "Coating", columns: ["coating"] },
-    { name: "Color", columns: ["photochromic", "polar"] },
-    { name: "Material", columns: ["material"] },
-  ],
-  filters: [],
-};
-
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -117,6 +94,7 @@ export function App() {
   const [setup, setSetup] = useState<Setup | null>(null);
   const [load, setLoad] = useState(0);
   const [loadedPeriods, setLoadedPeriods] = useState<LoadedPeriods | null>(null);
+  const [suggestedPeriods, setSuggestedPeriods] = useState<Sample["periods"] | null>(null);
   const [prior, setPrior] = useState("");
   const [current, setCurrent] = useState("");
   const [remember, setRemember] = useState(isRemembering);
@@ -141,7 +119,7 @@ export function App() {
     }
   }
 
-  async function afterLoad(name: string, preset?: Setup) {
+  async function afterLoad(name: string, preset?: Sample) {
     const q = await query();
     const described = await q(`DESCRIBE ${quote(TABLE)}`);
     const found = described.map((row) => ({ name: String(row.column_name), type: String(row.column_type) }));
@@ -152,7 +130,8 @@ export function App() {
     setSource(name);
     setRun(null);
     setLoad((n) => n + 1);
-    setSetup(preset ?? saved ?? guessSetup(found));
+    setSetup(preset?.setup ?? saved ?? guessSetup(found));
+    setSuggestedPeriods(preset?.periods ?? null);
     setNotice(saved ? "Restored the setup you last used with these columns." : "");
     setPreview(await q(`SELECT * FROM ${quote(TABLE)} LIMIT 8`));
     setRollups([]);
@@ -168,9 +147,10 @@ export function App() {
 
   const loadSample = () => {
     prefetchResults();
+    const { sample, rows } = resolveSample(new URLSearchParams(location.search).get("sample"));
     return task("Generating sample data…", async () => {
-      await createSyntheticSales(await query(), sampleRows(), TABLE);
-      await afterLoad("Sample data (made-up lens sales)", SAMPLE_SETUP);
+      await sample.create(await query(), rows, TABLE);
+      await afterLoad(sample.label, sample);
     });
   };
 
@@ -202,8 +182,11 @@ export function App() {
       if (stale) return;
       const values = [...list.values];
       setLoadedPeriods({ view: requested, values });
-      setCurrent((value) => (values.includes(value) ? value : (values.at(-1) ?? "")));
-      setPrior((value) => (values.includes(value) ? value : (values.at(-2) ?? "")));
+      // A sample that compares two named periods says which one is prior.
+      const pick = (kept: string, suggested: string | undefined, fallback: string) =>
+        values.includes(kept) ? kept : suggested !== undefined && values.includes(suggested) ? suggested : fallback;
+      setCurrent((value) => pick(value, suggestedPeriods?.current, values.at(-1) ?? ""));
+      setPrior((value) => pick(value, suggestedPeriods?.prior, values.at(-2) ?? ""));
     });
     return () => {
       stale = true;
