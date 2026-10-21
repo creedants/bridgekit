@@ -17,6 +17,9 @@ export default function WorkspacePanel(props: {
   onUseSetup: (setup: Setup) => void;
 }) {
   const [config, setConfig] = useState<api.Config | null>(null);
+  // Set when the server says accounts are closed, from the config or from an
+  // account route answering 404. The panel then renders nothing at all.
+  const [closed, setClosed] = useState(false);
   const [user, setUser] = useState<api.User | null | undefined>(undefined);
   const [workspaces, setWorkspaces] = useState<api.Workspace[]>([]);
   const [active, setActive] = useState("");
@@ -63,8 +66,18 @@ export default function WorkspacePanel(props: {
     act(async () => {
       const found = await api.getConfig();
       setConfig(found);
-      if (!accountsOpen(found)) return;
-      const signedIn = await api.getUser();
+      if (!accountsOpen(found)) {
+        setClosed(true);
+        return;
+      }
+      let signedIn: api.User | null;
+      try {
+        signedIn = await api.getUser();
+      } catch (error) {
+        if (!api.accountsClosed(error)) throw error;
+        setClosed(true);
+        return;
+      }
       setUser(signedIn);
       if (!signedIn) return;
       // An invitation link is /app/?invitation=ID; accept it once signed in.
@@ -93,8 +106,8 @@ export default function WorkspacePanel(props: {
     });
   }, [active, columnsKey]);
 
+  if (closed) return null;
   if (config === null) return loadingShell(error);
-  if (!accountsOpen(config)) return closedShell();
   if (user === undefined) return loadingShell(error);
   if (user === null) return <SignIn config={config} busy={busy} error={error} message={message} act={act} />;
 
@@ -240,15 +253,6 @@ function accountsOpen(config: api.Config): boolean {
 
 function loadingShell(error: string) {
   return <fieldset className="team"><legend>Workspace</legend>{error && <p className="error">{error}</p>}</fieldset>;
-}
-
-function closedShell() {
-  return (
-    <fieldset className="team">
-      <legend>Workspace</legend>
-      <p>Accounts are not open yet.</p>
-    </fieldset>
-  );
 }
 
 function SignIn(props: { config: api.Config; busy: boolean; error: string; message: string; act: Act }) {
