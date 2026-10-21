@@ -1,0 +1,1 @@
+- Saving a setup into a workspace that already holds 50 is refused, and setups already stored stay listed.
