@@ -1,0 +1,1 @@
+- When the config reports accounts closed, the Workspace panel shows nothing. No empty Workspace box appears while the config or the session is loading. A session failure on a deployment whose config offers accounts still shows its message, whatever its status or path, so a proxy or auth failure is never read as a closed deployment.

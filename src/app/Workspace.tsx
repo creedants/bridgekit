@@ -93,9 +93,11 @@ export default function WorkspacePanel(props: {
     });
   }, [active, columnsKey]);
 
-  if (config === null) return loadingShell(error);
-  if (!accountsOpen(config)) return closedShell();
-  if (user === undefined) return loadingShell(error);
+  // Nothing is known until the config and the session answer, so nothing
+  // renders; a read that really failed keeps its message.
+  if (config === null) return error === "" ? null : loadingShell(error);
+  if (!accountsOpen(config)) return null;
+  if (user === undefined) return error === "" ? null : loadingShell(error);
   if (user === null) return <SignIn config={config} busy={busy} error={error} message={message} act={act} />;
 
   const plan = plans[active] ?? null;
@@ -240,15 +242,6 @@ function accountsOpen(config: api.Config): boolean {
 
 function loadingShell(error: string) {
   return <fieldset className="team"><legend>Workspace</legend>{error && <p className="error">{error}</p>}</fieldset>;
-}
-
-function closedShell() {
-  return (
-    <fieldset className="team">
-      <legend>Workspace</legend>
-      <p>Accounts are not open yet.</p>
-    </fieldset>
-  );
 }
 
 function SignIn(props: { config: api.Config; busy: boolean; error: string; message: string; act: Act }) {
