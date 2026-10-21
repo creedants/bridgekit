@@ -406,7 +406,7 @@ const LIBRARY_FAILURE: ChunkSentences = {
   gone: "Reload the page to start again.",
 };
 
-const PARQUET_REFUSAL = "Parquet files are not supported. Save the file as CSV or Excel and try again.";
+export const PARQUET_REFUSAL = "Parquet files are not supported. Save the file as CSV or Excel and try again.";
 
 const duckdbChunk = lazyChunk({
   importer: () => import("@duckdb/duckdb-wasm"),

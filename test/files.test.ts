@@ -104,15 +104,29 @@ test("no site page or empty state promises Parquet", () => {
   }
   const app = readRoot(join("src", "app", "App.tsx"));
   assert.equal(/parquet/i.test(app.match(/Drop a .* file anywhere/)?.[0] ?? "parquet"), false, "empty state still mentions Parquet");
-  assert.equal(app.includes(".parquet"), false, "file picker still offers .parquet");
+  const accepts = app.match(/accept="[^"]*"/g) ?? [];
+  assert.equal(accepts.some((a) => /\.parquet/i.test(a)), false, "file picker still offers .parquet");
 });
 
 test("the database refuses Parquet without a third-party request", () => {
   const db = readRoot(join("src", "app", "db.ts"));
+  assert.equal(db.includes("export const PARQUET_REFUSAL"), true, "Parquet sentence is not shared from the database module");
   assert.equal(db.includes(PARQUET_REFUSAL), true, "Parquet refusal sentence is missing");
   assert.equal(db.includes("read_parquet"), false, "read_parquet can still ask extensions.duckdb.org for code");
   assert.equal(db.includes("upload.parquet"), false, "parquet upload name remains");
   assert.equal(db.includes("Use a CSV or Excel (.xlsx) file"), true, "generic file error still names Parquet");
+});
+
+test("the picker refuses Parquet before any database work", () => {
+  const app = readRoot(join("src", "app", "App.tsx"));
+  assert.equal(app.includes("PARQUET_REFUSAL"), true, "picker does not reuse the shared Parquet sentence");
+  assert.equal(app.includes("/\\.parquet$/i"), true, "picker check misses an uppercase .parquet");
+  const loadFileAt = app.indexOf("const loadFile");
+  assert.ok(loadFileAt !== -1, "loadFile is missing");
+  const checkAt = app.indexOf("/\\.parquet$/i");
+  assert.ok(checkAt > loadFileAt, "Parquet check is not in loadFile");
+  const prefetchAt = app.indexOf("prefetchResults()", loadFileAt);
+  assert.ok(checkAt < prefetchAt, "Parquet check runs after speculative loading starts");
 });
 
 test("the data preview shows dates as dates, not epoch milliseconds", () => {

@@ -5,6 +5,7 @@ import { resolveSample, type Sample } from "../synth.ts";
 import {
   lazyChunk,
   openBrowserDatabase,
+  PARQUET_REFUSAL,
   scheduleSpeculative,
   type BrowserDatabase,
   type ChunkSentences,
@@ -187,6 +188,11 @@ export function App() {
   };
 
   const loadFile = (file: File) => {
+    if (/\.parquet$/i.test(file.name)) {
+      return task(`Reading ${file.name}…`, async () => {
+        throw new Error(PARQUET_REFUSAL);
+      });
+    }
     prefetchResults();
     return task(`Reading ${file.name}…`, async () => {
       await (await db()).loadFile(file, TABLE);

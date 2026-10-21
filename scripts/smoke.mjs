@@ -39,6 +39,10 @@ const fail = (message) => {
   throw new Failure(message);
 };
 
+// The owner decided this sentence. Hardcoded here so the check pins the
+// wording users see, not whatever the code happens to hold.
+const PARQUET_SENTENCE = "Parquet files are not supported. Save the file as CSV or Excel and try again.";
+
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 function parseBridgeAmount(raw, where) {
@@ -581,6 +585,113 @@ function proves(record, origin, policies) {
   return null;
 }
 
+/**
+ * A fresh tool page left to settle until its speculative chunk, worker and
+ * wasm requests finish, so anything a later file choice adds stands out
+ * against it. A cooler page is built below with blocked asset URLs instead:
+ * Save-Data emulation cannot switch `navigator.connection.saveData` through
+ * this harness, so blocks hold speculative loading off until the choice.
+ */
+const COLD_SETTLE_MS = 10000;
+const COLD_BLOCKED_SETTLE_MS = 4000;
+const COLD_BLOCKS = ["*duckdb*", "*Results*", "*.wasm"];
+
+async function coldLoad(browser, origin) {
+  await browser.goto(`${origin}/app/`);
+  await browser.waitFor("document.body.innerText.includes('Load a sales file')");
+  await browser.sleep(COLD_SETTLE_MS);
+}
+
+/** A fresh page whose speculative loads are blocked, so nothing loads before the choice. */
+async function coldBlockedLoad(browser, origin) {
+  await browser.send("Network.setBlockedURLs", { urls: COLD_BLOCKS });
+  await browser.goto(`${origin}/app/`);
+  await browser.waitFor("document.body.innerText.includes('Load a sales file')");
+  await browser.sleep(COLD_BLOCKED_SETTLE_MS);
+}
+
+const recordUrls = (record) => [...new Set(record.network.map((entry) => entry.url))].sort();
+
+// Worker startup is recorded as a request to a per-session blob URL, so blob
+// and data URLs are left out of the growth comparison. Anything that could
+// carry data off the origin is an http URL and stays in.
+const comparableUrls = (record) => recordUrls(record).filter((url) => !/^(blob|data):/.test(url));
+
+const violationKey = (entry) => `${entry.from}|${entry.directive}|${entry.url}`;
+
+function assertNoNewViolations(record, base, step) {
+  const known = new Set(base.violations.map(violationKey));
+  const extra = record.violations.filter((entry) => !known.has(violationKey(entry)));
+  if (extra.length) {
+    fail(`${step}: new policy violations: ${extra.slice(0, 3).map((entry) => `[${entry.from}] ${entry.directive} ${entry.url}`).join("; ")}`);
+  }
+}
+
+function assertAllOrigin(record, origin, step) {
+  const stray = record.network.filter((entry) => {
+    if (/^(blob|data):/.test(entry.url)) return false;
+    const to = URL.canParse(entry.url) ? new URL(entry.url) : null;
+    return to?.origin !== origin;
+  });
+  if (stray.length) fail(`${step}: requests off this origin: ${stray.slice(0, 5).map((e) => `${e.method} ${e.url}`).join("; ")}`);
+}
+
+function assertNoThirdPartyExtension(record, step) {
+  const ext = record.network.find((entry) => (entry.url || "").includes("extensions.duckdb.org"));
+  if (ext) fail(`${step}: asked a third-party host: ${ext.method} ${ext.url}`);
+}
+
+async function coldBaseline(browser, origin) {
+  await coldLoad(browser, origin);
+}
+
+async function coldRefused(browser, origin, parquetPath) {
+  await coldLoad(browser, origin);
+  const { root } = await browser.send("DOM.getDocument");
+  const { nodeId } = await browser.send("DOM.querySelector", { nodeId: root.nodeId, selector: "input[type=file][accept*=csv]" });
+  await browser.send("DOM.setFileInputFiles", { nodeId, files: [parquetPath] });
+  await browser.waitFor("!!document.querySelector('.error')");
+  const text = (await browser.evalJs("document.querySelector('.error').textContent.trim()")).trim();
+  if (text !== PARQUET_SENTENCE) fail(`cold parquet: error is ${JSON.stringify(text)}`);
+  console.log("ok  cold parquet: refused with one plain sentence before any database work");
+}
+
+async function coldBlocked(browser, origin) {
+  await browser.send("Network.setBlockedURLs", { urls: COLD_BLOCKS });
+  await browser.goto(`${origin}/app/`);
+  await browser.waitFor("document.body.innerText.includes('Load a sales file')");
+  await browser.sleep(2000);
+  await browser.evalJs(`(async () => {
+    const file = new File(["not a parquet file\\n"], "REFUSED.PARQUET", { type: "application/octet-stream" });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    const event = new DragEvent("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "dataTransfer", { value: dt });
+    document.querySelector(".shell").dispatchEvent(event);
+  })()`);
+  await browser.waitFor("!!document.querySelector('.error')");
+  const text = (await browser.evalJs("document.querySelector('.error').textContent.trim()")).trim();
+  if (text !== PARQUET_SENTENCE) fail(`blocked parquet: error is ${JSON.stringify(text)}`);
+  console.log("ok  blocked parquet: refused with one plain sentence while database assets are unavailable");
+}
+
+async function coldBlockedBaseline(browser, origin) {
+  await coldBlockedLoad(browser, origin);
+  await browser.send("Network.setBlockedURLs", { urls: [] });
+}
+
+async function coldFreshRefused(browser, origin, parquetPath) {
+  await coldBlockedLoad(browser, origin);
+  await browser.send("Network.setBlockedURLs", { urls: [] });
+  const { root } = await browser.send("DOM.getDocument");
+  const { nodeId } = await browser.send("DOM.querySelector", { nodeId: root.nodeId, selector: "input[type=file][accept*=csv]" });
+  await browser.send("DOM.setFileInputFiles", { nodeId, files: [parquetPath] });
+  await browser.waitFor("!!document.querySelector('.error')");
+  const text = (await browser.evalJs("document.querySelector('.error').textContent.trim()")).trim();
+  if (text !== PARQUET_SENTENCE) fail(`fresh parquet: error is ${JSON.stringify(text)}`);
+  console.log("ok  fresh parquet: refused with one plain sentence on a page that loaded nothing");
+}
+
 async function drive(browser, origin, rows) {
   console.log(`browser: ${(await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/version`)).json()).Browser}`);
   await browser.size(1360, 1000);
@@ -898,10 +1009,10 @@ async function drive(browser, origin, rows) {
       await browser.waitFor("!!document.querySelector('.error')");
     }
     const parquetError = (await browser.evalJs("document.querySelector('.error').textContent.trim()")).trim();
-    if (parquetError !== "Parquet files are not supported. Save the file as CSV or Excel and try again.") {
+    if (parquetError !== PARQUET_SENTENCE) {
       fail(`parquet: error is ${JSON.stringify(parquetError)}`);
     }
-    console.log("ok  parquet: refused with one plain sentence and no network request in the record");
+    console.log("ok  parquet: refused with one plain sentence");
     await setDataFile(fixtures.csvPath);
     await addFixtureLevels();
     await waitReady();
@@ -1260,6 +1371,68 @@ try {
   const unproven = proves(control.record, origin, policies);
   if (unproven) fail(`canary: ${unproven}, so a request to another host could go unseen`);
   console.log(`ok  canary: a worker, a shared worker and the page each asked http://127.0.0.1:${DEBUG_PORT} by fetch and by XMLHttpRequest, and each attempt was ${policies ? "refused by the policy and reported" : "recorded and flagged"}`);
+  const coldDir = mkdtempSync(join(tmpdir(), "bridgekit-cold-"));
+  const coldFailures = [];
+  const coldRecords = {};
+  try {
+    const coldLower = join(coldDir, "refused.parquet");
+    writeFileSync(coldLower, "not a parquet file\n");
+    for (const [name, steps] of [
+      ["baseline", (browser) => coldBaseline(browser, origin)],
+      ["refused", (browser) => coldRefused(browser, origin, coldLower)],
+      ["blocked", (browser) => coldBlocked(browser, origin)],
+      ["fresh baseline", (browser) => coldBlockedBaseline(browser, origin)],
+      ["fresh refused", (browser) => coldFreshRefused(browser, origin, coldLower)],
+    ]) {
+      try {
+        coldRecords[name] = (await recorded(steps)).record;
+      } catch (error) {
+        coldFailures.push(`cold ${name}: ${error instanceof Failure ? error.message : error.stack}`);
+      }
+    }
+    const coldCheck = (name, fn) => {
+      try {
+        fn();
+      } catch (error) {
+        coldFailures.push(`${name}: ${error instanceof Failure ? error.message : error.stack}`);
+      }
+    };
+    const has = (record, from, file) => record.network.some((entry) => entry.from === from && URL.canParse(entry.url) && file.test(new URL(entry.url).pathname));
+    if (coldRecords.baseline && coldRecords.refused) coldCheck("cold parquet", () => {
+      // The refusal must add no request: every URL it saw, the quiet load saw too.
+      const quiet = new Set(comparableUrls(coldRecords.baseline));
+      const extra = comparableUrls(coldRecords.refused).filter((url) => !quiet.has(url));
+      if (extra.length) fail(`cold parquet: the choice added requests: ${extra.slice(0, 5).join("; ")}`);
+      // The quiet load must have finished speculative loading, or the comparison proves nothing.
+      if (!has(coldRecords.baseline, "worker", /\/duckdb-browser-[^/]*\.worker[^/]*\.js$/) || !has(coldRecords.baseline, "worker", /\/duckdb-[^/]*\.wasm$/)) {
+        fail("cold baseline: the quiet page never loaded its worker script and wasm, so the comparison proves nothing");
+      }
+      assertNoNewViolations(coldRecords.refused, coldRecords.baseline, "cold parquet");
+      assertAllOrigin(coldRecords.refused, origin, "cold parquet");
+      assertNoThirdPartyExtension(coldRecords.refused, "cold parquet");
+      console.log(`ok  cold record: the refusal added no request (${coldRecords.baseline.network.length} to ${coldRecords.refused.network.length})`);
+    });
+    if (coldRecords.blocked) coldCheck("blocked parquet", () => {
+      assertAllOrigin(coldRecords.blocked, origin, "blocked parquet");
+      assertNoThirdPartyExtension(coldRecords.blocked, "blocked parquet");
+    });
+    if (coldRecords["fresh baseline"] && coldRecords["fresh refused"]) coldCheck("fresh parquet", () => {
+      // Nothing may have loaded on the blocked page, or its comparison proves nothing either.
+      if (coldRecords["fresh baseline"].askers.some((asker) => asker.kind === "worker" || asker.kind === "shared_worker")) {
+        fail("cold baseline: the blocked page started a worker, so it was never cold");
+      }
+      const freshQuiet = new Set(comparableUrls(coldRecords["fresh baseline"]));
+      const freshExtra = comparableUrls(coldRecords["fresh refused"]).filter((url) => !freshQuiet.has(url));
+      if (freshExtra.length) fail(`fresh parquet: the choice added requests: ${freshExtra.slice(0, 5).join("; ")}`);
+      assertNoNewViolations(coldRecords["fresh refused"], coldRecords["fresh baseline"], "fresh parquet");
+      assertAllOrigin(coldRecords["fresh refused"], origin, "fresh parquet");
+      assertNoThirdPartyExtension(coldRecords["fresh refused"], "fresh parquet");
+      console.log(`ok  fresh record: the refusal added no request (${coldRecords["fresh baseline"].network.length} to ${coldRecords["fresh refused"].network.length})`);
+    });
+  } finally {
+    rmSync(coldDir, { recursive: true, force: true, maxRetries: 3 });
+  }
+  if (coldFailures.length) fail(coldFailures.join("\n"));
   const app = await recorded((browser) => drive(browser, origin, rows));
   const judged = judge(app.record, origin, { devServer: policies === 0 });
   for (const note of judged.notes) console.log(note);
