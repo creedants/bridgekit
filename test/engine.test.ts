@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDatabase } from "../src/duckdb.ts";
-import { runBridge, drill, unmatched, dataCheck, priceDistribution, sensitivity, trend, priceRealization, priceGaps, accountBridge, type BridgeConfig, type BridgeResult, type Level } from "../src/engine.ts";
-import { PERIOD, VIEW, viewSql, type Setup } from "../src/app/setup.ts";
+import { runBridge, drill, unmatched, dataCheck, priceDistribution, sensitivity, trend, priceRealization, priceGaps, accountBridge, periodMoney, tieOutLines, type BridgeConfig, type BridgeResult, type Level } from "../src/engine.ts";
+import { PERIOD, VIEW, quote, viewSql, type Setup } from "../src/app/setup.ts";
 import { createSyntheticSales } from "../src/synth.ts";
 
 function effect(result: BridgeResult, key: string): number {
@@ -603,6 +603,117 @@ test("rejects a missing prior period and duplicate columns", async () => {
     runBridge(query, { ...config, prior: "p1", levels: [...config.levels, ...config.levels] }),
     /more than one level/,
   );
+});
+
+test("money tie-out: the file's money less the excluded rows equals the bridge, to the cent", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE data (
+    order_date DATE, customer VARCHAR, design VARCHAR, units INTEGER, sales DOUBLE, cost DOUBLE
+  )`);
+  await query(`INSERT INTO data VALUES
+    (DATE '2025-02-01', 'keep', 'A', 2, 100.10, 60.00),
+    (DATE '2025-03-01', 'keep', 'B', NULL, 50.05, NULL),
+    (DATE '2025-03-02', 'drop', 'A', 5, 250.25, 100.00),
+    (DATE '2026-02-01', 'keep', 'A', 3, 180.33, 90.00),
+    (DATE '2026-03-01', 'drop', 'A', 1, 999.99, 400.00),
+    (DATE '2027-01-01', 'keep', 'A', 4, 700.00, 300.00)
+  `);
+  const setup: Setup = {
+    periodColumn: "order_date",
+    grain: "year",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    costColumn: "cost",
+    levels: [{ name: "Design", columns: ["design"] }],
+    filters: [{ column: "customer", mode: "include", values: ["keep"] }],
+  };
+  // The app builds its unfiltered relation from the same view definition, so the
+  // period column cannot drift from the one the bridge reads.
+  await query(`DROP VIEW IF EXISTS data_all`);
+  await query(viewSql({ ...setup, filters: [] }));
+  await query(`ALTER VIEW ${quote(VIEW)} RENAME TO ${quote("data_all")}`);
+  await query(viewSql(setup));
+
+  const config: BridgeConfig = {
+    table: VIEW, periodColumn: PERIOD, prior: "2025", current: "2026",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Design", columns: ["design"] }],
+  };
+  const result = await runBridge(query, config);
+  const check = await dataCheck(query, config);
+  const money = await periodMoney(query, config, { table: "data_all", periodColumn: PERIOD });
+
+  // In the file: 100.10 + 50.05 + 250.25 and 180.33 + 999.99. The 2027 row is another period.
+  near(money.prior.inFile, 400.4);
+  near(money.current.inFile, 1180.32);
+  // After the customer filter: 100.10 + 50.05 and 180.33. The two drop rows are out.
+  near(money.prior.afterFilters, 150.15);
+  near(money.current.afterFilters, 180.33);
+
+  // Existing figures for the same file are unchanged: the no-unit row still counts.
+  near(result.priorSales, 150.15);
+  near(result.currentSales, 180.33);
+  near(effect(result, "volume"), 50.05);
+  near(effect(result, "mix_1"), 0);
+  near(effect(result, "price"), 30.18);
+  near(effect(result, "new_config"), 0);
+  near(effect(result, "discontinued"), 0);
+  near(effect(result, "no_units"), -50.05);
+  near(total(result), result.currentSales - result.priorSales);
+  assert.equal(check.rows, 4);
+  assert.equal(check.priorRows, 2);
+  assert.equal(check.currentRows, 1);
+  assert.equal(check.otherPeriodRows, 1);
+
+  const lines = tieOutLines(config, money, result);
+  assert.deepEqual(lines.map((line) => line.label), [
+    "Sales in file, 2025",
+    "Excluded by filters, 2025",
+    "Sales in the bridge, 2025",
+    "Sales in file, 2026",
+    "Excluded by filters, 2026",
+    "Sales in the bridge, 2026",
+  ]);
+  const cents = (value: number) => Math.round(value * 100);
+  assert.deepEqual(lines.map((line) => cents(line.value)), [40040, 25025, 15015, 118032, 99999, 18033]);
+  for (const period of [0, 1]) {
+    // In file minus excluded is in the bridge, to the cent, on the lines themselves.
+    assert.equal(
+      cents(lines[period * 3].value) - cents(lines[period * 3 + 1].value),
+      cents(lines[period * 3 + 2].value),
+    );
+    assert.equal(cents(lines[period * 3 + 2].value), cents(period === 0 ? result.priorSales : result.currentSales));
+  }
+
+  // With no filter there is nothing to exclude, and the file equals the bridge.
+  await query(viewSql({ ...setup, filters: [] }));
+  const all = await runBridge(query, config);
+  const allMoney = await periodMoney(query, config, { table: "data_all", periodColumn: PERIOD });
+  near(allMoney.prior.inFile, 400.4);
+  near(allMoney.prior.afterFilters, 400.4);
+  near(all.priorSales, 400.4);
+  near(allMoney.current.afterFilters, 1180.32);
+  near(all.currentSales, 1180.32);
+  const allLines = tieOutLines(config, allMoney, all);
+  assert.deepEqual(allLines.map((line) => cents(line.value)), [40040, 0, 40040, 118032, 0, 118032]);
+
+  // On margin the same identity holds with sales minus cost as the measure.
+  await query(viewSql(setup));
+  const marginConfig: BridgeConfig = { ...config, costColumn: "cost" };
+  const margin = await runBridge(query, marginConfig);
+  const marginMoney = await periodMoney(query, marginConfig, { table: "data_all", periodColumn: PERIOD });
+  near(marginMoney.prior.inFile, 240.4);
+  near(marginMoney.prior.afterFilters, 90.15);
+  near(margin.priorSales, 90.15);
+  near(marginMoney.current.afterFilters, 90.33);
+  near(margin.currentSales, 90.33);
+  const marginLines = tieOutLines(marginConfig, marginMoney, margin);
+  assert.deepEqual(marginLines.map((line) => line.label).slice(0, 3), [
+    "Margin in file, 2025",
+    "Excluded by filters, 2025",
+    "Margin in the bridge, 2025",
+  ]);
+  assert.deepEqual(marginLines.map((line) => cents(line.value)), [24040, 15025, 9015, 69032, 59999, 9033]);
 });
 
 function ident(name: string): string {

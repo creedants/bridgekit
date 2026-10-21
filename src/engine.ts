@@ -157,6 +157,14 @@ export function cumulativeColumns(levels: Level[], j: number): string[] {
   return levels.slice(0, j).flatMap((level) => level.columns);
 }
 
+/** What one row adds to the bridge: sales, or sales minus cost when the bridge is on margin. */
+export function measureSql(config: BridgeConfig): string {
+  const sales = ident(config.salesColumn);
+  return config.costColumn
+    ? `(coalesce(${sales}, 0) - coalesce(${ident(config.costColumn)}, 0))`
+    : sales;
+}
+
 export function cellsSql(config: BridgeConfig): string {
   validate(config);
   const k = config.levels.length;
@@ -169,7 +177,7 @@ export function cellsSql(config: BridgeConfig): string {
   const hasUnits = `(${units} IS NOT NULL AND ${units} <> 0)`;
   const cost = config.costColumn ? ident(config.costColumn) : null;
   const gross = !cost && config.grossColumn ? ident(config.grossColumn) : null;
-  const measure = cost ? `(coalesce(${sales}, 0) - coalesce(${cost}, 0))` : sales;
+  const measure = measureSql(config);
   const full = config.newAndDiscontinued === "full";
   // In "full" mode reference prices come from continuing configurations only.
   const continuing = "(q0 > 0 AND q1 <> 0)";
@@ -539,6 +547,77 @@ export async function dataCheck(query: Query, config: BridgeConfig): Promise<Dat
      FROM ${ident(config.table)}`,
   );
   return Object.fromEntries(Object.entries(row).map(([key, value]) => [key, Number(value)])) as unknown as DataCheck;
+}
+
+export interface PeriodMoney {
+  period: string;
+  /** Money on every row of the file for this period, before the setup's filters. */
+  inFile: number;
+  /** Money on the rows the filters keep for this period. The bridge's total for the period equals this. */
+  afterFilters: number;
+}
+
+/** The two chosen periods, measured on both sides of the filters. */
+export interface TieOut {
+  prior: PeriodMoney;
+  current: PeriodMoney;
+}
+
+/**
+ * Money per period on both sides of the setup's filters. The file relation is
+ * the same rows as the bridge's table before filtering, with the same period
+ * column, so in-file minus after-filters is what the filters removed.
+ */
+export async function periodMoney(
+  query: Query,
+  config: BridgeConfig,
+  file: { table: string; periodColumn: string },
+): Promise<TieOut> {
+  const measure = measureSql(config);
+  const totals = async (table: string, periodColumn: string) => {
+    const period = ident(periodColumn);
+    const [row] = await query(
+      `SELECT
+         coalesce(sum(${measure}) FILTER (WHERE ${period} = ${literal(config.prior)}), 0)::DOUBLE AS "prior",
+         coalesce(sum(${measure}) FILTER (WHERE ${period} = ${literal(config.current)}), 0)::DOUBLE AS "current"
+       FROM ${ident(table)}`,
+    );
+    return { prior: Number(row.prior), current: Number(row.current) };
+  };
+  const inFile = await totals(file.table, file.periodColumn);
+  const afterFilters = await totals(config.table, config.periodColumn);
+  return {
+    prior: { period: String(config.prior), inFile: inFile.prior, afterFilters: afterFilters.prior },
+    current: { period: String(config.current), inFile: inFile.current, afterFilters: afterFilters.current },
+  };
+}
+
+export interface TieOutLine {
+  label: string;
+  value: number;
+}
+
+/** Money rounded to whole cents, so the lines shown next to each other add up exactly. */
+const cents = (value: number) => Math.round(value * 100) / 100;
+
+/**
+ * The money tie-out, three lines per period: what the file holds, what the
+ * filters removed, and what the bridge shows. The file and filter figures are
+ * measured on their own relations; the bridge figure is the bridge's own total,
+ * so a difference between them stays visible instead of being folded in.
+ */
+export function tieOutLines(config: BridgeConfig, tieOut: TieOut, result: BridgeResult): TieOutLine[] {
+  const measure = measureName(config);
+  const lines = (money: PeriodMoney, inBridge: number): TieOutLine[] => {
+    const inFile = cents(money.inFile);
+    const afterFilters = cents(money.afterFilters);
+    return [
+      { label: `${measure} in file, ${money.period}`, value: inFile },
+      { label: `Excluded by filters, ${money.period}`, value: Math.round((inFile - afterFilters) * 100) / 100 },
+      { label: `${measure} in the bridge, ${money.period}`, value: cents(inBridge) },
+    ];
+  };
+  return [...lines(tieOut.prior, result.priorSales), ...lines(tieOut.current, result.currentSales)];
 }
 
 export interface PriceBucket {
