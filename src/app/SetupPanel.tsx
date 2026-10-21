@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Level, Query } from "../engine.ts";
+import { sameSuggestedLevels } from "./fileProblems.ts";
 import { suggestAttributes } from "./profile.ts";
 import { isDate, isNumeric, quote, TABLE, type Column, type Filter, type Grain, type Setup } from "./setup.ts";
 
@@ -37,6 +38,38 @@ export function SetupPanel(props: {
   const suggested = suggestAttributes(columns, distinctByName, usedNames);
   const setLevels = (levels: Level[]) => onChange({ levels });
   const setFilters = (filters: Filter[]) => onChange({ filters });
+  const suggestRef = useRef<HTMLButtonElement>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  const [asking, setAsking] = useState(false);
+  const sameAsSuggested = sameSuggestedLevels(setup.levels, suggested);
+  useEffect(() => setAsking(false), [suggested.join("|")]);
+  useEffect(() => {
+    if (asking) confirmRef.current?.focus();
+  }, [asking]);
+  useEffect(() => {
+    if (!asking) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setAsking(false);
+      suggestRef.current?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [asking]);
+  const useSuggestion = () => {
+    setLevels(suggested.map((name) => ({ name, columns: [name] })));
+    setAsking(false);
+    suggestRef.current?.focus();
+  };
+  const keepMine = () => {
+    setAsking(false);
+    suggestRef.current?.focus();
+  };
+  const onSuggest = () => {
+    if (sameAsSuggested) return;
+    if (setup.levels.length === 0) useSuggestion();
+    else setAsking(true);
+  };
   const move = (from: number, to: number) => {
     const next = [...setup.levels];
     [next[from], next[to]] = [next[to], next[from]];
@@ -132,12 +165,26 @@ export function SetupPanel(props: {
         <p className="hint">Most important first. One attribute gives a classic bridge.</p>
         <button
           className="quiet"
+          ref={suggestRef}
           disabled={suggested.length === 0}
-          onClick={() => setLevels(suggested.map((name) => ({ name, columns: [name] })))}
+          onClick={onSuggest}
         >
           Suggest attributes
         </button>
         <p className="hint">Fills the list with the columns that look like product attributes, fewest values first.</p>
+        {asking && (
+          <div className="row">
+            <span className="hint" id="suggest-confirm">
+              Replace the attributes you chose with the suggested ones?
+            </span>
+            <button className="quiet" ref={confirmRef} aria-describedby="suggest-confirm" onClick={useSuggestion}>
+              Replace
+            </button>
+            <button className="quiet" aria-describedby="suggest-confirm" onClick={keepMine}>
+              Keep mine
+            </button>
+          </div>
+        )}
         <ol className="levels">
           {setup.levels.map((level, i) => (
             <li key={level.columns.join("|")}>
