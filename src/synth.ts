@@ -74,16 +74,16 @@ FROM shaped
 )`);
 }
 
-/** The row count a sample uses when the URL does not name one. */
+/** Default row count for the lens sample. */
 export const SAMPLE_ROWS = 1_000_000;
 /** The most `?sample=<number>` may ask for. */
 export const MAX_SAMPLE_ROWS = 5_000_000;
 
 /**
  * Made-up SKU-level sales in the shape of an ordinary product list: one row per
- * sales line, a stable SKU, a customer, units and sales. 2026 lifts the price of
- * the first twenty SKUs by 3%, retires four SKUs and adds two, so the bridge has
- * volume, mix, price, new and discontinued lines.
+ * sales line, a stable SKU, a customer, units and sales. 2026 raises prices by
+ * 3% on matching SKUs numbered 003 through 020, retires four SKUs and adds two,
+ * so the bridge has volume, mix, price, new and discontinued lines.
  *
  * Values come from hashing the row number, so the same row count always
  * produces the same data in Node and in the browser.
@@ -119,14 +119,14 @@ FROM shaped`);
 }
 
 /**
- * Made-up budget against actual by product: one row per product and period, a
- * column that says which period the row belongs to, units and sales. Actual
- * volume moves away from budget product by product, prices rise on half of
- * them, the first product is left out of actual and one new product appears.
+ * Made-up budget and actual sales by product, with units and sales for each
+ * row. Actual units can differ from budget, and a hash selects products for a
+ * 2% price rise. The first product is actual only and the last is budget only.
  *
- * `rows` is split evenly over the two periods, so 24 rows makes twelve
- * products. Values come from hashing the product number, so the same row count
- * always produces the same data in Node and in the browser.
+ * The generator starts with at least four products, using floor(rows / 2) when
+ * larger. Each period omits one product, so an input of 24 produces 22 rows
+ * across twelve products. Values come from hashing the product number, so the
+ * same input always produces the same data in Node and in the browser.
  */
 export async function createBudgetSales(query: Query, rows: number, table = "sales"): Promise<void> {
   const products = Math.max(4, Math.floor(rows / 2));
@@ -164,6 +164,12 @@ export interface Sample {
   readonly label: string;
   /** Preset setup, so the sample opens ready to calculate. */
   readonly setup: Setup;
+  /**
+   * Whether calculating this sample writes its setup to this browser, the way a
+   * user file does. False for a demonstration that must not overwrite a setup
+   * saved for a file with the same columns.
+   */
+  readonly savesSetup: boolean;
   /** Prior and current to prefer when the period order would put them the other way round. */
   readonly periods?: { readonly prior: string; readonly current: string };
   /** Row count used when the URL does not name one. */
@@ -188,6 +194,7 @@ const LENS_SAMPLE: Sample = {
     filters: [],
   },
   rows: SAMPLE_ROWS,
+  savesSetup: true,
   create: createSyntheticSales,
 };
 
@@ -203,6 +210,7 @@ const SKU_SAMPLE: Sample = {
     filters: [],
   },
   rows: 250_000,
+  savesSetup: false,
   create: createSkuSales,
 };
 
@@ -220,6 +228,7 @@ const BUDGET_SAMPLE: Sample = {
   // Code-point order puts Actual first, so the pair has to be named.
   periods: { prior: "Budget", current: "Actual" },
   rows: 24,
+  savesSetup: false,
   create: createBudgetSales,
 };
 

@@ -101,6 +101,8 @@ export function App() {
   const [preview, setPreview] = useState<Record<string, unknown>[]>([]);
   const [rollups, setRollups] = useState<string[][]>([]);
   const [run, setRun] = useState<(Run & { id: number; signature: string }) | null>(null);
+  // A demonstration sample must not overwrite a setup saved for a file with the same columns.
+  const writesSetup = useRef(true);
 
   function db(): Promise<BrowserDatabase> {
     return openBrowserDatabase();
@@ -132,6 +134,7 @@ export function App() {
     setLoad((n) => n + 1);
     setSetup(preset?.setup ?? saved ?? guessSetup(found));
     setSuggestedPeriods(preset?.periods ?? null);
+    writesSetup.current = preset?.savesSetup ?? true;
     setNotice(saved ? "Restored the setup you last used with these columns." : "");
     setPreview(await q(`SELECT * FROM ${quote(TABLE)} LIMIT 8`));
     setRollups([]);
@@ -241,7 +244,7 @@ export function App() {
         id: Date.now(),
         signature,
       });
-      saveSetup(columns, setup);
+      if (writesSetup.current) saveSetup(columns, setup);
       setNotice("");
     });
 
@@ -420,7 +423,7 @@ export function App() {
                   onChange={(e) => {
                     setRemembering(e.target.checked);
                     setRemember(e.target.checked);
-                    if (e.target.checked && setup) saveSetup(columns, setup);
+                    if (e.target.checked && setup && writesSetup.current) saveSetup(columns, setup);
                   }}
                 />
                 Remember this setup in this browser

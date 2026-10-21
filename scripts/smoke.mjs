@@ -585,6 +585,42 @@ async function drive(browser, origin, rows) {
   console.log(`browser: ${(await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/version`)).json()).Browser}`);
   await browser.size(1360, 1000);
   const started = Date.now();
+
+  // A demonstration sample must not write to storage or replace a setup saved for
+  // a file with the same columns. Remembering is at its default in this browser.
+  const setupKey = (names) => `bridgekit:setup:${[...names].sort().join("|")}`;
+  const seeded = [
+    [
+      "sku",
+      ["year", "sku", "customer", "units", "sales"],
+      { periodColumn: "year", grain: "value", unitsColumn: "units", salesColumn: "sales", levels: [{ name: "My products", columns: ["sku"] }], filters: [] },
+    ],
+    [
+      "budget",
+      ["period", "product", "units", "sales"],
+      { periodColumn: "period", grain: "value", unitsColumn: "units", salesColumn: "sales", levels: [{ name: "My products", columns: ["product"] }], filters: [] },
+    ],
+  ];
+  for (const [name, columns, saved] of seeded) {
+    const key = setupKey(columns);
+    const value = JSON.stringify(saved);
+    await browser.goto(`${origin}/app/`);
+    await browser.evalJs(`localStorage.setItem(${JSON.stringify(key)}, ${JSON.stringify(value)})`);
+    const url = `${origin}/app/?sample=${name}`;
+    await browser.goto(url);
+    try {
+      await browser.waitFor("!!document.querySelector('.kpis')", 600);
+    } catch (error) {
+      fail(`the ${name} sample at ${url} did not load and calculate within 150 s (${error.message})`);
+    }
+    const stored = JSON.parse(await browser.evalJs("JSON.stringify(Object.fromEntries(Object.entries(localStorage)))"));
+    const keys = Object.keys(stored);
+    if (keys.length !== 1 || keys[0] !== key) fail(`${name} sample: storage now holds ${JSON.stringify(keys)}, expected only the saved setup`);
+    if (stored[key] !== value) fail(`${name} sample: the saved setup for its columns was replaced`);
+    await browser.evalJs(`localStorage.removeItem(${JSON.stringify(key)})`);
+    console.log(`ok  ${name} sample: keeps the saved setup for its columns and writes nothing while remembering is on`);
+  }
+
   const sample = `${origin}/app/?sample${rows ? "=" + rows : ""}`;
   await browser.goto(sample);
   await browser.waitFor("!!document.querySelector('.kpis')", 600).catch((error) => fail(`the sample at ${sample} did not load and calculate within 150 s (${error.message})`));
