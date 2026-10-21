@@ -610,12 +610,49 @@ async function coldBlockedLoad(browser, origin) {
   await browser.sleep(COLD_BLOCKED_SETTLE_MS);
 }
 
-const recordUrls = (record) => [...new Set(record.network.map((entry) => entry.url))].sort();
+// A checkpoint of every request occurrence, keyed by asker, method and
+// address, with multiplicity kept. Two volatile parts of an address are
+// normalized so the comparison measures the refusal, not session noise: a
+// per-session blob worker address and the ?retry= stamp the chunk retry adds.
+const normalizeUrl = (url) =>
+  String(url ?? "")
+    .replace(/^(blob:[^/]+\/).*$/, "$1<blob>")
+    .replace(/([?&]retry=)\d+\.\d+/, "$1<stamp>");
 
-// Worker startup is recorded as a request to a per-session blob URL, so blob
-// and data URLs are left out of the growth comparison. Anything that could
-// carry data off the origin is an http URL and stays in.
-const comparableUrls = (record) => recordUrls(record).filter((url) => !/^(blob|data):/.test(url));
+const countRequests = (record) => {
+  const counts = new Map();
+  for (const entry of record.network) {
+    const key = `${entry.from}|${entry.method}|${normalizeUrl(entry.url)}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+};
+
+const countByAsker = (record) => {
+  const counts = {};
+  for (const entry of record.network) counts[entry.from] = (counts[entry.from] ?? 0) + 1;
+  return counts;
+};
+
+/**
+ * The refusal must add no request at all: every key's count in `after` has to
+ * equal the checkpoint's count. A repeat of an address the checkpoint already
+ * holds fails, which a unique-URL comparison would have accepted.
+ */
+function assertNoRequestGrowth(before, after, step) {
+  const base = countRequests(before);
+  const now = countRequests(after);
+  const grown = [];
+  for (const [key, count] of now) {
+    const was = base.get(key) ?? 0;
+    if (count > was) grown.push(`${count - was} extra of ${key} (was ${was}, now ${count})`);
+  }
+  if (grown.length) fail(`${step}: the refusal made requests: ${grown.slice(0, 5).join("; ")}`);
+  const missing = [...base].filter(([key, count]) => (now.get(key) ?? 0) < count);
+  if (missing.length) {
+    fail(`${step}: the refusal twin lost requests the checkpoint held, so the twins are not comparable: ${missing.slice(0, 3).map(([key, count]) => `${key} (was ${count})`).join("; ")}`);
+  }
+}
 
 const violationKey = (entry) => `${entry.from}|${entry.directive}|${entry.url}`;
 
@@ -656,11 +693,12 @@ async function coldRefused(browser, origin, parquetPath) {
   console.log("ok  cold parquet: refused with one plain sentence before any database work");
 }
 
+async function coldBlockedBaseline(browser, origin) {
+  await coldBlockedLoad(browser, origin);
+}
+
 async function coldBlocked(browser, origin) {
-  await browser.send("Network.setBlockedURLs", { urls: COLD_BLOCKS });
-  await browser.goto(`${origin}/app/`);
-  await browser.waitFor("document.body.innerText.includes('Load a sales file')");
-  await browser.sleep(2000);
+  await coldBlockedLoad(browser, origin);
   await browser.evalJs(`(async () => {
     const file = new File(["not a parquet file\\n"], "REFUSED.PARQUET", { type: "application/octet-stream" });
     const dt = new DataTransfer();
@@ -673,23 +711,6 @@ async function coldBlocked(browser, origin) {
   const text = (await browser.evalJs("document.querySelector('.error').textContent.trim()")).trim();
   if (text !== PARQUET_SENTENCE) fail(`blocked parquet: error is ${JSON.stringify(text)}`);
   console.log("ok  blocked parquet: refused with one plain sentence while database assets are unavailable");
-}
-
-async function coldBlockedBaseline(browser, origin) {
-  await coldBlockedLoad(browser, origin);
-  await browser.send("Network.setBlockedURLs", { urls: [] });
-}
-
-async function coldFreshRefused(browser, origin, parquetPath) {
-  await coldBlockedLoad(browser, origin);
-  await browser.send("Network.setBlockedURLs", { urls: [] });
-  const { root } = await browser.send("DOM.getDocument");
-  const { nodeId } = await browser.send("DOM.querySelector", { nodeId: root.nodeId, selector: "input[type=file][accept*=csv]" });
-  await browser.send("DOM.setFileInputFiles", { nodeId, files: [parquetPath] });
-  await browser.waitFor("!!document.querySelector('.error')");
-  const text = (await browser.evalJs("document.querySelector('.error').textContent.trim()")).trim();
-  if (text !== PARQUET_SENTENCE) fail(`fresh parquet: error is ${JSON.stringify(text)}`);
-  console.log("ok  fresh parquet: refused with one plain sentence on a page that loaded nothing");
 }
 
 async function drive(browser, origin, rows) {
@@ -1380,9 +1401,8 @@ try {
     for (const [name, steps] of [
       ["baseline", (browser) => coldBaseline(browser, origin)],
       ["refused", (browser) => coldRefused(browser, origin, coldLower)],
-      ["blocked", (browser) => coldBlocked(browser, origin)],
-      ["fresh baseline", (browser) => coldBlockedBaseline(browser, origin)],
-      ["fresh refused", (browser) => coldFreshRefused(browser, origin, coldLower)],
+      ["blocked baseline", (browser) => coldBlockedBaseline(browser, origin)],
+      ["blocked refused", (browser) => coldBlocked(browser, origin)],
     ]) {
       try {
         coldRecords[name] = (await recorded(steps)).record;
@@ -1398,36 +1418,31 @@ try {
       }
     };
     const has = (record, from, file) => record.network.some((entry) => entry.from === from && URL.canParse(entry.url) && file.test(new URL(entry.url).pathname));
-    if (coldRecords.baseline && coldRecords.refused) coldCheck("cold parquet", () => {
-      // The refusal must add no request: every URL it saw, the quiet load saw too.
-      const quiet = new Set(comparableUrls(coldRecords.baseline));
-      const extra = comparableUrls(coldRecords.refused).filter((url) => !quiet.has(url));
-      if (extra.length) fail(`cold parquet: the choice added requests: ${extra.slice(0, 5).join("; ")}`);
-      // The quiet load must have finished speculative loading, or the comparison proves nothing.
+    if (coldRecords.baseline && coldRecords.refused) coldCheck("picker parquet", () => {
+      // The quiet twin must have finished speculative loading, or equality proves nothing.
       if (!has(coldRecords.baseline, "worker", /\/duckdb-browser-[^/]*\.worker[^/]*\.js$/) || !has(coldRecords.baseline, "worker", /\/duckdb-[^/]*\.wasm$/)) {
-        fail("cold baseline: the quiet page never loaded its worker script and wasm, so the comparison proves nothing");
+        fail("picker baseline: the quiet page never loaded its worker script and wasm, so the comparison proves nothing");
       }
-      assertNoNewViolations(coldRecords.refused, coldRecords.baseline, "cold parquet");
-      assertAllOrigin(coldRecords.refused, origin, "cold parquet");
-      assertNoThirdPartyExtension(coldRecords.refused, "cold parquet");
-      console.log(`ok  cold record: the refusal added no request (${coldRecords.baseline.network.length} to ${coldRecords.refused.network.length})`);
+      assertNoRequestGrowth(coldRecords.baseline, coldRecords.refused, "picker parquet");
+      assertNoNewViolations(coldRecords.refused, coldRecords.baseline, "picker parquet");
+      assertAllOrigin(coldRecords.refused, origin, "picker parquet");
+      assertNoThirdPartyExtension(coldRecords.refused, "picker parquet");
+      const quiet = countByAsker(coldRecords.baseline);
+      const after = countByAsker(coldRecords.refused);
+      console.log(`ok  picker record: the refusal added no request (${JSON.stringify(quiet)} to ${JSON.stringify(after)}, ${coldRecords.baseline.network.length} to ${coldRecords.refused.network.length})`);
     });
-    if (coldRecords.blocked) coldCheck("blocked parquet", () => {
-      assertAllOrigin(coldRecords.blocked, origin, "blocked parquet");
-      assertNoThirdPartyExtension(coldRecords.blocked, "blocked parquet");
-    });
-    if (coldRecords["fresh baseline"] && coldRecords["fresh refused"]) coldCheck("fresh parquet", () => {
-      // Nothing may have loaded on the blocked page, or its comparison proves nothing either.
-      if (coldRecords["fresh baseline"].askers.some((asker) => asker.kind === "worker" || asker.kind === "shared_worker")) {
-        fail("cold baseline: the blocked page started a worker, so it was never cold");
+    if (coldRecords["blocked baseline"] && coldRecords["blocked refused"]) coldCheck("blocked drop parquet", () => {
+      // Nothing may have loaded on the blocked twin, or its comparison proves nothing either.
+      if (coldRecords["blocked baseline"].askers.some((asker) => asker.kind === "worker" || asker.kind === "shared_worker")) {
+        fail("blocked baseline: the blocked page started a worker, so it was never cold");
       }
-      const freshQuiet = new Set(comparableUrls(coldRecords["fresh baseline"]));
-      const freshExtra = comparableUrls(coldRecords["fresh refused"]).filter((url) => !freshQuiet.has(url));
-      if (freshExtra.length) fail(`fresh parquet: the choice added requests: ${freshExtra.slice(0, 5).join("; ")}`);
-      assertNoNewViolations(coldRecords["fresh refused"], coldRecords["fresh baseline"], "fresh parquet");
-      assertAllOrigin(coldRecords["fresh refused"], origin, "fresh parquet");
-      assertNoThirdPartyExtension(coldRecords["fresh refused"], "fresh parquet");
-      console.log(`ok  fresh record: the refusal added no request (${coldRecords["fresh baseline"].network.length} to ${coldRecords["fresh refused"].network.length})`);
+      assertNoRequestGrowth(coldRecords["blocked baseline"], coldRecords["blocked refused"], "blocked drop parquet");
+      assertNoNewViolations(coldRecords["blocked refused"], coldRecords["blocked baseline"], "blocked drop parquet");
+      assertAllOrigin(coldRecords["blocked refused"], origin, "blocked drop parquet");
+      assertNoThirdPartyExtension(coldRecords["blocked refused"], "blocked drop parquet");
+      const quiet = countByAsker(coldRecords["blocked baseline"]);
+      const after = countByAsker(coldRecords["blocked refused"]);
+      console.log(`ok  blocked drop record: the refusal added no request (${JSON.stringify(quiet)} to ${JSON.stringify(after)}, ${coldRecords["blocked baseline"].network.length} to ${coldRecords["blocked refused"].network.length})`);
     });
   } finally {
     rmSync(coldDir, { recursive: true, force: true, maxRetries: 3 });
