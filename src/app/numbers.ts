@@ -18,7 +18,9 @@ const US_THREE = `^${SIGN}(\\d{1,3}(,\\d{3})+|\\d{4,})\\.\\d{3}$`;
 const US_GROUPED = `^${SIGN}\\d{1,3}(,\\d{3}){2,}$`;
 const AMBIGUOUS = `^${SIGN}[1-9]\\d{0,2},\\d{3}$`;
 const US_INTEGER = `^${SIGN}\\d+$`;
-const US_NUMBER = `(${US_INTEGER}|${US_DECIMAL}|${US_THREE}|${US_GROUPED}|${AMBIGUOUS})`;
+const US_DECIMAL_EXP = `^${SIGN}\\d+(,\\d{3})*\\.\\d+[eE][+-]?\\d+$`;
+const US_INTEGER_EXP = `^${SIGN}\\d+[eE][+-]?\\d+$`;
+const US_NUMBER = `(${US_INTEGER}|${US_DECIMAL}|${US_THREE}|${US_GROUPED}|${AMBIGUOUS}|${US_DECIMAL_EXP}|${US_INTEGER_EXP})`;
 const FIRST_ROWS = 2000;
 
 const northAmerican = (column: string) =>
