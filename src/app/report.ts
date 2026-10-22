@@ -5,7 +5,7 @@ import { percent, signedPercent, signedWhole, whole } from "./format.ts";
 const markup = (value: unknown) =>
   String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 
-/** One wording per measure, so a margin bridge never says sales or price where it means margin. */
+/** Shared measure-specific labels for Movers and the report. */
 const SALES = {
   bridgeTitle: "Sales bridge",
   ofPrior: "% of prior sales",

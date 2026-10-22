@@ -1186,7 +1186,7 @@ async function drive(browser, origin, rows) {
     }
     console.log("ok  sales labels: Movers and the report keep the sales wording");
 
-    // A margin bridge says margin everywhere, and Setup names only the columns the engine used.
+    // Check the margin labels in Movers and the report, and omit ignored gross from Setup.
     const marginPath = join(fixtureDir, "margin.csv");
     writeFileSync(marginPath, toCsvText(
       ["period", "product", "units", "gross_sales", "net_sales", "cost"],
