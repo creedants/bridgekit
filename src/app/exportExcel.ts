@@ -18,6 +18,11 @@ import { download } from "./files.ts";
 /** Above this many configurations the detail sheet is left out and the bridge is written as values. */
 const MAX_DETAIL_ROWS = 150_000;
 
+/** Excel offers to repair a workbook whose cells hold NaN or Infinity, and a CSV cell holding either reads as text, so a number with no finite value becomes null, which both exports write as a blank cell. */
+export function finiteOrBlank<T>(value: T): T | null {
+  return typeof value === "number" && !Number.isFinite(value) ? null : value;
+}
+
 /** 1 -> A, 27 -> AA. */
 function columnLetter(index: number): string {
   let letters = "";
@@ -93,7 +98,9 @@ export async function exportExcel(
   for (const effect of effects) {
     const value = result.effects.find((e) => e.key === effect.key)!.value;
     const row = bridge.addRow([effect.label, total(effect.key, value)]);
-    row.getCell(3).value = { formula: `IF(B4=0,"",B${row.number}/B4)`, result: value / result.priorSales };
+    const formula = `IF(B4=0,"",B${row.number}/B4)`;
+    const share = finiteOrBlank(value / result.priorSales);
+    row.getCell(3).value = share === null ? { formula } : { formula, result: share };
     row.getCell(3).numFmt = "0.0%";
   }
   bridge.addRow([`Current ${measureName(config).toLowerCase()}`, sales("s1", "z1", result.currentSales)]).font = bold;

@@ -28,6 +28,7 @@ import {
 import { commentary } from "../commentary.ts";
 import { summarize, type BridgeSummary } from "../summary.ts";
 import { download, toExportCsv, toExportTsv } from "./files.ts";
+import { finiteOrBlank } from "./exportExcel.ts";
 import { percent, price, signedPercent, signedWhole, whole } from "./format.ts";
 import { decimalCommaNote } from "./numbers.ts";
 import { trendPeriods } from "./periods.ts";
@@ -180,7 +181,6 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
 
 function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<Query> }) {
   const paragraphs = commentary(props.result, props.run.config);
-  const [copied, setCopied] = useState(false);
   const downloadReport = async () => {
     const { config } = props.run;
     const first = config.levels[0];
@@ -206,15 +206,7 @@ function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<
       <div className="toolbar">
         <h3>Summary</h3>
         <span className="actions">
-          <button
-            onClick={async () => {
-              await navigator.clipboard.writeText(paragraphs.join("\n\n"));
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1500);
-            }}
-          >
-            {copied ? "Copied" : "Copy"}
-          </button>
+          <CopyButton text={() => paragraphs.join("\n\n")} />
           <button onClick={downloadReport}>Download report</button>
         </span>
       </div>
@@ -247,7 +239,6 @@ function AiCommentary(props: { summary: BridgeSummary; offer: "hint" | "button" 
   const [state, setState] = useState<
     { status: "idle" } | { status: "busy" } | { status: "done"; paragraphs: string[] } | { status: "error"; message: string }
   >({ status: "idle" });
-  const [copied, setCopied] = useState(false);
   const write = async () => {
     setState({ status: "busy" });
     try {
@@ -269,15 +260,7 @@ function AiCommentary(props: { summary: BridgeSummary; offer: "hint" | "button" 
         <h3>AI commentary (optional)</h3>
         {props.offer === "button" && state.status === "done" && (
           <span className="actions">
-            <button
-              onClick={async () => {
-                await navigator.clipboard.writeText(state.paragraphs.join("\n\n"));
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
-              }}
-            >
-              {copied ? "Copied" : "Copy"}
-            </button>
+            <CopyButton text={() => state.paragraphs.join("\n\n")} />
           </span>
         )}
       </div>
@@ -767,20 +750,31 @@ function Kpi(props: { label: string; value: string; note?: string }) {
 }
 
 function TableActions(props: { name: string; header: string[]; rows: () => unknown[][] }) {
-  const [copied, setCopied] = useState(false);
+  const rows = () => props.rows().map((row) => row.map(finiteOrBlank));
   return (
     <span className="actions">
-      <button
-        onClick={async () => {
-          await navigator.clipboard.writeText(toExportTsv(props.header, props.rows()));
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        }}
-      >
-        {copied ? "Copied" : "Copy"}
-      </button>
-      <button onClick={() => download(props.name, toExportCsv(props.header, props.rows()), "text/csv")}>CSV</button>
+      <CopyButton text={() => toExportTsv(props.header, rows())} />
+      <button onClick={() => download(props.name, toExportCsv(props.header, rows()), "text/csv")}>CSV</button>
     </span>
+  );
+}
+
+function CopyButton(props: { text: () => string }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  return (
+    <button
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(props.text());
+          setState("copied");
+          setTimeout(() => setState((current) => (current === "copied" ? "idle" : current)), 1500);
+        } catch {
+          setState("failed");
+        }
+      }}
+    >
+      {state === "copied" ? "Copied" : state === "failed" ? "Copy failed" : "Copy"}
+    </button>
   );
 }
 
@@ -817,7 +811,7 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
     const all = await drill(await props.query(), config, {
       columns: group.columns, filters, sortBy: props.sortBy, search, limit: 500_000,
     });
-    download("movers.csv", toExportCsv(header, all.map(exportRow)), "text/csv");
+    download("movers.csv", toExportCsv(header, all.map(exportRow).map((row) => row.map(finiteOrBlank))), "text/csv");
   };
 
   const mixOf = (row: Record<string, unknown>) =>
@@ -1063,7 +1057,7 @@ function Check(props: { run: Run; warnings: string[]; query: () => Promise<Query
     ["Rows with sales but zero units", check.zeroUnitSalesRows],
   ];
   return (
-    <div className="check">
+    <div className="data-check">
       <h3>Money tie-out</h3>
       <table className="narrow tieout">
         <tbody>
