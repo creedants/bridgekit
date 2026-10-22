@@ -1,9 +1,17 @@
 import type { Query } from "../engine.ts";
 
 const COMMA_TAIL = ",\\d{1,2}";
+const COMMA_THREE = ",\\d{3}";
+const COMMA_LONG = ",\\d{4,}";
 const GROUPED = `^-?\\d{1,3}(\\.\\d{3})*(${COMMA_TAIL})?$`;
 const PLAIN = `^-?\\d+${COMMA_TAIL}$`;
+const GROUPED_THREE = `^-?\\d{1,3}(\\.\\d{3})*(${COMMA_THREE})$`;
+const PLAIN_THREE = `^-?\\d+${COMMA_THREE}$`;
+const GROUPED_LONG = `^-?\\d{1,3}(\\.\\d{3})*(${COMMA_LONG})$`;
+const PLAIN_LONG = `^-?\\d+${COMMA_LONG}$`;
 const DECIMAL_TAIL = `${COMMA_TAIL}$`;
+const LONG_TAIL = `${COMMA_LONG}$`;
+const THOUSANDS = `^-?[1-9]\\d{0,2}(,\\d{3})+$`;
 const FIRST_ROWS = 2000;
 
 const northAmerican = (column: string) =>
@@ -16,6 +24,7 @@ interface ColumnCounts {
   nonBlank: number;
   european: number;
   decimalTail: number;
+  thousands: number;
   present: number;
   parsed: number;
   formatted: number;
@@ -36,7 +45,7 @@ function parsesWithFormatting(counts: Pick<ColumnCounts, "present" | "parsed" | 
 }
 
 function isDecimalComma(counts: ColumnCounts): boolean {
-  return counts.nonBlank > 0 && counts.nonBlank === counts.european && counts.decimalTail > 0;
+  return counts.nonBlank > 0 && counts.nonBlank === counts.european && counts.decimalTail > 0 && counts.thousands === 0;
 }
 
 function lacksDecimalTail(counts: ColumnCounts): boolean {
@@ -53,12 +62,14 @@ function formattingMeasures(column: string, index: number): string {
 
 function measures(column: string, index: number): string {
   const blank = `(${column} IS NULL OR regexp_matches(${column}, '^\\s*$'))`;
-  const european = `(regexp_matches(trim(${column}), '${GROUPED}') OR regexp_matches(trim(${column}), '${PLAIN}'))`;
-  const decimalTail = `regexp_matches(regexp_replace(trim(${column}), '[\\$\\s()]', '', 'g'), '${DECIMAL_TAIL}')`;
+  const european = `(regexp_matches(trim(${column}), '${GROUPED}') OR regexp_matches(trim(${column}), '${PLAIN}') OR regexp_matches(trim(${column}), '${GROUPED_THREE}') OR regexp_matches(trim(${column}), '${PLAIN_THREE}') OR regexp_matches(trim(${column}), '${GROUPED_LONG}') OR regexp_matches(trim(${column}), '${PLAIN_LONG}'))`;
+  const decimalTail = `(regexp_matches(regexp_replace(trim(${column}), '[\\$\\s()]', '', 'g'), '${DECIMAL_TAIL}') OR regexp_matches(regexp_replace(trim(${column}), '[\\$\\s()]', '', 'g'), '${LONG_TAIL}'))`;
+  const thousands = `regexp_matches(trim(${column}), '${THOUSANDS}')`;
   return [
     `count(*) FILTER (WHERE NOT ${blank})::DOUBLE AS nb${index}`,
     `count(*) FILTER (WHERE NOT ${blank} AND ${european})::DOUBLE AS eu${index}`,
     `count(*) FILTER (WHERE ${decimalTail})::DOUBLE AS p${index}`,
+    `count(*) FILTER (WHERE ${thousands})::DOUBLE AS t${index}`,
     formattingMeasures(column, index),
   ].join(", ");
 }
@@ -86,6 +97,7 @@ async function scan(query: Query, columns: string[], source: string): Promise<Co
     nonBlank: Number(row[`nb${index}`]),
     european: Number(row[`eu${index}`]),
     decimalTail: Number(row[`p${index}`]),
+    thousands: Number(row[`t${index}`]),
     ...formattingFrom(row, index),
   }));
 }
