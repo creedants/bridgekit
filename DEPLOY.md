@@ -499,7 +499,7 @@ Dashboard (not verified): Paddle > My account > Settings > Authentication > API 
 npx wrangler secret put PADDLE_API_KEY
 ```
 
-Every subscription webhook uses this key. With no `PADDLE_API_KEY`, the webhook answers 503 with `Subscriptions are not set up yet.`, writes nothing, and Paddle retries the delivery. With a key that cannot list subscriptions, the webhook answers 502 with `Could not read the subscription from Paddle.`, and Paddle retries that too.
+After verifying the signature and accepting a supported subscription event, the Worker checks this key. With no `PADDLE_API_KEY`, the webhook answers 503 with `Subscriptions are not set up yet.`, writes nothing, and Paddle retries the delivery. For a known workspace, a key that cannot list subscriptions makes the webhook answer 502 with `Could not read the subscription from Paddle.`, and Paddle retries that too.
 
 - Source: `server/env.ts:26` has `PADDLE_API_KEY?: string`.
 - Source: `server/paddle.ts:388-391` has `doFetch`, `/transactions`, `method: "POST"`.
@@ -509,7 +509,7 @@ Every subscription webhook uses this key. With no `PADDLE_API_KEY`, the webhook 
 - Source: `server/worker.ts:343` has `if (!paddle) return c.json({ error: "Subscriptions are not set up yet." }, 503)`.
 - Source: `server/worker.ts:364` has `Could not read the subscription from Paddle.`, `502`
 - Source: `server/paddle.ts:244` has `Paddle returned ${response.status} when listing subscriptions.`
-- Not verified: the permission name is not in this repo. Paddle's transaction reference requires `transaction.write` at [Create a transaction](https://developer.paddle.com/api-reference/transactions/create-transaction). Paddle's authentication reference says a key without the permission returns 403, at [Authentication](https://developer.paddle.com/api-reference/about/authentication). Nobody entered an account. Paddle's permissions page lists `subscription.read` at [Permissions](https://developer.paddle.com/api-reference/about/permissions); a key without it is refused with 403 and the webhook answers 502.
+- Not verified: the permission name is not in this repo. Paddle's transaction reference requires `transaction.write` at [Create a transaction](https://developer.paddle.com/api-reference/transactions/create-transaction). Paddle's authentication reference says a key without the permission returns 403, at [Authentication](https://developer.paddle.com/api-reference/about/authentication). Nobody entered an account. Paddle's permissions page lists `subscription.read` at [Permissions](https://developer.paddle.com/api-reference/about/permissions); a key without it is refused with 403. For an accepted subscription event for a known workspace, that refusal makes the webhook answer 502.
 - Worked: `npx wrangler secret list` prints `PADDLE_API_KEY`. This proves the name is present, not that the key can create a transaction.
 - If this is wrong you will see: Subscribe answers 500 and `Something went wrong on the server.`
 
