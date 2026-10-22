@@ -1,0 +1,1 @@
+- A file's date order is now read from the values the load delivered, a column whose own values prove an order keeps it, and a file is left exactly as the reader read it unless every value in its date columns is a four-digit-year slash date.
