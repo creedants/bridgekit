@@ -181,6 +181,93 @@ test("an ambiguous two-digit date beside a four-digit date keeps the plain reade
   assert.equal(await dateOrderNote(query, "ambiguouswidth"), null);
 });
 
+test("a two-digit-year date leaves every column as the plain reader read it", async () => {
+  const file = await csvPath("id,a,b\n1,04/13/25,03/04/2025\n2,05/06/2025,05/06/2025\n");
+  const query = await openDatabase();
+  await readCsvTable(query, "mixedyears", file);
+  await query(`CREATE TABLE plain AS SELECT * FROM read_csv('${esc(file)}')`);
+  const loaded = await query("SELECT CAST(a AS VARCHAR) AS a, CAST(b AS VARCHAR) AS b FROM mixedyears ORDER BY id");
+  const plain = await query("SELECT CAST(a AS VARCHAR) AS a, CAST(b AS VARCHAR) AS b FROM plain ORDER BY id");
+  assert.deepEqual(loaded, plain);
+  assert.deepEqual(
+    loaded.map((row) => String(row.a)),
+    ["0025-04-13", "2025-05-06"],
+  );
+  assert.deepEqual(
+    loaded.map((row) => String(row.b)),
+    ["2025-03-04", "2025-05-06"],
+  );
+  const types = Object.fromEntries(
+    (await query("DESCRIBE mixedyears")).map((row) => [String(row.column_name), String(row.column_type)]),
+  );
+  assert.equal(types.a, "DATE");
+  assert.equal(types.b, "DATE");
+  assert.equal(await dateOrderNote(query, "mixedyears"), null);
+});
+
+test("a day-first two-digit-year date leaves every column as the plain reader read it", async () => {
+  const file = await csvPath("id,a,b\n1,13/04/25,03/04/2025\n2,05/06/2025,05/06/2025\n");
+  const query = await openDatabase();
+  await readCsvTable(query, "mixedyearsday", file);
+  await query(`CREATE TABLE plain AS SELECT * FROM read_csv('${esc(file)}')`);
+  const loaded = await query("SELECT CAST(a AS VARCHAR) AS a, CAST(b AS VARCHAR) AS b FROM mixedyearsday ORDER BY id");
+  const plain = await query("SELECT CAST(a AS VARCHAR) AS a, CAST(b AS VARCHAR) AS b FROM plain ORDER BY id");
+  assert.deepEqual(loaded, plain);
+  assert.deepEqual(
+    loaded.map((row) => String(row.a)),
+    ["0025-04-13", "2025-06-05"],
+  );
+  assert.deepEqual(
+    loaded.map((row) => String(row.b)),
+    ["2025-04-03", "2025-06-05"],
+  );
+  assert.equal(await dateOrderNote(query, "mixedyearsday"), null);
+});
+
+test("a three-digit year is left as read, a rowid column is swapped, and a short row keeps its values", async () => {
+  const threeDigitFile = await csvPath("id,a,b\n1,13/04/025,03/04/2025\n2,05/06/2025,05/06/2025\n");
+  const shortFile = await csvPath("id,a,b\n1,04/13/25,03/04/2025\n2,05/06/2025,05/06/2025\n3,07/08/2025\n");
+  const rowidFile = await csvPath("rowid,v\n03/04/2025,10\n05/06/2025,20\n");
+  const query = await openDatabase();
+
+  await readCsvTable(query, "threedigit", threeDigitFile);
+  await query(`CREATE TABLE plainthree AS SELECT * FROM read_csv('${esc(threeDigitFile)}')`);
+  const threeDigit = await query(
+    "SELECT CAST(a AS VARCHAR) AS a, CAST(b AS VARCHAR) AS b FROM threedigit ORDER BY id",
+  );
+  const plainThree = await query(
+    "SELECT CAST(a AS VARCHAR) AS a, CAST(b AS VARCHAR) AS b FROM plainthree ORDER BY id",
+  );
+  assert.deepEqual(threeDigit, plainThree);
+  assert.deepEqual(
+    threeDigit.map((row) => String(row.a)),
+    ["0025-04-13", "2025-06-05"],
+  );
+  assert.deepEqual(
+    threeDigit.map((row) => String(row.b)),
+    ["2025-04-03", "2025-06-05"],
+  );
+  assert.equal(await dateOrderNote(query, "threedigit"), null);
+
+  await readCsvTable(query, "shortrow", shortFile);
+  const short = await query("SELECT CAST(a AS VARCHAR) AS a, CAST(b AS VARCHAR) AS b FROM shortrow ORDER BY id");
+  assert.deepEqual(
+    short.map((row) => (row.b === null ? null : String(row.b))),
+    ["2025-03-04", "2025-05-06", null],
+  );
+  assert.equal(await dateOrderNote(query, "shortrow"), null);
+
+  await readCsvTable(query, "rowidcol", rowidFile);
+  const described = await query("DESCRIBE rowidcol");
+  assert.equal(String(described.find((row) => String(row.column_name) === "rowid")?.column_type), "DATE");
+  const rowid = await query("SELECT CAST(rowid AS VARCHAR) AS rowid FROM rowidcol ORDER BY v");
+  assert.deepEqual(
+    rowid.map((row) => String(row.rowid)),
+    ["2025-03-04", "2025-05-06"],
+  );
+  assert.equal(await dateOrderNote(query, "rowidcol"), "1 column with slash dates was read month-first: rowid.");
+});
+
 test("ISO dates stay unchanged and the note is null", async () => {
   const file = await csvPath("d,v\n2025-03-04,10\n2025-04-05,20\n");
   const query = await openDatabase();
