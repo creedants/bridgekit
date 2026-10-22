@@ -30,7 +30,7 @@ A non-zero delay is a partial run. During the wait the page may download the Duc
 `--sizes` replaces the row table for that run with a comma-separated list of row counts. Every listed size runs in the browser. Each count must be an integer from 1 to 20000000. A plain run without the flag measures 10,000 and 300,000 rows in the browser and 3,000,000 rows in Node only.
 
 ```
-DIR=$(mktemp -d)
+DIR=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}")
 npm run perf -- --sizes 1000000,3000000 --out $DIR/large.json
 ```
 
@@ -93,7 +93,7 @@ File to a finished bridge:
 Engine, in Node, one connection per size, after one discarded warm-up:
 
 - `engine.sizes[].generateMs` is `createSyntheticSales`. That is the in-app sample-data path. A person who loads a CSV does not pay it.
-- `engine.sizes[].bridgeMs` is `runBridge` for Model, Finish, Color (color and upgrade), and Material, on sales, with no gross column and no cost column.
+- `engine.sizes[].bridgeMs` is `runBridge` for the four product attributes, on sales, with no gross column and no cost column.
 - `engine.sizes[].dataCheckMs` is the scan the tool awaits before it draws the bridge. It is not part of `bridgeMs`. `dataCheck.rows` is the row count that scan saw.
 - `engine.sizes[].duckdbThreads` is DuckDB's `threads` setting on that connection.
 - `engine.sizes[].fingerprint.sha256` hashes money rounded to cents and coverage shares rounded to five decimals. Raw float sums move by a fraction of a cent. `maxAbsMoneyDelta` is the largest raw gap in that size.

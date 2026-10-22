@@ -1,0 +1,1 @@
+- Round 2 clarifies the Units and Product definitions, replaces red items wording with higher-priced color options, and updates the perf README scratch directory and attribute wording.
