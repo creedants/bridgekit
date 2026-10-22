@@ -223,7 +223,7 @@ test("a decimal comma beside a north american decimal stays text", async () => {
   await convertFormattedNumbers(query, "mixed");
   assert.equal(await columnType(query, "mixed", "amount"), "VARCHAR");
   assert.deepEqual(await columnValues(query, "mixed", "amount"), ["1.234,56", "1,260.00"]);
-  assert.equal(await decimalCommaNote(query, "mixed"), null);
+  assert.equal(await decimalCommaNote(query, "mixed"), "amount mixes number styles, so it was read as text.");
 });
 
 test("a space used as a thousands mark stays text", async () => {
@@ -258,13 +258,13 @@ test("parentheses around a decimal comma stay text, and today's parentheses stil
   assert.equal(await decimalCommaNote(query, "parens"), null);
 });
 
-test("three digits after the comma keep today's reading", async () => {
+test("three digits after a dot group mark read as a decimal comma", async () => {
   const query = await openDatabase();
-  await createText(query, "tail", { amount: ["1.234,567"] });
+  await createText(query, "tail", { amount: ["1.234,567", "2.345,678"] });
   await convertFormattedNumbers(query, "tail");
   assert.equal(await columnType(query, "tail", "amount"), "DOUBLE");
-  expectNumbers(await columnValues(query, "tail", "amount"), [1.234567]);
-  assert.equal(await decimalCommaNote(query, "tail"), null);
+  expectNumbers(await columnValues(query, "tail", "amount"), [1234.567, 2345.678]);
+  assert.equal(await decimalCommaNote(query, "tail"), ONE);
 });
 
 test("three-decimal comma values convert via whole-column decision", async () => {
@@ -279,6 +279,33 @@ test("three-decimal comma values convert via whole-column decision", async () =>
   assert.equal(await columnType(query, "shorttail", "amount"), "DOUBLE");
   expectNumbers(await columnValues(query, "shorttail", "amount"), [0.125, 12.5]);
   assert.equal(await decimalCommaNote(query, "shorttail"), ONE);
+});
+
+test("a decimal-comma column beside an ambiguous value stays text and the note names it", async () => {
+  const directory = await mkdtemp("/tmp/bridgekit-comma-");
+  const file = path.join(directory, "styles.csv");
+  await writeFile(
+    file,
+    "period;product;units;net_sales;gross_sales\n2024;A;10;1,234;100\n2024;A;10;12,3456;200\n2025;A;10;1,234;110\n2025;A;10;12,3456;210\n",
+  );
+  const query = await openDatabase();
+  await query(`CREATE TABLE styles AS SELECT * FROM read_csv('${file}', delim=';', header=true, types={'gross_sales': 'DOUBLE'})`);
+  await convertFormattedNumbers(query, "styles");
+  assert.equal(await columnType(query, "styles", "net_sales"), "VARCHAR");
+  assert.deepEqual(await columnValues(query, "styles", "net_sales"), ["1,234", "12,3456", "1,234", "12,3456"]);
+  assert.equal(await columnType(query, "styles", "gross_sales"), "DOUBLE");
+  assert.equal(await decimalCommaNote(query, "styles"), "net_sales mixes number styles, so it was read as text.");
+
+  await createText(query, "pair", {
+    a: ["1.234,56", "1,260.00"],
+    b: ["1.234,567", "1,234"],
+  });
+  await convertFormattedNumbers(query, "pair");
+  assert.equal(await columnType(query, "pair", "a"), "VARCHAR");
+  assert.equal(await columnType(query, "pair", "b"), "VARCHAR");
+  assert.deepEqual(await columnValues(query, "pair", "a"), ["1.234,56", "1,260.00"]);
+  assert.deepEqual(await columnValues(query, "pair", "b"), ["1.234,567", "1,234"]);
+  assert.equal(await decimalCommaNote(query, "pair"), "a and b mix number styles, so they were read as text.");
 });
 
 test("a decimal comma after 2000 blank rows stays text", async () => {
@@ -326,7 +353,7 @@ test("a decimal comma after 2000 thousands values stays text", async () => {
   const rows = await query(`SELECT amount FROM late ORDER BY i`);
   assert.equal(rows[0].amount, "1,260");
   assert.equal(rows[2000].amount, "1.234,56");
-  assert.equal(await decimalCommaNote(query, "late"), null);
+  assert.equal(await decimalCommaNote(query, "late"), "amount mixes number styles, so it was read as text.");
 });
 
 test("a late product code stays text", async () => {
