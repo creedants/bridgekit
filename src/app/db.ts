@@ -188,6 +188,79 @@ export interface BrowserDatabase {
 // encoding from its whole text.
 const CSV_PREFIX_BYTES = 65536;
 
+// read_csv options that keep well-formed files identical while letting short
+// rows load with blanks. null_padding pads short rows, parallel=false keeps
+// the single-threaded sniff the plain reader used for quoted line breaks.
+const CSV_OPTIONS = "null_padding=true, parallel=false";
+
+// Marks a DATE column whose slash dates were reinterpreted month-first.
+const MONTH_FIRST_MARK = "month first";
+
+// Patterns that decide a slash date column's order. A column with at least
+// one slash date and no part above 12 on either side is fully ambiguous.
+const SLASH_DATE_ORDER = {
+  slash: "^\\s*\\d{1,2}/\\d{1,2}/\\d{4}\\s*$",
+  firstProves: "^\\s*(1[3-9]|[2-9][0-9])/\\d{1,2}/\\d{4}",
+  secondProves: "^\\s*\\d{1,2}/(1[3-9]|[2-9][0-9])/\\d{4}",
+} as const;
+
+export async function readCsvTable(query: Query, table: string, path: string): Promise<void> {
+  const escaped = path.replaceAll("'", "''");
+  await query(`CREATE OR REPLACE TABLE ${quote(table)} AS SELECT * FROM read_csv('${escaped}', ${CSV_OPTIONS})`);
+  const { ambiguous, monthFirst } = await ambiguousDateColumns(query, table, path);
+  for (const column of ambiguous) {
+    const name = quote(table);
+    const field = quote(column);
+    if (!monthFirst) {
+      await query(
+        `UPDATE ${name} SET ${field} = make_date(year(${field})::INTEGER, day(${field})::INTEGER, month(${field})::INTEGER) WHERE ${field} IS NOT NULL`,
+      );
+    }
+    await query(`COMMENT ON COLUMN ${name}.${field} IS '${MONTH_FIRST_MARK}'`);
+  }
+}
+
+async function ambiguousDateColumns(
+  query: Query,
+  table: string,
+  path: string,
+): Promise<{ ambiguous: string[]; monthFirst: boolean }> {
+  const described = await query(`DESCRIBE ${quote(table)}`);
+  const dates = described
+    .filter((row) => String(row.column_type) === "DATE")
+    .map((row) => String(row.column_name));
+  if (dates.length === 0) return { ambiguous: [], monthFirst: false };
+  const escaped = path.replaceAll("'", "''");
+  const source = `read_csv('${escaped}', all_varchar=true, ${CSV_OPTIONS})`;
+  const counts = dates
+    .map(
+      (_, index) =>
+        [
+          `count(*) FILTER (WHERE regexp_matches(${quote(dates[index])}, '${SLASH_DATE_ORDER.slash}'))::DOUBLE AS s${index}`,
+          `count(*) FILTER (WHERE regexp_matches(${quote(dates[index])}, '${SLASH_DATE_ORDER.firstProves}'))::DOUBLE AS f${index}`,
+          `count(*) FILTER (WHERE regexp_matches(${quote(dates[index])}, '${SLASH_DATE_ORDER.secondProves}'))::DOUBLE AS m${index}`,
+        ].join(", "),
+    )
+    .join(", ");
+  const [row] = await query(`SELECT ${counts} FROM ${source}`);
+  if (!row) return { ambiguous: [], monthFirst: false };
+  const monthFirst = dates.some((_, index) => Number(row[`m${index}`]) > 0);
+  const ambiguous = dates.filter(
+    (_, index) => Number(row[`s${index}`]) > 0 && Number(row[`f${index}`]) === 0 && Number(row[`m${index}`]) === 0,
+  );
+  return { ambiguous, monthFirst };
+}
+
+export async function dateOrderNote(query: Query, table: string): Promise<string | null> {
+  const rows = await query(
+    `SELECT column_name FROM duckdb_columns() WHERE schema_name = current_schema() AND table_name = '${table.replaceAll("'", "''")}' AND comment = '${MONTH_FIRST_MARK}' ORDER BY column_name`,
+  );
+  const names = rows.map((row) => String(row.column_name));
+  if (names.length === 0) return null;
+  if (names.length === 1) return `1 column with slash dates was read month-first: ${names[0]}.`;
+  return `${names.length} columns with slash dates were read month-first: ${names.join(", ")}.`;
+}
+
 // read_csv only reads UTF-8. When a file that passed the prefix check turns out
 // to hold bytes that are not UTF-8, the database's own message names exactly
 // this failure, and the one sentence replaces it. Any other database error is
@@ -472,9 +545,8 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
             else await db.registerFileText(registered, decision.text);
           }
         }
-        const reader = `read_csv('${registered}')`;
         try {
-          await query(`CREATE OR REPLACE TABLE "${table}" AS SELECT * FROM ${reader}`);
+          await readCsvTable(query, table, registered);
         } catch (error) {
           throw csvEncodingFailure(error);
         }
