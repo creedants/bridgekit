@@ -1153,6 +1153,102 @@ async function drive(browser, origin, rows) {
     if (Math.abs(formattedCurrent - FORMATTED_CURRENT) > 1e-6) fail(`formatted numbers: current is ${formattedCurrent}, expected ${FORMATTED_CURRENT}`);
     console.log("ok  formatted numbers: 1,234.50, dollar, thousands and parentheses load with the right total");
 
+    const readHeads = () => browser.evalJs(
+      `JSON.stringify([...document.querySelector('.scroll table thead').rows[0].cells].map((th) => th.textContent.trim()))`,
+    ).then(JSON.parse);
+    const downloadReport = () => browser.evalJs(`(async () => {
+      let blob = null; const original = URL.createObjectURL;
+      URL.createObjectURL = (b) => { blob = b; return original(b); };
+      T.btn('Download report').click();
+      for (let i = 0; i < 100 && !blob; i++) await new Promise(r => setTimeout(r, 100));
+      URL.createObjectURL = original;
+      if (!blob) return "";
+      return await blob.text();
+    })()`);
+
+    // A sales bridge keeps today literals in Movers and the downloaded report.
+    await setDataFile(fixtures.csvPath);
+    await addFixtureLevels();
+    await waitReady();
+    await calculate();
+    const salesReport = await downloadReport();
+    if (!salesReport) fail("sales labels: no report was downloaded");
+    for (const want of ["<title>Sales bridge: 2024 to 2025</title>", "% of prior sales", ">Price</th>"]) {
+      if (!salesReport.includes(want)) fail(`sales labels: the report is missing ${JSON.stringify(want)}`);
+    }
+    if (salesReport.includes("Margin bridge")) fail("sales labels: the report says Margin bridge");
+    await browser.evalJs(`T.tab("Movers")`);
+    await browser.sleep(800);
+    const salesHeads = await readHeads();
+    const salesTail = ["Prior sales", "Current sales", "Change", "Volume", "Mix", "Price", "New config.", "Discontinued", "No units", "Prior price", "Current price", "Price change"];
+    if (salesHeads.slice(-salesTail.length).join("|") !== salesTail.join("|")) {
+      fail(`sales labels: Movers headers are ${salesHeads.join(", ")}`);
+    }
+    console.log("ok  sales labels: Movers and the report keep the sales wording");
+
+    // Check the margin labels in Movers and the report, and omit ignored gross from Setup.
+    const marginPath = join(fixtureDir, "margin.csv");
+    writeFileSync(marginPath, toCsvText(
+      ["period", "product", "units", "gross_sales", "net_sales", "cost"],
+      [
+        ["2025", "P", 100, 1100, 1000, 400],
+        ["2025", "Q", 100, 1200, 1000, 100],
+        ["2026", "P", 110, 1331, 1210, 440],
+        ["2026", "Q", 90, 990, 900, 135],
+      ],
+    ));
+    await nodeQuery(`CREATE OR REPLACE TABLE data AS SELECT * FROM read_csv('${marginPath}', header=true)`);
+    await nodeQuery(viewSql({ periodColumn: "period", grain: "value", unitsColumn: "units", salesColumn: "net_sales", levels: [{ name: "Product", columns: ["product"] }], filters: [], newAndDiscontinued: "difference" }));
+    const marginExpected = await runBridge(nodeQuery, {
+      table: VIEW, periodColumn: PERIOD, prior: "2025", current: "2026",
+      unitsColumn: "units", salesColumn: "net_sales", costColumn: "cost",
+      levels: [{ name: "Product", columns: ["product"] }],
+    });
+    const marginAmounts = [
+      marginExpected.priorSales,
+      ...marginExpected.effects.filter((e) => e.key !== "no_units" || e.value !== 0).map((e) => e.value),
+      marginExpected.currentSales,
+    ];
+    await setDataFile(marginPath);
+    await addAttribute("product");
+    await browser.evalJs(`T.set(T.sel('Cost'), 'cost')`);
+    try {
+      await browser.waitFor(`T.sel('Cost')?.value === 'cost'`);
+    } catch {
+      fail("margin labels: the Cost column did not take cost");
+    }
+    await waitReady();
+    await calculate();
+    sameTotals(await readBridge("margin bridge"), marginAmounts, "margin bridge: totals differ from the engine in Node");
+    console.log(`ok  margin bridge: totals match the engine in Node (prior ${marginAmounts[0]})`);
+    const marginReport = await downloadReport();
+    if (!marginReport) fail("margin labels: no report was downloaded");
+    for (const want of ["<title>Margin bridge: 2025 to 2026</title>", "% of prior margin", "Price and unit cost", "Cost column"]) {
+      if (!marginReport.includes(want)) fail(`margin labels: the report is missing ${JSON.stringify(want)}`);
+    }
+    for (const want of ["Sales bridge", "Gross sales column"]) {
+      if (marginReport.includes(want)) fail(`margin labels: the report still says ${JSON.stringify(want)}`);
+    }
+    console.log("ok  margin labels: the report is a Margin bridge with the cost column and no gross line");
+    await browser.evalJs(`T.tab("Movers")`);
+    await browser.sleep(800);
+    const marginHeads = await readHeads();
+    for (const want of ["Price and unit cost", "Prior unit margin", "Current unit margin", "Unit margin change"]) {
+      if (!marginHeads.includes(want)) fail(`margin labels: Movers is missing ${JSON.stringify(want)} (has ${marginHeads.join(", ")})`);
+    }
+    for (const want of ["Prior price", "Current price", "Price change"]) {
+      if (marginHeads.includes(want)) fail(`margin labels: Movers still shows ${JSON.stringify(want)}`);
+    }
+    if (marginHeads.includes("Price")) fail("margin labels: Movers still shows a Price column");
+    const marginSort = await browser.evalJs(`(() => { const sel = [...document.querySelectorAll('label')].find((l) => l.firstChild && l.firstChild.textContent.trim().startsWith('Sort by'))?.querySelector('select'); const opt = sel ? [...sel.options].find((o) => o.value === 'price') : null; return opt ? opt.textContent.trim() : ''; })()`);
+    if (marginSort !== "Price and unit cost") fail(`margin labels: the price sort is labelled ${JSON.stringify(marginSort)}`);
+    const marginHint = await browser.evalJs(`JSON.stringify([...document.querySelectorAll('main .hint')].map((p) => p.textContent.replace(/\\s+/g, " ").trim()).join("\\n"))`).then(JSON.parse);
+    for (const want of ["Unit margins exclude sales with no units.", "Unit margin change is the change in average unit margin and includes mix inside the row."]) {
+      if (!marginHint.includes(want)) fail(`margin labels: the Movers hint is missing ${JSON.stringify(want)}`);
+    }
+    if (marginHint.includes("Prices exclude sales with no units.")) fail("margin labels: the Movers hint still talks about prices");
+    console.log("ok  margin labels: Movers names the unit-margin figures");
+
     await setDataFile(fixtures.csvPath);
     await addFixtureLevels();
     await browser.evalJs(`T.set(T.sel('Compare by'), 'ytd')`);

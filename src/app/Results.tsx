@@ -33,7 +33,7 @@ import { decimalCommaNote } from "./numbers.ts";
 import { trendPeriods } from "./periods.ts";
 import { TABLE } from "./setup.ts";
 import { useCommentaryOffer } from "./useConfig.ts";
-import { buildReport } from "./report.ts";
+import { buildReport, moverHeader, terms } from "./report.ts";
 import { SmallBridges } from "./SmallBridges.tsx";
 import { Waterfall } from "./Waterfall.tsx";
 
@@ -122,7 +122,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
               currentLabel={String(config.current)}
               footer={<Summary run={run} result={result} query={props.query} />}
               onSelect={(key) => {
-                setSortBy(key.startsWith("mix_") ? "mix" : key.startsWith("price") ? "price" : key);
+                setSortBy(key.startsWith("mix_") ? "mix" : key.startsWith("price") || key === "cost_rate" ? "price" : key);
                 setTab("movers");
               }}
             />
@@ -786,6 +786,7 @@ function TableActions(props: { name: string; header: string[]; rows: () => unkno
 
 function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; onSortBy: (key: string) => void }) {
   const { config } = props.run;
+  const t = terms(config);
   const levels = config.levels;
   const options = [
     ...levels.map((level) => ({ label: level.name, columns: level.columns })),
@@ -821,7 +822,7 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
 
   const mixOf = (row: Record<string, unknown>) =>
     levels.reduce((sum, _, i) => sum + Number(row[`mix_${i + 1}`] ?? 0), 0);
-  const header = [...group.columns, `Prior ${measureName(config).toLowerCase()}`, `Current ${measureName(config).toLowerCase()}`, "Change", "Volume", "Mix", "Price", "New config.", "Discontinued", "No units", "Prior price", "Current price", "Price change"];
+  const header = [...group.columns, ...moverHeader(config)];
   const values = (row: Record<string, unknown>) => {
     const p0 = Number(row.s0) / Number(row.q0);
     const p1 = Number(row.s1) / Number(row.q1);
@@ -861,7 +862,7 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
             <option value="change">Change</option>
             <option value="volume">Volume</option>
             <option value="mix">Mix</option>
-            <option value="price">Price</option>
+            <option value="price">{t.priceEffect}</option>
             <option value="new_config">New configurations</option>
             <option value="discontinued">Discontinued configurations</option>
             <option value="no_units">Sales with no units</option>
@@ -938,9 +939,8 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
         </table>
       </div>
       <p className="hint">
-        Top 200 by size. Each row’s effects add up to its change. Prices exclude sales with no units.
-        {canDrill && " Click a row to break it down by the next attribute."} Price change is the change in average
-        price and includes mix inside the row.
+        Top 200 by size. Each row’s effects add up to its change. {t.hintUnits}
+        {canDrill && " Click a row to break it down by the next attribute."} {t.hintChange}
       </p>
     </div>
   );

@@ -104,7 +104,8 @@ function describeSetup(setup: Setup, prior: string, current: string, source: str
     `Periods: ${prior} to ${current} (${setup.periodColumn}${setup.grain === "value" ? "" : ", by " + setup.grain})`,
     `Units column: ${setup.unitsColumn}`,
     `Sales column: ${setup.salesColumn}`,
-    ...(setup.grossColumn ? [`Gross sales column: ${setup.grossColumn}`] : []),
+    // Cost takes precedence over gross in cellsSql, so Setup lists gross only when cost is not set.
+    ...(setup.grossColumn && !setup.costColumn ? [`Gross sales column: ${setup.grossColumn}`] : []),
     ...(setup.costColumn ? [`Cost column: ${setup.costColumn} (bridge is on margin)`] : []),
     ...setup.levels.map((level, i) => `Attribute ${i + 1}: ${level.name} (${level.columns.join(" + ")})`),
     `New and discontinued: ${setup.newAndDiscontinued === "full" ? "full sales, outside volume and mix" : "price difference only, units in volume"}`,
