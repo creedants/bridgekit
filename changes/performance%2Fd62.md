@@ -1,0 +1,1 @@
+- The site pages and README now describe the built-in sample as made-up sales lines of a made-to-order product with Model, Finish, Color and Material attributes and coded values, and perf/README uses a scratch directory placeholder instead of absolute paths.

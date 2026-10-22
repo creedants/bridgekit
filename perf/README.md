@@ -30,13 +30,14 @@ A non-zero delay is a partial run. During the wait the page may download the Duc
 `--sizes` replaces the row table for that run with a comma-separated list of row counts. Every listed size runs in the browser. Each count must be an integer from 1 to 20000000. A plain run without the flag measures 10,000 and 300,000 rows in the browser and 3,000,000 rows in Node only.
 
 ```
-npm run perf -- --sizes 1000000,3000000 --out /home/marcus/.cache/pstack-t3/scratch/xxx/large.json
+DIR=$(mktemp -d)
+npm run perf -- --sizes 1000000,3000000 --out $DIR/large.json
 ```
 
 A run with `--sizes` is a partial run. Pass `--out` to another path. `--csv-dir` sets the base directory for the generated CSV scratch files, which default to `/tmp/bridgekit-perf`, and never changes the measured numbers. The run makes its own sub-directory under that base, writes only there, and removes only that sub-directory at the end. An assets-only run creates nothing there. Files that existed before are never deleted or replaced. Use it when the files are large enough to strain `/tmp`.
 
 ```
-npm run perf -- --sizes 1000000 --csv-dir /home/marcus/.cache/pstack-t3/scratch/xxx --out /home/marcus/.cache/pstack-t3/scratch/xxx/one.json
+npm run perf -- --sizes 1000000 --csv-dir $DIR --out $DIR/one.json
 ```
 
 ## Time the Worker locally
@@ -86,13 +87,13 @@ File to a finished bridge:
 
 - `browser.files[].totalMs` is the wall time from just before the file input is set until the bridge table and the KPI row are on screen.
 - `parseMs` ends when the setup panel is visible and the status text is empty. It includes the CSV read and any DuckDB startup still unfinished. With the default `--pick-delay` of 0, the harness sets the file as soon as it sees the interactive mark. The idle open has not finished, so this time includes the wasm download.
-- `configureMs` is the script setting year, jobs, sales, and the four attributes, then waiting until Calculate bridge is enabled.
+- `configureMs` is the script setting year, units, sales, and the four attributes, then waiting until Calculate bridge is enabled.
 - `calculateMs` runs from that click until the bridge table is on screen.
 
 Engine, in Node, one connection per size, after one discarded warm-up:
 
 - `engine.sizes[].generateMs` is `createSyntheticSales`. That is the in-app sample-data path. A person who loads a CSV does not pay it.
-- `engine.sizes[].bridgeMs` is `runBridge` for Design, Coating, Color (photochromic and polar), and Material, on sales, with no gross column and no cost column.
+- `engine.sizes[].bridgeMs` is `runBridge` for Model, Finish, Color (color and upgrade), and Material, on sales, with no gross column and no cost column.
 - `engine.sizes[].dataCheckMs` is the scan the tool awaits before it draws the bridge. It is not part of `bridgeMs`. `dataCheck.rows` is the row count that scan saw.
 - `engine.sizes[].duckdbThreads` is DuckDB's `threads` setting on that connection.
 - `engine.sizes[].fingerprint.sha256` hashes money rounded to cents and coverage shares rounded to five decimals. Raw float sums move by a fraction of a cent. `maxAbsMoneyDelta` is the largest raw gap in that size.
