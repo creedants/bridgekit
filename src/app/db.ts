@@ -196,13 +196,9 @@ const CSV_OPTIONS = "null_padding=true, parallel=false";
 // Marks a DATE column whose slash dates were reinterpreted month-first.
 const MONTH_FIRST_MARK = "month first";
 
-// Patterns that decide a slash date column's order. A column with at least
-// one slash date and no part above 12 on either side is fully ambiguous.
-const SLASH_DATE_ORDER = {
-  slash: "^\\s*\\d{1,2}/\\d{1,2}/\\d{4}\\s*$",
-  firstProves: "^\\s*(1[3-9]|[2-9][0-9])/\\d{1,2}/\\d{4}",
-  secondProves: "^\\s*\\d{1,2}/(1[3-9]|[2-9][0-9])/\\d{4}",
-} as const;
+// The only slash shape in scope. Its groups are the two parts whose order the
+// reader had to decide, and the year.
+const SLASH_DATE = "^\\s*(\\d{1,2})/(\\d{1,2})/(\\d{4})\\s*$";
 
 export async function readCsvTable(query: Query, table: string, path: string): Promise<void> {
   const escaped = path.replaceAll("'", "''");
@@ -245,36 +241,58 @@ async function ambiguousDateColumns(
   path: string,
 ): Promise<{ ambiguous: string[]; monthFirst: boolean }> {
   const described = await query(`DESCRIBE ${quote(table)}`);
+  const names = described.map((row) => String(row.column_name));
   const dates = described
     .filter((row) => String(row.column_type) === "DATE")
     .map((row) => String(row.column_name));
   if (dates.length === 0) return { ambiguous: [], monthFirst: false };
   const escaped = path.replaceAll("'", "''");
   const source = `read_csv('${escaped}', all_varchar=true, ${CSV_OPTIONS})`;
+  const sourceNames = (await query(`DESCRIBE SELECT * FROM ${source}`)).map((row) => String(row.column_name));
+  if (sourceNames.length !== names.length || sourceNames.some((name, index) => name !== names[index])) {
+    return { ambiguous: [], monthFirst: false };
+  }
+  const loaded = dates.map((name, index) => `${quote(name)} AS v${index}`).join(", ");
+  const parts = dates
+    .map((name, index) =>
+      [
+        `${quote(name)} AS t${index}`,
+        `TRY_CAST(regexp_extract(${quote(name)}, '${SLASH_DATE}', 1) AS INTEGER) AS first${index}`,
+        `TRY_CAST(regexp_extract(${quote(name)}, '${SLASH_DATE}', 2) AS INTEGER) AS second${index}`,
+        `TRY_CAST(regexp_extract(${quote(name)}, '${SLASH_DATE}', 3) AS INTEGER) AS year${index}`,
+      ].join(", "),
+    )
+    .join(", ");
   const counts = dates
     .map(
       (_, index) =>
         [
-          `count(*) FILTER (WHERE regexp_matches(${quote(dates[index])}, '${SLASH_DATE_ORDER.slash}'))::DOUBLE AS s${index}`,
-          `count(*) FILTER (WHERE regexp_matches(${quote(dates[index])}, '${SLASH_DATE_ORDER.firstProves}'))::DOUBLE AS f${index}`,
-          `count(*) FILTER (WHERE regexp_matches(${quote(dates[index])}, '${SLASH_DATE_ORDER.secondProves}'))::DOUBLE AS m${index}`,
-          `count(${quote(dates[index])})::DOUBLE AS n${index}`,
+          `count(t${index})::DOUBLE AS n${index}`,
+          `count(year${index})::DOUBLE AS s${index}`,
+          `count(*) FILTER (WHERE first${index} > 12 OR second${index} > 12)::DOUBLE AS p${index}`,
+          `count(*) FILTER (WHERE year(v${index}) = year${index} AND month(v${index}) = first${index} AND day(v${index}) = second${index})::DOUBLE AS m${index}`,
+          `count(*) FILTER (WHERE year(v${index}) = year${index} AND month(v${index}) = second${index} AND day(v${index}) = first${index})::DOUBLE AS d${index}`,
         ].join(", "),
     )
     .join(", ");
-  const [row] = await query(`SELECT ${counts} FROM ${source}`);
-  if (!row) return { ambiguous: [], monthFirst: false };
-  const monthFirst = dates.some((_, index) => Number(row[`m${index}`]) > 0);
-  // Only a column made entirely of four-digit slash dates may be swapped. A
-  // two-digit year row is invisible to the three patterns, so counting the
-  // column's non-null values keeps such a column on the reader's own order.
-  const ambiguous = dates.filter(
-    (_, index) =>
-      Number(row[`s${index}`]) > 0 &&
-      Number(row[`s${index}`]) === Number(row[`n${index}`]) &&
-      Number(row[`f${index}`]) === 0 &&
-      Number(row[`m${index}`]) === 0,
+  const [row] = await query(
+    `SELECT ${counts} FROM (SELECT ${loaded} FROM ${quote(table)}) POSITIONAL JOIN (SELECT ${parts} FROM ${source})`,
   );
+  if (!row) return { ambiguous: [], monthFirst: false };
+  const count = (key: string) => Number(row[key]);
+  // Only a file whose every DATE value is a four-digit slash date is in scope.
+  // A three-digit year is read as a date too, so it would otherwise change the
+  // order without being seen here.
+  if (dates.some((_, index) => count(`s${index}`) !== count(`n${index}`))) {
+    return { ambiguous: [], monthFirst: false };
+  }
+  // The order is read from the values the load delivered. Every value must
+  // match one reading, or the file keeps the order it was read with.
+  const monthFirst = dates.every((_, index) => count(`m${index}`) === count(`n${index}`));
+  if (!monthFirst && !dates.every((_, index) => count(`d${index}`) === count(`n${index}`))) {
+    return { ambiguous: [], monthFirst: false };
+  }
+  const ambiguous = dates.filter((_, index) => count(`s${index}`) > 0 && count(`p${index}`) === 0);
   return { ambiguous, monthFirst };
 }
 
