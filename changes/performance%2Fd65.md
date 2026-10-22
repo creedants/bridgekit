@@ -1,0 +1,1 @@
+- A bridge with no prior sales exports without the NaN and Infinity values that made Excel offer to repair the workbook, the CSV files leave those cells empty, the Data check panel stacks its tables and hints instead of running them across the page, and a Copy button the browser blocks now reads Copy failed.
