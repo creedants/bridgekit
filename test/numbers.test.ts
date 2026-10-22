@@ -214,7 +214,103 @@ test("a four-digit whole number beside a decimal comma stays text", async () => 
   assert.equal(await columnType(query, "long", "thousand"), "VARCHAR");
   assert.deepEqual(await columnValues(query, "long", "fifteen"), ["1500", "12,50"]);
   assert.deepEqual(await columnValues(query, "long", "thousand"), ["1000", "12,50"]);
-  assert.equal(await decimalCommaNote(query, "long"), null);
+  assert.equal(await decimalCommaNote(query, "long"), "fifteen and thousand mix number styles, so they were read as text.");
+});
+
+test("review two mixed US three-decimal columns stay text and are named", async () => {
+  const query = await openDatabase();
+  const cases: Record<string, [string, string]> = {
+    grouped: ["1.234,567", "1,260.000"],
+    plain: ["1.234,567", "1260.000"],
+    plus: ["1.234,567", "+1,260.00"],
+    dollar: ["1.234,567", "$1,260.000"],
+    parens: ["1.234,567", "(1,260.000)"],
+  };
+  for (const [name, values] of Object.entries(cases)) {
+    const table = `three_${name}`;
+    await createText(query, table, { amount: values });
+    await convertFormattedNumbers(query, table);
+    assert.equal(await columnType(query, table, "amount"), "VARCHAR");
+    assert.deepEqual(await columnValues(query, table, "amount"), values);
+    assert.equal(await decimalCommaNote(query, table), "amount mixes number styles, so it was read as text.");
+  }
+});
+
+test("a plain integer beside three-decimal comma proof stays text and is named", async () => {
+  const query = await openDatabase();
+  await createText(query, "intproof", { amount: ["1500", "1.234,567"] });
+  await convertFormattedNumbers(query, "intproof");
+  assert.equal(await columnType(query, "intproof", "amount"), "VARCHAR");
+  assert.deepEqual(await columnValues(query, "intproof", "amount"), ["1500", "1.234,567"]);
+  assert.equal(await decimalCommaNote(query, "intproof"), "amount mixes number styles, so it was read as text.");
+});
+
+test("a semicolon file with mixed three-decimal styles loads and names the conflict", async () => {
+  const directory = await mkdtemp("/tmp/bridgekit-comma-");
+  const file = path.join(directory, "mixed-three.csv");
+  await writeFile(
+    file,
+    "period;product;units;net_sales;gross_sales\n2024;A;10;1.234,567;100\n2024;A;10;1,260.000;200\n2025;A;10;1.234,567;110\n2025;A;10;1,260.000;210\n",
+  );
+  const query = await openDatabase();
+  await query(`CREATE TABLE mixed_three AS SELECT * FROM read_csv('${file}', delim=';', header=true, types={'gross_sales': 'DOUBLE'})`);
+  await convertFormattedNumbers(query, "mixed_three");
+  assert.equal(await columnType(query, "mixed_three", "net_sales"), "VARCHAR");
+  assert.deepEqual(await columnValues(query, "mixed_three", "net_sales"), ["1.234,567", "1,260.000", "1.234,567", "1,260.000"]);
+  assert.equal(await columnType(query, "mixed_three", "gross_sales"), "DOUBLE");
+  assert.equal(await decimalCommaNote(query, "mixed_three"), "net_sales mixes number styles, so it was read as text.");
+});
+
+test("every number-shaped column left as text is named", async () => {
+  const query = await openDatabase();
+  const pool = [
+    "1.234,567",
+    "1,260.000",
+    "1260.000",
+    "+1,260.00",
+    "$1,260.000",
+    "(1,260.000)",
+    "0,000,000",
+    "1.234,56",
+    "1,260.00",
+    "1,234",
+    "12,3456",
+    "12,50",
+    "0,125",
+    "1.234",
+    "1500",
+    "12,5",
+    "-1.234,567",
+    "$90.00",
+    "(45)",
+    "1,234.56",
+  ];
+  const named = "amount mixes number styles, so it was read as text.";
+  const hasMarker = (value: string): boolean => /[,$()]/.test(value);
+  let text = 0;
+  let numeric = 0;
+  for (let i = 0; i < pool.length; i++) {
+    for (let j = i + 1; j < pool.length; j++) {
+      const table = `pair_${i}_${j}`;
+      await createText(query, table, { amount: [pool[i], pool[j]] });
+      await convertFormattedNumbers(query, table);
+      const type = await columnType(query, table, "amount");
+      if (type === "DOUBLE") {
+        numeric += 1;
+        continue;
+      }
+      assert.equal(type, "VARCHAR");
+      assert.deepEqual(await columnValues(query, table, "amount"), [pool[i], pool[j]]);
+      if (!hasMarker(pool[i]) && !hasMarker(pool[j])) {
+        assert.equal(await decimalCommaNote(query, table), null);
+        continue;
+      }
+      assert.equal(await decimalCommaNote(query, table), named);
+      text += 1;
+    }
+  }
+  assert.ok(text > 0);
+  assert.ok(numeric > 0);
 });
 
 test("a decimal comma beside a north american decimal stays text", async () => {
