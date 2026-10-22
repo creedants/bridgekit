@@ -220,6 +220,25 @@ export async function readCsvTable(query: Query, table: string, path: string): P
   }
 }
 
+// An Excel load keeps the plain reader it had before slash dates were
+// reinterpreted, because the change is for CSV text exports only.
+export async function readLoadedTable(
+  query: Query,
+  table: string,
+  path: string,
+  isExcel: boolean,
+): Promise<void> {
+  try {
+    if (isExcel) {
+      await query(`CREATE OR REPLACE TABLE ${quote(table)} AS SELECT * FROM read_csv('${path.replaceAll("'", "''")}')`);
+      return;
+    }
+    await readCsvTable(query, table, path);
+  } catch (error) {
+    throw csvEncodingFailure(error);
+  }
+}
+
 async function ambiguousDateColumns(
   query: Query,
   table: string,
@@ -239,14 +258,22 @@ async function ambiguousDateColumns(
           `count(*) FILTER (WHERE regexp_matches(${quote(dates[index])}, '${SLASH_DATE_ORDER.slash}'))::DOUBLE AS s${index}`,
           `count(*) FILTER (WHERE regexp_matches(${quote(dates[index])}, '${SLASH_DATE_ORDER.firstProves}'))::DOUBLE AS f${index}`,
           `count(*) FILTER (WHERE regexp_matches(${quote(dates[index])}, '${SLASH_DATE_ORDER.secondProves}'))::DOUBLE AS m${index}`,
+          `count(${quote(dates[index])})::DOUBLE AS n${index}`,
         ].join(", "),
     )
     .join(", ");
   const [row] = await query(`SELECT ${counts} FROM ${source}`);
   if (!row) return { ambiguous: [], monthFirst: false };
   const monthFirst = dates.some((_, index) => Number(row[`m${index}`]) > 0);
+  // Only a column made entirely of four-digit slash dates may be swapped. A
+  // two-digit year row is invisible to the three patterns, so counting the
+  // column's non-null values keeps such a column on the reader's own order.
   const ambiguous = dates.filter(
-    (_, index) => Number(row[`s${index}`]) > 0 && Number(row[`f${index}`]) === 0 && Number(row[`m${index}`]) === 0,
+    (_, index) =>
+      Number(row[`s${index}`]) > 0 &&
+      Number(row[`s${index}`]) === Number(row[`n${index}`]) &&
+      Number(row[`f${index}`]) === 0 &&
+      Number(row[`m${index}`]) === 0,
   );
   return { ambiguous, monthFirst };
 }
@@ -545,11 +572,7 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
             else await db.registerFileText(registered, decision.text);
           }
         }
-        try {
-          await readCsvTable(query, table, registered);
-        } catch (error) {
-          throw csvEncodingFailure(error);
-        }
+        await readLoadedTable(query, table, registered, isExcel);
         if (excelHoles.length > 0) {
           const described = await query(`DESCRIBE ${quote(table)}`);
           const names = described.map((row) => String(row.column_name));
