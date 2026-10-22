@@ -210,7 +210,7 @@ test("a stale split calculates nothing, and the grid for that same column stays"
   assert.equal(gridAction("", false, ""), "clear");
   assert.equal(gridAction("design", false, ""), "calculate");
   assert.equal(gridAction("design", true, "design"), "keep");
-  assert.equal(gridAction("coating", true, "design"), "clear");
+  assert.equal(gridAction("finish", true, "design"), "clear");
   assert.equal(gridAction("design", true, ""), "clear");
 });
 
@@ -280,7 +280,7 @@ test("a split replaced before it starts never runs, and only the latest follows 
     ran.push(`${column}:end`);
   });
   runner.request("design");
-  runner.request("coating");
+  runner.request("finish");
   runner.request("material");
   await runner.settled();
   assert.deepEqual(ran, ["material:start", "material:end"]);
@@ -293,14 +293,14 @@ test("a split replaced before it starts never runs, and only the latest follows 
   });
   second.request("design");
   await Promise.resolve();
-  second.request("coating");
+  second.request("finish");
   second.request("customer");
   await second.settled();
   assert.deepEqual(followed, ["design:start", "design:end", "customer:start", "customer:end"]);
 });
 
 function sampleGrid(): BridgeBy {
-  return { column: "coating", total: bridge(0, []), panels: [], between: [] };
+  return { column: "finish", total: bridge(0, []), panels: [], between: [] };
 }
 
 test("a split is shown only while the generation stamped on the run is still live", () => {
@@ -312,10 +312,10 @@ test("a split is shown only while the generation stamped on the run is still liv
   assert.equal(again.calculation, 1);
   assert.equal(again.stampedGeneration.value, 0);
 
-  const displayed = displayedIdentity(again, "coating");
+  const displayed = displayedIdentity(again, "finish");
   const calculating = reduceSplitPhase(IDLE_SPLIT_PHASE, {
     type: "inputs",
-    column: "coating",
+    column: "finish",
     displayed,
     stale: false,
   });
@@ -378,7 +378,7 @@ test("a split is shown only while the generation stamped on the run is still liv
 test("a split is dropped when the column, the calculation, or the notice does not match", async () => {
   const run = {};
   const stamp = noteDisplayedRun(null, run, 4);
-  const request = displayedIdentity(stamp, "coating");
+  const request = displayedIdentity(stamp, "finish");
   const live = () => readLiveGeneration(4);
   const runSplit = (wanted: SplitIdentity, shown: SplitIdentity, stale: boolean) =>
     attemptSplit({
@@ -395,7 +395,7 @@ test("a split is dropped when the column, the calculation, or the notice does no
 
   const nextRun = noteDisplayedRun(stamp, {}, 4);
   assert.equal(nextRun.calculation, stamp.calculation + 1);
-  assert.deepEqual(await runSplit(request, displayedIdentity(nextRun, "coating"), false), { status: "drop" });
+  assert.deepEqual(await runSplit(request, displayedIdentity(nextRun, "finish"), false), { status: "drop" });
 
   assert.deepEqual(await runSplit(request, request, true), { status: "drop" });
 
@@ -462,8 +462,8 @@ test("a failed queue install is forgotten, and the split ends on the existing se
   let opens = 0;
   const run = {};
   const stamp = noteDisplayedRun(null, run, 0);
-  const request = displayedIdentity(stamp, "coating");
-  const displayed = () => displayedIdentity(stamp, "coating");
+  const request = displayedIdentity(stamp, "finish");
+  const displayed = () => displayedIdentity(stamp, "finish");
   const live = () => readLiveGeneration(0);
   const fail = await attemptSplit({
     request,

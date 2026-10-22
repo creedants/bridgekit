@@ -106,14 +106,14 @@ test("numbers and dates are counted and then left out of roll-ups", async () => 
     ('P2', 'F1', 2, DATE '2025-01-02', true),
     ('P3', 'F2', 3, DATE '2026-01-03', true),
     ('P4', 'F3', 4, DATE '2026-01-04', false)
-  ) v(product, family, qty, ordered, polar)`);
+  ) v(product, family, qty, ordered, upgrade)`);
   const distinct = await distinctCounts(query, columns);
   assert.equal(distinct.get("qty"), 4);
   assert.equal(distinct.get("ordered"), 4);
-  assert.equal(distinct.get("polar"), 2);
+  assert.equal(distinct.get("upgrade"), 2);
   assert.equal(distinct.get("product"), 4);
   assert.equal(distinct.get("family"), 3);
-  assert.deepEqual(await findRollups(query, columns, distinct), [["polar", "family", "product"]]);
+  assert.deepEqual(await findRollups(query, columns, distinct), [["upgrade", "family", "product"]]);
 });
 
 test("fewer than two text columns produces no roll-up", async () => {
@@ -136,13 +136,13 @@ test("synthetic sales at 10k rows keep the same counts and chains", async () => 
   assert.equal(distinct.get("cost"), 3845);
   assert.equal(distinct.get("order_date"), 672);
   assert.equal(distinct.get("customer"), 400);
-  assert.equal(distinct.get("design"), 60);
-  assert.equal(distinct.get("coating"), 12);
-  assert.equal(distinct.get("photochromic"), 3);
-  assert.equal(distinct.get("polar"), 2);
+  assert.equal(distinct.get("model"), 60);
+  assert.equal(distinct.get("finish"), 12);
+  assert.equal(distinct.get("color"), 3);
+  assert.equal(distinct.get("upgrade"), 2);
   assert.equal(distinct.get("material"), 8);
-  assert.equal(distinct.get("finish_type"), 2);
-  assert.equal(distinct.get("jobs"), 2);
+  assert.equal(distinct.get("delivery"), 2);
+  assert.equal(distinct.get("units"), 2);
   assert.equal(distinct.get("sales"), 7891);
   assert.equal(distinct.get("gross_sales"), 8032);
   const chains = await findRollups(query, columns, distinct);
@@ -156,12 +156,12 @@ test("synthetic sales at 300k rows match the previous query on one frozen sample
   const fullColumns = await columnsOf(query);
   const fullDistinct = await distinctCounts(query, fullColumns);
   assert.equal(fullDistinct.get("customer"), 400);
-  assert.equal(fullDistinct.get("design"), 60);
-  assert.equal(fullDistinct.get("coating"), 12);
-  assert.equal(fullDistinct.get("photochromic"), 3);
-  assert.equal(fullDistinct.get("polar"), 2);
+  assert.equal(fullDistinct.get("model"), 60);
+  assert.equal(fullDistinct.get("finish"), 12);
+  assert.equal(fullDistinct.get("color"), 3);
+  assert.equal(fullDistinct.get("upgrade"), 2);
   assert.equal(fullDistinct.get("material"), 8);
-  assert.equal(fullDistinct.get("finish_type"), 2);
+  assert.equal(fullDistinct.get("delivery"), 2);
   assert.equal(fullDistinct.get("sales"), 37031);
   assert.equal(fullDistinct.get("gross_sales"), 39234);
   await query(`CREATE TABLE held AS SELECT * FROM data USING SAMPLE 200000 ROWS`);
@@ -212,15 +212,15 @@ test("the sample file suggests six attributes, fewest values first, and not cust
   await query(`CREATE TABLE data AS SELECT * FROM read_csv('${file.replaceAll("'", "''")}', header=true)`);
   const columns = await columnsOf(query);
   const distinct = await distinctCounts(query, columns);
-  assert.equal(distinct.get("design"), 60);
-  assert.equal(distinct.get("coating"), 12);
+  assert.equal(distinct.get("model"), 60);
+  assert.equal(distinct.get("finish"), 12);
   assert.equal(distinct.get("material"), 8);
-  assert.equal(distinct.get("photochromic"), 3);
-  assert.equal(distinct.get("polar"), 2);
-  assert.equal(distinct.get("finish_type"), 2);
+  assert.equal(distinct.get("color"), 3);
+  assert.equal(distinct.get("upgrade"), 2);
+  assert.equal(distinct.get("delivery"), 2);
   assert.equal(distinct.get("customer"), 399);
   const suggested = suggestAttributes(columns, distinct, usedOf(columns));
-  assert.deepEqual(suggested, ["polar", "finish_type", "photochromic", "material", "coating", "design"]);
+  assert.deepEqual(suggested, ["upgrade", "delivery", "color", "material", "finish", "model"]);
   assert.equal(suggested.includes("customer"), false);
 });
 
@@ -258,14 +258,14 @@ test("numeric and date columns are left out", () => {
 
 test("a true/false column with two values is suggested", () => {
   const columns: Column[] = [
-    { name: "polar", type: "BOOLEAN" },
+    { name: "upgrade", type: "BOOLEAN" },
     { name: "product", type: "VARCHAR" },
   ];
   const distinct = new Map([
-    ["polar", 2],
+    ["upgrade", 2],
     ["product", 4],
   ]);
-  assert.deepEqual(suggestAttributes(columns, distinct, new Set()), ["polar", "product"]);
+  assert.deepEqual(suggestAttributes(columns, distinct, new Set()), ["upgrade", "product"]);
 });
 
 test("customer, region, date and id names are left out", () => {

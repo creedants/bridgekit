@@ -336,7 +336,7 @@ test("an empty column list does not ask for setups", async () => {
 test("the setups list records only whether a column query was sent", () => {
   assert.equal(setupListQuery("https://bk.example/api/workspaces/w1/setups"), "absent");
   assert.equal(
-    setupListQuery("https://bk.example/api/workspaces/w1/setups?column=period&column=design&column=coating&column=units&column=sales"),
+    setupListQuery("https://bk.example/api/workspaces/w1/setups?column=period&column=design&column=finish&column=units&column=sales"),
     "present",
   );
   assert.equal(setupListQuery("https://bk.example/api/workspaces/w1/setups?column"), "present");
@@ -345,7 +345,7 @@ test("the setups list records only whether a column query was sent", () => {
 test("only setups without filter values and bridge totals can be saved", async () => {
   const db = await seeded();
   await applySubscription(db, subscription());
-  const filtered = { ...setup, filters: [{ column: "design", mode: "include", values: ["Acme"] }] };
+  const filtered = { ...setup, filters: [{ column: "design", mode: "include", values: ["C0001"] }] };
   await rejects(saveSetup(db, "u1", "w1", { name: "x", columns, setup: filtered }), 400);
   await rejects(saveSetup(db, "u1", "w1", { name: "x", columns: ["other"], setup }), 400);
   await rejects(saveBridge(db, "u1", "w1", { name: "x", columns, setup, summary: { ...summary, rows: [] } }), 400);

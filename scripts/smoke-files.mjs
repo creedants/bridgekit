@@ -1,9 +1,9 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-export const FIXTURE_HEADER = ["sale_date", "customer", "design", "units", "net_sales"];
+export const FIXTURE_HEADER = ["sale_date", "customer", "model", "units", "net_sales"];
 export const FIXTURE_LEVELS = [
-  { name: "Design", columns: ["design"] },
+  { name: "Model", columns: ["model"] },
   { name: "Customer", columns: ["customer"] },
 ];
 
@@ -13,12 +13,12 @@ export function fixtureRows() {
     const month = String((k % 12) + 1).padStart(2, "0");
     const day = String((k % 28) + 1).padStart(2, "0");
     const customer = `C${k % 5}`;
-    const design = `D${k % 4}`;
+    const model = `MD${k % 4}`;
     const units = 1 + (k % 3);
     const base = 100 + (k % 7) * 10;
     for (const year of [2024, 2025]) {
       const price = base + (year === 2025 ? 5 : 0);
-      rows.push([`${year}-${month}-${day}`, customer, design, units, units * price]);
+      rows.push([`${year}-${month}-${day}`, customer, model, units, units * price]);
     }
   }
   return rows;

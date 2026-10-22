@@ -880,7 +880,7 @@ async function drive(browser, origin, rows) {
   const { nodeId } = await browser.send("DOM.querySelector", { nodeId: root.nodeId, selector: "input[type=file][accept*=csv]" });
   await browser.send("DOM.setFileInputFiles", { nodeId, files: [new URL("../public/sample-sales.csv", import.meta.url).pathname] });
   await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent");
-  await browser.evalJs(`T.set(document.querySelector('select[aria-label="Add attribute"]'), 'design')`);
+  await browser.evalJs(`T.set(document.querySelector('select[aria-label="Add attribute"]'), 'model')`);
   await browser.sleep(300);
   await browser.evalJs(`T.set(document.querySelector('select[aria-label="Add filter"]'), 'customer')`);
   await browser.waitFor("document.querySelectorAll('.values input').length > 0");
@@ -1049,7 +1049,7 @@ async function drive(browser, origin, rows) {
       }
     };
     const addFixtureLevels = async () => {
-      await addAttribute("design");
+      await addAttribute("model");
       await addAttribute("customer");
     };
     const waitReady = async () => {
@@ -1274,7 +1274,7 @@ async function drive(browser, origin, rows) {
 
     await setDataFile(fixtures.csvPath);
     await addAttribute("customer");
-    await addAttribute("design");
+    await addAttribute("model");
     await browser.evalJs(`T.set(T.sel('Sales'), 'units'); T.set(T.sel('Units'), 'net_sales')`);
     const readMapping = async () =>
       JSON.parse(
@@ -1282,7 +1282,7 @@ async function drive(browser, origin, rows) {
       );
     await browser.waitFor(`T.sel('Units')?.value === 'net_sales' && T.sel('Sales')?.value === 'units'`);
     const drafted = await readMapping();
-    if (drafted.levels.join(",") !== "customer,design") fail(`load setup: attributes before save are ${drafted.levels.join(", ") || "none"}`);
+    if (drafted.levels.join(",") !== "customer,model") fail(`load setup: attributes before save are ${drafted.levels.join(", ") || "none"}`);
     const setupJson = await browser.evalJs(`(async () => {
       let blob = null; const original = URL.createObjectURL;
       URL.createObjectURL = (b) => { blob = b; return original(b); };
@@ -1295,7 +1295,7 @@ async function drive(browser, origin, rows) {
     if (!setupJson) fail("load setup: no setup file was saved");
     const saved = JSON.parse(setupJson);
     if (saved.unitsColumn !== "net_sales" || saved.salesColumn !== "units") fail(`load setup: saved mapping is ${saved.unitsColumn}/${saved.salesColumn}`);
-    if (!Array.isArray(saved.levels) || saved.levels.map((level) => level.name).join(",") !== "customer,design") fail("load setup: saved attributes are not customer then design");
+    if (!Array.isArray(saved.levels) || saved.levels.map((level) => level.name).join(",") !== "customer,model") fail("load setup: saved attributes are not customer then model");
     const savedSetupPath = join(fixtureDir, "bridgekit-setup.json");
     writeFileSync(savedSetupPath, setupJson);
     await browser.evalJs("T.btn('Clear data').click()");
@@ -1313,7 +1313,7 @@ async function drive(browser, origin, rows) {
       await browser.send("DOM.setFileInputFiles", { nodeId, files: [savedSetupPath] });
     }
     try {
-      await browser.waitFor(`T.sel('Units')?.value === 'net_sales' && T.sel('Sales')?.value === 'units' && [...document.querySelectorAll('.levels input[aria-label="Attribute name"]')].map((input) => input.value).join(',') === 'customer,design'`, 40);
+      await browser.waitFor(`T.sel('Units')?.value === 'net_sales' && T.sel('Sales')?.value === 'units' && [...document.querySelectorAll('.levels input[aria-label="Attribute name"]')].map((input) => input.value).join(',') === 'customer,model'`, 40);
     } catch {
       const got = await readMapping();
       fail(`load setup: mapping is ${got.units}/${got.sales}, attributes ${got.levels.join(", ") || "none"}`);
@@ -1509,7 +1509,7 @@ async function drive(browser, origin, rows) {
     if (!(await browser.evalJs(`${exportButton}.disabled`))) {
       fail("stale bridge: Export Excel stays on while the notice says the setup changed");
     }
-    await addAttribute("design");
+    await addAttribute("model");
     await waitReady();
     await calculate();
     try {
@@ -1533,7 +1533,7 @@ async function drive(browser, origin, rows) {
         grain: "year",
         unitsColumn: "units",
         salesColumn: "net_sales",
-        levels: [{ name: "Design", columns: ["design"] }],
+        levels: [{ name: "Model", columns: ["model"] }],
         filters: [],
       }),
     );
