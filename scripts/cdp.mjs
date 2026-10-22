@@ -155,7 +155,7 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
       const stderr = browserExit ? browserExit.stderr : stderrTail();
       return new Error(`the browser closed its debugging socket during ${method} (exit ${status}). Its last output:\n${stderr}`);
     };
-    const command = (method, params, sessionId) => new Promise((resolve, reject) => {
+    const command = (method, params, sessionId, strict = false) => new Promise((resolve, reject) => {
       if (record && broken) return reject(broken);
       if (record && ws.readyState !== WebSocket.OPEN) return reject(broken ??= closedSocket(method));
       const current = ++id;
@@ -178,7 +178,7 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
       }
       pending.set(current, {
         method,
-        reply: (d) => finish(record && d.error ? new Error(`${method} failed: ${d.error.message}`) : null, d.result),
+        reply: (d) => finish((record || strict) && d.error ? new Error(`${method} failed: ${d.error.message}`) : null, d.result),
         fail: (error) => finish(error),
       });
       ws.send(JSON.stringify({ id: current, method, params, ...(sessionId ? { sessionId } : {}) }));
@@ -405,7 +405,7 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
       throw new Error("timeout " + expr + " :: " + seen);
     };
     const helpers = `window.T = { btn: (t) => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === t), sel: (label) => [...document.querySelectorAll('label')].find(l => l.firstChild?.textContent?.trim().startsWith(label))?.querySelector('select'), set: (el, v) => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(el, v); el.dispatchEvent(new Event('change', { bubbles: true })); }, input: (el, v) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); }, tab: (t) => [...document.querySelectorAll('.tabs button')].find(b => b.textContent.startsWith(t)).click(), err: () => document.querySelector('.error')?.textContent ?? null }; true`;
-    await command("Browser.setDownloadBehavior", { behavior: "allow", downloadPath, eventsEnabled: false });
+    await command("Browser.setDownloadBehavior", { behavior: "allow", downloadPath, eventsEnabled: false }, undefined, true);
     // Enabling the Network domain is part of the timed browser launch.
     await send("Network.enable");
     const goto = async (url) => {
