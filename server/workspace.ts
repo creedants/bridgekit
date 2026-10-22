@@ -1,7 +1,16 @@
 import { columnsKey, isValidSetup, type Setup } from "../src/app/setup.ts";
 import { parseSummary, type BridgeSummary } from "../src/summary.ts";
 import type { D1Database } from "./cloudflare.ts";
-import { hasPro, type SubscriptionChange, type SubscriptionStatus } from "./paddle.ts";
+import {
+  chooseSubscription,
+  hasPro,
+  listWorkspaceSubscriptions,
+  PaddleReadError,
+  type PaddleAccount,
+  type SubscriptionChange,
+  type SubscriptionEvent,
+  type SubscriptionStatus,
+} from "./paddle.ts";
 
 /**
  * What a workspace saves: setups (without filter values) and bridge totals.
@@ -266,8 +275,11 @@ export async function assertCheckoutOpen(db: D1Database, workspaceId: string, no
 }
 
 /**
- * Applies a Paddle subscription event. Paddle may deliver events out of
- * order, so an event older than the last one applied is ignored.
+ * Writes the one subscription row for a workspace. `lastEventAt` is when the
+ * read behind this row began for rows written by syncSubscription; older rows
+ * hold a Paddle occurred_at and still compare correctly. Comparing as instants
+ * (julianday) keeps mixed ISO precisions in order. syncSubscription is its only
+ * server caller.
  */
 export async function applySubscription(db: D1Database, change: SubscriptionChange): Promise<"applied" | "stale" | "unknown-workspace"> {
   const workspace = await db.prepare(`SELECT id FROM organization WHERE id = ?`).bind(change.workspaceId).first();
@@ -280,7 +292,7 @@ export async function applySubscription(db: D1Database, change: SubscriptionChan
          paddleSubscriptionId = excluded.paddleSubscriptionId, paddleCustomerId = excluded.paddleCustomerId,
          status = excluded.status, priceId = excluded.priceId, seats = excluded.seats,
          currentPeriodEnd = excluded.currentPeriodEnd, lastEventAt = excluded.lastEventAt
-       WHERE excluded.lastEventAt > subscription.lastEventAt`,
+       WHERE julianday(excluded.lastEventAt) > julianday(subscription.lastEventAt)`,
     )
     .bind(
       change.workspaceId,
@@ -294,6 +306,92 @@ export async function applySubscription(db: D1Database, change: SubscriptionChan
     )
     .run();
   return meta.changes ? "applied" : "stale";
+}
+
+export type SubscriptionSync = "applied" | "stale" | "conflict" | "unknown-workspace";
+
+/**
+ * Reconciles a workspace's subscription with Paddle's current state. The
+ * webhook body only says where to look; Paddle's list of the whole account,
+ * filtered to this workspace, decides what to store, so a late or out-of-order
+ * event cannot replace a paying subscription and no earlier customer is
+ * forgotten. A missing subscription or an unreadable list throws
+ * PaddleReadError before anything is written, and the caller asks Paddle to
+ * retry.
+ *
+ * A write the strict lastEventAt guard rejects is acknowledged as "stale" only
+ * when the stored row already holds the state that read reported. Otherwise it
+ * is a "conflict" and the caller refuses with 503, so Paddle's retry
+ * reconciles again with a later read start and wins the guard once Paddle's
+ * state has moved.
+ */
+export async function syncSubscription(
+  db: D1Database,
+  event: SubscriptionEvent,
+  paddle: PaddleAccount,
+  now: Date = new Date(),
+): Promise<SubscriptionSync> {
+  const workspace = await db.prepare(`SELECT id FROM organization WHERE id = ?`).bind(event.workspaceId).first();
+  if (!workspace) return "unknown-workspace";
+  const candidates = await listWorkspaceSubscriptions(paddle, event.workspaceId);
+  const containing = candidates.find((candidate) => candidate.subscriptionId === event.subscriptionId);
+  if (!containing) {
+    // Paddle sends the webhook after it commits, so a missing id is lag or a
+    // subscription that moved to another workspace. Retrying heals the first
+    // and only logs the second; never blank the row from an incomplete read.
+    throw new PaddleReadError(`Paddle does not list ${event.subscriptionId} for workspace ${event.workspaceId}.`);
+  }
+  const elected = chooseSubscription([containing, ...candidates.filter((candidate) => candidate !== containing)], now);
+  const paying = candidates.filter((candidate) => hasPro(candidate.status, candidate.currentPeriodEnd, now));
+  if (paying.length > 1) {
+    console.error({
+      message: "More than one paid subscription for a workspace.",
+      workspaceId: event.workspaceId,
+      subscriptionId: elected.subscriptionId,
+      otherPayingSubscriptionIds: paying
+        .filter((candidate) => candidate.subscriptionId !== elected.subscriptionId)
+        .map((candidate) => candidate.subscriptionId),
+    });
+  }
+  const change: SubscriptionChange = {
+    subscriptionId: elected.subscriptionId,
+    customerId: elected.customerId,
+    workspaceId: elected.workspaceId,
+    status: elected.status,
+    priceId: elected.priceId,
+    seats: elected.seats,
+    currentPeriodEnd: elected.currentPeriodEnd,
+    eventId: event.eventId,
+    occurredAt: now.toISOString(),
+  };
+  const applied = await applySubscription(db, change);
+  if (applied !== "stale") return applied;
+  return (await storesSameState(db, change)) ? "stale" : "conflict";
+}
+
+/**
+ * Whether the stored row already holds the state a rejected write tried to
+ * record. One SELECT over the six state columns, so no second row type has to
+ * track them. A matching row makes a duplicate delivery safe to acknowledge.
+ */
+async function storesSameState(db: D1Database, change: SubscriptionChange): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT 1 AS same FROM subscription
+       WHERE organizationId = ? AND paddleSubscriptionId IS ? AND paddleCustomerId IS ? AND status IS ?
+         AND priceId IS ? AND seats IS ? AND currentPeriodEnd IS ?`,
+    )
+    .bind(
+      change.workspaceId,
+      change.subscriptionId,
+      change.customerId,
+      change.status,
+      change.priceId,
+      change.seats,
+      change.currentPeriodEnd,
+    )
+    .first();
+  return row !== null;
 }
 
 /** Before an account is deleted: workspaces it is the only member of go with it, saved items included. */

@@ -21,8 +21,16 @@ export const PADDLE_API = {
 } as const;
 export type PaddleEnvironment = keyof typeof PADDLE_API;
 
-/** Paddle recommends rejecting webhooks whose ts is more than 5 seconds from now. */
-export const SIGNATURE_TOLERANCE_SECONDS = 5;
+/**
+ * How old a signed delivery may be. Paddle retries any non-200 answer with
+ * exponential backoff: three attempts in about two minutes on sandbox, and up
+ * to 60 attempts over about two days on live, about 10 of them in the first
+ * hour. It does not promise that a retry carries a freshly signed ts, so a
+ * window shorter than the documented schedule can refuse a genuine retry and
+ * the delayed event never applies. Three days covers that schedule with a day
+ * of margin. Deliveries signed more than three days ago are refused.
+ */
+export const SIGNATURE_TOLERANCE_SECONDS = 259200;
 
 const encoder = new TextEncoder();
 
@@ -31,6 +39,10 @@ const encoder = new TextEncoder();
  * Paddle signs `${ts}:${rawBody}` with HMAC-SHA256 using the endpoint's secret
  * key. During secret rotation the header carries more than one h1; any match
  * passes. rawBody must be the exact request text, before any JSON parsing.
+ *
+ * The window is past-only, which is what Paddle's own sample code does. It
+ * still covers a retry that Paddle signed when the event happened, and it
+ * tolerates our clock running behind Paddle's.
  */
 export async function verifyPaddleSignature(
   rawBody: string,
@@ -50,7 +62,7 @@ export async function verifyPaddleSignature(
     else if (key === "h1") signatures.push(value.toLowerCase());
   }
   if (!ts || !/^\d+$/.test(ts) || signatures.length === 0) return false;
-  if (Math.abs(nowSeconds - Number(ts)) > SIGNATURE_TOLERANCE_SECONDS) return false;
+  if (nowSeconds - Number(ts) > SIGNATURE_TOLERANCE_SECONDS) return false;
 
   const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(`${ts}:${rawBody}`)));
@@ -102,23 +114,74 @@ export interface SubscriptionChange {
   occurredAt: string;
 }
 
+/** Credentials and parsing rules for one deployment's Paddle account. */
+export interface PaddleAccount {
+  apiKey: string;
+  environment: PaddleEnvironment;
+  seatPriceIds?: readonly string[];
+  /** For tests. */
+  fetch?: typeof fetch;
+}
+
+/** One subscription as Paddle's API reports it, in domain terms. */
+export interface PaddleSubscription {
+  subscriptionId: string;
+  customerId: string;
+  /** custom_data.workspace_id, always the workspace that was asked for. */
+  workspaceId: string;
+  status: SubscriptionStatus;
+  priceId: string;
+  seats: number;
+  /** current_billing_period.ends_at, or null when Paddle reports no period. */
+  currentPeriodEnd: string | null;
+  /** created_at, used only to order equally good subscriptions. */
+  createdAt: string;
+}
+
+/** What a subscription webhook tells us: where to look. Carries no state. */
+export interface SubscriptionEvent {
+  eventId: string;
+  occurredAt: string;
+  workspaceId: string;
+  subscriptionId: string;
+  customerId: string;
+}
+
+/** Thrown when Paddle cannot answer for this subscription: nothing is written and the delivery should be retried. */
+export class PaddleReadError extends Error {}
+
 /**
- * Turns a parsed webhook body into the subscription fields we store. Returns
- * null for other event types, malformed payloads, or subscriptions without
- * custom_data.workspace_id. The seat count comes from the item whose price is
- * in seatPriceIds, or from the first item when no list is given.
+ * Turns a parsed webhook body into the workspace and subscription it points
+ * at. Returns null for other event types, malformed payloads, or subscriptions
+ * without custom_data.workspace_id. It deliberately carries no status, seats or
+ * period: the caller reads the current state from Paddle's API instead of
+ * trusting the order in which events arrived.
  */
-export function parseSubscriptionEvent(body: unknown, seatPriceIds?: readonly string[]): SubscriptionChange | null {
+export function parseSubscriptionEvent(body: unknown, seatPriceIds?: readonly string[]): SubscriptionEvent | null {
   if (!isRecord(body) || typeof body.event_type !== "string" || !SUBSCRIPTION_EVENTS.includes(body.event_type)) return null;
   const { event_id: eventId, occurred_at: occurredAt, data } = body;
-  if (typeof eventId !== "string" || typeof occurredAt !== "string" || !isRecord(data)) return null;
+  if (typeof eventId !== "string" || typeof occurredAt !== "string") return null;
+  const entity = parseSubscriptionEntity(data, seatPriceIds);
+  if (!entity) return null;
+  return {
+    eventId,
+    occurredAt,
+    workspaceId: entity.workspaceId,
+    subscriptionId: entity.subscriptionId,
+    customerId: entity.customerId,
+  };
+}
+
+/** The fields a webhook entity and a listed entity share, validated once so the two readers cannot drift. */
+function parseSubscriptionEntity(data: unknown, seatPriceIds?: readonly string[]): Omit<PaddleSubscription, "createdAt"> | null {
+  if (!isRecord(data)) return null;
   const { id, customer_id: customerId, status, items, custom_data: customData, current_billing_period: period } = data;
   if (typeof id !== "string" || typeof customerId !== "string") return null;
   if (typeof status !== "string" || !STATUSES.includes(status)) return null;
   if (!isRecord(customData) || typeof customData.workspace_id !== "string" || !customData.workspace_id) return null;
   if (!Array.isArray(items)) return null;
 
-  const item = items.find((candidate) => !seatPriceIds || seatPriceIds.includes(priceOf(candidate) ?? ""));
+  const item = seatPriceIds ? items.find((candidate) => seatPriceIds.includes(priceOf(candidate) ?? "")) : items[0];
   const priceId = priceOf(item);
   const seats = isRecord(item) ? item.quantity : undefined;
   if (!priceId || typeof seats !== "number" || !Number.isInteger(seats) || seats < 1) return null;
@@ -132,9 +195,89 @@ export function parseSubscriptionEvent(body: unknown, seatPriceIds?: readonly st
     priceId,
     seats,
     currentPeriodEnd: endsAt,
-    eventId,
-    occurredAt,
   };
+}
+
+const PAGE_LIMIT = 5;
+
+/**
+ * Reads the account's subscriptions and keeps the ones tagged for this
+ * workspace. Pagination URLs are built here rather than taken from response-body
+ * links. A sixth page means the account is larger than this deployment should
+ * page through, so it fails rather than returning a partial list.
+ */
+export async function listWorkspaceSubscriptions(account: PaddleAccount, workspaceId: string): Promise<PaddleSubscription[]> {
+  const subscriptions: PaddleSubscription[] = [];
+  let after: string | undefined;
+  for (let page = 1; ; page++) {
+    if (page > PAGE_LIMIT) throw new PaddleReadError(`Paddle served more than ${PAGE_LIMIT} pages of subscriptions.`);
+    const query = `per_page=200${after === undefined ? "" : `&after=${encodeURIComponent(after)}`}`;
+    const { data, hasMore } = await readSubscriptionsPage(account, `${PADDLE_API[account.environment]}/subscriptions?${query}`);
+    for (const raw of data) {
+      const createdAt = isRecord(raw) && typeof raw.created_at === "string" ? raw.created_at : undefined;
+      const entity = parseSubscriptionEntity(raw, account.seatPriceIds);
+      if (entity && createdAt && Number.isFinite(Date.parse(createdAt)) && entity.workspaceId === workspaceId) {
+        subscriptions.push({ ...entity, createdAt });
+      }
+    }
+    if (!hasMore) return subscriptions;
+    const last = data[data.length - 1];
+    const lastId = isRecord(last) && typeof last.id === "string" ? last.id : undefined;
+    if (!lastId) throw new PaddleReadError("Paddle reported another page without an entity id to follow.");
+    after = lastId;
+  }
+}
+
+async function readSubscriptionsPage(account: PaddleAccount, url: string): Promise<{ data: unknown[]; hasMore: boolean }> {
+  const doFetch = account.fetch ?? fetch;
+  let response: Response;
+  try {
+    response = await doFetch(url, {
+      headers: { authorization: `Bearer ${account.apiKey}`, "paddle-version": "1" },
+      // A followed redirect could carry the API key to another host, so a 3xx
+      // fails the ok check below instead.
+      redirect: "manual",
+    });
+  } catch {
+    throw new PaddleReadError("Paddle could not be reached.");
+  }
+  if (!response.ok) throw new PaddleReadError(`Paddle returned ${response.status} when listing subscriptions.`);
+  let json: unknown;
+  try {
+    json = await response.json();
+  } catch {
+    throw new PaddleReadError("Paddle returned a subscription list that was not JSON.");
+  }
+  if (!isRecord(json) || !Array.isArray(json.data)) throw new PaddleReadError("Paddle returned no subscription data array.");
+  const meta = isRecord(json.meta) ? json.meta : undefined;
+  const pagination = meta && isRecord(meta.pagination) ? meta.pagination : undefined;
+  return { data: json.data, hasMore: pagination?.has_more === true };
+}
+
+const STATUS_RANK: Record<SubscriptionStatus, number> = { active: 0, trialing: 0, past_due: 1, paused: 2, canceled: 3 };
+
+/**
+ * Elects the one subscription a workspace stores. The order uses only Paddle's
+ * own fields, so the same Paddle state picks the same subscription whatever
+ * order the events arrived in. A subscription that grants Pro outranks one that
+ * does not, which keeps a canceled subscription from displacing a paying one.
+ */
+export function chooseSubscription(candidates: readonly [PaddleSubscription, ...PaddleSubscription[]], now: Date): PaddleSubscription {
+  const [first, ...rest] = candidates;
+  let best = first;
+  for (const candidate of rest) if (precedes(candidate, best, now)) best = candidate;
+  return best;
+}
+
+function precedes(left: PaddleSubscription, right: PaddleSubscription, now: Date): boolean {
+  const leftPro = hasPro(left.status, left.currentPeriodEnd, now);
+  const rightPro = hasPro(right.status, right.currentPeriodEnd, now);
+  if (leftPro !== rightPro) return leftPro;
+  const rank = STATUS_RANK[left.status] - STATUS_RANK[right.status];
+  if (rank !== 0) return rank < 0;
+  const created = Date.parse(left.createdAt) - Date.parse(right.createdAt);
+  if (created !== 0) return created > 0;
+  return left.subscriptionId > right.subscriptionId;
 }
 
 function priceOf(item: unknown): string | undefined {
@@ -218,6 +361,7 @@ export async function createPortalSession(options: PortalSessionOptions): Promis
         "paddle-version": "1",
       },
       body: JSON.stringify({}),
+      redirect: "manual",
     },
   );
   if (!response.ok) throw new Error(`Paddle returned ${response.status} when creating a portal session.`);
@@ -250,6 +394,7 @@ export async function createCheckout(options: CheckoutOptions): Promise<{ transa
       "paddle-version": "1",
     },
     body: JSON.stringify(body),
+    redirect: "manual",
   });
   if (!response.ok) throw new Error(`Paddle returned ${response.status} when creating a transaction.`);
   const json: unknown = await response.json();
