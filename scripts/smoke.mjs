@@ -1,4 +1,5 @@
 //   npm run build            && npm run smoke:preview    (serves dist/ itself)
+//   npm run build            && npm run smoke:preview -- --gallery   (rewrites the four public/img screenshots)
 //   npm run build:cloudflare && npm run smoke:wrangler   (local wrangler dev, accounts on)
 //   npm run dev   (in another terminal)
 //   npm run smoke [-- http://localhost:5173] [rows]
@@ -1714,7 +1715,62 @@ async function recorded(steps) {
   }
 }
 
-const { target, rows } = parseTarget(process.argv.slice(2));
+/**
+ * Writes the four site screenshots from a served build. The size matches the
+ * gallery figures on the site, and the sample is the one the app loads by
+ * default, so a rerun reproduces the same images.
+ */
+async function captureGallery(origin) {
+  const dir = join(root, "public", "img");
+  const browser = await open(DEBUG_PORT, { chromium: CHROMIUM });
+  try {
+    await browser.size(1280, 860);
+    await browser.goto(`${origin}/app/?sample`);
+    await browser.waitFor("!!document.querySelector('.kpis') && !!document.querySelector('.bridge table')", 600);
+    const capture = async (name, ready) => {
+      if (ready) await browser.waitFor(ready, 240);
+      await browser.sleep(1500);
+      const error = await browser.evalJs("document.querySelector('.error')?.textContent ?? null");
+      if (error) fail(`gallery: ${name} shows ${JSON.stringify(error)}`);
+      await browser.shot(join(dir, name));
+      console.log(`gallery: wrote ${name}`);
+    };
+    await browser.evalJs(`T.tab("Bridge")`);
+    await capture("g-bridge.png", "!!document.querySelector('.waterfall canvas')");
+    await browser.evalJs(`T.tab("Movers")`);
+    await browser.waitFor("document.querySelectorAll('.dense tbody tr.clickable').length > 0", 240);
+    await browser.evalJs("document.querySelector('.dense tbody tr.clickable').click()");
+    await capture("g-movers.png", "document.querySelector('.dense thead th')?.textContent.trim() === 'finish'");
+    await browser.evalJs(`T.tab("Price changes")`);
+    await capture("g-price.png", "!!document.querySelector('.distribution tbody tr')");
+    await browser.evalJs(`T.tab("Setup check")`);
+    await capture("g-setup.png", "!!document.querySelector('table.narrow-wide tbody tr')");
+  } finally {
+    await browser.close();
+  }
+}
+
+const argv = process.argv.slice(2);
+const gallery = argv.includes("--gallery");
+const { target, rows } = parseTarget(argv.filter((arg) => arg !== "--gallery"));
+if (gallery) {
+  let server = null;
+  let failure = null;
+  try {
+    server = await serve(target);
+    await captureGallery(server.origin);
+  } catch (error) {
+    failure = error;
+  } finally {
+    await server?.stop().catch((error) => { failure ??= error; });
+  }
+  if (failure) {
+    console.error("FAIL: " + (failure instanceof Failure ? failure.message : failure.stack));
+    process.exit(1);
+  }
+  console.log("gallery images written to public/img");
+  process.exit(0);
+}
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => process.exit(1));
 const failures = [];
 let server = null;
