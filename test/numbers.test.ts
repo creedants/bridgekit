@@ -267,6 +267,20 @@ test("three digits after the comma keep today's reading", async () => {
   assert.equal(await decimalCommaNote(query, "tail"), null);
 });
 
+test("three-decimal comma values convert via whole-column decision", async () => {
+  const query = await openDatabase();
+  await createText(query, "three", { amount: ["1.234,567", "0,125", "12,50"] });
+  await convertFormattedNumbers(query, "three");
+  assert.equal(await columnType(query, "three", "amount"), "DOUBLE");
+  expectNumbers(await columnValues(query, "three", "amount"), [1234.567, 0.125, 12.5]);
+  assert.equal(await decimalCommaNote(query, "three"), ONE);
+  await createText(query, "shorttail", { amount: ["0,125", "12,5"] });
+  await convertFormattedNumbers(query, "shorttail");
+  assert.equal(await columnType(query, "shorttail", "amount"), "DOUBLE");
+  expectNumbers(await columnValues(query, "shorttail", "amount"), [0.125, 12.5]);
+  assert.equal(await decimalCommaNote(query, "shorttail"), ONE);
+});
+
 test("a decimal comma after 2000 blank rows stays text", async () => {
   const query = await openDatabase();
   await query(`CREATE TABLE late AS SELECT i, CASE WHEN i < 2000 THEN NULL ELSE '12,50' END AS amount FROM range(2001) t(i) ORDER BY i`);
