@@ -12,9 +12,13 @@ const PLAIN_LONG = `^-?\\d+${COMMA_LONG}$`;
 const DECIMAL_TAIL = `${COMMA_TAIL}$`;
 const LONG_TAIL = `${COMMA_LONG}$`;
 const DOT_GROUP_COMMA = "^-?\\d{1,3}(\\.\\d{3})+,\\d+$";
-const US_DECIMAL = "^-?\\d+(,\\d{3})*(\\.\\d{1,2}|\\.\\d{4,})$";
-const US_GROUPED = "^-?[1-9]\\d{0,2}(,\\d{3}){2,}$";
-const AMBIGUOUS = "^-?[1-9]\\d{0,2},\\d{3}$";
+const SIGN = "[+-]?";
+const US_DECIMAL = `^${SIGN}\\d+(,\\d{3})*(\\.\\d{1,2}|\\.\\d{4,})$`;
+const US_THREE = `^${SIGN}(\\d{1,3}(,\\d{3})+|\\d{4,})\\.\\d{3}$`;
+const US_GROUPED = `^${SIGN}\\d{1,3}(,\\d{3}){2,}$`;
+const AMBIGUOUS = `^${SIGN}[1-9]\\d{0,2},\\d{3}$`;
+const US_INTEGER = `^${SIGN}\\d+$`;
+const US_NUMBER = `(${US_INTEGER}|${US_DECIMAL}|${US_THREE}|${US_GROUPED}|${AMBIGUOUS})`;
 const FIRST_ROWS = 2000;
 
 const northAmerican = (column: string) =>
@@ -25,6 +29,15 @@ const decimalComma = (column: string) =>
 
 const stripped = (column: string) => `regexp_replace(trim(${column}), '[\\$\\s()]', '', 'g')`;
 
+const european = (column: string) =>
+  `(regexp_matches(trim(${column}), '${GROUPED}') OR regexp_matches(trim(${column}), '${PLAIN}') OR regexp_matches(trim(${column}), '${GROUPED_THREE}') OR regexp_matches(trim(${column}), '${PLAIN_THREE}') OR regexp_matches(trim(${column}), '${GROUPED_LONG}') OR regexp_matches(trim(${column}), '${PLAIN_LONG}'))`;
+
+const valueForShapes = (column: string) =>
+  `regexp_replace(regexp_replace(trim(${column}), '[\\$\\s]', '', 'g'), '^\\((.*)\\)$', '-\\1')`;
+
+const shaped = (column: string) =>
+  `(${european(column)} OR regexp_matches(${valueForShapes(column)}, '${US_NUMBER}'))`;
+
 interface ColumnCounts {
   nonBlank: number;
   european: number;
@@ -33,6 +46,7 @@ interface ColumnCounts {
   usDecimal: number;
   usGrouped: number;
   ambiguous: number;
+  shaped: number;
   present: number;
   parsed: number;
   formatted: number;
@@ -60,10 +74,6 @@ function hasUSProof(counts: ColumnCounts): boolean {
   return counts.usDecimal > 0 || counts.usGrouped > 0;
 }
 
-function mixesStyles(counts: ColumnCounts): boolean {
-  return hasDecimalProof(counts) && (hasUSProof(counts) || counts.ambiguous > 0);
-}
-
 function isDecimalComma(counts: ColumnCounts): boolean {
   return (
     counts.nonBlank > 0 &&
@@ -88,16 +98,16 @@ function formattingMeasures(column: string, index: number): string {
 
 function measures(column: string, index: number): string {
   const blank = `(${column} IS NULL OR regexp_matches(${column}, '^\\s*$'))`;
-  const european = `(regexp_matches(trim(${column}), '${GROUPED}') OR regexp_matches(trim(${column}), '${PLAIN}') OR regexp_matches(trim(${column}), '${GROUPED_THREE}') OR regexp_matches(trim(${column}), '${PLAIN_THREE}') OR regexp_matches(trim(${column}), '${GROUPED_LONG}') OR regexp_matches(trim(${column}), '${PLAIN_LONG}'))`;
   const decimalTail = `(regexp_matches(${stripped(column)}, '${DECIMAL_TAIL}') OR regexp_matches(${stripped(column)}, '${LONG_TAIL}'))`;
   return [
     `count(*) FILTER (WHERE NOT ${blank})::DOUBLE AS nb${index}`,
-    `count(*) FILTER (WHERE NOT ${blank} AND ${european})::DOUBLE AS eu${index}`,
+    `count(*) FILTER (WHERE NOT ${blank} AND ${european(column)})::DOUBLE AS eu${index}`,
     `count(*) FILTER (WHERE ${decimalTail})::DOUBLE AS p${index}`,
     `count(*) FILTER (WHERE regexp_matches(${stripped(column)}, '${DOT_GROUP_COMMA}'))::DOUBLE AS dg${index}`,
-    `count(*) FILTER (WHERE regexp_matches(${stripped(column)}, '${US_DECIMAL}'))::DOUBLE AS ud${index}`,
+    `count(*) FILTER (WHERE regexp_matches(${stripped(column)}, '${US_DECIMAL}') OR regexp_matches(${stripped(column)}, '${US_THREE}'))::DOUBLE AS ud${index}`,
     `count(*) FILTER (WHERE regexp_matches(${stripped(column)}, '${US_GROUPED}'))::DOUBLE AS ug${index}`,
     `count(*) FILTER (WHERE regexp_matches(${stripped(column)}, '${AMBIGUOUS}'))::DOUBLE AS am${index}`,
+    `count(*) FILTER (WHERE ${shaped(column)})::DOUBLE AS sh${index}`,
     formattingMeasures(column, index),
   ].join(", ");
 }
@@ -129,6 +139,7 @@ async function scan(query: Query, columns: string[], source: string): Promise<Co
     usDecimal: Number(row[`ud${index}`]),
     usGrouped: Number(row[`ug${index}`]),
     ambiguous: Number(row[`am${index}`]),
+    shaped: Number(row[`sh${index}`]),
     ...formattingFrom(row, index),
   }));
 }
@@ -149,7 +160,7 @@ export async function convertFormattedNumbers(query: Query, table: string): Prom
       await query(`COMMENT ON COLUMN ${tableName}.${column} IS 'decimal comma'`);
     } else if (lacksDecimalProof(counts)) {
       await query(`ALTER TABLE ${tableName} ALTER ${column} TYPE DOUBLE USING ${northAmerican(column)}`);
-    } else if (mixesStyles(counts)) {
+    } else if (counts.present > 0 && counts.shaped === counts.present) {
       await query(`COMMENT ON COLUMN ${tableName}.${column} IS 'mixed number styles'`);
     }
   }
