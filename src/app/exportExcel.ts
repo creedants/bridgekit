@@ -18,8 +18,8 @@ import { download } from "./files.ts";
 /** Above this many configurations the detail sheet is left out and the bridge is written as values. */
 const MAX_DETAIL_ROWS = 150_000;
 
-/** Excel offers to repair a workbook whose cells hold NaN or Infinity, so a share with no finite value is left blank. */
-export function finiteOrBlank(value: unknown): unknown {
+/** Excel offers to repair a workbook whose cells hold NaN or Infinity, and a CSV cell holding either reads as text, so a number with no finite value becomes null, which both exports write as a blank cell. */
+export function finiteOrBlank<T>(value: T): T | null {
   return typeof value === "number" && !Number.isFinite(value) ? null : value;
 }
 
@@ -100,7 +100,7 @@ export async function exportExcel(
     const row = bridge.addRow([effect.label, total(effect.key, value)]);
     const formula = `IF(B4=0,"",B${row.number}/B4)`;
     const share = finiteOrBlank(value / result.priorSales);
-    row.getCell(3).value = share === null ? { formula } : { formula, result: share as number };
+    row.getCell(3).value = share === null ? { formula } : { formula, result: share };
     row.getCell(3).numFmt = "0.0%";
   }
   bridge.addRow([`Current ${measureName(config).toLowerCase()}`, sales("s1", "z1", result.currentSales)]).font = bold;
