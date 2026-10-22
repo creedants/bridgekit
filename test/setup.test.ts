@@ -1617,7 +1617,7 @@ test("a remembered setup is dropped when a same-named table's sales column is te
   assert.equal(loadSavedSetup(withType(salesTable, "sales", "VARCHAR")), null);
 });
 
-test("a remembered setup is dropped when its grain meets a text period column", () => {
+test("a remembered setup is dropped when its date grain meets a BIGINT period column", () => {
   stored.clear();
   const dated: Column[] = withType(salesTable, "year", "DATE");
   const yearly: Setup = { ...workedSetup, grain: "year" };
@@ -1651,7 +1651,7 @@ test("a loaded setup whose date grain meets a non-date period column is refused"
   assert.equal(isValidSetup({ ...yearly, grain: "month" }, salesTable), false);
 });
 
-test("a setup with no measures is valid, so the file's own guessing decides", () => {
+test("a setup with unchosen period, measures and attributes is valid", () => {
   const empty: Setup = { ...workedSetup, unitsColumn: "", salesColumn: "", periodColumn: "", levels: [] };
   assert.equal(isValidSetup(empty, salesTable), true);
 });
