@@ -417,7 +417,7 @@ Do: Ask Paddle to approve `<domain>`. Wait until Paddle lists `<domain>` as appr
 
 Dashboard (not verified): Paddle > My account > Settings > Website approval.
 
-- Source: `server/paddle.ts:190` has `domain approved in Paddle (Website approval)`.
+- Source: `server/paddle.ts:333` has `domain approved in Paddle (Website approval)`.
 - Source: `server/paddle.ts:219` has `Check the default payment link is set and approved.`
 - Not verified: how long approval takes, and what Paddle asks for. Nobody entered an account. Paddle's guide names this screen and places approval before the default payment link, at [Set your default payment link](https://developer.paddle.com/build/transactions/default-payment-link).
 - Worked: Paddle lists `<domain>` as approved.
@@ -431,7 +431,7 @@ Dashboard (not verified): Paddle > Checkout > Checkout configuration.
 https://<domain>/pay/
 ```
 
-- Derived from: `server/paddle.ts:188-189` has `default payment link`, `?_ptxn=`. `vite.config.ts:76` has `pay/index.html`. `README.md:140-141` has `Checkout opens on`, `/pay/`. The code names no path for that link. `/pay/` is the page built to load Paddle's script. It was not run.
+- Derived from: `server/paddle.ts:331-332` has `default payment link`, `?_ptxn=`. `vite.config.ts:76` has `pay/index.html`. `README.md:140-141` has `Checkout opens on`, `/pay/`. The code names no path for that link. `/pay/` is the page built to load Paddle's script. It was not run.
 - Source: `scripts/policy.ts:10` has `script-src 'self' 'wasm-unsafe-eval'`.
 - Source: `scripts/policy.ts:25` has `https://cdn.paddle.com`.
 - Source: `src/app/Workspace.tsx:115` has `location.href = (await api.checkout(active, seats)).checkoutUrl`.
@@ -462,13 +462,18 @@ Dashboard (not verified): Paddle > Developer Tools > Notifications > New destina
 https://<domain>/api/paddle/webhook
 ```
 
-- Source: `server/worker.ts:293` has `"/api/paddle/webhook"`.
-- Source: `server/paddle.ts:77-85` has `subscription.created`, `subscription.activated`, `subscription.updated`, `subscription.trialing`, `subscription.past_due`, `subscription.paused`, `subscription.resumed`, `subscription.canceled`, `subscription.imported`.
-- Source: `server/paddle.ts:112` has `!SUBSCRIPTION_EVENTS.includes(body.event_type)) return null`.
-- Source: `server/paddle.ts:156-159` has `case "active":`, `return true`.
-- Source: `server/paddle.ts:160-163` has `case "canceled":`, `now.getTime() < end`.
-- Source: `server/workspace.ts:32` has `if (!row) return { pro: false`.
-- Source: `src/app/Workspace.tsx:249` has `Saving needs Pro`.
+Each of these events carries the subscription, but the Worker does not store the status from the event. For a known workspace it reads the account's subscription list from Paddle, keeps the subscriptions tagged for that workspace, and stores the state Paddle reports. The event only says which workspace and subscription to look at; the row holds what Paddle reports when the delivery is handled.
+
+- Source: `server/worker.ts:332` has `"/api/paddle/webhook"`.
+- Source: `server/paddle.ts:89-97` has `subscription.created`, `subscription.activated`, `subscription.updated`, `subscription.trialing`, `subscription.past_due`, `subscription.paused`, `subscription.resumed`, `subscription.canceled`, `subscription.imported`.
+- Source: `server/paddle.ts:161` has `!SUBSCRIPTION_EVENTS.includes(body.event_type)) return null`.
+- Source: `server/paddle.ts:299-302` has `case "active":`, `return true`.
+- Source: `server/paddle.ts:303-306` has `case "canceled":`, `now.getTime() < end`.
+- Source: `server/workspace.ts:41` has `if (!row) return { pro: false`.
+- Source: `server/paddle.ts:141` has `Carries no state.`
+- Source: `server/workspace.ts:336` has `listWorkspaceSubscriptions(paddle, event.workspaceId)`.
+- Source: `server/workspace.ts:360` has `status: elected.status`.
+- Source: `src/app/Workspace.tsx:288` has `Saving needs Pro`.
 - Worked: Paddle shows the destination and those nine events. This proves it is set, not that it is right.
 - If this is wrong you will see: a missing webhook event fails nothing. A workspace that paid still shows `Saving needs Pro`, or a canceled one keeps Pro, because that event never arrives.
 
@@ -482,24 +487,29 @@ npx wrangler secret put PADDLE_WEBHOOK_SECRET
 ```
 
 - Source: `server/env.ts:27` has `PADDLE_WEBHOOK_SECRET?: string`.
-- Source: `server/worker.ts:295-296` has `!c.env.PADDLE_WEBHOOK_SECRET`, `Bad signature.`
+- Source: `server/worker.ts:334-335` has `!c.env.PADDLE_WEBHOOK_SECRET`, `Bad signature.`
 - Worked: `npx wrangler secret list` prints `PADDLE_WEBHOOK_SECRET`.
 
 ### 2.13 Store the Paddle API key
 
-Do: Create a live API key with the `transaction.write` permission. Store the key. The permission name is not in this repo.
+Do: Create a live API key with the `transaction.write` and `subscription.read` permissions. Store the key. The permission names are not in this repo.
 
 Dashboard (not verified): Paddle > My account > Settings > Authentication > API keys.
 ```sh
 npx wrangler secret put PADDLE_API_KEY
 ```
 
+After verifying the signature and accepting a supported subscription event, the Worker checks this key. With no `PADDLE_API_KEY`, the webhook answers 503 with `Subscriptions are not set up yet.`, writes nothing, and Paddle retries the delivery. For a known workspace, a key that cannot list subscriptions makes the webhook answer 502 with `Could not read the subscription from Paddle.`, and Paddle retries that too.
+
 - Source: `server/env.ts:26` has `PADDLE_API_KEY?: string`.
-- Source: `server/paddle.ts:203-205` has `doFetch`, `/transactions`, `method: "POST"`.
-- Derived from: `server/paddle.ts:213` has `Paddle returned ${response.status} when creating a transaction.` A 403 makes that throw `Paddle returned 403 when creating a transaction.` It was not run.
-- Source: `server/worker.ts:234-235` has `console.error(error)`, `Something went wrong on the server.`
-- Source: `server/worker.ts:281` has `Subscriptions are not set up yet.`
-- Not verified: the permission name is not in this repo. Paddle's transaction reference requires `transaction.write` at [Create a transaction](https://developer.paddle.com/api-reference/transactions/create-transaction). Paddle's authentication reference says a key without the permission returns 403, at [Authentication](https://developer.paddle.com/api-reference/about/authentication). Nobody entered an account.
+- Source: `server/paddle.ts:388-391` has `doFetch`, `/transactions`, `method: "POST"`.
+- Derived from: `server/paddle.ts:399` has `Paddle returned ${response.status} when creating a transaction.` A 403 makes that throw `Paddle returned 403 when creating a transaction.` It was not run.
+- Source: `server/worker.ts:239-240` has `console.error(error)`, `Something went wrong on the server.`
+- Source: `server/worker.ts:298` has `Subscriptions are not set up yet.`
+- Source: `server/worker.ts:343` has `if (!paddle) return c.json({ error: "Subscriptions are not set up yet." }, 503)`.
+- Source: `server/worker.ts:364` has `Could not read the subscription from Paddle.`, `502`
+- Source: `server/paddle.ts:244` has `Paddle returned ${response.status} when listing subscriptions.`
+- Not verified: the permission name is not in this repo. Paddle's transaction reference requires `transaction.write` at [Create a transaction](https://developer.paddle.com/api-reference/transactions/create-transaction). Paddle's authentication reference says a key without the permission returns 403, at [Authentication](https://developer.paddle.com/api-reference/about/authentication). Nobody entered an account. Paddle's permissions page lists `subscription.read` at [Permissions](https://developer.paddle.com/api-reference/about/permissions); a key without it is refused with 403. For an accepted subscription event for a known workspace, that refusal makes the webhook answer 502.
 - Worked: `npx wrangler secret list` prints `PADDLE_API_KEY`. This proves the name is present, not that the key can create a transaction.
 - If this is wrong you will see: Subscribe answers 500 and `Something went wrong on the server.`
 
@@ -709,7 +719,7 @@ https://<domain>/app/
 ```
 
 - Source: `src/app/Workspace.tsx:115` has `location.href = (await api.checkout(active, seats)).checkoutUrl`.
-- Source: `server/paddle.ts:188-189` has `?_ptxn=`.
+- Source: `server/paddle.ts:332` has `?_ptxn=`.
 - Worked: the address bar shows `https://<domain>/pay/?_ptxn=` followed by an id, and the checkout shows the price you chose.
 
 ### 2.22 Check that a payment turns Pro on
@@ -726,15 +736,15 @@ https://<domain>/app/?sample
 - Source: `src/app/Workspace.tsx:132-134` has `props.setup`, `label="Save setup"`.
 - Source: `src/app/Workspace.tsx:139` has `api.saveSetup`.
 - Source: `src/pay/pay.ts:48` has `/app/?subscribed=1`.
-- Source: `server/workspace.ts:207` has `"applied"`.
-- Source: `server/workspace.ts:110` has `Saving to a workspace needs a Pro subscription.`
+- Source: `server/workspace.ts:311` has `"applied"`.
+- Source: `server/workspace.ts:119` has `Saving to a workspace needs a Pro subscription.`
 - Worked: the hint reads `Pro,` then the seat count and `seat` or `seats`. Save setup is on the page. After you reload the same columns, the saved name is still listed.
 
 ### 2.23 Check that an immediate cancellation reaches the site
 
 Do: Cancel that subscription in Paddle immediately. Wait until Paddle shows the `subscription.canceled` delivery. Query that subscription, not every row.
 
-A cancel at the period end sends `subscription.updated` with status `active`. `parseSubscriptionEvent` stores that status and does not store `scheduled_change`. The row stays `active` until the effective date. Do not expect `canceled` before then.
+A cancel at the period end sends `subscription.updated` with status `active`. The webhook reads that subscription from Paddle's list and stores the status Paddle reports there, so the row stays `active` until the effective date. This code does not store `scheduled_change`. Do not expect `canceled` before then.
 
 Dashboard (not verified): Paddle > Customers > the customer > the subscription > Cancel.
 
@@ -743,11 +753,12 @@ Run:
 npx wrangler d1 execute bridgekit --remote --command "SELECT status, currentPeriodEnd FROM subscription WHERE paddleSubscriptionId = '<subscription id>'"
 ```
 
-- Source: `server/paddle.ts:131` has `status: status as SubscriptionStatus`.
+- Source: `server/paddle.ts:194` has `status: status as SubscriptionStatus`.
 - Source: `server/paddle.ts` lacks `scheduled_change`.
-- Source: `server/workspace.ts:188-193` has `status`. `server/workspace.ts:188-193` lacks `scheduled_change`.
-- Source: `server/paddle.ts:154` has `export function hasPro`.
-- Source: `server/paddle.ts:160-163` has `case "canceled":`, `now.getTime() < end`.
+- Source: `server/workspace.ts:360` has `status: elected.status`.
+- Source: `server/workspace.ts` lacks `scheduled_change`.
+- Source: `server/paddle.ts:297` has `export function hasPro`.
+- Source: `server/paddle.ts:303-306` has `case "canceled":`, `now.getTime() < end`.
 - Source: `src/app/Workspace.tsx:113` has `plan.plan.status === "canceled"`, `currentPeriodEnd`, `ends`, `slice(0, 10)`.
 - Source: `migrations/0003_workspaces.sql:6` has `paddleSubscriptionId`.
 - Source: `migrations/0003_workspaces.sql:8` has `status TEXT NOT NULL`.
@@ -774,5 +785,5 @@ A path in backticks, then `has` or `lacks`, then words in backticks, is a claim 
 3. A `lacks` claim on a line span also has an anchor in that same span.
 4. `Not verified` has nothing to check in the repo.
 5. `BETTER_AUTH_URL` is the Part 1 edit to `wrangler.jsonc`. `ACCOUNTS` is the Part 2 edit to `wrangler.jsonc` `vars`, and the value is `on`. Every other string name in `server/env.ts` is one `npx wrangler secret put` line with that name, or one leave-unset line.
-6. The nine event names in step 2.11 are the names at `server/paddle.ts:77-85`.
+6. The nine event names in step 2.11 are the names at `server/paddle.ts:89-97`.
 7. `package.json` lacks `smoke:preview`. `package.json` lacks `smoke:wrangler`.
