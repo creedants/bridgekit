@@ -1,0 +1,1 @@
+- The browser harness now directs every download into the launch's own scratch downloads directory, so smoke runs no longer leave bridge workbooks, reports or setup files in the Downloads folder and closing the browser removes them.
