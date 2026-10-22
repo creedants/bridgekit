@@ -284,6 +284,9 @@ test("every number-shaped column left as text is named", async () => {
     "$90.00",
     "(45)",
     "1,234.56",
+    "1.260e3",
+    "1e3",
+    "$90e2",
   ];
   const named = "amount mixes number styles, so it was read as text.";
   const hasMarker = (value: string): boolean => /[,$()]/.test(value);
@@ -320,6 +323,20 @@ test("a decimal comma beside a north american decimal stays text", async () => {
   assert.equal(await columnType(query, "mixed", "amount"), "VARCHAR");
   assert.deepEqual(await columnValues(query, "mixed", "amount"), ["1.234,56", "1,260.00"]);
   assert.equal(await decimalCommaNote(query, "mixed"), "amount mixes number styles, so it was read as text.");
+});
+
+test("scientific notation beside a decimal comma stays text and is named", async () => {
+  const query = await openDatabase();
+  await createText(query, "sci_three", { amount: ["1.234,567", "1.260e3"] });
+  await convertFormattedNumbers(query, "sci_three");
+  assert.equal(await columnType(query, "sci_three", "amount"), "VARCHAR");
+  assert.deepEqual(await columnValues(query, "sci_three", "amount"), ["1.234,567", "1.260e3"]);
+  assert.equal(await decimalCommaNote(query, "sci_three"), "amount mixes number styles, so it was read as text.");
+  await createText(query, "sci_plain", { amount: ["1.234,56", "1e3"] });
+  await convertFormattedNumbers(query, "sci_plain");
+  assert.equal(await columnType(query, "sci_plain", "amount"), "VARCHAR");
+  assert.deepEqual(await columnValues(query, "sci_plain", "amount"), ["1.234,56", "1e3"]);
+  assert.equal(await decimalCommaNote(query, "sci_plain"), "amount mixes number styles, so it was read as text.");
 });
 
 test("a space used as a thousands mark stays text", async () => {
