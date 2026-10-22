@@ -1,0 +1,1 @@
+- A column left as text after the style decision is now named whenever every value is number-shaped, so 1.234,567 beside 1,260.000, 1260.000, +1,260.00, $1,260.000 or (1,260.000) stays text and the Data check says it mixes number styles.
