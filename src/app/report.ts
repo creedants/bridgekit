@@ -5,6 +5,53 @@ import { percent, signedPercent, signedWhole, whole } from "./format.ts";
 const markup = (value: unknown) =>
   String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 
+/** One wording per measure, so a margin bridge never says sales or price where it means margin. */
+const SALES = {
+  bridgeTitle: "Sales bridge",
+  ofPrior: "% of prior sales",
+  priceEffect: "Price",
+  priorPrice: "Prior price",
+  currentPrice: "Current price",
+  priceChange: "Price change",
+  hintUnits: "Prices exclude sales with no units.",
+  hintChange: "Price change is the change in average price and includes mix inside the row.",
+} as const;
+const MARGIN = {
+  bridgeTitle: "Margin bridge",
+  ofPrior: "% of prior margin",
+  priceEffect: "Price and unit cost",
+  priorPrice: "Prior unit margin",
+  currentPrice: "Current unit margin",
+  priceChange: "Unit margin change",
+  hintUnits: "Unit margins exclude sales with no units.",
+  hintChange: "Unit margin change is the change in average unit margin and includes mix inside the row.",
+} as const;
+interface Terms {
+  bridgeTitle: string;
+  ofPrior: string;
+  priceEffect: string;
+  priorPrice: string;
+  currentPrice: string;
+  priceChange: string;
+  hintUnits: string;
+  hintChange: string;
+}
+const TERMS = { SALES, MARGIN } satisfies Record<string, Terms>;
+
+/** The report and Movers wording for this bridge: sales wording, or margin wording with a cost column. */
+export function terms(config: BridgeConfig): Terms {
+  return config.costColumn ? TERMS.MARGIN : TERMS.SALES;
+}
+
+/** The Movers columns after the grouping columns, in margin wording when the bridge is on margin. */
+export function moverHeader(config: BridgeConfig): string[] {
+  const t = terms(config);
+  const measure = measureName(config).toLowerCase();
+  return [
+    `Prior ${measure}`, `Current ${measure}`, "Change", "Volume", "Mix", t.priceEffect,
+    "New config.", "Discontinued", "No units", t.priorPrice, t.currentPrice, t.priceChange,
+  ];
+}
 /** A table cell that begins with a formula character takes a leading apostrophe, as the CSV export does. */
 const cell = (value: unknown) => {
   const text = String(value);
@@ -26,6 +73,7 @@ export function buildReport(input: {
   accounts?: { column: string; groups: AccountGroup[] };
 }): string {
   const { config, result } = input;
+  const t = terms(config);
   const row = (cells: string[], tag = "td") =>
     `<tr>${cells.map((c, i) => `<${tag}${i > 0 ? ' class="n"' : ""}>${c}</${tag}>`).join("")}</tr>`;
   const bridge = [
@@ -46,7 +94,7 @@ export function buildReport(input: {
   );
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sales bridge: ${markup(config.prior)} to ${markup(config.current)}</title>
+<title>${markup(t.bridgeTitle)}: ${markup(config.prior)} to ${markup(config.current)}</title>
 <style>
 body{font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;color:#14181f;max-width:900px;margin:32px auto;padding:0 20px}
 h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;margin:28px 0 8px}
@@ -56,18 +104,18 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:#4a5360;bo
 .n{text-align:right;font-variant-numeric:tabular-nums}tr:first-child td,tr:last-child td{font-weight:600}
 .plain tr td{font-weight:400}img{max-width:100%}
 </style></head><body>
-<h1>Sales bridge: ${markup(config.prior)} to ${markup(config.current)}</h1>
+<h1>${markup(t.bridgeTitle)}: ${markup(config.prior)} to ${markup(config.current)}</h1>
 <p class="muted">Created ${new Date().toISOString().slice(0, 10)} with Bridgekit. It holds totals and a written summary, names the file, the setup, its filter values and the largest movers, and holds no rows.</p>
 ${commentary(result, config).map((p) => `<p>${markup(p)}</p>`).join("\n")}
 ${input.chartUrl ? `<img alt="Waterfall chart of the bridge" src="${input.chartUrl}">` : ""}
 <h2>Bridge</h2>
-<table>${row(["", "Amount", "% of prior sales"], "th")}${bridge.join("")}</table>
+<table>${row(["", "Amount", t.ofPrior], "th")}${bridge.join("")}</table>
 <h2>How current sales were matched</h2>
 <table class="plain">${row(["Compared against", "Share", "Configurations"], "th")}${result.coverage
     .map((c) => row([cell(c.label), percent(c.share), whole(c.cells)]))
     .join("")}</table>
 <h2>Largest movers by ${markup(input.movers.label)}</h2>
-<table class="plain">${row([cell(input.movers.label), "Change", "Volume", "Mix", "Price"], "th")}${movers.join("")}</table>
+<table className="plain">${row([cell(input.movers.label), "Change", "Volume", "Mix", t.priceEffect], "th")}${movers.join("")}</table>
 <h2>How widely price moved</h2>
 <table class="plain">${row(["Change in average price", "Share of matched sales", "Price effect"], "th")}${input.priceBands
     .map((b) => row([cell(b.label), percent(b.share), signedWhole(b.priceEffect)]))

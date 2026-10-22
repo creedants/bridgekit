@@ -93,7 +93,8 @@ test("a margin report is titled Margin bridge with the margin headers", () => {
   assert.equal(html.includes("% of prior margin"), true, "margin bridge header is not % of prior margin");
   assert.equal(html.includes("Price and unit cost"), true, "margin movers header is not Price and unit cost");
   assert.equal(html.includes("Sales bridge"), false, "margin report still says Sales bridge");
-  assert.equal(html.includes("Cost column: cost"), true, "margin setup lost the cost line");
+  assert.equal(html.includes("Cost column"), true, "margin setup lost the cost line");
+  assert.equal(html.includes("cost (bridge is on margin)"), true, "margin setup lost the margin note");
 });
 
 test("margin mover headers and terms name the unit-margin figures", () => {
