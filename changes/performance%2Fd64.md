@@ -1,0 +1,1 @@
+- Decimal-comma columns with three-decimal values now parse via a whole-column decision instead of value by value, so 1.234,567 reads 1234.567 and 0,125 beside 12,5 reads 0.125, while ambiguous-only columns such as 1,234 keep today's thousands reading and mixed columns stay text.
