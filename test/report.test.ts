@@ -78,6 +78,7 @@ test("a sales report keeps the sales title and headers", () => {
   assert.equal(html.includes("% of prior sales"), true, "sales bridge header changed");
   assert.equal(html.includes(`<th class="n">Price</th>`), true, "sales movers header changed");
   assert.equal(html.includes("Margin bridge"), false, "sales report names margin");
+  assert.equal(html.includes("className"), false, "sales report carries a React attribute");
 });
 
 test("a margin report is titled Margin bridge with the margin headers", () => {

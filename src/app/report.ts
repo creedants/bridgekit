@@ -115,7 +115,7 @@ ${input.chartUrl ? `<img alt="Waterfall chart of the bridge" src="${input.chartU
     .map((c) => row([cell(c.label), percent(c.share), whole(c.cells)]))
     .join("")}</table>
 <h2>Largest movers by ${markup(input.movers.label)}</h2>
-<table className="plain">${row([cell(input.movers.label), "Change", "Volume", "Mix", t.priceEffect], "th")}${movers.join("")}</table>
+<table class="plain">${row([cell(input.movers.label), "Change", "Volume", "Mix", t.priceEffect], "th")}${movers.join("")}</table>
 <h2>How widely price moved</h2>
 <table class="plain">${row(["Change in average price", "Share of matched sales", "Price effect"], "th")}${input.priceBands
     .map((b) => row([cell(b.label), percent(b.share), signedWhole(b.priceEffect)]))
