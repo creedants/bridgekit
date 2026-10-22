@@ -21,6 +21,7 @@ import {
   FIXTURE_LEVELS,
   FORMATTED_CURRENT,
   FORMATTED_PRIOR,
+  toCsvText,
   toTsvText,
   writeFixtures,
 } from "./smoke-files.mjs";
@@ -1399,6 +1400,117 @@ async function drive(browser, origin, rows) {
       fail(`exported workbook: ${address} cached result is ${check.cached}, expected a value within 1e-6 of zero`);
     }
     console.log("ok  exported workbook: sheets present and the Bridge check row is a number or a formula result within 1e-6 of zero");
+
+    // A stale bridge must not export: the notice and the button describe one
+    // fact, the run's signature.
+    await setDataFile(fixtures.csvPath);
+    await addFixtureLevels();
+    await waitReady();
+    await calculate();
+    const exportButton = `[...document.querySelectorAll('header nav button')].find((b) => b.textContent.trim() === 'Export Excel')`;
+    await browser.evalJs(`document.querySelector('button[aria-label="Remove attribute"]').click()`);
+    await browser.waitFor("document.body.innerText.includes('The setup changed since this bridge was calculated')");
+    if (!(await browser.evalJs(`${exportButton}.disabled`))) {
+      fail("stale bridge: Export Excel stays on while the notice says the setup changed");
+    }
+    await addAttribute("design");
+    await waitReady();
+    await calculate();
+    try {
+      await browser.waitFor(`${exportButton}.disabled === false`, 20000);
+    } catch {
+      fail("stale bridge: Export Excel stays off after Calculate");
+    }
+    console.log("ok  stale bridge: Export Excel is off while the setup-changed notice shows, and back after Calculate");
+
+    // A restored or loaded setup must fit the types of the table it lands on.
+    const textSalesPath = join(fixtureDir, "text-sales.csv");
+    writeFileSync(
+      textSalesPath,
+      toCsvText(FIXTURE_HEADER, fixtures.rows.map((row) => [row[0], row[1], row[2], row[3], "n/a"])),
+    );
+    const textMeasurePath = join(fixtureDir, "text-measure-setup.json");
+    writeFileSync(
+      textMeasurePath,
+      JSON.stringify({
+        periodColumn: "sale_date",
+        grain: "year",
+        unitsColumn: "units",
+        salesColumn: "net_sales",
+        levels: [{ name: "Design", columns: ["design"] }],
+        filters: [],
+      }),
+    );
+    const grainPath = join(fixtureDir, "grain-setup.json");
+    writeFileSync(
+      grainPath,
+      JSON.stringify({
+        periodColumn: "period",
+        grain: "month",
+        unitsColumn: "units",
+        salesColumn: "sales",
+        levels: [{ name: "Product", columns: ["product"] }],
+        filters: [],
+      }),
+    );
+    const notJsonPath = join(fixtureDir, "not-a-setup.json");
+    writeFileSync(notJsonPath, "{oops");
+
+    const REFUSED = "That setup file does not match the columns in this data.";
+    const NOT_SETUP = "That file is not a setup file.";
+    const loadSetupFile = async (path) => {
+      const { root } = await browser.send("DOM.getDocument");
+      const { nodeId } = await browser.send("DOM.querySelector", { nodeId: root.nodeId, selector: 'input[type=file][accept*="json"]' });
+      await browser.send("DOM.setFileInputFiles", { nodeId, files: [path] });
+    };
+    const errorText = async () =>
+      (await browser.evalJs("document.querySelector('.error') ? document.querySelector('.error').textContent.trim() : ''")).trim();
+    const noRawText = async (step) => {
+      const shown = await errorText();
+      for (const trace of ["Binder Error", "strftime(", "sum(", "LINE ", "JSON at position"]) {
+        if (shown.includes(trace)) fail(`${step}: the banner reads ${JSON.stringify(shown)}`);
+      }
+    };
+
+    // Remembering on, so a file with the same columns is offered the saved setup.
+    await setDataFile(fixtures.csvPath);
+    await browser.evalJs(`${rememberBox}.click()`);
+    await browser.sleep(300);
+    await addFixtureLevels();
+    await waitReady();
+    await calculate();
+    await setDataFile(textSalesPath);
+    await browser.sleep(1200);
+    if (await browser.evalJs(`document.body.innerText.includes('Restored the setup')`)) {
+      fail("text sales column: the remembered setup was restored onto a table it cannot run");
+    }
+    if (!(await browser.evalJs("document.querySelector('button.primary').disabled"))) {
+      fail("text sales column: Calculate is on with no sales measure");
+    }
+    if ((await errorText()) !== "") fail(`text sales column: the banner reads ${JSON.stringify(await errorText())}`);
+    console.log("ok  text sales column: the remembered setup is dropped, Calculate is off and the banner is empty");
+
+    await loadSetupFile(textMeasurePath);
+    await browser.waitFor(`document.querySelector('.error')?.textContent.trim() === ${JSON.stringify(REFUSED)}`, 10000);
+    await noRawText("text measure setup");
+    if (!(await browser.evalJs("document.querySelector('button.primary').disabled"))) {
+      fail("text measure setup: Calculate is on after the refusal");
+    }
+    console.log("ok  text measure setup: refused with one plain sentence and Calculate stays off");
+
+    await setDataFile(fixtures.formattedPath);
+    await loadSetupFile(grainPath);
+    await browser.waitFor(`document.querySelector('.error')?.textContent.trim() === ${JSON.stringify(REFUSED)}`, 10000);
+    await noRawText("grain setup");
+    console.log("ok  grain setup: refused with one plain sentence instead of a database error");
+
+    await loadSetupFile(notJsonPath);
+    await browser.waitFor(`document.querySelector('.error')?.textContent.trim() === ${JSON.stringify(NOT_SETUP)}`, 10000);
+    await noRawText("not a setup file");
+    console.log("ok  not a setup file: one plain sentence instead of a JSON parser message");
+
+    await browser.evalJs(`${rememberBox}.click()`);
+    await browser.sleep(300);
 
     await browser.send("Page.enable");
     await browser.send("Page.setInterceptFileChooserDialog", { enabled: true });

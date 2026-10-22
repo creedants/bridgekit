@@ -143,27 +143,56 @@ export function setRemembering(on: boolean): void {
   }
 }
 
+interface ColumnRule {
+  /** The type a chosen column must have. */
+  readonly allows: (type: string) => boolean;
+  /** Whether leaving this role empty is allowed. */
+  readonly empty: boolean;
+}
+
+/** One row per column role: what it needs when chosen, and what an empty name means. */
+const COLUMN_RULES: Record<"period" | "datePeriod" | "units" | "sales" | "gross" | "cost", ColumnRule> = {
+  // A "value" grain reads any period column as text; the other grains need a date.
+  period: { allows: () => true, empty: true },
+  datePeriod: { allows: isDate, empty: true },
+  units: { allows: isNumeric, empty: true },
+  sales: { allows: isNumeric, empty: true },
+  gross: { allows: isNumeric, empty: true },
+  cost: { allows: isNumeric, empty: true },
+};
+
 export function isValidSetup(value: unknown, columns: Column[]): value is Setup {
   if (typeof value !== "object" || value === null) return false;
   const setup = value as Partial<Setup>;
   const names = new Set(columns.map((c) => c.name));
+  const types = new Map(columns.map((c) => [c.name, c.type]));
   const known = (name: unknown) => typeof name === "string" && (name === "" || names.has(name));
+  const named = (name: unknown) => typeof name === "string" && name !== "" && names.has(name);
+  const fits = (name: unknown, rule: ColumnRule) => {
+    if (typeof name !== "string") return false;
+    if (name === "") return rule.empty;
+    if (!types.has(name)) return false;
+    // A caller that knows only names, like a saved workspace setup, reports no type.
+    const type = types.get(name) ?? "";
+    return type === "" || rule.allows(type);
+  };
   return (
     known(setup.periodColumn) &&
-    known(setup.unitsColumn) &&
-    known(setup.salesColumn) &&
-    (setup.grossColumn === undefined || known(setup.grossColumn)) &&
-    (setup.costColumn === undefined || known(setup.costColumn)) &&
+    fits(setup.periodColumn, setup.grain === "value" ? COLUMN_RULES.period : COLUMN_RULES.datePeriod) &&
+    fits(setup.unitsColumn, COLUMN_RULES.units) &&
+    fits(setup.salesColumn, COLUMN_RULES.sales) &&
+    (setup.grossColumn === undefined || fits(setup.grossColumn, COLUMN_RULES.gross)) &&
+    (setup.costColumn === undefined || fits(setup.costColumn, COLUMN_RULES.cost)) &&
     ["value", "year", "ytd", "quarter", "month"].includes(setup.grain as string) &&
     Array.isArray(setup.levels) &&
     setup.levels.every(
-      (l) => typeof l?.name === "string" && Array.isArray(l.columns) && l.columns.length > 0 && l.columns.every(known),
+      (l) => typeof l?.name === "string" && Array.isArray(l.columns) && l.columns.length > 0 && l.columns.every(named),
     ) &&
     [undefined, "difference", "full"].includes(setup.newAndDiscontinued) &&
     Array.isArray(setup.filters) &&
     setup.filters.every(
       (f) =>
-        known(f?.column) &&
+        named(f?.column) &&
         (f.mode === "include" || f.mode === "exclude") &&
         Array.isArray(f.values) &&
         f.values.every((v) => typeof v === "string"),

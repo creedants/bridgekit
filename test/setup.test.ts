@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { guessSetup, isDate, isNumeric, type Column, type Setup } from "../src/app/setup.ts";
+import {
+  guessSetup,
+  isDate,
+  isNumeric,
+  isValidSetup,
+  loadSavedSetup,
+  saveSetup,
+  type Column,
+  type Setup,
+} from "../src/app/setup.ts";
 
 function legacyGuess(columns: Column[]): Setup {
   const find = (pattern: RegExp, among: Column[]) => among.find((c) => pattern.test(c.name))?.name ?? "";
@@ -1564,4 +1573,91 @@ test("oracle headers match the legacy guess outside excluded words", () => {
     assert.equal(actual.salesColumn, salesGuess.salesColumn, message);
     assert.equal(actual.grossColumn, salesGuess.grossColumn, message);
   }
+});
+
+// The remembered and loaded paths read localStorage at call time, so a stub
+// replaces it for this file only.
+const stored = new Map<string, string>();
+Object.defineProperty(globalThis, "localStorage", {
+  configurable: true,
+  value: {
+    getItem: (key: string) => stored.get(key) ?? null,
+    setItem: (key: string, value: string) => void stored.set(key, value),
+    removeItem: (key: string) => void stored.delete(key),
+    key: (index: number) => [...stored.keys()][index] ?? null,
+    get length() {
+      return stored.size;
+    },
+    clear: () => stored.clear(),
+  },
+});
+
+const salesTable: Column[] = [
+  { name: "year", type: "BIGINT" },
+  { name: "product", type: "VARCHAR" },
+  { name: "units", type: "BIGINT" },
+  { name: "sales", type: "DOUBLE" },
+];
+const withType = (columns: Column[], name: string, type: string): Column[] =>
+  columns.map((column) => (column.name === name ? { ...column, type } : column));
+
+const workedSetup: Setup = {
+  periodColumn: "year",
+  grain: "value",
+  unitsColumn: "units",
+  salesColumn: "sales",
+  levels: [{ name: "Product", columns: ["product"] }],
+  filters: [],
+};
+
+test("a remembered setup is dropped when a same-named table's sales column is text", () => {
+  stored.clear();
+  saveSetup(salesTable, workedSetup);
+  assert.deepEqual(loadSavedSetup(salesTable), workedSetup);
+  assert.equal(loadSavedSetup(withType(salesTable, "sales", "VARCHAR")), null);
+});
+
+test("a remembered setup is dropped when its date grain meets a BIGINT period column", () => {
+  stored.clear();
+  const dated: Column[] = withType(salesTable, "year", "DATE");
+  const yearly: Setup = { ...workedSetup, grain: "year" };
+  saveSetup(dated, yearly);
+  assert.deepEqual(loadSavedSetup(dated), yearly);
+  assert.equal(loadSavedSetup(salesTable), null);
+});
+
+test("a loaded setup that names a text column as sales is refused", () => {
+  assert.equal(isValidSetup(workedSetup, salesTable), true);
+  assert.equal(isValidSetup(workedSetup, withType(salesTable, "sales", "VARCHAR")), false);
+});
+
+test("a loaded setup that names a text column as units, gross or cost is refused", () => {
+  const loading: Setup = { ...workedSetup, unitsColumn: "units" };
+  assert.equal(isValidSetup(loading, salesTable), true);
+  assert.equal(isValidSetup(loading, withType(salesTable, "units", "VARCHAR")), false);
+  const gross: Setup = { ...workedSetup, grossColumn: "gross" };
+  assert.equal(isValidSetup(gross, [...salesTable, { name: "gross", type: "DOUBLE" }]), true);
+  assert.equal(isValidSetup(gross, [...salesTable, { name: "gross", type: "VARCHAR" }]), false);
+  const margin: Setup = { ...workedSetup, costColumn: "cost" };
+  assert.equal(isValidSetup(margin, [...salesTable, { name: "cost", type: "DOUBLE" }]), true);
+  assert.equal(isValidSetup(margin, [...salesTable, { name: "cost", type: "VARCHAR" }]), false);
+});
+
+test("a loaded setup whose date grain meets a non-date period column is refused", () => {
+  const yearly: Setup = { ...workedSetup, grain: "year" };
+  assert.equal(isValidSetup(yearly, withType(salesTable, "year", "DATE")), true);
+  assert.equal(isValidSetup(yearly, salesTable), false);
+  assert.equal(isValidSetup({ ...yearly, grain: "month" }, withType(salesTable, "year", "TIMESTAMP")), true);
+  assert.equal(isValidSetup({ ...yearly, grain: "month" }, salesTable), false);
+});
+
+test("a setup with unchosen period, measures and attributes is valid", () => {
+  const empty: Setup = { ...workedSetup, unitsColumn: "", salesColumn: "", periodColumn: "", levels: [] };
+  assert.equal(isValidSetup(empty, salesTable), true);
+});
+
+test("a loaded setup with an empty attribute or filter column is refused", () => {
+  assert.equal(isValidSetup({ ...workedSetup, levels: [{ name: "Product", columns: [""] }] }, salesTable), false);
+  assert.equal(isValidSetup({ ...workedSetup, filters: [{ column: "", mode: "include", values: ["A"] }] }, salesTable), false);
+  assert.equal(isValidSetup({ ...workedSetup, filters: [{ column: "product", mode: "include", values: ["A"] }] }, salesTable), true);
 });
