@@ -1,0 +1,1 @@
+- An Excel load keeps the plain reader it had before slash dates were reinterpreted, and only a slash-date column whose every non-blank value is a four-digit date is read month-first, so a workbook and a column mixing two-digit and four-digit years load exactly as they did before.
