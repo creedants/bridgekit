@@ -1,0 +1,1 @@
+- A bare column of dot-grouped three-decimal values now reads 1.234,567 as 1234.567, and a column that mixes number styles, such as 1,234 beside 12,3456, stays text and the Data check now names it.
