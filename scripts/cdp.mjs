@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { closeSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -84,6 +84,8 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
   // Its own directory per launch. Nothing an earlier run stored reaches this one, and the last browser on this
   // port, still exiting, cannot remove this one's profile.
   const scratch = mkdtempSync(join(tmpdir(), prefix));
+  const downloadPath = join(scratch, "downloads");
+  mkdirSync(downloadPath, { recursive: true });
   const stderrPath = join(scratch, "stderr");
   // A file and not a pipe, so a browser that outlives this process never blocks on a full pipe.
   const stderrFd = openSync(stderrPath, "w");
@@ -121,6 +123,9 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
     const endpoint = record ? (await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()).webSocketDebuggerUrl : target.webSocketDebuggerUrl;
     const ws = new WebSocket(endpoint);
     await new Promise((r) => (ws.onopen = r));
+    // Non-record mode talks to the page socket, which cannot hold the download directory: the setting reverts
+    // when its browser session disconnects, so this socket stays open until close().
+    let browserWs = null;
     let id = 0;
     const pending = new Map();
     /** @type {Asker[]} */ const askers = [];
@@ -403,6 +408,25 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
       throw new Error("timeout " + expr + " :: " + seen);
     };
     const helpers = `window.T = { btn: (t) => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === t), sel: (label) => [...document.querySelectorAll('label')].find(l => l.firstChild?.textContent?.trim().startsWith(label))?.querySelector('select'), set: (el, v) => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(el, v); el.dispatchEvent(new Event('change', { bubbles: true })); }, input: (el, v) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); }, tab: (t) => [...document.querySelectorAll('.tabs button')].find(b => b.textContent.startsWith(t)).click(), err: () => document.querySelector('.error')?.textContent ?? null }; true`;
+    if (record) {
+      await command("Browser.setDownloadBehavior", { behavior: "allow", downloadPath, eventsEnabled: false });
+    } else {
+      const browserEndpoint = (await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()).webSocketDebuggerUrl;
+      browserWs = new WebSocket(browserEndpoint);
+      await new Promise((resolve, reject) => {
+        browserWs.onopen = resolve;
+        browserWs.onerror = () => reject(new Error("Browser.setDownloadBehavior failed: could not open the browser socket"));
+      });
+      await new Promise((resolve, reject) => {
+        browserWs.onmessage = (m) => {
+          const d = JSON.parse(m.data);
+          if (d.error) reject(new Error(`Browser.setDownloadBehavior failed: ${d.error.message}`));
+          else resolve();
+        };
+        browserWs.onerror = () => reject(new Error("Browser.setDownloadBehavior failed: the browser socket errored"));
+        browserWs.send(JSON.stringify({ id: 1, method: "Browser.setDownloadBehavior", params: { behavior: "allow", downloadPath, eventsEnabled: false } }));
+      });
+    }
     // Enabling the Network domain is part of the timed browser launch.
     await send("Network.enable");
     const goto = async (url) => {
@@ -465,6 +489,7 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
       close: () => {
         closing = true;
         if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) ws.close();
+        if (browserWs && (browserWs.readyState === WebSocket.CONNECTING || browserWs.readyState === WebSocket.OPEN)) browserWs.close();
         stop();
         return exited;
       },
