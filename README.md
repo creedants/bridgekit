@@ -113,8 +113,7 @@ npm run demo     # 3 million made-up rows on the command line
 npm run smoke    # drives the tool in headless Chromium; needs `npm run dev` running
 ```
 
-The app reads CSV and Excel files. "Load sample data" generates made-up
-prescription lens sales so you can try it without a file.
+The app reads CSV and Excel files. "Load sample data" generates made-up sales lines of a made-to-order product so you can try it without a file.
 
 ## Deploying
 

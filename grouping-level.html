@@ -28,22 +28,22 @@
     <article>
       <div class="wrap narrow">
         <h1>Why the grouping level changes the price effect in a price-volume-mix bridge</h1>
-        <p class="sub">The grouping level is what a bridge treats as one product: a lens design, or a design with one coating, one color and one material. The price effect depends on that choice. This page shows why, with two bridges run on the same sales data.</p>
+        <p class="sub">The grouping level is what a bridge treats as one product: a model, or a model with one finish, one color and one material. The price effect depends on that choice. This page shows why, with two bridges run on the same sales data.</p>
 
         <h2>What the price effect measures</h2>
         <p>A <a href="/price-volume-mix-analysis.html">price-volume-mix analysis</a> compares each product with the same product in the prior period. The price effect is current units times the change in average price, <code>q1 × (p1 − p0)</code>. Product means whatever you group by, and the two prices are averages of that group. A coarse group blends every option sold under it.</p>
-        <p>One lens design is sold with a standard coating and a dearer coating. Neither price changes. This year more buyers choose the dearer coating, so the average price of the design rises. Grouped by design, the bridge sees one product whose price went up and reports a price effect. Grouped by design and coating, each coating is compared with itself. Neither price changed, so there is no price effect. The shift is reported as mix. The total change in sales is the same either way. Only the split between the lines moves.</p>
+        <p>One model is sold with a standard finish and a dearer finish. Neither price changes. This year more buyers choose the dearer finish, so the average price of the model rises. Grouped by model, the bridge sees one product whose price went up and reports a price effect. Grouped by model and finish, each finish is compared with itself. Neither price changed, so there is no price effect. The shift is reported as mix. The total change in sales is the same either way. Only the split between the lines moves.</p>
 
         <h2>Two bridges on three million sales lines</h2>
-        <p>The data is made up. It is prescription lens sales from the generator behind the tool's sample. Between the two years it contains a price increase on some designs, some new designs, a retired coating, and a shift toward photochromic lenses. The first bridge groups by full configuration: design, then coating, color and material. The second groups by design only. Same sales lines, same calculation.</p>
+        <p>The data consists of made-up sales lines of a made-to-order product from the generator behind the tool's sample. Between the two years it contains a price increase on some models, some new models, a retired finish, and a shift toward higher-priced color options. The first bridge groups by full configuration: model, then finish, color and material. The second groups by model only. Same sales lines, same calculation.</p>
         <div class="boxed">
           <table>
-            <thead><tr><th>Three million sales lines</th><th class="num">Full configuration</th><th class="num">Design only</th></tr></thead>
+            <thead><tr><th>Three million sales lines</th><th class="num">Full configuration</th><th class="num">Model only</th></tr></thead>
             <tbody>
               <tr class="total"><td>Prior sales</td><td class="num">173,972,189</td><td class="num">173,972,189</td></tr>
               <tr><td>Volume</td><td class="num">+14,493,720</td><td class="num">+14,493,720</td></tr>
-              <tr><td>Mix: Design</td><td class="num">+3,180,031</td><td class="num">+3,180,031</td></tr>
-              <tr><td>Mix: Coating</td><td class="num">+2,433,311</td><td class="num">no line</td></tr>
+              <tr><td>Mix: Model</td><td class="num">+3,180,031</td><td class="num">+3,180,031</td></tr>
+              <tr><td>Mix: Finish</td><td class="num">+2,433,311</td><td class="num">no line</td></tr>
               <tr><td>Mix: Color</td><td class="num">+6,806,470</td><td class="num">no line</td></tr>
               <tr><td>Mix: Material</td><td class="num">−115,845</td><td class="num">no line</td></tr>
               <tr><td>Price (like-for-like)</td><td class="num">+3,189,686</td><td class="num">+9,724,424</td></tr>
@@ -53,18 +53,18 @@
             </tbody>
           </table>
         </div>
-        <p>Both bridges start from the same prior sales and end at the same current sales. They report the same volume and the same design mix. The design-only bridge has no coating, color, or material line. What the full bridge reports on those lines, and on a configuration that is new or discontinued inside a design that sold in both years, the design-only bridge reports as price. The design-only price effect is the larger of the two. The shift toward photochromic lenses is in the Mix: Color line of the full bridge. In the design-only bridge it sits inside the price effect.</p>
+        <p>Both bridges start from the same prior sales and end at the same current sales. They report the same volume and the same model mix. The model-only bridge has no finish, color, or material line. What the full bridge reports on those lines, and on a configuration that is new or discontinued inside a model that sold in both years, the model-only bridge reports as price. The model-only price effect is the larger of the two. The shift toward higher-priced color options is in the Mix: Color line of the full bridge. In the model-only bridge it sits inside the price effect.</p>
 
         <h2>The same two bridges on one million sales lines</h2>
-        <p>This is a second run of the same two bridges, on one million sales lines. One million is the size of the sample built into the tool. Compare the tool's default sample with this one-million-line table. The design-only discontinued line is zero in both tables, because grouping by design leaves no discontinued design. Every other line in the tables differs.</p>
+        <p>This is a second run of the same two bridges, on one million sales lines. One million is the size of the sample built into the tool. Compare the tool's default sample with this one-million-line table. The model-only discontinued line is zero in both tables, because grouping by model leaves no discontinued model. Every other line in the tables differs.</p>
         <div class="boxed">
           <table>
-            <thead><tr><th>One million sales lines</th><th class="num">Full configuration</th><th class="num">Design only</th></tr></thead>
+            <thead><tr><th>One million sales lines</th><th class="num">Full configuration</th><th class="num">Model only</th></tr></thead>
             <tbody>
               <tr class="total"><td>Prior sales</td><td class="num">57,908,260</td><td class="num">57,908,260</td></tr>
               <tr><td>Volume</td><td class="num">+4,843,531</td><td class="num">+4,843,531</td></tr>
-              <tr><td>Mix: Design</td><td class="num">+1,141,258</td><td class="num">+1,141,258</td></tr>
-              <tr><td>Mix: Coating</td><td class="num">+823,665</td><td class="num">no line</td></tr>
+              <tr><td>Mix: Model</td><td class="num">+1,141,258</td><td class="num">+1,141,258</td></tr>
+              <tr><td>Mix: Finish</td><td class="num">+823,665</td><td class="num">no line</td></tr>
               <tr><td>Mix: Color</td><td class="num">+2,244,655</td><td class="num">no line</td></tr>
               <tr><td>Mix: Material</td><td class="num">−93,715</td><td class="num">no line</td></tr>
               <tr><td>Price (like-for-like)</td><td class="num">+1,026,258</td><td class="num">+3,269,836</td></tr>
@@ -74,14 +74,14 @@
             </tbody>
           </table>
         </div>
-        <p>Here too the design-only price effect is the larger of the two.</p>
+        <p>Here too the model-only price effect is the larger of the two.</p>
 
         <h2>Why not group as finely as possible</h2>
-        <p>A full configuration that sold in only one of the two years has no exact comparison across both periods. In the default bridge, its units go to Volume and, where it applies, Mix. Only the remaining premium or discount against the nearest comparable group goes to New configurations or Discontinued configurations. In both tables, the new-configurations line is larger by full configuration than by design only, and the discontinued line is zero by design only. A coarse grouping moves mix into price, and a fine grouping moves that premium or discount out of price into new and discontinued. Neither grouping level avoids both.</p>
+        <p>A full configuration that sold in only one of the two years has no exact comparison across both periods. In the default bridge, its units go to Volume and, where it applies, Mix. Only the remaining premium or discount against the nearest comparable group goes to New configurations or Discontinued configurations. In both tables, the new-configurations line is larger by full configuration than by model only, and the discontinued line is zero by model only. A coarse grouping moves mix into price, and a fine grouping moves that premium or discount out of price into new and discontinued. Neither grouping level avoids both.</p>
         <p>Bridgekit compares each configuration with the same configuration in the prior period. Where there is no match, it falls back to the nearest group that did sell. See <a href="/method.html">how Bridgekit handles this</a>.</p>
 
         <h2>Check this on the Setup check tab</h2>
-        <p>The tool reruns the bridge with each attribute left out in turn and lists the results on the Setup check tab. With the sample, the first row is Your setup. That row is the full-configuration bridge on one million sales lines, the same grouping as the first column of the second table. The rows under it are Without Design, Without Coating, Without Color, and Without Material. The vs your setup column shows how far the price effect moves each time. Matched exactly shows how much of current sales had the same configuration in the prior year. The tab has no design-only row. Leaving out one attribute is a smaller step than grouping by design alone.</p>
+        <p>The tool reruns the bridge with each attribute left out in turn and lists the results on the Setup check tab. With the sample, the first row is Your setup. That row is the full-configuration bridge on one million sales lines, the same grouping as the first column of the second table. The rows under it are Without Model, Without Finish, Without Color, and Without Material. The vs your setup column shows how far the price effect moves each time. Matched exactly shows how much of current sales had the same configuration in the prior year. The tab has no model-only row. Leaving out one attribute is a smaller step than grouping by model alone.</p>
         <p>On your own file, a large move in price when an attribute is left out shows that the price effect depends on that attribute. Before you keep it, look at what the attribute means, and at how exact-match coverage and New and Discontinued change when you remove it. If an attribute adds little product or pricing detail and barely moves price, you can drop it.</p>
         <p>The link opens the tool with the sample already calculated. Then open the <b>Setup check</b> tab.</p>
         <p style="margin-top: 32px"><a class="button" href="/app/?sample">See this in the tool</a></p>

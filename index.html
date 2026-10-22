@@ -44,7 +44,7 @@
         <p class="fine">Free and open source. No account. Works with CSV and Excel files.</p>
 
         <figure class="shot">
-          <div class="shot-bar"><b>Sales bridge</b><span>2025 to 2026</span><span>Design › Coating › Color › Material</span></div>
+          <div class="shot-bar"><b>Sales bridge</b><span>2025 to 2026</span><span>Model › Finish › Color › Material</span></div>
           <div class="shot-body">
             <svg viewBox="0 34 680 228" role="img" aria-label="Waterfall chart: sales rise from 57.9 million to 70.4 million through volume, four mix effects, price, new configurations and discontinued configurations. The numbers are in the table beside it.">
               <g stroke="var(--grid)">
@@ -83,8 +83,8 @@
               <g text-anchor="middle">
                 <text x="60" y="236">2025</text>
                 <text x="123" y="236">Volume</text>
-                <text x="186" y="236">Mix:</text><text x="186" y="249">Design</text>
-                <text x="249" y="236">Mix:</text><text x="249" y="249">Coating</text>
+                <text x="186" y="236">Mix:</text><text x="186" y="249">Model</text>
+                <text x="249" y="236">Mix:</text><text x="249" y="249">Finish</text>
                 <text x="312" y="236">Mix:</text><text x="312" y="249">Color</text>
                 <text x="375" y="236">Mix:</text><text x="375" y="249">Material</text>
                 <text x="438" y="236">Price</text>
@@ -100,8 +100,8 @@
               <tbody>
                 <tr class="total"><td>Sales 2025</td><td class="num">57,908,260</td></tr>
                 <tr><td>Volume</td><td class="num">+4,843,531</td></tr>
-                <tr><td>Mix: Design</td><td class="num">+1,141,258</td></tr>
-                <tr><td>Mix: Coating</td><td class="num">+823,665</td></tr>
+                <tr><td>Mix: Model</td><td class="num">+1,141,258</td></tr>
+                <tr><td>Mix: Finish</td><td class="num">+823,665</td></tr>
                 <tr><td>Mix: Color</td><td class="num">+2,244,655</td></tr>
                 <tr><td>Mix: Material</td><td class="num">−93,715</td></tr>
                 <tr><td>Price (like-for-like)</td><td class="num">+1,026,258</td></tr>
@@ -111,7 +111,7 @@
               </tbody>
             </table>
           </div>
-          <figcaption>Output from the tool’s built-in sample: one million made-up prescription lens sales lines. The chart axis starts at 50M.</figcaption>
+          <figcaption>Output from the tool’s built-in sample: one million made-up sales lines of a made-to-order product. The chart axis starts at 50M.</figcaption>
         </figure>
       </div>
     </header>
@@ -120,8 +120,8 @@
       <div class="wrap">
         <h2>Any single grouping level gives the wrong price number</h2>
         <p class="sub">
-          A standard bridge needs one product key. When a product is a combination of choices, such as a design, a
-          coating, a color and a material, no single key works.
+          A standard bridge needs one product key. When a product is a combination of choices, such as a model, a
+          finish, a color and a material, no single key works.
         </p>
         <div class="cols" style="margin-bottom: 32px">
           <div>
@@ -130,7 +130,7 @@
           </div>
           <div>
             <h3>Group too coarsely</h3>
-            <p>A customer moving to a premium coating raises the average price of the design. The bridge reports it as a price increase, and it is not one.</p>
+            <p>A customer moving to a premium finish raises the average price of the model. The bridge reports it as a price increase, and it is not one.</p>
           </div>
           <div>
             <h3>What Bridgekit does</h3>
@@ -143,14 +143,14 @@
               <tr><th>Same data, two bridges</th><th class="num">Price effect reported</th><th class="num">Against the true +3.21M</th></tr>
             </thead>
             <tbody>
-              <tr><td>Grouped by design only</td><td class="num flag">+9.72M</td><td class="num flag">3 times too high</td></tr>
+              <tr><td>Grouped by model only</td><td class="num flag">+9.72M</td><td class="num flag">3 times too high</td></tr>
               <tr><td>Bridgekit, four attributes</td><td class="num">+3.19M</td><td class="num">Within 1%</td></tr>
             </tbody>
           </table>
         </div>
         <p class="sub" style="margin: 12px 0 0; font-size: 14px">
           Test on three million made-up sales lines with a 4% price increase planted on part of the range, so the true
-          answer is known. In the design-only bridge, a shift toward photochromic lenses is counted as price.
+          answer is known. In the model-only bridge, a shift toward higher-priced color options is counted as price.
           <a href="/grouping-level.html">Why the grouping level changes the price effect</a>.
         </p>
       </div>
@@ -162,7 +162,7 @@
         <p class="sub">Setup stays on the left, results on the right. Every table can be copied, and every number can be traced.</p>
         <div class="gallery">
           <figure><img src="/img/g-bridge.png" alt="Bridge tab with waterfall chart, bridge table and written summary" loading="lazy" /><figcaption>The bridge, match coverage and a written summary.</figcaption></figure>
-          <figure><img src="/img/g-movers.png" alt="Movers tab drilled into one design, broken down by coating" loading="lazy" /><figcaption>Movers, drilled into one design.</figcaption></figure>
+          <figure><img src="/img/g-movers.png" alt="Movers tab drilled into one model, broken down by finish" loading="lazy" /><figcaption>Movers, drilled into one model.</figcaption></figure>
           <figure><img src="/img/g-price.png" alt="Price changes tab showing share of sales by band of price change" loading="lazy" /><figcaption>How widely a price change landed.</figcaption></figure>
           <figure><img src="/img/g-setup.png" alt="Setup check tab with the bridge rerun leaving out each attribute" loading="lazy" /><figcaption>The bridge rerun with each attribute left out.</figcaption></figure>
         </div>
@@ -198,7 +198,7 @@
         <h2>What is in the tool</h2>
         <p class="sub">Built for the person who has to defend the numbers in a review.</p>
         <div class="features">
-          <div><h3>Mix split by attribute</h3><p>A separate mix line for each attribute, so you can say how much came from coating and how much from material.</p></div>
+          <div><h3>Mix split by attribute</h3><p>A separate mix line for each attribute, so you can say how much came from finish and how much from material.</p></div>
           <div><h3>List price and discounts</h3><p>Add a gross sales column and the price effect splits into list price changes and discount changes.</p></div>
           <div><h3>Margin bridge</h3><p>Add a cost column and the bridge moves to margin, with the rate effect split into selling price and unit cost.</p></div>
           <div><h3>Rebates and credits kept apart</h3><p>Rows with sales and no units get their own line, so a rebate accrual never shows up as a price cut.</p></div>
