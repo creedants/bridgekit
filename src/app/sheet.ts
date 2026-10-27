@@ -70,46 +70,51 @@ export async function firstSheetAsCsv(file: File): Promise<{ csv: string; holes:
   if (!sheet || sheet.rowCount < 2) throw new Error("The first sheet of that workbook has no data rows.");
   const width = sheet.columnCount;
   const rows: unknown[][] = [];
-  sheet.eachRow((row) => {
+  const rowNumbers: number[] = [];
+  sheet.eachRow((row, rowNumber) => {
     const values = (row.values as unknown[]).slice(1);
     rows.push(values);
+    rowNumbers.push(rowNumber);
   });
   const header = excelHeaderNames(rows[0], width);
   const holes = excelHoleIndexes(rows[0], width);
   const dataRows = rows.slice(1).map((values) =>
     Array.from({ length: width }, (_, index) => flattenCell(values[index])),
   );
-  return { csv: toCsv(header, dataRows), holes, formulaBlanks: await countFormulaBlanks(data) };
+  return { csv: toCsv(header, dataRows), holes, formulaBlanks: await countFormulaBlanks(data, rowNumbers.slice(1)) };
 }
 
 // A formula cell with no `<v>` in the sheet XML has no cached result, so the
 // reader loads it as blank. A cached empty string still writes `<v></v>`, so
-// the presence of the element, not its text, decides. Only data rows count.
-async function countFormulaBlanks(data: ArrayBuffer): Promise<number> {
+// the presence of the element, not its text, decides. Only the rows ExcelJS
+// exports as data count, matched by the row number it visits.
+async function countFormulaBlanks(data: ArrayBuffer, dataRowNumbers: readonly number[]): Promise<number> {
+  const wanted = new Set(dataRowNumbers);
+  if (wanted.size === 0) return 0;
   try {
     const { default: JSZip } = await import("jszip");
     const zip = await JSZip.loadAsync(data);
     const workbookXml = await zip.file("xl/workbook.xml")?.async("text");
     if (!workbookXml) return 0;
-    const sheetId = /<sheet\b[^>]*r:id="([^"]+)"/.exec(workbookXml)?.[1];
+    const sheetTag = /<sheet\b[^>]*>/.exec(workbookXml)?.[0];
+    const sheetId = sheetTag ? attributeValue(sheetTag, "r:id") : undefined;
     if (!sheetId) return 0;
     const relsXml = await zip.file("xl/_rels/workbook.xml.rels")?.async("text");
     if (!relsXml) return 0;
-    const escaped = sheetId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const target =
-      new RegExp(`<Relationship\\b[^>]*Id="${escaped}"[^>]*Target="([^"]+)"`).exec(relsXml)?.[1] ??
-      new RegExp(`<Relationship\\b[^>]*Target="([^"]+)"[^>]*Id="${escaped}"`).exec(relsXml)?.[1];
+    let target: string | undefined;
+    for (const relationship of relsXml.matchAll(/<Relationship\b[^>]*>/g)) {
+      if (attributeValue(relationship[0], "Id") !== sheetId) continue;
+      target = attributeValue(relationship[0], "Target");
+      break;
+    }
     if (!target) return 0;
-    const sheetPath = target.startsWith("xl/") ? target : `xl/${target}`;
-    const sheetXml = await zip.file(sheetPath)?.async("text");
+    const sheetXml = await zip.file(resolvePartPath(target))?.async("text");
     if (!sheetXml) return 0;
-    const rows = [...sheetXml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)];
-    if (rows.length < 2) return 0;
     let blanks = 0;
-    for (const row of rows.slice(1)) {
-      const body = row[1] ?? "";
-      for (const cell of body.matchAll(/<c\b[^>]*>([\s\S]*?)<\/c>/g)) {
-        const inner = cell[1] ?? "";
+    for (const row of sheetXml.matchAll(/<row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/g)) {
+      if (!wanted.has(Number(attributeValue(row[1], "r")))) continue;
+      for (const cell of (row[2] ?? "").matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+        const inner = cell[2] ?? "";
         if (!/<f[\s>/]/.test(inner)) continue;
         if (/<v[\s>/]/.test(inner)) continue;
         blanks += 1;
@@ -119,4 +124,21 @@ async function countFormulaBlanks(data: ArrayBuffer): Promise<number> {
   } catch {
     return 0;
   }
+}
+
+function attributeValue(tag: string, name: string): string | undefined {
+  const match = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(tag);
+  return match ? (match[1] ?? match[2]) : undefined;
+}
+
+// Relationship targets follow package path rules. A leading slash is the
+// package root; anything else is relative to the folder of xl/workbook.xml.
+function resolvePartPath(target: string): string {
+  const parts = target.startsWith("/") ? [] : ["xl"];
+  for (const segment of target.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") parts.pop();
+    else parts.push(segment);
+  }
+  return parts.join("/");
 }
