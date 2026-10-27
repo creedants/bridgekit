@@ -74,9 +74,9 @@ async function loaded(name: string, text: string): Promise<Query> {
   return query;
 }
 
-async function notes(query: Query, table: string): Promise<string[]> {
+async function notes(query: Query, table: string, formulaBlanks?: number): Promise<string[]> {
   const { dataCheckNotes } = await import("../src/app/Results.tsx");
-  return dataCheckNotes(query, table);
+  return dataCheckNotes(query, table, formulaBlanks);
 }
 
 test("the Data check shows the decimal comma and the month-first sentences in order", async () => {
@@ -104,4 +104,33 @@ test("a failing date order query still shows the decimal comma sentence", async 
       ? Promise.reject(new Error("the date order query failed"))
       : query(sql);
   assert.deepEqual(await notes(picky, "onefailed"), [DECIMAL]);
+});
+
+test("the Data check shows the singular formula sentence for one blank cell", async () => {
+  const query = await loaded("single", NEITHER_FILE);
+  assert.deepEqual(await notes(query, "single", 1), [
+    "1 cell in the Excel file holds a formula with no saved result, so it was read as blank. Open and save the file in Excel, then load it again.",
+  ]);
+});
+
+test("the Data check shows the plural formula sentence after the other read notes", async () => {
+  const query = await loaded("plural", BOTH_FILE);
+  assert.deepEqual(await notes(query, "plural", 2), [
+    DECIMAL,
+    "1 column with slash dates was read month-first: date.",
+    "2 cells in the Excel file hold a formula with no saved result, so they were read as blank. Open and save the file in Excel, then load it again.",
+  ]);
+});
+
+test("the Data check formats a large formula count with a thousands separator", async () => {
+  const query = await loaded("large", NEITHER_FILE);
+  assert.deepEqual(await notes(query, "large", 1000), [
+    "1,000 cells in the Excel file hold a formula with no saved result, so they were read as blank. Open and save the file in Excel, then load it again.",
+  ]);
+});
+
+test("the Data check shows no formula sentence at zero", async () => {
+  const query = await loaded("zero", NEITHER_FILE);
+  assert.deepEqual(await notes(query, "zero", 0), []);
+  assert.deepEqual(await notes(query, "zero"), []);
 });

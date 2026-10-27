@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { excelHeaderNames, excelHoleIndexes, holeRenames } from "../src/app/sheet.ts";
+import { excelHeaderNames, excelHoleIndexes, firstSheetAsCsv, holeRenames } from "../src/app/sheet.ts";
 
 test("writes the word undefined for a missing header cell", () => {
   assert.deepEqual(excelHeaderNames(["region", undefined, undefined, undefined], 4), [
@@ -187,4 +187,38 @@ test("renames a missing column without taking a filled header", () => {
   assert.throws(() => holeRenames(["region"], [1]), RangeError);
   assert.throws(() => holeRenames(["region"], [1.5]), RangeError);
   assert.throws(() => holeRenames(["region"], [-1]), RangeError);
+});
+
+test("counts data-row formulas with no cached result and skips the header and cached results", async () => {
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("sales");
+  sheet.addRow(["period", "units", "sales", { formula: "1+1" }]);
+  sheet.addRow(["2025", 10, 100, { formula: "B2*C2" }]);
+  sheet.addRow(["2025", 20, 200, { formula: "B3*C3", result: 400 }]);
+  sheet.addRow(["2026", 30, 300, { formula: "B4*C4", result: 0 }]);
+  sheet.addRow(["2026", 40, 400, { formula: "B5*C5", result: false }]);
+  sheet.addRow(["2026", 50, 500, { formula: "B6*C6", result: "" }]);
+  sheet.addRow(["2026", 60, 600, { formula: "B7*C7", result: "hi" }]);
+  sheet.addRow(["2026", 70, 700, { formula: "B8*C8" }]);
+  const book = new File([await workbook.xlsx.writeBuffer()], "book.xlsx");
+  const loaded = await firstSheetAsCsv(book);
+  assert.equal(loaded.formulaBlanks, 2);
+});
+
+test("counts a single blank formula and no blanks for a fully cached sheet", async () => {
+  const { default: ExcelJS } = await import("exceljs");
+  const single = new ExcelJS.Workbook();
+  const one = single.addWorksheet("sales");
+  one.addRow(["period", "units"]);
+  one.addRow(["2025", { formula: "B2*2" }]);
+  const oneBook = new File([await single.xlsx.writeBuffer()], "one.xlsx");
+  assert.equal((await firstSheetAsCsv(oneBook)).formulaBlanks, 1);
+  const cached = new ExcelJS.Workbook();
+  const two = cached.addWorksheet("sales");
+  two.addRow(["period", "units"]);
+  two.addRow(["2025", { formula: "B2*2", result: 10 }]);
+  two.addRow(["2026", { formula: "B3*2", result: 0 }]);
+  const cachedBook = new File([await cached.xlsx.writeBuffer()], "cached.xlsx");
+  assert.equal((await firstSheetAsCsv(cachedBook)).formulaBlanks, 0);
 });
