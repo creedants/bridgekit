@@ -178,8 +178,8 @@ function networkSaveData(): boolean {
 
 export interface BrowserDatabase {
   query: Query;
-  /** Loads a CSV or Excel file into `table` without it leaving the browser. */
-  loadFile(file: File, table: string): Promise<void>;
+  /** Loads a CSV or Excel file into `table` without it leaving the browser. Returns the data-row formulas with no saved result (zero for a CSV). */
+  loadFile(file: File, table: string): Promise<number>;
 }
 
 // A UTF-8 file is handed to the database as its own bytes, so this is the most
@@ -575,9 +575,11 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
         }
         const registered = "upload.csv";
         let excelHoles: readonly number[] = [];
+        let formulaBlanks = 0;
         if (isExcel) {
           const sheet = await firstSheetAsCsv(file);
           excelHoles = sheet.holes;
+          formulaBlanks = sheet.formulaBlanks;
           await db.registerFileText(registered, sheet.csv);
         } else {
           const prefix = new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer());
@@ -600,6 +602,7 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
           }
         }
         await convertFormattedNumbers(query, table);
+        return formulaBlanks;
       },
     };
   } catch (error) {

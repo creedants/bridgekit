@@ -1,0 +1,1 @@
+- The Data check names Excel formulas with no saved result, which load as blank, and says to open and save the file in Excel, then load it again.

@@ -61,22 +61,104 @@ export function holeRenames(
   return renames;
 }
 
-export async function firstSheetAsCsv(file: File): Promise<{ csv: string; holes: readonly number[] }> {
+export async function firstSheetAsCsv(file: File): Promise<{ csv: string; holes: readonly number[]; formulaBlanks: number }> {
   const { default: ExcelJS } = await import("exceljs");
+  const data = await file.arrayBuffer();
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(await file.arrayBuffer());
+  await workbook.xlsx.load(data);
   const sheet = workbook.worksheets[0];
   if (!sheet || sheet.rowCount < 2) throw new Error("The first sheet of that workbook has no data rows.");
   const width = sheet.columnCount;
   const rows: unknown[][] = [];
-  sheet.eachRow((row) => {
+  const rowNumbers: number[] = [];
+  sheet.eachRow((row, rowNumber) => {
     const values = (row.values as unknown[]).slice(1);
     rows.push(values);
+    rowNumbers.push(rowNumber);
   });
   const header = excelHeaderNames(rows[0], width);
   const holes = excelHoleIndexes(rows[0], width);
-  const data = rows.slice(1).map((values) =>
+  const dataRows = rows.slice(1).map((values) =>
     Array.from({ length: width }, (_, index) => flattenCell(values[index])),
   );
-  return { csv: toCsv(header, data), holes };
+  return {
+    csv: toCsv(header, dataRows),
+    holes,
+    formulaBlanks: await countFormulaBlanks(data, rowNumbers.slice(1), sheet.id),
+  };
+}
+
+// A formula cell with no `<v>` in the sheet XML has no cached result, so the
+// reader loads it as blank. A cached empty string still writes `<v></v>`, so
+// the presence of the element, not its text, decides. Only the rows ExcelJS
+// exports as data count, matched by the row number it visits.
+async function countFormulaBlanks(data: ArrayBuffer, dataRowNumbers: readonly number[], sheetId: number): Promise<number> {
+  const wanted = new Set(dataRowNumbers);
+  if (wanted.size === 0) return 0;
+  try {
+    const { default: JSZip } = await import("jszip");
+    const zip = await JSZip.loadAsync(data);
+    const workbookXml = await zip.file("xl/workbook.xml")?.async("text");
+    if (!workbookXml) return 0;
+    const relsXml = await zip.file("xl/_rels/workbook.xml.rels")?.async("text");
+    if (!relsXml) return 0;
+    const partPath = sheetPartPath(workbookXml, relsXml, sheetId);
+    if (!partPath) return 0;
+    const sheetXml = await zip.file(partPath)?.async("text");
+    if (!sheetXml) return 0;
+    let blanks = 0;
+    for (const row of sheetXml.matchAll(/<row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/g)) {
+      if (!wanted.has(Number(attributeValue(row[1], "r")))) continue;
+      for (const cell of (row[2] ?? "").matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+        const inner = cell[2] ?? "";
+        if (!/<f[\s>/]/.test(inner)) continue;
+        if (/<v[\s>/]/.test(inner)) continue;
+        blanks += 1;
+      }
+    }
+    return blanks;
+  } catch {
+    return 0;
+  }
+}
+
+function attributeValue(tag: string, name: string): string | undefined {
+  const match = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(tag);
+  return match ? (match[1] ?? match[2]) : undefined;
+}
+
+// ExcelJS drops a worksheet whose relationship target it cannot reconcile, so
+// the first `<sheet>` in workbook.xml need not be the worksheet it imported.
+// Its worksheet id is the numeric `sheetId` it read from the element, which is
+// how the library itself links the two.
+function sheetPartPath(workbookXml: string, relsXml: string, sheetId: number): string | undefined {
+  const sheetTags: string[] = [];
+  for (const sheet of workbookXml.matchAll(/<sheet\b[^>]*>/g)) {
+    if (parseInt(attributeValue(sheet[0], "sheetId") ?? "", 10) === sheetId) sheetTags.push(sheet[0]);
+  }
+  if (sheetTags.length !== 1) return undefined;
+  const relationshipId = attributeValue(sheetTags[0], "r:id");
+  if (!relationshipId) return undefined;
+  const targets: (string | undefined)[] = [];
+  for (const relationship of relsXml.matchAll(/<Relationship\b[^>]*>/g)) {
+    if (attributeValue(relationship[0], "Id") === relationshipId) {
+      targets.push(attributeValue(relationship[0], "Target"));
+    }
+  }
+  const target = targets.length === 1 ? targets[0] : undefined;
+  return target ? resolvePartPath(target) : undefined;
+}
+
+// Relationship targets follow package path rules. A leading slash is the
+// package root; anything else is relative to the folder of xl/workbook.xml.
+function resolvePartPath(target: string): string | undefined {
+  const parts = target.startsWith("/") ? [] : ["xl"];
+  for (const segment of target.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      if (parts.length === 0) return undefined;
+      parts.pop();
+    } else parts.push(segment);
+  }
+  return parts.length === 0 ? undefined : parts.join("/");
 }

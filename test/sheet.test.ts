@@ -1,6 +1,54 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { excelHeaderNames, excelHoleIndexes, holeRenames } from "../src/app/sheet.ts";
+import { excelHeaderNames, excelHoleIndexes, firstSheetAsCsv, holeRenames } from "../src/app/sheet.ts";
+
+async function formulaWorkbook(): Promise<ArrayBuffer> {
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("sales");
+  sheet.addRow(["period", "units", { formula: "1+1" }]);
+  sheet.addRow(["2025", 10, { formula: "B2*C2" }]);
+  sheet.addRow(["2025", 20, { formula: "B3*C3", result: "" }]);
+  return workbook.xlsx.writeBuffer();
+}
+
+async function formulaFile(): Promise<File> {
+  return new File([await formulaWorkbook()], "book.xlsx");
+}
+
+async function rewriteWorkbook(
+  buffer: ArrayBuffer,
+  edits: Record<string, (xml: string) => string>,
+): Promise<File> {
+  const { default: JSZip } = await import("jszip");
+  const zip = await JSZip.loadAsync(buffer);
+  for (const [path, edit] of Object.entries(edits)) {
+    const entry = zip.file(path);
+    if (!entry) throw new Error(`The workbook has no ${path}.`);
+    zip.file(path, edit(await entry.async("text")));
+  }
+  return new File([await zip.generateAsync({ type: "arraybuffer" })], "book.xlsx");
+}
+
+function replaceOnce(xml: string, from: string, to: string): string {
+  const next = xml.replace(from, to);
+  if (next === xml) throw new Error(`The workbook XML does not hold ${from}.`);
+  return next;
+}
+
+// A styled but empty row 1, with every real row and cell reference moved down one.
+function prependStyledBlankRow(xml: string): string {
+  const moved = xml
+    .replace(/(<row\b[^>]*?\br=")(\d+)(")/g, (_, head, number, tail) => `${head}${Number(number) + 1}${tail}`)
+    .replace(
+      /(<c\b[^>]*?\br=")([A-Z]+)(\d+)(")/g,
+      (_, head, column, number, tail) => `${head}${column}${Number(number) + 1}${tail}`,
+    )
+    .replace(/(<dimension\b[^>]*?\bref=")([^"]*)(")/, (_, head, ref, tail) =>
+      `${head}${ref.replace(/([A-Z]+)(\d+)/g, (__: string, column: string, number: string) => `${column}${Number(number) + 1}`)}${tail}`,
+    );
+  return moved.replace(/<sheetData>/, '<sheetData><row r="1"><c r="A1" s="0"/></row>');
+}
 
 test("writes the word undefined for a missing header cell", () => {
   assert.deepEqual(excelHeaderNames(["region", undefined, undefined, undefined], 4), [
@@ -187,4 +235,125 @@ test("renames a missing column without taking a filled header", () => {
   assert.throws(() => holeRenames(["region"], [1]), RangeError);
   assert.throws(() => holeRenames(["region"], [1.5]), RangeError);
   assert.throws(() => holeRenames(["region"], [-1]), RangeError);
+});
+
+test("counts data-row formulas with no cached result and skips the header and cached results", async () => {
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("sales");
+  sheet.addRow(["period", "units", "sales", { formula: "1+1" }]);
+  sheet.addRow(["2025", 10, 100, { formula: "B2*C2" }]);
+  sheet.addRow(["2025", 20, 200, { formula: "B3*C3", result: 400 }]);
+  sheet.addRow(["2026", 30, 300, { formula: "B4*C4", result: 0 }]);
+  sheet.addRow(["2026", 40, 400, { formula: "B5*C5", result: false }]);
+  sheet.addRow(["2026", 50, 500, { formula: "B6*C6", result: "" }]);
+  sheet.addRow(["2026", 60, 600, { formula: "B7*C7", result: "hi" }]);
+  sheet.addRow(["2026", 70, 700, { formula: "B8*C8" }]);
+  const book = new File([await workbook.xlsx.writeBuffer()], "book.xlsx");
+  const loaded = await firstSheetAsCsv(book);
+  assert.equal(loaded.formulaBlanks, 2);
+});
+
+test("counts a single blank formula and no blanks for a fully cached sheet", async () => {
+  const { default: ExcelJS } = await import("exceljs");
+  const single = new ExcelJS.Workbook();
+  const one = single.addWorksheet("sales");
+  one.addRow(["period", "units"]);
+  one.addRow(["2025", { formula: "B2*2" }]);
+  const oneBook = new File([await single.xlsx.writeBuffer()], "one.xlsx");
+  assert.equal((await firstSheetAsCsv(oneBook)).formulaBlanks, 1);
+  const cached = new ExcelJS.Workbook();
+  const two = cached.addWorksheet("sales");
+  two.addRow(["period", "units"]);
+  two.addRow(["2025", { formula: "B2*2", result: 10 }]);
+  two.addRow(["2026", { formula: "B3*2", result: 0 }]);
+  const cachedBook = new File([await cached.xlsx.writeBuffer()], "cached.xlsx");
+  assert.equal((await firstSheetAsCsv(cachedBook)).formulaBlanks, 0);
+});
+
+test("counts a formula header under a leading styled blank row as the header", async () => {
+  const book = await rewriteWorkbook(await formulaWorkbook(), {
+    "xl/worksheets/sheet1.xml": prependStyledBlankRow,
+  });
+  const loaded = await firstSheetAsCsv(book);
+  assert.equal(loaded.csv.split("\n").length, 3);
+  assert.equal(loaded.formulaBlanks, 1);
+});
+
+test("finds the first sheet through a relative and through an absolute target", async () => {
+  const relative = await firstSheetAsCsv(await formulaFile());
+  const absolute = await firstSheetAsCsv(
+    await rewriteWorkbook(await formulaWorkbook(), {
+      "xl/_rels/workbook.xml.rels": (xml) =>
+        replaceOnce(xml, 'Target="worksheets/sheet1.xml"', 'Target="/xl/worksheets/sheet1.xml"'),
+    }),
+  );
+  assert.equal(relative.formulaBlanks, 1);
+  assert.equal(absolute.formulaBlanks, 1);
+  assert.equal(absolute.csv, relative.csv);
+});
+
+async function twoSheetWorkbook(): Promise<ArrayBuffer> {
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const skipped = workbook.addWorksheet("skipped");
+  skipped.addRow(["period", "units"]);
+  skipped.addRow(["2025", { formula: "1+1" }]);
+  const used = workbook.addWorksheet("used");
+  used.addRow(["period", "units"]);
+  used.addRow(["2026", 20]);
+  return workbook.xlsx.writeBuffer();
+}
+
+test("counts nothing when the skipped first sheet resolves to a different target form", async () => {
+  const targets = [
+    "./worksheets/sheet1.xml",
+    "../xl/worksheets/sheet1.xml",
+    "../../xl/worksheets/sheet1.xml",
+    "/../../xl/worksheets/sheet1.xml",
+  ];
+  for (const target of targets) {
+    const book = await rewriteWorkbook(await twoSheetWorkbook(), {
+      "xl/_rels/workbook.xml.rels": (xml) =>
+        replaceOnce(xml, 'Target="worksheets/sheet1.xml"', `Target="${target}"`),
+    });
+    const loaded = await firstSheetAsCsv(book);
+    assert.equal(loaded.csv, "period,units\n2026,20", target);
+    assert.equal(loaded.formulaBlanks, 0, target);
+  }
+});
+
+test("counts the imported sheet's formulas, not a skipped sheet's matching rows", async () => {
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const skipped = workbook.addWorksheet("skipped");
+  skipped.addRow(["period", "units"]);
+  skipped.addRow(["2025", { formula: "1+1" }]);
+  skipped.addRow(["2025", { formula: "2+2" }]);
+  const used = workbook.addWorksheet("used");
+  used.addRow(["period", "units"]);
+  used.addRow(["2026", { formula: "3+3" }]);
+  used.addRow(["2026", 30]);
+  const book = await rewriteWorkbook(await workbook.xlsx.writeBuffer(), {
+    "xl/_rels/workbook.xml.rels": (xml) =>
+      replaceOnce(xml, 'Target="worksheets/sheet1.xml"', 'Target="./worksheets/sheet1.xml"'),
+  });
+  const loaded = await firstSheetAsCsv(book);
+  assert.equal(loaded.csv, "period,units\n2026,\n2026,30");
+  assert.equal(loaded.formulaBlanks, 1);
+});
+
+test("reads a single-quoted worksheet relationship id", async () => {
+  const quotedSheetId = await firstSheetAsCsv(
+    await rewriteWorkbook(await formulaWorkbook(), {
+      "xl/workbook.xml": (xml) => replaceOnce(xml, 'r:id="rId4"', "r:id='rId4'"),
+    }),
+  );
+  assert.equal(quotedSheetId.formulaBlanks, 1);
+  const quotedRelationship = await firstSheetAsCsv(
+    await rewriteWorkbook(await formulaWorkbook(), {
+      "xl/_rels/workbook.xml.rels": (xml) => replaceOnce(xml, 'Id="rId4"', "Id='rId4'"),
+    }),
+  );
+  assert.equal(quotedRelationship.formulaBlanks, 1);
 });
