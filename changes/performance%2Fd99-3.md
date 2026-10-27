@@ -1,0 +1,3 @@
+- After a failed number-conversion step, cleanup attempts to drop each internal helper column and rethrows the original error.
+- A table that carries an index, or a constraint DuckDB will not let the tool retype, keeps that column as text instead of failing the load.
+- Adapter limits: schema-qualified names are unsupported, catalog checks can miss case or search-path matches, generated dependencies can still throw, and a refused cleanup DROP can leave helpers.
