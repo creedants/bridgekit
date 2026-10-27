@@ -1,0 +1,3 @@
+- Mail sent to support@pvmbridge.com is now handled by the site's server: a copy goes to our own inbox, and the message, its subject and your address are kept for 90 days so a reply can be written, then deleted. The privacy page says so.
+- Mail that a person did not write (bounces, automatic replies, mailing-list mail, and mail from no-reply senders) is forwarded and not kept.
+- If the forwarding address is not set, or forwarding fails, the message is still kept and the sender is told the message was not delivered.

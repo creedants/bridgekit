@@ -15,3 +15,5 @@ PADDLE_WEBHOOK_SECRET=
 PADDLE_PRICE_ID=
 # Exact value "on" enables sign-in, workspaces, checkout, the Paddle webhook and commentary. Any other value leaves those routes off.
 ACCOUNTS=on
+# Where mail to the support address is forwarded; must be a verified Email Routing destination. Empty stores the mail but fails its delivery.
+SUPPORT_FORWARD_TO=owner@example.invalid

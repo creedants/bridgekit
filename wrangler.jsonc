@@ -52,9 +52,12 @@
     }
   ],
   "workers_dev": false,
-  "preview_urls": false
+  "preview_urls": false,
   // Secrets, set with `wrangler secret put NAME` (or .dev.vars locally):
   // BETTER_AUTH_SECRET, ANTHROPIC_API_KEY, RESEND_API_KEY, EMAIL_FROM,
   // MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, GOOGLE_CLIENT_ID,
-  // GOOGLE_CLIENT_SECRET, PADDLE_API_KEY, PADDLE_WEBHOOK_SECRET, PADDLE_PRICE_ID
+  // GOOGLE_CLIENT_SECRET, PADDLE_API_KEY, PADDLE_WEBHOOK_SECRET, PADDLE_PRICE_ID, SUPPORT_FORWARD_TO
+
+  // Once a day at 03:17 UTC: the scheduled handler deletes stored support mail received more than 90 days ago (server/support.ts).
+  "triggers": { "crons": ["17 3 * * *"] }
 }
