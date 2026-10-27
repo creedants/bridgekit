@@ -87,11 +87,10 @@ export async function firstSheetAsCsv(file: File): Promise<{ csv: string; holes:
   };
 }
 
-// ExcelJS compares literal element names for the SpreadsheetML and package
-// parts, so one a writer saved as <x:worksheet> parses as nothing, and a
-// prefixed styles part drops the number formats, which turns a date cell into a
-// serial number. These four are inflated before the load because repairing the
-// whole package is only worth its cost once something is known to be wrong.
+// ExcelJS compares literal element names for SpreadsheetML and package parts.
+// Prefixed worksheet or styles parts can fail to load. Check these four parts
+// before loading; the larger worksheet and shared-string parts are handled by
+// the retry below.
 const PREFIX_CHECKED_PARTS = [
   "[Content_Types].xml",
   "xl/workbook.xml",
@@ -99,9 +98,8 @@ const PREFIX_CHECKED_PARTS = [
   "xl/styles.xml",
 ];
 
-// The namespaces whose parts ExcelJS reads by literal name. A prefixed root in
-// any other namespace is already read as it stands, so the docProps and theme
-// parts keep their prefixes.
+// Restrict this repair to these three namespaces. Leave other namespaces,
+// including docProps and themes, unchanged.
 const LITERAL_NAMESPACES = [
   "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
   "http://schemas.openxmlformats.org/package/2006/relationships",
@@ -171,17 +169,88 @@ async function repairPackage(data: ArrayBuffer): Promise<ArrayBuffer | undefined
 // A prefixed root states its namespace as xmlns:prefix, so the part means what
 // its unprefixed twin means once that one prefix comes off every element name.
 // Other prefixes and all text and attribute values stay as written.
-function unprefixPart(xml: string): string {
+export function unprefixPart(xml: string): string {
   const root = rootTag(xml);
   if (!root?.prefix) return xml;
   const declared = new RegExp(`(?:^|\\s)xmlns:${root.prefix}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(root.attributes);
   const namespace = declared?.[1] ?? declared?.[2];
   if (!namespace || !LITERAL_NAMESPACES.includes(namespace)) return xml;
-  const stripped = xml.replaceAll(`</${root.prefix}:`, "</").replaceAll(`<${root.prefix}:`, "<");
+  const stripped = stripElementPrefixes(xml, root.prefix);
   const plain = rootTag(stripped);
   if (!plain || /(?:^|\s)xmlns\s*=/.test(plain.attributes)) return stripped;
   const insertAt = plain.index + 1 + plain.name.length;
   return `${stripped.slice(0, insertAt)} xmlns="${namespace}"${stripped.slice(insertAt)}`;
+}
+
+const PAYLOADS: readonly (readonly [string, string])[] = [
+  ["<!--", "-->"],
+  ["<![CDATA[", "]]>"],
+  ["<?", "?>"],
+];
+
+// Copies the part one payload or tag at a time. A payload or a tag's tail is
+// copied as one slice, so only the matched element name loses the prefix and a
+// prefix-shaped string inside markup the reader ignores is left alone.
+function stripElementPrefixes(xml: string, prefix: string): string {
+  const lead = `${prefix}:`;
+  let out = "";
+  let index = 0;
+  while (index < xml.length) {
+    const open = xml.indexOf("<", index);
+    if (open < 0) {
+      out += xml.slice(index);
+      break;
+    }
+    out += xml.slice(index, open);
+    const payload = PAYLOADS.find(([start]) => xml.startsWith(start, open));
+    if (payload) {
+      const close = xml.indexOf(payload[1], open + payload[0].length);
+      const stop = close < 0 ? xml.length : close + payload[1].length;
+      out += xml.slice(open, stop);
+      index = stop;
+      continue;
+    }
+    if (xml.startsWith("<!", open)) {
+      const stop = tagEnd(xml, open + 2);
+      out += xml.slice(open, stop);
+      index = stop;
+      continue;
+    }
+    const closing = xml.startsWith("</", open);
+    const nameAt = open + (closing ? 2 : 1);
+    if (!xml.startsWith(lead, nameAt)) {
+      if (!/[A-Za-z_]/.test(xml[nameAt] ?? "")) {
+        out += "<";
+        index = open + 1;
+        continue;
+      }
+      const stop = tagEnd(xml, nameAt);
+      out += xml.slice(open, stop);
+      index = stop;
+      continue;
+    }
+    const stop = tagEnd(xml, nameAt);
+    out += `${closing ? "</" : "<"}${xml.slice(nameAt + lead.length, stop)}`;
+    index = stop;
+  }
+  return out;
+}
+
+// An attribute value may hold `>` or `<`, so the tag ends at the first one
+// outside quotes.
+function tagEnd(xml: string, from: number): number {
+  let quote = "";
+  for (let index = from; index < xml.length; index++) {
+    const char = xml[index];
+    if (quote) {
+      if (char === quote) quote = "";
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === ">") {
+      return index + 1;
+    }
+  }
+  return xml.length;
 }
 
 // The part's root element, skipping the declaration and any comment. A comment

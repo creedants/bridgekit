@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { excelHeaderNames, excelHoleIndexes, firstSheetAsCsv, holeRenames } from "../src/app/sheet.ts";
+import { excelHeaderNames, excelHoleIndexes, firstSheetAsCsv, holeRenames, unprefixPart } from "../src/app/sheet.ts";
 
 async function formulaWorkbook(): Promise<ArrayBuffer> {
   const { default: ExcelJS } = await import("exceljs");
@@ -418,8 +418,7 @@ test("loads a workbook whose every spreadsheet part uses a namespace prefix", as
       "xl/_rels/workbook.xml.rels": (xml) => prefixPart(xml, "rel"),
     }),
   );
-  // The date is the cell that reads back as a serial number when the styles
-  // part does not reach the reader.
+  // The date checks that the repaired styles preserve its number format.
   assert.match(plain.csv, /2025-01-15/);
   assert.equal(prefixed.csv, plain.csv);
   assert.equal(prefixed.formulaBlanks, plain.formulaBlanks);
@@ -487,4 +486,69 @@ test("keeps a CDATA payload in a prefixed worksheet formula out of the formula c
     (open, close) => `${open}IF(B2&gt;0,"<![CDATA[<x:v/>]]>","")${close}`,
   );
   assertPayloadTwins(plain, prefixed);
+});
+
+const SHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+
+function prefixedSheet(body: string): string {
+  return `<x:worksheet xmlns="${SHEET_NS}" xmlns:x="${SHEET_NS}">${body}</x:worksheet>`;
+}
+
+test("unprefixes element names in a part without touching a comment payload", () => {
+  const result = unprefixPart(
+    prefixedSheet('<x:row r="1"><x:c r="A1"><x:f>B2*4</x:f><!-- <x:v/> --></x:c></x:row>'),
+  );
+  assert.equal(
+    result,
+    `<worksheet xmlns="${SHEET_NS}" xmlns:x="${SHEET_NS}"><row r="1"><c r="A1"><f>B2*4</f><!-- <x:v/> --></c></row></worksheet>`,
+  );
+});
+
+test("unprefixes element names in a part without touching a processing instruction", () => {
+  const result = unprefixPart(
+    prefixedSheet('<x:row r="1"><x:c r="A1"><x:f>B2*4</x:f><?review <x:v/> ?></x:c></x:row>'),
+  );
+  assert.equal(
+    result,
+    `<worksheet xmlns="${SHEET_NS}" xmlns:x="${SHEET_NS}"><row r="1"><c r="A1"><f>B2*4</f><?review <x:v/> ?></c></row></worksheet>`,
+  );
+});
+
+test("unprefixes element names in a part without touching a CDATA payload", () => {
+  const result = unprefixPart(
+    prefixedSheet('<x:row r="1"><x:c r="A1"><x:f><![CDATA[<x:v/>]]></x:f></x:c></x:row>'),
+  );
+  assert.equal(
+    result,
+    `<worksheet xmlns="${SHEET_NS}" xmlns:x="${SHEET_NS}"><row r="1"><c r="A1"><f><![CDATA[<x:v/>]]></f></c></row></worksheet>`,
+  );
+});
+
+test("leaves a prefixed-looking attribute value as written", () => {
+  const result = unprefixPart(
+    prefixedSheet('<x:row r="1"><x:c r="A1" data-k="x:c" data-j="c>d"><x:v>1</x:v></x:c></x:row>'),
+  );
+  assert.equal(
+    result,
+    `<worksheet xmlns="${SHEET_NS}" xmlns:x="${SHEET_NS}"><row r="1"><c r="A1" data-k="x:c" data-j="c>d"><v>1</v></c></row></worksheet>`,
+  );
+});
+
+test("leaves escaped text that spells an element as written", () => {
+  const result = unprefixPart(
+    prefixedSheet('<x:row r="1"><x:c r="A1" t="str"><x:v>&lt;x:c&gt;</x:v></x:c></x:row>'),
+  );
+  assert.equal(
+    result,
+    `<worksheet xmlns="${SHEET_NS}" xmlns:x="${SHEET_NS}"><row r="1"><c r="A1" t="str"><v>&lt;x:c&gt;</v></c></row></worksheet>`,
+  );
+});
+
+test("unprefixes a self-closing root and leaves an unprefixed part as it is", () => {
+  assert.equal(
+    unprefixPart(`<x:worksheet xmlns:x="${SHEET_NS}" />`),
+    `<worksheet xmlns="${SHEET_NS}" xmlns:x="${SHEET_NS}" />`,
+  );
+  const xml = `<worksheet xmlns="${SHEET_NS}"><sheetData><row r="1"><c r="A1"><v>x:c</v></c></row></sheetData></worksheet>`;
+  assert.equal(unprefixPart(xml), xml);
 });
