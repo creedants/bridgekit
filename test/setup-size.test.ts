@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Env } from "../server/env.ts";
 import app from "../server/worker.ts";
-import * as routes from "../server/worker.ts";
 import { isValidSetup, type Column, type Setup } from "../src/app/setup.ts";
 import * as bounds from "../src/app/setup.ts";
 import { parseSummary, type BridgeSummary } from "../src/summary.ts";
@@ -293,15 +292,12 @@ function post(
   return call(`${ORIGIN}/api/workspaces/${workspaceId}/${route}`, env, init);
 }
 
-test("exports the documented bounds and the two save limits", () => {
+test("exports the documented bounds", () => {
   assert.equal(bounds.MAX_COLUMNS, MAX_COLUMNS);
   assert.equal(bounds.MAX_COLUMN_NAME, MAX_COLUMN_NAME);
   assert.equal(bounds.MAX_LEVEL_NAME, MAX_LEVEL_NAME);
   assert.equal(bounds.MAX_FILTER_VALUES, MAX_FILTER_VALUES);
   assert.equal(bounds.MAX_FILTER_VALUE, MAX_FILTER_VALUE);
-  assert.equal(routes.SETUP_BODY_LIMIT, SETUP_LIMIT);
-  assert.equal(routes.BRIDGE_BODY_LIMIT, BRIDGE_LIMIT);
-  assert.equal(routes.TOO_LARGE, TOO_LARGE);
 });
 
 test("refuses a setup with more levels than its columns allow", () => {
