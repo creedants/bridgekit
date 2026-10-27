@@ -81,14 +81,18 @@ export async function firstSheetAsCsv(file: File): Promise<{ csv: string; holes:
   const dataRows = rows.slice(1).map((values) =>
     Array.from({ length: width }, (_, index) => flattenCell(values[index])),
   );
-  return { csv: toCsv(header, dataRows), holes, formulaBlanks: await countFormulaBlanks(data, rowNumbers.slice(1)) };
+  return {
+    csv: toCsv(header, dataRows),
+    holes,
+    formulaBlanks: await countFormulaBlanks(data, rowNumbers.slice(1), sheet.id),
+  };
 }
 
 // A formula cell with no `<v>` in the sheet XML has no cached result, so the
 // reader loads it as blank. A cached empty string still writes `<v></v>`, so
 // the presence of the element, not its text, decides. Only the rows ExcelJS
 // exports as data count, matched by the row number it visits.
-async function countFormulaBlanks(data: ArrayBuffer, dataRowNumbers: readonly number[]): Promise<number> {
+async function countFormulaBlanks(data: ArrayBuffer, dataRowNumbers: readonly number[], sheetId: number): Promise<number> {
   const wanted = new Set(dataRowNumbers);
   if (wanted.size === 0) return 0;
   try {
@@ -96,19 +100,11 @@ async function countFormulaBlanks(data: ArrayBuffer, dataRowNumbers: readonly nu
     const zip = await JSZip.loadAsync(data);
     const workbookXml = await zip.file("xl/workbook.xml")?.async("text");
     if (!workbookXml) return 0;
-    const sheetTag = /<sheet\b[^>]*>/.exec(workbookXml)?.[0];
-    const sheetId = sheetTag ? attributeValue(sheetTag, "r:id") : undefined;
-    if (!sheetId) return 0;
     const relsXml = await zip.file("xl/_rels/workbook.xml.rels")?.async("text");
     if (!relsXml) return 0;
-    let target: string | undefined;
-    for (const relationship of relsXml.matchAll(/<Relationship\b[^>]*>/g)) {
-      if (attributeValue(relationship[0], "Id") !== sheetId) continue;
-      target = attributeValue(relationship[0], "Target");
-      break;
-    }
-    if (!target) return 0;
-    const sheetXml = await zip.file(resolvePartPath(target))?.async("text");
+    const partPath = sheetPartPath(workbookXml, relsXml, sheetId);
+    if (!partPath) return 0;
+    const sheetXml = await zip.file(partPath)?.async("text");
     if (!sheetXml) return 0;
     let blanks = 0;
     for (const row of sheetXml.matchAll(/<row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/g)) {
@@ -131,14 +127,39 @@ function attributeValue(tag: string, name: string): string | undefined {
   return match ? (match[1] ?? match[2]) : undefined;
 }
 
+// ExcelJS drops a worksheet whose relationship target it cannot reconcile, so
+// the first `<sheet>` in workbook.xml need not be the worksheet it imported.
+// Its worksheet id is the `<sheetId>` it read from the element, which is how the
+// library itself links the two.
+function sheetPartPath(workbookXml: string, relsXml: string, sheetId: number): string | undefined {
+  const sheetTags: string[] = [];
+  for (const sheet of workbookXml.matchAll(/<sheet\b[^>]*>/g)) {
+    if (parseInt(attributeValue(sheet[0], "sheetId") ?? "", 10) === sheetId) sheetTags.push(sheet[0]);
+  }
+  if (sheetTags.length !== 1) return undefined;
+  const relationshipId = attributeValue(sheetTags[0], "r:id");
+  if (!relationshipId) return undefined;
+  const targets: (string | undefined)[] = [];
+  for (const relationship of relsXml.matchAll(/<Relationship\b[^>]*>/g)) {
+    if (attributeValue(relationship[0], "Id") === relationshipId) {
+      targets.push(attributeValue(relationship[0], "Target"));
+    }
+  }
+  const target = targets.length === 1 ? targets[0] : undefined;
+  return target ? resolvePartPath(target) : undefined;
+}
+
 // Relationship targets follow package path rules. A leading slash is the
 // package root; anything else is relative to the folder of xl/workbook.xml.
-function resolvePartPath(target: string): string {
+// Walking above the package root has no part to name, so it resolves to none.
+function resolvePartPath(target: string): string | undefined {
   const parts = target.startsWith("/") ? [] : ["xl"];
   for (const segment of target.split("/")) {
     if (segment === "" || segment === ".") continue;
-    if (segment === "..") parts.pop();
-    else parts.push(segment);
+    if (segment === "..") {
+      if (parts.length === 0) return undefined;
+      parts.pop();
+    } else parts.push(segment);
   }
-  return parts.join("/");
+  return parts.length === 0 ? undefined : parts.join("/");
 }
