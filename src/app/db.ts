@@ -559,6 +559,9 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
     startFailed.catch(() => {});
     await Promise.race([db.instantiate(pageUrl(bundle.mainModule), pthread), startFailed]);
     const connection = await db.connect();
+    // DuckDB keeps a registered name until it is dropped and refuses a file
+    // handle under a name it still holds as text, so a load drops the last upload first.
+    let uploadRegistered = false;
     const query: Query = async (sql) => {
       const result = await connection.query(sql);
       return result.toArray().map((row) => row.toJSON() as Record<string, unknown>);
@@ -574,6 +577,10 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
           throw new Error("Use a CSV or Excel (.xlsx) file");
         }
         const registered = "upload.csv";
+        if (uploadRegistered) {
+          await db.dropFile(registered);
+          uploadRegistered = false;
+        }
         let excelHoles: readonly number[] = [];
         let formulaBlanks = 0;
         if (isExcel) {
@@ -592,6 +599,7 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
             else await db.registerFileText(registered, decision.text);
           }
         }
+        uploadRegistered = true;
         await readLoadedTable(query, table, registered, isExcel);
         if (excelHoles.length > 0) {
           const described = await query(`DESCRIBE ${quote(table)}`);
