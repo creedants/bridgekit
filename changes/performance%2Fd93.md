@@ -1,0 +1,3 @@
+- The tool page now has a title, description, canonical and social tags, plus a fallback heading and paragraph inside its mount point, and the home page carries one WebSite block.
+- The PVM analysis and grouping level pages are linked from every footer, and from the volume bullet in the guide and two spots on the method page.
+- The four gallery images now serve AVIF first with explicit 1280 by 860 dimensions: g-bridge 199852 to 51805 bytes, g-movers 150786 to 38378, g-price 171775 to 44438, g-setup 121970 to 32136. A new test pins the eight heads, the footers, the image sizes and the WebSite block.

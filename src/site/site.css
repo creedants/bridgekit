@@ -90,8 +90,9 @@ article .boxed { margin: 16px 0 20px; }
 article li { margin-bottom: 6px; }
 article ol { padding-left: 22px; }
 .shot img { border: 0; }
+.gallery picture, .shot picture { display: block; }
 .gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 24px; }
-.gallery img { width: 100%; display: block; border: 1px solid var(--line); border-radius: 6px; }
+.gallery img { width: 100%; height: auto; display: block; border: 1px solid var(--line); border-radius: 6px; }
 .gallery figcaption { font-size: 14px; color: var(--text-2); margin-top: 8px; }
 @media (max-width: 480px) { .gallery { grid-template-columns: 1fr; } }
 .plan { background: var(--panel); }
