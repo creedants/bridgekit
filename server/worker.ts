@@ -442,12 +442,17 @@ async function pageResponse(request: Request, assets: Fetcher): Promise<Response
  * The not-found page, served at a status that says the address does not exist.
  * The asset layer answers /404 with the 404.html body and a 200, and moves
  * /404.html to /404 with a 307, so both names read /404 here and keep the
- * body, ETag and headers a missing path gets.
+ * body, ETag and headers a missing path gets. The read drops the caller's
+ * validators because a matching one makes the asset layer answer 304, which
+ * would leave this 404 with no page body.
  */
 async function notFoundPage(request: Request, assets: Fetcher): Promise<Response> {
   const url = new URL(request.url);
   url.pathname = "/404";
-  const response = await assets.fetch(new Request(url, request));
+  const headers = new Headers(request.headers);
+  headers.delete("if-none-match");
+  headers.delete("if-modified-since");
+  const response = await assets.fetch(new Request(url, { method: request.method, headers }));
   return new Response(response.body, { status: 404, headers: response.headers });
 }
 
