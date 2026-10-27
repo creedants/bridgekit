@@ -338,6 +338,10 @@ test("a sales trend has no unit cost and keeps the price it shows today", async 
   near(steps[0].price, 10);
   assert.equal("unitCost" in steps[0], false, "a sales step has no unit cost");
   assert.equal("unitCost" in steps[1], false, "a sales step has no unit cost");
+  assert.deepEqual(steps, [
+    { prior: "p0", current: "p1", priorSales: 100, currentSales: 110, volume: 0, mix: 0, price: 10, newAndDiscontinued: 0, noUnits: 0 },
+    { prior: "p1", current: "p2", priorSales: 110, currentSales: 130, volume: 0, mix: 0, price: 20, newAndDiscontinued: 0, noUnits: 0 },
+  ]);
 });
 
 test("the margin and sales fixtures compute the totals the base computed", async () => {

@@ -65,7 +65,7 @@ export function moverHeader(config: BridgeConfig): string[] {
   ];
 }
 
-/** The Trend tab columns for this bridge, in order. */
+/** The Trend tab columns, in order, so the measure's wording is decided here rather than in the JSX. */
 export function trendHeader(config: BridgeConfig): { label: string; num: boolean }[] {
   const unitCost = effectColumns(config).find((column) => column.key === "cost_rate")?.label;
   return [
