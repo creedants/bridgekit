@@ -1,0 +1,1 @@
+- Excel export By sheets strip leading and trailing apostrophes from the 28-character base so names ending in an apostrophe export, and sheets with more than 5,000 drill rows keep 5,000 rows with a note that the Bridge totals include every row; a 100-attribute regression and focused case-only, truncation and suffix-boundary fixtures protect the naming.

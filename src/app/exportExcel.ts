@@ -18,6 +18,9 @@ import { download } from "./files.ts";
 /** Above this many configurations the detail sheet is left out and the bridge is written as values. */
 const MAX_DETAIL_ROWS = 150_000;
 
+/** Above this many rows a By sheet keeps the largest movers and names the cap on the sheet. */
+const MAX_BY_ROWS = 5_000;
+
 /** Excel offers to repair a workbook whose cells hold NaN or Infinity, and a CSV cell holding either reads as text, so a number with no finite value becomes null, which both exports write as a blank cell. */
 export function finiteOrBlank<T>(value: T): T | null {
   return typeof value === "number" && !Number.isFinite(value) ? null : value;
@@ -127,9 +130,14 @@ export async function exportExcel(
   const usedNames = new Set(workbook.worksheets.map((sheet) => sheet.name.toLowerCase()));
   for (const fixed of ["Price bands", "Setup check", "Detail", "Setup"]) usedNames.add(fixed.toLowerCase());
   for (const level of config.levels) {
-    const rows = await drill(query, config, { columns: level.columns, limit: 5000 });
+    const rows = await drill(query, config, { columns: level.columns, limit: MAX_BY_ROWS + 1 });
+    const capped = rows.length > MAX_BY_ROWS;
+    const visible = capped ? rows.slice(0, MAX_BY_ROWS) : rows;
     // Excel compares sheet names without regard to case and caps them at 31 characters.
-    const baseName = `By ${level.name}`.replace(/[\\/*?:[\]]/g, " ").slice(0, 28);
+    const baseName = `By ${level.name}`
+      .replace(/[\\/*?:[\]]/g, " ")
+      .slice(0, 28)
+      .replace(/^'+|'+$/g, "");
     let sheetName = baseName;
     for (let n = 2; usedNames.has(sheetName.toLowerCase()); n++) {
       const suffix = ` ${n}`;
@@ -138,13 +146,18 @@ export async function exportExcel(
     usedNames.add(sheetName.toLowerCase());
     const sheet = workbook.addWorksheet(sheetName);
     sheet.addRow([...level.columns, "Prior sales", "Current sales", "Change", ...effects.map((e) => e.label)]).font = bold;
-    for (const row of rows) {
+    for (const row of visible) {
       sheet.addRow([
         ...level.columns.map((c) => (row[c] === null ? "(blank)" : String(row[c]))),
         Number(row.s0) + Number(row.z0),
         Number(row.s1) + Number(row.z1),
         Number(row.s1) + Number(row.z1) - Number(row.s0) - Number(row.z0),
         ...effects.map((e) => Number(row[e.key])),
+      ]);
+    }
+    if (capped) {
+      sheet.addRow([
+        `This sheet shows the ${MAX_BY_ROWS.toLocaleString("en-US")} rows with the largest change. The Bridge sheet totals include every row.`,
       ]);
     }
     sheet.columns.forEach((column, index) => {
