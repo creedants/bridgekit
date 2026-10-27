@@ -66,6 +66,7 @@ const display = (value: unknown) => (value === null || value === undefined ? "(b
 export function Results(props: { run: Run; query: () => Promise<Query> }) {
   const { run } = props;
   const { config } = run;
+  const t = terms(config);
   // A bridge line that only exists for some data is left out when it is exactly zero.
   const result = {
     ...run.result,
@@ -102,13 +103,13 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
         <Kpi label={`${measureName(config)} ${config.current}`} value={whole(result.currentSales)} />
         <Kpi label="Change" value={signedWhole(change)} note={signedPercent(shareOfPrior(change, result.priorSales))} />
         <Kpi label="Like-for-like price" value={signedWhole(priceEffect)} note={signedPercent(shareOfPrior(priceEffect, result.priorSales))} />
-        <Kpi label="Matched exactly" value={percent(exact)} note="of current sales with units" />
+        <Kpi label="Matched exactly" value={percent(exact)} note={t.exactNote} />
       </div>
 
       <div className="tabs" role="tablist">
-        {tabs.map((t) => (
-          <button key={t.id} role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}>
-            {t.label}
+        {tabs.map((entry) => (
+          <button key={entry.id} role="tab" aria-selected={tab === entry.id} onClick={() => setTab(entry.id)}>
+            {entry.label}
           </button>
         ))}
       </div>
@@ -151,7 +152,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
                   <tr className="total"><td>{measureName(config)} {config.current}</td><td className="num">{whole(result.currentSales)}</td><td /></tr>
                 </tbody>
               </table>
-              <h3>How current sales were matched</h3>
+              <h3>{t.matchedHeading}</h3>
               <table>
                 <thead>
                   <tr><th>Compared against</th><th className="num">Share</th><th className="num">Configurations</th></tr>
@@ -167,7 +168,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
                 </tbody>
               </table>
               <p className="hint">
-                Only exact matches count as price. The rest is in “New configurations”; see the Unmatched tab. Shares are of current sales on rows with units.
+                Only exact matches count as price. The rest is in “New configurations”; see the Unmatched tab. {t.sharesNote}
               </p>
             </div>
           </div>
@@ -538,23 +539,24 @@ function PriceChanges(props: { run: Run; query: () => Promise<Query> }) {
     };
   }, [props.run]);
   if (!data) return null;
+  const t = terms(props.run.config);
   const widest = Math.max(...data.buckets.map((b) => b.share), 0.0001);
   const moved = (from: number, to: number) => data.buckets.slice(from, to).reduce((sum, b) => sum + b.share, 0);
   return (
     <div>
       <div className="kpis" style={{ marginBottom: 12 }}>
         <Kpi label="Average price change" value={signedPercent(data.averageChange)} note="exactly matched configurations" />
-        <Kpi label="Sales with a price increase" value={percent(moved(5, 9))} note="up more than 0.5%" />
-        <Kpi label="Sales with no change" value={percent(moved(4, 5))} note="within 0.5%" />
-        <Kpi label="Sales with a price decrease" value={percent(moved(0, 4))} note="down more than 0.5%" />
+        <Kpi label={t.priceUp} value={percent(moved(5, 9))} note="up more than 0.5%" />
+        <Kpi label={t.priceFlat} value={percent(moved(4, 5))} note="within 0.5%" />
+        <Kpi label={t.priceDown} value={percent(moved(0, 4))} note="down more than 0.5%" />
       </div>
       <table className="dense distribution">
         <thead>
           <tr>
             <th>Change in average price</th>
-            <th>Share of matched sales</th>
+            <th>{t.matchedShare}</th>
             <th className="num">Share</th>
-            <th className="num">Current sales</th>
+            <th className="num">{t.current}</th>
             <th className="num">Price effect</th>
             <th className="num">Configurations</th>
           </tr>
@@ -605,10 +607,11 @@ function RealizationTable(props: { run: Run; query: () => Promise<Query>; overal
     };
   }, [props.run, groupBy]);
   const columns = levels[data.groupBy].columns;
+  const t = terms(props.run.config);
   const planned = Number(target) / 100;
   const hasTarget = target.trim() !== "" && Number.isFinite(planned) && planned !== 0;
   const againstPlan = (row: Realization) => (row.change - planned) * (row.matchedSales - row.priceEffect);
-  const header = [...columns, "Matched sales", "Price effect", "Realized change", ...(hasTarget ? ["Realization", "Against plan"] : [])];
+  const header = [...columns, t.matched, "Price effect", "Realized change", ...(hasTarget ? ["Realization", "Against plan"] : [])];
   const cells = (row: Realization) => [
     ...columns.map((c) => display(row.keys[c])),
     row.matchedSales,
@@ -665,8 +668,8 @@ function RealizationTable(props: { run: Run; query: () => Promise<Query>; overal
       </div>
       <p className="hint">
         Realized change is the like-for-like price effect over what this period’s volume would have cost at prior
-        prices. {hasTarget && "Against plan is the sales above or below what the planned increase would have delivered. "}
-        Largest 200 groups by matched sales.
+        prices. {hasTarget && `${t.againstPlan} `}
+        {t.largestGroups}
       </p>
     </div>
   );
@@ -674,6 +677,7 @@ function RealizationTable(props: { run: Run; query: () => Promise<Query>; overal
 
 function PriceGaps(props: { run: Run; query: () => Promise<Query> }) {
   const { config } = props.run;
+  const t = terms(config);
   const k = config.levels.length;
   const [data, setData] = useState<Awaited<ReturnType<typeof priceGaps>> | null>(null);
   useEffect(() => {
@@ -693,7 +697,7 @@ function PriceGaps(props: { run: Run; query: () => Promise<Query> }) {
   const last = config.levels[k - 1].name;
   const peers = config.levels.slice(0, k - 1).map((l) => l.name).join(" + ");
   const keys = cumulativeColumns(config.levels, k);
-  const header = [...keys, "Units", "Sales", "Price", "Peer price", "Gap", "If at peer price"];
+  const header = [...keys, "Units", t.measure, "Price", "Peer price", "Gap", "If at peer price"];
   const cells = (row: PriceGap) => [
     ...keys.map((c) => display(row.keys[c])),
     row.units,
@@ -706,8 +710,8 @@ function PriceGaps(props: { run: Run; query: () => Promise<Query> }) {
   return (
     <div>
       <div className="kpis" style={{ marginBottom: 12 }}>
-        <Kpi label="Sales compared" value={whole(data.comparedSales)} note={`${config.current}, groups with 2+ ${last} values`} />
-        <Kpi label="Priced below peers" value={whole(data.belowPeerSales)} note={percent(data.belowPeerSales / data.comparedSales) + " of sales compared"} />
+        <Kpi label={t.compared} value={whole(data.comparedSales)} note={`${config.current}, groups with 2+ ${last} values`} />
+        <Kpi label="Priced below peers" value={whole(data.belowPeerSales)} note={percent(data.belowPeerSales / data.comparedSales) + " " + t.ofCompared} />
         <Kpi label="If raised to peer average" value={signedWhole(data.totalOpportunity)} note="upper bound, not a forecast" />
       </div>
       <div className="toolbar">
@@ -960,6 +964,7 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
 
 function Unmatched(props: { run: Run; query: () => Promise<Query> }) {
   const { config } = props.run;
+  const t = terms(config);
   const keys = cumulativeColumns(config.levels, config.levels.length);
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
 
@@ -974,7 +979,7 @@ function Unmatched(props: { run: Run; query: () => Promise<Query> }) {
     };
   }, [props.run]);
 
-  const header = [...keys, "Units", "Sales", "Price", "Compared against", "Reference price", "Effect"];
+  const header = [...keys, "Units", t.measure, "Price", "Compared against", "Reference price", "Effect"];
   const cells = (row: Record<string, unknown>) => [
     ...keys.map((c) => display(row[c])),
     Number(row.q1),
@@ -1023,6 +1028,7 @@ function Unmatched(props: { run: Run; query: () => Promise<Query> }) {
 
 function checkWarnings(run: Run): string[] {
   const { check, config, result } = run;
+  const t = terms(config);
   const exact = result.coverage.find((c) => c.level === config.levels.length)?.share ?? 0;
   const warnings: string[] = [];
   if (check.blankMeasureRows > 0) {
@@ -1038,7 +1044,7 @@ function checkWarnings(run: Run): string[] {
     warnings.push(`${whole(check.blankPeriodRows)} rows have a blank period and are ignored.`);
   }
   if (exact < 0.7) {
-    warnings.push(`Only ${percent(exact)} of current sales matched an exact prior configuration. Consider fewer attributes, or check the Unmatched tab.`);
+    warnings.push(t.lowMatch(exact));
   }
   return warnings;
 }

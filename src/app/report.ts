@@ -20,6 +20,19 @@ const SALES = {
   priceChange: "Price change",
   hintUnits: "Prices exclude sales with no units.",
   hintChange: "Price change is the change in average price and includes mix inside the row.",
+  exactNote: "of current sales with units",
+  sharesNote: "Shares are of current sales on rows with units.",
+  priceUp: "Sales with a price increase",
+  priceFlat: "Sales with no change",
+  priceDown: "Sales with a price decrease",
+  matched: "Matched sales",
+  againstPlan: "Against plan is the sales above or below what the planned increase would have delivered.",
+  largestGroups: "Largest 200 groups by matched sales.",
+  measure: "Sales",
+  compared: "Sales compared",
+  ofCompared: "of sales compared",
+  lowMatch: (share: number) =>
+    `Only ${percent(share)} of current sales matched an exact prior configuration. Consider fewer attributes, or check the Unmatched tab.`,
 } as const;
 const MARGIN = {
   bridgeTitle: "Margin bridge",
@@ -34,6 +47,19 @@ const MARGIN = {
   priceChange: "Unit margin change",
   hintUnits: "Unit margins exclude sales with no units.",
   hintChange: "Unit margin change is the change in average unit margin and includes mix inside the row.",
+  exactNote: "of current margin with units",
+  sharesNote: "Shares are of current margin on rows with units.",
+  priceUp: "Margin with a price increase",
+  priceFlat: "Margin with no change",
+  priceDown: "Margin with a price decrease",
+  matched: "Matched margin",
+  againstPlan: "Against plan is the margin above or below what the planned increase would have delivered.",
+  largestGroups: "Largest 200 groups by matched margin.",
+  measure: "Margin",
+  compared: "Margin compared",
+  ofCompared: "of margin compared",
+  lowMatch: (share: number) =>
+    `Only ${percent(share)} of current margin matched an exact prior configuration. Consider fewer attributes, or check the Unmatched tab.`,
 } as const;
 interface Terms {
   bridgeTitle: string;
@@ -48,6 +74,18 @@ interface Terms {
   priceChange: string;
   hintUnits: string;
   hintChange: string;
+  exactNote: string;
+  sharesNote: string;
+  priceUp: string;
+  priceFlat: string;
+  priceDown: string;
+  matched: string;
+  againstPlan: string;
+  largestGroups: string;
+  measure: string;
+  compared: string;
+  ofCompared: string;
+  lowMatch: (share: number) => string;
 }
 const TERMS = { SALES, MARGIN } satisfies Record<string, Terms>;
 
