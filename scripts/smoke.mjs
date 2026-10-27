@@ -32,7 +32,7 @@ import {
 
 const DEBUG_PORT = 9360;
 /** The cross-tab scenario keeps no record, so it opens its own browser beside the recorded ones. */
-const SECOND_PAGE_PORT = 9361;
+const SECOND_TAB_PORT = 9361;
 const CHROMIUM = process.env.CHROMIUM || "chromium";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const bin = (name) => join(root, "node_modules/.bin", name);
@@ -1808,7 +1808,7 @@ async function rememberAcrossPages(browser, origin, { sample }) {
     fail(`page A turning Remember off left ${JSON.stringify(off)}, expected only the opt-out preference`);
   }
 
-  const tab = await openSecondTab(SECOND_PAGE_PORT);
+  const tab = await openSecondTab(SECOND_TAB_PORT);
   try {
     // Page B is the second tab: its own app, page A's storage.
     await tab.evaluate(`location.href = ${JSON.stringify(`${origin}/app/`)}`);
@@ -1852,7 +1852,7 @@ async function crossPageRemembering(origin) {
     ["remember across tabs", {}],
     ["remember across tabs with a demonstration sample", { sample: "sku" }],
   ]) {
-    const browser = await open(SECOND_PAGE_PORT, { chromium: CHROMIUM });
+    const browser = await open(SECOND_TAB_PORT, { chromium: CHROMIUM });
     try {
       await rememberAcrossPages(browser, origin, options);
       console.log(`ok  ${label}: turning Remember on in one tab keeps the setup another tab saved${options.sample ? " while a sample is loaded" : ""}`);
