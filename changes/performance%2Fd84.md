@@ -1,0 +1,2 @@
+- `DEPLOY.md` has a checker, `scripts/check-deploy-doc.mjs`, which reads every `has` and `lacks` claim, checks it against the cited file, and exits 1 on a drifted claim. `test/deploy-doc.test.ts` covers the parsing and checking on inline fixtures.
+- The runbook's 97 drifted claim checks now cite the line each one points at. Step 1.8 pipes `openssl rand -base64 32` into `npx wrangler secret put BETTER_AUTH_SECRET`, so the secret is never printed.
