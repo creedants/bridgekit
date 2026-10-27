@@ -318,6 +318,23 @@ function csvEncodingFailure(error: unknown): unknown {
   return error;
 }
 
+export const TOO_BIG_SENTENCE =
+  "This file is too big to open in this browser. Try a smaller file, or save it with fewer rows or columns.";
+
+// DuckDB-WASM begins the recorded allocation failure with this text.
+// CSV parse and encoding failures do not begin with this prefix.
+const OUT_OF_MEMORY_PREFIX = "Out of Memory Error";
+
+export function isOutOfMemory(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.startsWith(OUT_OF_MEMORY_PREFIX);
+}
+
+export function loadFailure(error: unknown): Error {
+  if (isOutOfMemory(error)) return new Error(TOO_BIG_SENTENCE);
+  return error instanceof Error ? error : new Error(String(error));
+}
+
 // One open per page. A rejection clears it so the next call can try again.
 // A stale attempt must not clear a newer one.
 let opening: Promise<BrowserDatabase> | undefined;
@@ -569,48 +586,52 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
     return {
       query,
       async loadFile(file, table) {
-        if (/\.parquet$/i.test(file.name)) {
-          throw new Error(PARQUET_REFUSAL);
-        }
-        const isExcel = /\.xlsx$/i.test(file.name);
-        if (!isExcel && !/\.(csv|tsv|txt)$/i.test(file.name)) {
-          throw new Error("Use a CSV or Excel (.xlsx) file");
-        }
-        const registered = "upload.csv";
-        if (uploadRegistered) {
-          await db.dropFile(registered);
-          uploadRegistered = false;
-        }
-        let excelHoles: readonly number[] = [];
-        let formulaBlanks = 0;
-        if (isExcel) {
-          const sheet = await firstSheetAsCsv(file);
-          excelHoles = sheet.holes;
-          formulaBlanks = sheet.formulaBlanks;
-          await db.registerFileText(registered, sheet.csv);
-        } else {
-          const prefix = new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer());
-          const continues = prefix.byteLength < file.size;
-          if (continues && isUtf8Prefix(prefix)) {
-            await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+        try {
+          if (/\.parquet$/i.test(file.name)) {
+            throw new Error(PARQUET_REFUSAL);
+          }
+          const isExcel = /\.xlsx$/i.test(file.name);
+          if (!isExcel && !/\.(csv|tsv|txt)$/i.test(file.name)) {
+            throw new Error("Use a CSV or Excel (.xlsx) file");
+          }
+          const registered = "upload.csv";
+          if (uploadRegistered) {
+            await db.dropFile(registered);
+            uploadRegistered = false;
+          }
+          let excelHoles: readonly number[] = [];
+          let formulaBlanks = 0;
+          if (isExcel) {
+            const sheet = await firstSheetAsCsv(file);
+            excelHoles = sheet.holes;
+            formulaBlanks = sheet.formulaBlanks;
+            await db.registerFileText(registered, sheet.csv);
           } else {
-            const decision = decodeCsvBuffer(continues ? new Uint8Array(await file.arrayBuffer()) : prefix);
-            if (decision.kind === "utf8") await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
-            else await db.registerFileText(registered, decision.text);
+            const prefix = new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer());
+            const continues = prefix.byteLength < file.size;
+            if (continues && isUtf8Prefix(prefix)) {
+              await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+            } else {
+              const decision = decodeCsvBuffer(continues ? new Uint8Array(await file.arrayBuffer()) : prefix);
+              if (decision.kind === "utf8") await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+              else await db.registerFileText(registered, decision.text);
+            }
           }
-        }
-        uploadRegistered = true;
-        await readLoadedTable(query, table, registered, isExcel);
-        if (excelHoles.length > 0) {
-          const described = await query(`DESCRIBE ${quote(table)}`);
-          const names = described.map((row) => String(row.column_name));
-          for (const rename of holeRenames(names, excelHoles)) {
-            if (rename.from === rename.to) continue;
-            await query(`ALTER TABLE ${quote(table)} RENAME COLUMN ${quote(rename.from)} TO ${quote(rename.to)}`);
+          uploadRegistered = true;
+          await readLoadedTable(query, table, registered, isExcel);
+          if (excelHoles.length > 0) {
+            const described = await query(`DESCRIBE ${quote(table)}`);
+            const names = described.map((row) => String(row.column_name));
+            for (const rename of holeRenames(names, excelHoles)) {
+              if (rename.from === rename.to) continue;
+              await query(`ALTER TABLE ${quote(table)} RENAME COLUMN ${quote(rename.from)} TO ${quote(rename.to)}`);
+            }
           }
+          await convertFormattedNumbers(query, table);
+          return formulaBlanks;
+        } catch (error) {
+          throw loadFailure(error);
         }
-        await convertFormattedNumbers(query, table);
-        return formulaBlanks;
       },
     };
   } catch (error) {
