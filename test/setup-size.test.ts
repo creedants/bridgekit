@@ -14,7 +14,7 @@ const MAX_COLUMN_NAME = 300;
 const MAX_LEVEL_NAME = 300;
 const MAX_FILTER_VALUES = 500;
 const MAX_FILTER_VALUE = 300;
-const SAVE_LIMIT = 6 * 1024 * 1024;
+const SAVE_LIMIT = 8 * 1024 * 1024;
 const TOO_LARGE = "This is too large to save.";
 
 const ORIGIN = "http://127.0.0.1:8790";
@@ -369,7 +369,7 @@ test("accepts the largest setup the app can build", () => {
   assert.equal(isValidSetup(largestSetupWithFilters(columns), columnsOf(columns)), true);
 });
 
-test("refuses a setup save just over 6 MiB with 413, whatever Content-Length says", async () => {
+test("refuses a setup save just over 8 MiB with 413, whatever Content-Length says", async () => {
   const { env, cookie, workspaceId } = await signedIn();
   const text = padded(smallSetupBody(), SAVE_LIMIT + 1);
   const accurate = await post(env, workspaceId, "setups", cookie, text, {
@@ -387,7 +387,7 @@ test("refuses a setup save just over 6 MiB with 413, whatever Content-Length say
   }
 });
 
-test("refuses a bridge save just over 6 MiB with 413, whatever Content-Length says", async () => {
+test("refuses a bridge save just over 8 MiB with 413, whatever Content-Length says", async () => {
   const { env, cookie, workspaceId } = await signedIn();
   const text = padded(smallBridgeBody(), SAVE_LIMIT + 1);
   const accurate = await post(env, workspaceId, "bridges", cookie, text, {
@@ -405,7 +405,7 @@ test("refuses a bridge save just over 6 MiB with 413, whatever Content-Length sa
   }
 });
 
-test("accepts a setup body of exactly 6 MiB", async () => {
+test("accepts a setup body of exactly 8 MiB", async () => {
   const { env, cookie, workspaceId } = await signedIn();
   const text = padded(smallSetupBody(), SAVE_LIMIT);
   const response = await post(env, workspaceId, "setups", cookie, text, {
@@ -461,7 +461,7 @@ test("the largest setup and bridge bodies sit under the save limit", () => {
     const columns = columnNames(MAX_COLUMNS, filler);
     const setup = setupAcross(columns);
     const setupSize = Buffer.byteLength(JSON.stringify(setupBody(columns, setup)));
-    const bridgeSize = Buffer.byteLength(JSON.stringify(bridgeBody(columns, setup, largestSummary(filler))));
+    const bridgeSize = Buffer.byteLength(JSON.stringify({ ...bridgeBody(columns, setup, largestSummary(filler)), filterColumns: columns }));
     assert.ok(setupSize < SAVE_LIMIT, `${filler} setup ${setupSize} against ${SAVE_LIMIT}`);
     assert.ok(bridgeSize < SAVE_LIMIT, `${filler} bridge ${bridgeSize} against ${SAVE_LIMIT}`);
     assert.ok(parseSummary(largestSummary(filler)), filler);

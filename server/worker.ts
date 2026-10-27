@@ -247,7 +247,7 @@ async function json(c: Context<App>): Promise<unknown> {
 }
 
 /** The most a setup or bridge save body may be, in bytes. */
-const SAVE_BODY_LIMIT = 6 * 1024 * 1024;
+const SAVE_BODY_LIMIT = 8 * 1024 * 1024;
 const TOO_LARGE = "This is too large to save.";
 
 class BodyTooLarge extends Error {}
