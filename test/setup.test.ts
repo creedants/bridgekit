@@ -1682,6 +1682,56 @@ test("text net_sales withholds sales instead of falling through to gross_sales",
   ]) satisfies Column[]), "net_sales");
 });
 
+test("a numeric net_sales_note keeps the base sales guess beside text net_sales", () => {
+  const expected: Setup = {
+    periodColumn: "period",
+    grain: "value",
+    unitsColumn: "units",
+    salesColumn: "gross_sales",
+    grossColumn: undefined,
+    levels: [],
+    filters: [],
+  };
+  const forward: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "units", type: "INTEGER" },
+    { name: "net_sales", type: "VARCHAR" },
+    { name: "gross_sales", type: "DOUBLE" },
+    { name: "net_sales_note", type: "DOUBLE" },
+  ];
+  const backward: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "units", type: "INTEGER" },
+    { name: "net_sales_note", type: "DOUBLE" },
+    { name: "gross_sales", type: "DOUBLE" },
+    { name: "net_sales", type: "VARCHAR" },
+  ];
+  assert.deepEqual(guessSetup(forward), expected);
+  assert.deepEqual(guessSetup(backward), expected);
+});
+
+test("a numeric net_revenue keeps the base sales guess beside text net_sales", () => {
+  const expected: Setup = {
+    periodColumn: "period",
+    grain: "value",
+    unitsColumn: "units",
+    salesColumn: "net_revenue",
+    grossColumn: undefined,
+    levels: [],
+    filters: [],
+  };
+  const columns: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "units", type: "INTEGER" },
+    { name: "net_sales", type: "VARCHAR" },
+    { name: "net_revenue", type: "DOUBLE" },
+  ];
+  assert.deepEqual(guessSetup(columns), expected);
+});
+
 test("network-like text columns do not withhold sales", () => {
   for (const name of ["network", "internet_channel", "cabinet_type"]) {
     const setup = guessSetup([
