@@ -183,15 +183,25 @@ test("labels that name the same period stay separate and order by their string",
   assert.deepEqual((await loadOnly(["q1 2025", "Q1 2025", "Q4 2024"])).values, ["Q4 2024", "Q1 2025", "q1 2025"]);
 });
 
-test("a column of 250 month labels keeps the latest 200", async () => {
+test("a column of 2,050 month labels keeps the latest 2,000", async () => {
   const names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const months = Array.from({ length: 250 }, (_, index) => `${names[index % 12]} ${2000 + Math.floor(index / 12)}`);
+  const months = Array.from({ length: 2050 }, (_, index) => `${names[index % 12]} ${2000 + Math.floor(index / 12)}`);
   const shuffled = months.filter((_, index) => index % 2 === 1).concat(months.filter((_, index) => index % 2 === 0));
   const list = await loadOnly(shuffled);
   assert.equal(list.sort, "text");
-  assert.equal(list.values.length, 200);
+  assert.equal(list.values.length, 2000);
   assert.equal(list.values[0], "Mar 2004");
-  assert.equal(list.values.at(-1), "Oct 2020");
+  assert.equal(list.values.at(-1), "Oct 2170");
+});
+
+test("a column of 250 daily dates keeps all 250", async () => {
+  const day = 24 * 60 * 60 * 1000;
+  const first = Date.UTC(2025, 11, 1);
+  const dates = Array.from({ length: 250 }, (_, index) => new Date(first + index * day).toISOString().slice(0, 10));
+  const shuffled = dates.filter((_, index) => index % 2 === 1).concat(dates.filter((_, index) => index % 2 === 0));
+  const list = await loadOnly(shuffled);
+  assert.equal(list.sort, "text");
+  assert.deepEqual(list.values, dates);
 });
 
 test("a mix of label shapes, or a value that matches none, stays in text order", async () => {
@@ -262,11 +272,13 @@ test("an empty period list is text", async () => {
 });
 
 test("a capped window keeps the text decision made over the values it dropped", async () => {
-  const values = ["#note", ...Array.from({ length: 250 }, (_, index) => String(index + 1))];
+  // Four digits, so the text order is also the age order and the cap's choice
+  // is readable: the oldest fifty fall away and the rest stay oldest first.
+  const values = ["#note", ...Array.from({ length: 2050 }, (_, index) => String(index + 1).padStart(4, "0"))];
   const list = await loadOnly(values);
-  assert.equal(list.values.length, 200);
+  assert.equal(list.values.length, 2000);
   assert.equal(list.values.includes("#note"), false);
-  assert.equal(list.values[0], "144");
-  assert.equal(list.values.at(-1), "99");
+  assert.equal(list.values[0], "0051");
+  assert.equal(list.values.at(-1), "2050");
   assert.equal(list.sort, "text");
 });
