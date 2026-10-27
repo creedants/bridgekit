@@ -187,11 +187,10 @@ test("a column of 2,050 month labels keeps the latest 2,000", async () => {
   const names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const months = Array.from({ length: 2050 }, (_, index) => `${names[index % 12]} ${2000 + Math.floor(index / 12)}`);
   const shuffled = months.filter((_, index) => index % 2 === 1).concat(months.filter((_, index) => index % 2 === 0));
+  const expected = months.slice(-2000);
   const list = await loadOnly(shuffled);
   assert.equal(list.sort, "text");
-  assert.equal(list.values.length, 2000);
-  assert.equal(list.values[0], "Mar 2004");
-  assert.equal(list.values.at(-1), "Oct 2170");
+  assert.deepEqual(list.values, expected);
 });
 
 test("a column of 250 daily dates keeps all 250", async () => {
@@ -275,10 +274,8 @@ test("a capped window keeps the text decision made over the values it dropped", 
   // Four digits, so the text order is also the age order and the cap's choice
   // is readable: the oldest fifty fall away and the rest stay oldest first.
   const values = ["#note", ...Array.from({ length: 2050 }, (_, index) => String(index + 1).padStart(4, "0"))];
+  const expected = Array.from({ length: 2000 }, (_, index) => String(index + 51).padStart(4, "0"));
   const list = await loadOnly(values);
-  assert.equal(list.values.length, 2000);
-  assert.equal(list.values.includes("#note"), false);
-  assert.equal(list.values[0], "0051");
-  assert.equal(list.values.at(-1), "2050");
+  assert.deepEqual(list.values, expected);
   assert.equal(list.sort, "text");
 });
