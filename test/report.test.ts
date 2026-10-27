@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { openDatabase } from "../src/duckdb.ts";
 import type { BridgeConfig } from "../src/engine.ts";
+import { accountBridge, drill, priceDistribution, runBridge } from "../src/engine.ts";
 import { buildReport, moverHeader, terms } from "../src/app/report.ts";
+import { signedWhole, whole } from "../src/app/format.ts";
 
 const config: BridgeConfig = {
   table: "sales",
@@ -165,8 +168,8 @@ const namesFixture = () => ({
   chartUrl: "data:image/png;base64,AAA",
 });
 
-// The input type does not name omitNames yet, so the flag travels as
-// unknown until the fix lands. This keeps the red test typechecking.
+// This wrapper let the fixture run against the base revision, before
+// buildReport accepted omitNames, to record the failing test.
 const reportWith = (input: unknown): string =>
   buildReport(input as Parameters<typeof buildReport>[0]);
 
@@ -194,4 +197,75 @@ test("an unticked report keeps today output and names", () => {
   for (const present of ["ZX-41", "ZX-42", "q3-sample.csv", "ZX-90", "<img", UNTICKED_SENTENCE]) {
     assert.equal(unticked.includes(present), true, `${present} is missing from the unticked report`);
   }
+});
+
+test("a ticked engine report leaves custom attribute, filter and separator-free names out", async () => {
+  const prodValue = "ZX-PROD-A";
+  const acctValue = "ZX-ACCT-OLD";
+  const filterValue = "ZX-REGION-IN";
+  const fileName = "zx-names.csv";
+  const futureLine = "ZX-FUTURE-NAME";
+  const attrOne = `${prodValue} assortment`;
+  const attrTwo = `${acctValue} segment`;
+  const query = await openDatabase();
+  await query(`CREATE TABLE t (period VARCHAR, product VARCHAR, customer VARCHAR, region VARCHAR, units INTEGER, sales DOUBLE)`);
+  await query(`INSERT INTO t VALUES
+    ('2025', '${prodValue}', '${acctValue}', '${filterValue}', 10, 100),
+    ('2025', '${prodValue}', 'ZX-ACCT-LOST', '${filterValue}', 10, 300),
+    ('2025', 'ZX-PROD-GONE', 'ZX-ACCT-LOST', '${filterValue}', 10, 200),
+    ('2026', '${prodValue}', '${acctValue}', '${filterValue}', 25, 350),
+    ('2026', '${prodValue}', 'ZX-ACCT-NEW', '${filterValue}', 5, 150),
+    ('2026', 'ZX-PROD-NEW', 'ZX-ACCT-NEW', '${filterValue}', 10, 400)`);
+  const engineConfig: BridgeConfig = {
+    table: "t",
+    periodColumn: "period",
+    prior: "2025",
+    current: "2026",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: [
+      { name: attrOne, columns: ["product"] },
+      { name: attrTwo, columns: ["customer"] },
+    ],
+  };
+  const engineResult = await runBridge(query, engineConfig);
+  const moverRows = await drill(query, engineConfig, { columns: ["product"], limit: 15 });
+  const bands = (await priceDistribution(query, engineConfig)).buckets;
+  const groups = await accountBridge(query, engineConfig, "customer");
+  const description = [
+    `Source: ${fileName}`,
+    "Periods: 2025 to 2026 (period)",
+    "Units column: units",
+    "Sales column: sales",
+    `Attribute 1: ${attrOne} (product)`,
+    `Attribute 2: ${attrTwo} (customer)`,
+    "New and discontinued: price difference only, units in volume",
+    `Filter: region is one of ${filterValue}`,
+    futureLine,
+  ];
+  const input = {
+    config: engineConfig,
+    result: engineResult,
+    chartUrl: "data:image/png;base64,AAA",
+    description,
+    movers: { label: attrOne, rows: moverRows, columns: ["product"] },
+    priceBands: bands,
+    accounts: { column: "customer", groups },
+  };
+  const ticked = buildReport({ ...input, omitNames: true });
+  const lowered = ticked.toLowerCase();
+  for (const absent of [prodValue, acctValue, filterValue, fileName, futureLine, attrOne, attrTwo]) {
+    assert.equal(lowered.includes(absent.toLowerCase()), false, `${absent} is still in the ticked report`);
+  }
+  assert.equal(ticked.includes("<img"), false, "the chart image is still in the ticked report");
+  assert.equal(ticked.includes(TICKED_SENTENCE), true, "the ticked sentence is missing");
+  assert.equal(ticked.includes(whole(engineResult.priorSales)), true, "prior total left the ticked report");
+  assert.equal(ticked.includes(whole(engineResult.currentSales)), true, "current total left the ticked report");
+  for (const effect of engineResult.effects) {
+    assert.equal(ticked.includes(signedWhole(effect.value)), true, `effect ${effect.key} amount left the ticked report`);
+  }
+  for (const band of bands) {
+    assert.equal(ticked.includes(band.label), true, `price band ${band.label} left the ticked report`);
+  }
+  assert.equal(ticked.includes("left out"), true, "the setup stand-in is missing");
 });
