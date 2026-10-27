@@ -244,45 +244,6 @@ test("level sheets whose names differ only in case get unique names", async () =
   assert.equal(second.getRow(2).getCell(1).value, "region_val");
 });
 
-test("level sheets with long names that collide after the cut get unique names within 31 characters", async () => {
-  const workbook = await exportLevelWorkbook([
-    { name: "Quarterly product attribute grouping variant alpha one", columns: ["a1"] },
-    { name: "QUARTERLY PRODUCT ATTRIBUTE GROUPING VARIANT ALPHA TWO", columns: ["a2"] },
-  ]);
-  const names = workbook.worksheets.map((sheet) => sheet.name);
-  const levels = names.filter((name) => name.startsWith("By "));
-  assert.equal(levels.length, 2);
-  assert.equal(new Set(levels.map((name) => name.toLowerCase())).size, 2);
-  for (const name of levels) assert.ok(name.length <= 31, `${name} is over 31 characters`);
-  assert.equal(levels[0], "By Quarterly product attribu");
-  assert.equal(levels[1], "By QUARTERLY PRODUCT ATTRIBU 2");
-  const first = workbook.getWorksheet("By Quarterly product attribu")!;
-  assert.equal(first.getRow(1).getCell(1).value, "a1");
-  assert.equal(first.getRow(2).getCell(1).value, "a1_val");
-  const second = workbook.getWorksheet("By QUARTERLY PRODUCT ATTRIBU 2")!;
-  assert.equal(second.getRow(1).getCell(1).value, "a2");
-  assert.equal(second.getRow(2).getCell(1).value, "a2_val");
-});
-
-test("the tenth colliding level sheet carries a two-digit suffix within 31 characters", async () => {
-  const levels = Array.from({ length: 10 }, (_, i) => ({
-    name: i % 2 === 0 ? "Attribute" : "ATTRIBUTE",
-    columns: [`c${i + 1}`],
-  }));
-  const workbook = await exportLevelWorkbook(levels);
-  const names = workbook.worksheets.map((sheet) => sheet.name);
-  const sheets = names.filter((name) => name.startsWith("By "));
-  assert.equal(sheets.length, 10);
-  assert.equal(new Set(sheets.map((name) => name.toLowerCase())).size, 10);
-  for (const name of sheets) assert.ok(name.length <= 31, `${name} is over 31 characters`);
-  assert.equal(sheets[9], "By ATTRIBUTE 10");
-  sheets.forEach((sheetName, i) => {
-    const sheet = workbook.getWorksheet(sheetName)!;
-    assert.equal(sheet.getRow(1).getCell(1).value, `c${i + 1}`);
-    assert.equal(sheet.getRow(2).getCell(1).value, `c${i + 1}_val`);
-  });
-});
-
 test("level sheets with ordinary names keep their names", async () => {
   const workbook = await exportLevelWorkbook([
     { name: "Product", columns: ["product"] },

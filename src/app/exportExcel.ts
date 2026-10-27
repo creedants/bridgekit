@@ -130,9 +130,13 @@ export async function exportExcel(
   const usedNames = new Set(workbook.worksheets.map((sheet) => sheet.name.toLowerCase()));
   for (const fixed of ["Price bands", "Setup check", "Detail", "Setup"]) usedNames.add(fixed.toLowerCase());
   for (const level of config.levels) {
-    const rows = await drill(query, config, { columns: level.columns, limit: MAX_BY_ROWS + 1 });
-    const capped = rows.length > MAX_BY_ROWS;
-    const visible = capped ? rows.slice(0, MAX_BY_ROWS) : rows;
+    const rows = await drill(query, config, { columns: level.columns, limit: MAX_BY_ROWS });
+    let capped = false;
+    if (rows.length === MAX_BY_ROWS) {
+      const probe = await drill(query, config, { columns: level.columns, limit: MAX_BY_ROWS + 1 });
+      capped = probe.length > MAX_BY_ROWS;
+    }
+    const visible = rows;
     // Excel compares sheet names without regard to case and caps them at 31 characters.
     const baseName = `By ${level.name}`
       .replace(/[\\/*?:[\]]/g, " ")
