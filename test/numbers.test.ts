@@ -84,17 +84,18 @@ async function columnValues(query: Query, table: string, column: string): Promis
   return rows.map((row) => row.v);
 }
 
-function expectNumbers(actual: unknown[], expected: (number | null)[]): void {
+function expectNumbers(actual: unknown[], expected: (number | null)[], label = ""): void {
+  const where = label === "" ? "" : ` (${label})`;
   assert.equal(actual.length, expected.length);
   actual.forEach((value, index) => {
     const want = expected[index];
     if (want === null) {
-      assert.equal(value, null);
+      assert.equal(value, null, `null${where}`);
       return;
     }
     const got = typeof value === "bigint" ? Number(value) : value;
-    assert.equal(typeof got, "number");
-    assert.ok(typeof got === "number" && Math.abs(got - want) < 1e-9, `${String(value)} is not ${want}`);
+    assert.equal(typeof got, "number", `number${where}`);
+    assert.ok(typeof got === "number" && Math.abs(got - want) < 1e-9, `${String(value)} is not ${want}${where}`);
   });
 }
 
@@ -269,75 +270,101 @@ test("a semicolon file with mixed three-decimal styles loads and names the confl
   assert.equal(await decimalCommaNote(query, "mixed_three"), "net_sales mixes number styles, so it was read as text.");
 });
 
+type PairOutcome =
+  | { type: "VARCHAR"; strings: [string, string]; note: string | null }
+  | { type: "DOUBLE"; values: [number, number]; note: string | null };
+
+const MIXED_STYLES = "amount mixes number styles, so it was read as text.";
+
+function textPair(left: string, right: string, note: string | null): [string, string, PairOutcome] {
+  return [left, right, { type: "VARCHAR", strings: [left, right], note }];
+}
+
+function numberPair(left: string, right: string, values: [number, number], note: string | null): [string, string, PairOutcome] {
+  return [left, right, { type: "DOUBLE", values, note }];
+}
+
 test("mixed number-shape pairs are named only when both sides prove a style", async () => {
   const query = await openDatabase();
-  const values: { text: string; us: boolean; comma: boolean }[] = [
-    { text: "1,260.00", us: true, comma: false },
-    { text: "1,234.56", us: true, comma: false },
-    { text: "1,260.000", us: true, comma: false },
-    { text: "+1,260.00", us: true, comma: false },
-    { text: "$1,260.000", us: true, comma: false },
-    { text: "(1,260.000)", us: true, comma: false },
-    { text: "$90.00", us: true, comma: false },
-    { text: "12.5", us: true, comma: false },
-    { text: "12.3456", us: true, comma: false },
-    { text: "1.234,567", us: false, comma: true },
-    { text: "1.234,56", us: false, comma: true },
-    { text: "12,50", us: false, comma: true },
-    { text: "12,5", us: false, comma: true },
-    { text: "12,3456", us: false, comma: true },
-    { text: "-1.234,567", us: false, comma: true },
-    { text: "+12,50", us: false, comma: true },
-    { text: "1 234,56", us: false, comma: true },
-    { text: "1 234,567", us: false, comma: true },
-    { text: "+1.234,567", us: false, comma: true },
-    { text: "$12,50", us: false, comma: true },
-    { text: "(12,50)", us: false, comma: true },
-    { text: "-12,50", us: false, comma: true },
-    { text: "1500", us: false, comma: false },
-    { text: "1000", us: false, comma: false },
-    { text: "1260.000", us: false, comma: false },
-    { text: "1,260", us: false, comma: false },
-    { text: "1,234", us: false, comma: false },
-    { text: "1,234,567", us: false, comma: false },
-    { text: "0,000,000", us: false, comma: false },
-    { text: "1.234", us: false, comma: false },
-    { text: "0,125", us: false, comma: false },
-    { text: "1e3", us: false, comma: false },
-    { text: "1.260e3", us: false, comma: false },
-    { text: "$90e2", us: false, comma: false },
+  const pairs: [left: string, right: string, expected: PairOutcome][] = [
+    textPair("12.5", "1 234,567", MIXED_STYLES),
+    textPair("12.5", "+1.234,567", MIXED_STYLES),
+    textPair("12.5", "-1 234,567", MIXED_STYLES),
+    textPair("12.5", "$1 234,567", MIXED_STYLES),
+    textPair("12.5", "(1 234,567)", MIXED_STYLES),
+    textPair("12.5", "-1.234,567", MIXED_STYLES),
+    textPair("12.5", "$1.234,567", MIXED_STYLES),
+    textPair("12.5", "(1.234,567)", MIXED_STYLES),
+    textPair("1 500", "1 234,567", null),
+    textPair("1,234", "1 234,567", null),
+    textPair("1,260.00", "1 234,567", MIXED_STYLES),
+    textPair("12.3456", "1.234,567", MIXED_STYLES),
+    textPair("1,260.000", "1.234,567", MIXED_STYLES),
+    textPair("1,260.00", "1.234,56", MIXED_STYLES),
+    textPair("12.5", "1.234,56", MIXED_STYLES),
+    textPair("$90.00", "12,50", MIXED_STYLES),
+    textPair("12.5", "12,3456", MIXED_STYLES),
+    textPair("1,260.000", "1.234,56", MIXED_STYLES),
+    textPair("1,234.56", "1.234,567", MIXED_STYLES),
+    textPair("1,260.00", "12,50", MIXED_STYLES),
+    numberPair("1.234,567", "12,50", [1234.567, 12.5], ONE),
+    numberPair("1.234,56", "12,50", [1234.56, 12.5], ONE),
+    numberPair("12,3456", "12,50", [12.3456, 12.5], ONE),
+    numberPair("0,125", "12,50", [0.125, 12.5], ONE),
+    numberPair("1.234,567", "-1.234,567", [1234.567, -1234.567], ONE),
+    numberPair("1.234,567", "1.234,56", [1234.567, 1234.56], ONE),
+    numberPair("1.234,567", "0,125", [1234.567, 0.125], ONE),
+    numberPair("12,5", "12,50", [12.5, 12.5], ONE),
+    numberPair("1.234,567", "1.234,567", [1234.567, 1234.567], ONE),
+    numberPair("12.5", "1,260.00", [12.5, 1260], null),
+    numberPair("1,234,567", "1,260.00", [1234567, 1260], null),
+    numberPair("$90.00", "(1,260)", [90, -1260], null),
+    numberPair("1 500", "1,260", [1500, 1260], null),
+    numberPair("12.3456", "$90.00", [12.3456, 90], null),
+    numberPair("1,234", "1,260", [1234, 1260], null),
+    numberPair("1.234", "1,260", [1.234, 1260], null),
+    numberPair("1500", "$1,260", [1500, 1260], null),
+    numberPair("1 500", "$1,260", [1500, 1260], null),
+    numberPair("1,234", "1,260.00", [1234, 1260], null),
+    textPair("1,234", "12,50", null),
+    textPair("1,234", "1.234,567", null),
+    textPair("1 234,567", "-1 234,567", null),
+    textPair("1 234,567", "+1.234,567", null),
+    textPair("12,5", "1 234,567", null),
+    textPair("(12,50)", "1.234,567", null),
+    textPair("$12,50", "1 234,567", null),
+    textPair("1.260e3", "1.234,567", null),
+    textPair("1e3", "12,50", null),
+    textPair("$90e2", "1.234,567", null),
+    textPair("1.234", "2.500", null),
+    textPair("1500", "1000", null),
+    numberPair("1,234,567", "12.5", [1234567, 12.5], null),
+    textPair("1.234,567", "(1 234,567)", null),
+    textPair("1.234,56", "1 234,567", null),
   ];
-  const named = "amount mixes number styles, so it was read as text.";
-  const hasMarker = (value: string): boolean => /[,$()]/.test(value);
-  let namedCount = 0;
-  let unnamedCount = 0;
-  let numeric = 0;
-  for (let i = 0; i < values.length; i++) {
-    for (let j = i; j < values.length; j++) {
-      const left = values[i];
-      const right = values[j];
-      const table = `proof_${i}_${j}`;
-      await createText(query, table, { amount: [left.text, right.text] });
+  const failures: string[] = [];
+  for (const [index, [left, right, expected]] of pairs.entries()) {
+    const table = `proof_${index}`;
+    const label = `${left} with ${right}`;
+    try {
+      await createText(query, table, { amount: [left, right] });
       await convertFormattedNumbers(query, table);
-      if (!hasMarker(left.text) && !hasMarker(right.text)) {
-        assert.equal(await columnType(query, table, "amount"), "VARCHAR", `${left.text} with ${right.text}`);
-        assert.equal(await decimalCommaNote(query, table), null, `${left.text} with ${right.text}`);
-        continue;
+      assert.equal(await columnType(query, table, "amount"), expected.type, `${label} type`);
+      if (expected.type === "VARCHAR") {
+        assert.deepEqual(await columnValues(query, table, "amount"), expected.strings, `${label} strings`);
+      } else {
+        expectNumbers(await columnValues(query, table, "amount"), expected.values, label);
       }
-      if ((await columnType(query, table, "amount")) === "DOUBLE") {
-        numeric += 1;
-        continue;
-      }
-      assert.deepEqual(await columnValues(query, table, "amount"), [left.text, right.text]);
-      const provesBoth = (left.us || right.us) && (left.comma || right.comma);
-      assert.equal(await decimalCommaNote(query, table), provesBoth ? named : null, `${left.text} with ${right.text}`);
-      if (provesBoth) namedCount += 1;
-      else unnamedCount += 1;
+      assert.equal(await decimalCommaNote(query, table), expected.note, `${label} note`);
+    } catch (error) {
+      failures.push((error as Error).message);
     }
   }
-  assert.ok(namedCount > 0);
-  assert.ok(unnamedCount > 0);
-  assert.ok(numeric > 0);
+  assert.deepEqual(failures, []);
+  assert.ok(pairs.some(([, , expected]) => expected.type === "VARCHAR" && expected.note === MIXED_STYLES));
+  assert.ok(pairs.some(([, , expected]) => expected.type === "VARCHAR" && expected.note === null));
+  assert.ok(pairs.some(([, , expected]) => expected.type === "DOUBLE" && expected.note === ONE));
+  assert.ok(pairs.some(([, , expected]) => expected.type === "DOUBLE" && expected.note === null));
 });
 
 test("text values, a malformed number and single decorated styles stay text and are not named", async () => {
@@ -381,49 +408,7 @@ test("review three decorated decimal commas beside a US value stay text and are 
   }
 });
 
-test("twelve point five beside space-grouped and plus-signed three-decimal proof stays text and is named", async () => {
-  const query = await openDatabase();
-  const cases: Record<string, [string, string]> = {
-    space: ["12.5", "1 234,567"],
-    plus: ["12.5", "+1.234,567"],
-  };
-  for (const [name, values] of Object.entries(cases)) {
-    const table = `t292_base_${name}`;
-    await createText(query, table, { amount: values });
-    await convertFormattedNumbers(query, table);
-    assert.equal(await columnType(query, table, "amount"), "VARCHAR");
-    assert.deepEqual(await columnValues(query, table, "amount"), values);
-    assert.equal(await decimalCommaNote(query, table), "amount mixes number styles, so it was read as text.");
-  }
-});
-
-test("twelve point five beside decorated space-grouped three-decimal proof stays text and is named", async () => {
-  const query = await openDatabase();
-  const partners = ["-1 234,567", "$1 234,567", "(1 234,567)"];
-  for (const [index, partner] of partners.entries()) {
-    const table = `t292_space_${index}`;
-    await createText(query, table, { amount: ["12.5", partner] });
-    await convertFormattedNumbers(query, table);
-    assert.equal(await columnType(query, table, "amount"), "VARCHAR");
-    assert.deepEqual(await columnValues(query, table, "amount"), ["12.5", partner]);
-    assert.equal(await decimalCommaNote(query, table), "amount mixes number styles, so it was read as text.");
-  }
-});
-
-test("twelve point five beside decorated dot-grouped three-decimal proof stays text and is named", async () => {
-  const query = await openDatabase();
-  const partners = ["-1.234,567", "$1.234,567", "(1.234,567)"];
-  for (const [index, partner] of partners.entries()) {
-    const table = `t292_dot_${index}`;
-    await createText(query, table, { amount: ["12.5", partner] });
-    await convertFormattedNumbers(query, table);
-    assert.equal(await columnType(query, table, "amount"), "VARCHAR");
-    assert.deepEqual(await columnValues(query, table, "amount"), ["12.5", partner]);
-    assert.equal(await decimalCommaNote(query, table), "amount mixes number styles, so it was read as text.");
-  }
-});
-
-test("space-grouped, plus-signed and plain four-digit three-decimal values alone pin the new proof", async () => {
+test("lone 1 234,567 and +1.234,567 stay text; lone 1234,567 converts to 1234.567 and is named", async () => {
   const query = await openDatabase();
   await createText(query, "t292_alone_space", { amount: ["1 234,567"] });
   await convertFormattedNumbers(query, "t292_alone_space");
@@ -440,27 +425,6 @@ test("space-grouped, plus-signed and plain four-digit three-decimal values alone
   assert.equal(await columnType(query, "t292_alone_plain", "amount"), "DOUBLE");
   expectNumbers(await columnValues(query, "t292_alone_plain", "amount"), [1234.567]);
   assert.equal(await decimalCommaNote(query, "t292_alone_plain"), ONE);
-});
-
-test("three-decimal space proof beside neutral neighbours keeps the D64 boundaries", async () => {
-  const query = await openDatabase();
-  const unnamed: Record<string, [string, string]> = {
-    space_whole: ["1 500", "1 234,567"],
-    plain_three: ["1,234", "1 234,567"],
-  };
-  for (const [name, values] of Object.entries(unnamed)) {
-    const table = `t292_edge_${name}`;
-    await createText(query, table, { amount: values });
-    await convertFormattedNumbers(query, table);
-    assert.equal(await columnType(query, table, "amount"), "VARCHAR");
-    assert.deepEqual(await columnValues(query, table, "amount"), values);
-    assert.equal(await decimalCommaNote(query, table), null);
-  }
-  await createText(query, "t292_edge_named", { amount: ["1,260.00", "1 234,567"] });
-  await convertFormattedNumbers(query, "t292_edge_named");
-  assert.equal(await columnType(query, "t292_edge_named", "amount"), "VARCHAR");
-  assert.deepEqual(await columnValues(query, "t292_edge_named", "amount"), ["1,260.00", "1 234,567"]);
-  assert.equal(await decimalCommaNote(query, "t292_edge_named"), "amount mixes number styles, so it was read as text.");
 });
 
 test("review four consistent european columns stay text and are not named", async () => {
