@@ -342,19 +342,25 @@ test("mixed number-shape pairs are named only when both sides prove a style", as
     textPair("1.234,567", "(1 234,567)", null),
     textPair("1.234,56", "1 234,567", null),
   ];
+  const failures: string[] = [];
   for (const [index, [left, right, expected]] of pairs.entries()) {
     const table = `proof_${index}`;
     const label = `${left} with ${right}`;
-    await createText(query, table, { amount: [left, right] });
-    await convertFormattedNumbers(query, table);
-    assert.equal(await columnType(query, table, "amount"), expected.type, label);
-    if (expected.type === "VARCHAR") {
-      assert.deepEqual(await columnValues(query, table, "amount"), expected.strings, label);
-    } else {
-      expectNumbers(await columnValues(query, table, "amount"), expected.values, label);
+    try {
+      await createText(query, table, { amount: [left, right] });
+      await convertFormattedNumbers(query, table);
+      assert.equal(await columnType(query, table, "amount"), expected.type, `${label} type`);
+      if (expected.type === "VARCHAR") {
+        assert.deepEqual(await columnValues(query, table, "amount"), expected.strings, `${label} strings`);
+      } else {
+        expectNumbers(await columnValues(query, table, "amount"), expected.values, label);
+      }
+      assert.equal(await decimalCommaNote(query, table), expected.note, `${label} note`);
+    } catch (error) {
+      failures.push((error as Error).message);
     }
-    assert.equal(await decimalCommaNote(query, table), expected.note, label);
   }
+  assert.deepEqual(failures, []);
   assert.ok(pairs.some(([, , expected]) => expected.type === "VARCHAR" && expected.note === MIXED_STYLES));
   assert.ok(pairs.some(([, , expected]) => expected.type === "VARCHAR" && expected.note === null));
   assert.ok(pairs.some(([, , expected]) => expected.type === "DOUBLE" && expected.note === ONE));
