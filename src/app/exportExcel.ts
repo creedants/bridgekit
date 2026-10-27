@@ -124,12 +124,18 @@ export async function exportExcel(
   coverage.getColumn(2).numFmt = "0.0%";
   coverage.getColumn(3).numFmt = numberFormat;
 
+  const usedNames = new Set(workbook.worksheets.map((sheet) => sheet.name.toLowerCase()));
+  for (const fixed of ["Price bands", "Setup check", "Detail", "Setup"]) usedNames.add(fixed.toLowerCase());
   for (const level of config.levels) {
     const rows = await drill(query, config, { columns: level.columns, limit: 5000 });
-    // Sheet names are capped at 31 characters and must be unique.
+    // Excel compares sheet names without regard to case and caps them at 31 characters.
     const baseName = `By ${level.name}`.replace(/[\\/*?:[\]]/g, " ").slice(0, 28);
     let sheetName = baseName;
-    for (let n = 2; workbook.getWorksheet(sheetName); n++) sheetName = `${baseName} ${n}`;
+    for (let n = 2; usedNames.has(sheetName.toLowerCase()); n++) {
+      const suffix = ` ${n}`;
+      sheetName = `${baseName.slice(0, 31 - suffix.length)}${suffix}`;
+    }
+    usedNames.add(sheetName.toLowerCase());
     const sheet = workbook.addWorksheet(sheetName);
     sheet.addRow([...level.columns, "Prior sales", "Current sales", "Change", ...effects.map((e) => e.label)]).font = bold;
     for (const row of rows) {
