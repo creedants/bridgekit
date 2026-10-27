@@ -294,6 +294,12 @@ test("mixed number-shape pairs are named only when both sides prove a style", as
     { text: "$12,50", us: false, comma: true },
     { text: "(12,50)", us: false, comma: true },
     { text: "-12,50", us: false, comma: true },
+    { text: "-1 234,567", us: false, comma: true },
+    { text: "$1 234,567", us: false, comma: true },
+    { text: "(1 234,567)", us: false, comma: true },
+    { text: "$1.234,567", us: false, comma: true },
+    { text: "(1.234,567)", us: false, comma: true },
+    { text: "1 500", us: false, comma: false },
     { text: "1500", us: false, comma: false },
     { text: "1000", us: false, comma: false },
     { text: "1260.000", us: false, comma: false },
@@ -309,6 +315,11 @@ test("mixed number-shape pairs are named only when both sides prove a style", as
   ];
   const named = "amount mixes number styles, so it was read as text.";
   const hasMarker = (value: string): boolean => /[,$()]/.test(value);
+  const numberFrom = (value: string, decimalComma: boolean): number => {
+    const decorated = value.trim().replaceAll("$", "").replaceAll(" ", "");
+    const signed = decorated.startsWith("(") ? `-${decorated.slice(1, -1)}` : decorated;
+    return Number(decimalComma ? signed.replaceAll(".", "").replace(",", ".") : signed.replaceAll(",", ""));
+  };
   let namedCount = 0;
   let unnamedCount = 0;
   let numeric = 0;
@@ -326,6 +337,8 @@ test("mixed number-shape pairs are named only when both sides prove a style", as
       }
       if ((await columnType(query, table, "amount")) === "DOUBLE") {
         numeric += 1;
+        const decimalComma = left.comma || right.comma;
+        expectNumbers(await columnValues(query, table, "amount"), [numberFrom(left.text, decimalComma), numberFrom(right.text, decimalComma)]);
         continue;
       }
       assert.deepEqual(await columnValues(query, table, "amount"), [left.text, right.text]);
@@ -381,49 +394,7 @@ test("review three decorated decimal commas beside a US value stay text and are 
   }
 });
 
-test("twelve point five beside space-grouped and plus-signed three-decimal proof stays text and is named", async () => {
-  const query = await openDatabase();
-  const cases: Record<string, [string, string]> = {
-    space: ["12.5", "1 234,567"],
-    plus: ["12.5", "+1.234,567"],
-  };
-  for (const [name, values] of Object.entries(cases)) {
-    const table = `t292_base_${name}`;
-    await createText(query, table, { amount: values });
-    await convertFormattedNumbers(query, table);
-    assert.equal(await columnType(query, table, "amount"), "VARCHAR");
-    assert.deepEqual(await columnValues(query, table, "amount"), values);
-    assert.equal(await decimalCommaNote(query, table), "amount mixes number styles, so it was read as text.");
-  }
-});
-
-test("twelve point five beside decorated space-grouped three-decimal proof stays text and is named", async () => {
-  const query = await openDatabase();
-  const partners = ["-1 234,567", "$1 234,567", "(1 234,567)"];
-  for (const [index, partner] of partners.entries()) {
-    const table = `t292_space_${index}`;
-    await createText(query, table, { amount: ["12.5", partner] });
-    await convertFormattedNumbers(query, table);
-    assert.equal(await columnType(query, table, "amount"), "VARCHAR");
-    assert.deepEqual(await columnValues(query, table, "amount"), ["12.5", partner]);
-    assert.equal(await decimalCommaNote(query, table), "amount mixes number styles, so it was read as text.");
-  }
-});
-
-test("twelve point five beside decorated dot-grouped three-decimal proof stays text and is named", async () => {
-  const query = await openDatabase();
-  const partners = ["-1.234,567", "$1.234,567", "(1.234,567)"];
-  for (const [index, partner] of partners.entries()) {
-    const table = `t292_dot_${index}`;
-    await createText(query, table, { amount: ["12.5", partner] });
-    await convertFormattedNumbers(query, table);
-    assert.equal(await columnType(query, table, "amount"), "VARCHAR");
-    assert.deepEqual(await columnValues(query, table, "amount"), ["12.5", partner]);
-    assert.equal(await decimalCommaNote(query, table), "amount mixes number styles, so it was read as text.");
-  }
-});
-
-test("space-grouped, plus-signed and plain four-digit three-decimal values alone pin the new proof", async () => {
+test("lone three-decimal values stay text except a plain four-digit comma value, which converts and is named", async () => {
   const query = await openDatabase();
   await createText(query, "t292_alone_space", { amount: ["1 234,567"] });
   await convertFormattedNumbers(query, "t292_alone_space");
@@ -440,27 +411,6 @@ test("space-grouped, plus-signed and plain four-digit three-decimal values alone
   assert.equal(await columnType(query, "t292_alone_plain", "amount"), "DOUBLE");
   expectNumbers(await columnValues(query, "t292_alone_plain", "amount"), [1234.567]);
   assert.equal(await decimalCommaNote(query, "t292_alone_plain"), ONE);
-});
-
-test("three-decimal space proof beside neutral neighbours keeps the D64 boundaries", async () => {
-  const query = await openDatabase();
-  const unnamed: Record<string, [string, string]> = {
-    space_whole: ["1 500", "1 234,567"],
-    plain_three: ["1,234", "1 234,567"],
-  };
-  for (const [name, values] of Object.entries(unnamed)) {
-    const table = `t292_edge_${name}`;
-    await createText(query, table, { amount: values });
-    await convertFormattedNumbers(query, table);
-    assert.equal(await columnType(query, table, "amount"), "VARCHAR");
-    assert.deepEqual(await columnValues(query, table, "amount"), values);
-    assert.equal(await decimalCommaNote(query, table), null);
-  }
-  await createText(query, "t292_edge_named", { amount: ["1,260.00", "1 234,567"] });
-  await convertFormattedNumbers(query, "t292_edge_named");
-  assert.equal(await columnType(query, "t292_edge_named", "amount"), "VARCHAR");
-  assert.deepEqual(await columnValues(query, "t292_edge_named", "amount"), ["1,260.00", "1 234,567"]);
-  assert.equal(await decimalCommaNote(query, "t292_edge_named"), "amount mixes number styles, so it was read as text.");
 });
 
 test("review four consistent european columns stay text and are not named", async () => {

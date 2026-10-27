@@ -1,0 +1,1 @@
+- `test/numbers.test.ts` folds the overlapping three-decimal number-shape tests into the proof-pair matrix, which now also checks the parsed value of every column it converts, leaving two tests that each fail alone on their own parser mutation.
