@@ -321,8 +321,8 @@ function csvEncodingFailure(error: unknown): unknown {
 export const TOO_BIG_SENTENCE =
   "This file is too big to open in this browser. Try a smaller file, or save it with fewer rows or columns.";
 
-// DuckDB-WASM begins its allocation failure with this text, and a CSV parse or
-// encoding error begins with its own class name instead.
+// DuckDB-WASM begins the recorded allocation failure with this text.
+// CSV parse and encoding failures do not begin with this prefix.
 const OUT_OF_MEMORY_PREFIX = "Out of Memory Error";
 
 export function isOutOfMemory(error: unknown): boolean {
