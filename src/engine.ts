@@ -774,6 +774,8 @@ export interface TrendStep {
   volume: number;
   mix: number;
   price: number;
+  /** The unit cost part of the rate effect. Absent on a sales bridge. */
+  unitCost?: number;
   newAndDiscontinued: number;
   noUnits: number;
 }
@@ -800,6 +802,7 @@ export async function trend(
     }
     const sum = (match: (key: string) => boolean) =>
       result.effects.filter((e) => match(e.key)).reduce((total, e) => total + e.value, 0);
+    const unitCost = sum((key) => key === "cost_rate");
     steps.push({
       prior: String(periods[i - 1]),
       current: String(periods[i]),
@@ -807,7 +810,8 @@ export async function trend(
       currentSales: result.currentSales,
       volume: sum((key) => key === "volume"),
       mix: sum((key) => key.startsWith("mix_")),
-      price: sum((key) => key.startsWith("price") || key === "cost_rate"),
+      price: sum((key) => key.startsWith("price")),
+      ...(config.costColumn ? { unitCost } : {}),
       newAndDiscontinued: sum((key) => key === "new_config" || key === "discontinued"),
       noUnits: sum((key) => key === "no_units"),
     });

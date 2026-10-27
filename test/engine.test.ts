@@ -288,6 +288,103 @@ test("trend bridges each pair of consecutive periods", async () => {
   for (const s of steps) near(s.volume + s.mix + s.price + s.newAndDiscontinued + s.noUnits, s.currentSales - s.priorSales);
 });
 
+test("trend splits unit cost from price on a margin bridge and keeps each step whole", async () => {
+  const query = await openDatabase();
+  await query(`SET threads=1`);
+  await query(`CREATE TABLE t AS SELECT * FROM (VALUES
+    ('p0', 'P-104', 'Family A', 10, 100.0, 60.0), ('p0', 'P-105', 'Family A', 10, 200.0, 150.0),
+    ('p1', 'P-104', 'Family A', 10, 105.0, 64.0), ('p1', 'P-105', 'Family A', 18, 340.0, 260.0),
+    ('p2', 'P-104', 'Family A', 12, 150.0, 80.0), ('p2', 'P-105', 'Family A', 24, 500.0, 380.0)
+  ) v(period, product, family, units, sales, cost)`);
+  const config: BridgeConfig = {
+    table: "t", periodColumn: "period", prior: "p0", current: "p2",
+    unitsColumn: "units", salesColumn: "sales", costColumn: "cost",
+    levels: [{ name: "Product", columns: ["product"] }, { name: "Family", columns: ["family"] }],
+  };
+  const periods = ["p0", "p1", "p2"];
+  const steps = await trend(query, config, periods);
+  assert.equal(steps.length, 2);
+
+  for (let i = 1; i < periods.length; i++) {
+    const step = steps[i - 1];
+    const bridge = await runBridge(query, { ...config, prior: periods[i - 1], current: periods[i] });
+    const sum = (match: (key: string) => boolean) =>
+      bridge.effects.filter((effect) => match(effect.key)).reduce((total, effect) => total + effect.value, 0);
+    const folded = sum((key) => key.startsWith("price") || key === "cost_rate");
+    const unitCost = Number(step.unitCost);
+    near(step.price, sum((key) => key.startsWith("price")));
+    near(unitCost, sum((key) => key === "cost_rate"));
+    near(step.price + unitCost, folded);
+    near(
+      step.volume + step.mix + step.price + unitCost + step.newAndDiscontinued + step.noUnits,
+      step.currentSales - step.priorSales,
+    );
+  }
+  assert.equal(typeof steps[0].unitCost, "number", "a margin step carries its unit cost");
+});
+
+test("a sales trend has no unit cost and keeps the price it shows today", async () => {
+  const query = await openDatabase();
+  await query(`SET threads=1`);
+  await query(`CREATE TABLE t AS SELECT * FROM (VALUES
+    ('p0', 'P-104', 10, 100.0), ('p1', 'P-104', 10, 110.0), ('p2', 'P-104', 10, 130.0)
+  ) v(period, product, units, sales)`);
+  const steps = await trend(
+    query,
+    { table: "t", periodColumn: "period", prior: "p0", current: "p2", unitsColumn: "units", salesColumn: "sales",
+      levels: [{ name: "Product", columns: ["product"] }] },
+    ["p0", "p1", "p2"],
+  );
+  near(steps[0].price, 10);
+  assert.equal("unitCost" in steps[0], false, "a sales step has no unit cost");
+  assert.equal("unitCost" in steps[1], false, "a sales step has no unit cost");
+  assert.deepEqual(steps, [
+    { prior: "p0", current: "p1", priorSales: 100, currentSales: 110, volume: 0, mix: 0, price: 10, newAndDiscontinued: 0, noUnits: 0 },
+    { prior: "p1", current: "p2", priorSales: 110, currentSales: 130, volume: 0, mix: 0, price: 20, newAndDiscontinued: 0, noUnits: 0 },
+  ]);
+});
+
+test("the margin and sales fixtures compute the totals the base computed", async () => {
+  const query = await openDatabase();
+  await query(`SET threads=1`);
+  await query(`CREATE TABLE t AS SELECT * FROM (VALUES
+    ('p0', 'P-104', 'Family A', 10, 100.0, 60.0), ('p0', 'P-105', 'Family A', 10, 200.0, 150.0),
+    ('p1', 'P-104', 'Family A', 10, 105.0, 64.0), ('p1', 'P-105', 'Family A', 18, 340.0, 260.0),
+    ('p2', 'P-104', 'Family A', 12, 150.0, 80.0), ('p2', 'P-105', 'Family A', 24, 500.0, 380.0)
+  ) v(period, product, family, units, sales, cost)`);
+  const base = {
+    table: "t", periodColumn: "period", prior: "p1", current: "p2",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }, { name: "Family", columns: ["family"] }],
+  };
+  const sales = await runBridge(query, base);
+  assert.equal(sales.priorSales, 445);
+  assert.equal(sales.currentSales, 650);
+  const salesValues = Object.fromEntries(sales.effects.map((effect) => [effect.key, effect.value]));
+  near(salesValues.volume, 127.14285714285714);
+  near(salesValues.mix_1, 7.190476190476197);
+  near(salesValues.mix_2, 0);
+  near(salesValues.price, 70.66666666666666);
+  near(salesValues.new_config, 0);
+  near(salesValues.discontinued, 0);
+  near(salesValues.no_units, 0);
+  near(sales.effects.reduce((total, effect) => total + effect.value, 0), sales.currentSales - sales.priorSales);
+
+  const margin = await runBridge(query, { ...base, costColumn: "cost" });
+  assert.equal(margin.priorSales, 121);
+  assert.equal(margin.currentSales, 190);
+  const marginValues = Object.fromEntries(margin.effects.map((effect) => [effect.key, effect.value]));
+  near(marginValues.volume, 34.57142857142857);
+  near(marginValues.mix_1, 0.29523809523809774);
+  near(marginValues.mix_2, 0);
+  near(marginValues.price_sales, 70.66666666666669);
+  near(marginValues.cost_rate, -36.53333333333336);
+  near(marginValues.new_config, 0);
+  near(marginValues.discontinued, 0);
+  near(marginValues.no_units, 0);
+  near(margin.effects.reduce((total, effect) => total + effect.value, 0), margin.currentSales - margin.priorSales);
+});
+
 test("price realization by group and price gaps against peers", async () => {
   const query = await openDatabase();
   await query(`CREATE TABLE t AS SELECT * FROM (VALUES

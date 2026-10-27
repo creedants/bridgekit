@@ -1,5 +1,5 @@
 import { commentary } from "../commentary.ts";
-import { coverageLabel, measureName, type AccountGroup, type BridgeConfig, type BridgeResult, type PriceBucket } from "../engine.ts";
+import { coverageLabel, effectColumns, measureName, type AccountGroup, type BridgeConfig, type BridgeResult, type PriceBucket } from "../engine.ts";
 import type { Setup } from "./setup.ts";
 import { percent, shareOfPrior, signedPercent, signedWhole, whole } from "./format.ts";
 
@@ -10,6 +10,10 @@ const markup = (value: unknown) =>
 const SALES = {
   bridgeTitle: "Sales bridge",
   ofPrior: "% of prior sales",
+  prior: "Prior sales",
+  current: "Current sales",
+  matchedHeading: "How current sales were matched",
+  matchedShare: "Share of matched sales",
   priceEffect: "Price",
   priorPrice: "Prior price",
   currentPrice: "Current price",
@@ -20,6 +24,10 @@ const SALES = {
 const MARGIN = {
   bridgeTitle: "Margin bridge",
   ofPrior: "% of prior margin",
+  prior: "Prior margin",
+  current: "Current margin",
+  matchedHeading: "How current margin was matched",
+  matchedShare: "Share of matched margin",
   priceEffect: "Price and unit cost",
   priorPrice: "Prior unit margin",
   currentPrice: "Current unit margin",
@@ -30,6 +38,10 @@ const MARGIN = {
 interface Terms {
   bridgeTitle: string;
   ofPrior: string;
+  prior: string;
+  current: string;
+  matchedHeading: string;
+  matchedShare: string;
   priceEffect: string;
   priorPrice: string;
   currentPrice: string;
@@ -47,10 +59,26 @@ export function terms(config: BridgeConfig): Terms {
 /** The Movers columns after the grouping columns, in margin wording when the bridge is on margin. */
 export function moverHeader(config: BridgeConfig): string[] {
   const t = terms(config);
-  const measure = measureName(config).toLowerCase();
   return [
-    `Prior ${measure}`, `Current ${measure}`, "Change", "Volume", "Mix", t.priceEffect,
+    t.prior, t.current, "Change", "Volume", "Mix", t.priceEffect,
     "New config.", "Discontinued", "No units", t.priorPrice, t.currentPrice, t.priceChange,
+  ];
+}
+
+/** The Trend tab columns, in order, so whether a margin bridge's Unit cost column appears is decided here rather than in the JSX. */
+export function trendHeader(config: BridgeConfig): { label: string; num: boolean }[] {
+  const unitCost = effectColumns(config).find((column) => column.key === "cost_rate")?.label;
+  return [
+    { label: "Periods", num: false },
+    { label: "Change", num: true },
+    { label: "Volume", num: true },
+    { label: "Mix", num: true },
+    { label: "Price", num: true },
+    ...(config.costColumn && unitCost ? [{ label: unitCost, num: true }] : []),
+    { label: "Price, % of prior", num: true },
+    { label: "Price effect", num: false },
+    { label: "New and discontinued", num: true },
+    { label: "No units", num: true },
   ];
 }
 /** A table cell that begins with a formula character takes a leading apostrophe, as the CSV export does. */
@@ -203,14 +231,14 @@ ${paragraphs.map((p) => `<p>${markup(p)}</p>`).join("\n")}
 ${omit ? "" : input.chartUrl ? `<img alt="Waterfall chart of the bridge" src="${input.chartUrl}">` : ""}
 <h2>Bridge</h2>
 <table>${row(["", "Amount", t.ofPrior], "th")}${bridge.join("")}</table>
-<h2>How current sales were matched</h2>
+<h2>${markup(t.matchedHeading)}</h2>
 <table class="plain">${row(["Compared against", "Share", "Configurations"], "th")}${viewCoverage
     .map((c) => row([cell(c.label), percent(c.share), whole(c.cells)]))
     .join("")}</table>
 <h2>Largest movers by ${markup(viewMoversLabel)}</h2>
 <table class="plain">${row([cell(viewMoversLabel), ...moverColumns.map((c) => c.label)], "th")}${movers.join("")}</table>
 <h2>How widely price moved</h2>
-<table class="plain">${row(["Change in average price", "Share of matched sales", "Price effect"], "th")}${input.priceBands
+<table class="plain">${row(["Change in average price", t.matchedShare, "Price effect"], "th")}${input.priceBands
     .map((b) => row([cell(b.label), percent(b.share), signedWhole(b.priceEffect)]))
     .join("")}</table>
 ${

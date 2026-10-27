@@ -504,6 +504,98 @@ test("ten same-name sheets keep the two-digit suffix in range", async () => {
   });
 });
 
+test("the Setup sheet keeps a -0 money tie-out line displayed as -0 (T237)", async () => {
+  const { default: ExcelJS } = await import("exceljs");
+  const captured: { blob?: Blob } = {};
+  const realDocument = (globalThis as any).document;
+  const realCreate = URL.createObjectURL;
+  const realRevoke = URL.revokeObjectURL;
+  (globalThis as any).document = { createElement: () => ({ href: "", download: "", click() {} }) };
+  (URL as any).createObjectURL = (blob: Blob) => {
+    captured.blob = blob;
+    return "blob:zero-sign";
+  };
+  (URL as any).revokeObjectURL = () => {};
+
+  const config: BridgeConfig = {
+    table: "sales",
+    periodColumn: "period",
+    prior: "2025",
+    current: "2026",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    costColumn: "cost",
+    levels: [{ name: "Product", columns: ["product"] }],
+  };
+  const effects = [
+    { key: "volume", label: "Volume", value: 0 },
+    { key: "mix_1", label: "Mix: Product", value: 0 },
+    { key: "price_sales", label: "Price", value: 0 },
+    { key: "cost_rate", label: "Unit cost", value: 0 },
+    { key: "new_config", label: "New configurations", value: 0 },
+    { key: "discontinued", label: "Discontinued configurations", value: 0 },
+    { key: "no_units", label: "Sales with no units", value: 0 },
+  ];
+  // A prior total that rounds to -0 and a current total that rounds to +0, so both zero signs meet one column.
+  const result: BridgeResult = { priorSales: -0.3, currentSales: 0.4, effects, coverage: [], cellsTable: "bridge_cells" };
+  const check: DataCheck = {
+    rows: 0,
+    priorRows: 0,
+    currentRows: 0,
+    otherPeriodRows: 0,
+    blankPeriodRows: 0,
+    blankMeasureRows: 0,
+    negativeUnitRows: 0,
+    negativeSalesRows: 0,
+    zeroUnitSalesRows: 0,
+  };
+  const tieOut: TieOut = {
+    prior: { period: "2025", inFile: -0.3, afterFilters: -0.3 },
+    current: { period: "2026", inFile: 0.4, afterFilters: 0.4 },
+  };
+  const query: Query = async () => [markerRow];
+  try {
+    await exportExcel(query, config, result, check, tieOut, ["Source: zero-sign.csv"]);
+  } finally {
+    (globalThis as any).document = realDocument;
+    URL.createObjectURL = realCreate;
+    URL.revokeObjectURL = realRevoke;
+  }
+  assert.ok(captured.blob, "the export downloaded a workbook");  const bytes = new Uint8Array(await captured.blob.arrayBuffer());
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(bytes as any);
+
+  /** The digits Excel shows for a number with this format, sectioned by sign. A quoted section is literal text. */
+  const shown = (value: unknown, numFmt: string): string => {
+    const number = Number(value);
+    const [positive, negative, zero] = numFmt.split(";");
+    const section = number === 0 ? zero ?? positive : number < 0 ? negative ?? positive : positive;
+    const pattern = section.replace(/"[^"]*"/g, "");
+    const text = section.replaceAll('"', "");
+    if (!/[#0]/.test(pattern)) return text;
+    const digits = Math.abs(Math.round(number)).toLocaleString("en-US");
+    return text.replace(/-?[#0][#0,]*/, (number < 0 ? "-" : "") + digits);
+  };
+
+  const cells = new Map<string, { value: unknown; shown: string }>();
+  workbook.getWorksheet("Setup")!.eachRow((row) => {
+    const label = String(row.getCell(1).value ?? "");
+    if (label.startsWith("Margin")) {
+      cells.set(label, { value: row.getCell(2).value, shown: shown(row.getCell(2).value, String(row.getCell(2).numFmt ?? "")) });
+    }
+  });
+  const priorFile = cells.get("Margin in file, 2025");
+  const priorBridge = cells.get("Margin in the bridge, 2025");
+  const currentFile = cells.get("Margin in file, 2026");
+  assert.ok(priorFile && priorBridge && currentFile, "the Setup sheet holds both tie-out periods");
+  for (const [name, cell] of [["prior file", priorFile], ["prior bridge", priorBridge]] as const) {
+    assert.equal(typeof cell.value, "number", `${name} stays numeric`);
+    assert.equal(cell.shown, "-0", `${name} shows the sign the app shows`);
+  }
+  assert.equal(currentFile.shown, "0", "a positive zero keeps its plain zero");
+  assert.equal(typeof currentFile.value, "number", "a positive zero stays numeric");
+});
+
 test("tied By groups keep the limit-5000 rows and order with a cap note only over the cap (D79-2)", async () => {
   const { openDatabase } = await import("../src/duckdb.ts");
   const { runBridge, drill, dataCheck, periodMoney } = await import("../src/engine.ts");

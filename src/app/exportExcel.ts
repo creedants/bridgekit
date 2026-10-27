@@ -15,6 +15,7 @@ import {
 } from "../engine.ts";
 import { download } from "./files.ts";
 import { shareOfPrior } from "./format.ts";
+import { terms } from "./report.ts";
 
 /** Above this many configurations the detail sheet is left out and the bridge is written as values. */
 const MAX_DETAIL_ROWS = 150_000;
@@ -50,6 +51,7 @@ export async function exportExcel(
   const k = config.levels.length;
   const keys = cumulativeColumns(config.levels, k);
   const effects = effectColumns(config);
+  const t = terms(config);
   const bold = { bold: true };
   const numberFormat = "#,##0;-#,##0";
 
@@ -90,7 +92,7 @@ export async function exportExcel(
   bridge.columns = [{ width: 34 }, { width: 18 }, { width: 16 }];
   bridge.addRow([`${measureName(config)} bridge: ${config.prior} to ${config.current}`]).font = bold;
   bridge.addRow([]);
-  bridge.addRow(["", "Amount", "% of prior sales"]).font = bold;
+  bridge.addRow(["", "Amount", t.ofPrior]).font = bold;
   const lastDetailRow = detailRows + 1;
   const total = (field: string, value: number) =>
     withDetail ? { formula: `SUM(Detail!${letter(field)}2:${letter(field)}${lastDetailRow})`, result: value } : value;
@@ -98,7 +100,7 @@ export async function exportExcel(
     withDetail
       ? { formula: `SUM(Detail!${letter(a)}2:${letter(a)}${lastDetailRow})+SUM(Detail!${letter(b)}2:${letter(b)}${lastDetailRow})`, result: value }
       : value;
-  bridge.addRow([`Prior ${measureName(config).toLowerCase()}`, sales("s0", "z0", result.priorSales)]).font = bold;
+  bridge.addRow([t.prior, sales("s0", "z0", result.priorSales)]).font = bold;
   for (const effect of effects) {
     const value = result.effects.find((e) => e.key === effect.key)!.value;
     const row = bridge.addRow([effect.label, total(effect.key, value)]);
@@ -109,7 +111,7 @@ export async function exportExcel(
     row.getCell(3).value = share === null ? { formula } : { formula, result: share };
     row.getCell(3).numFmt = "0.0%";
   }
-  bridge.addRow([`Current ${measureName(config).toLowerCase()}`, sales("s1", "z1", result.currentSales)]).font = bold;
+  bridge.addRow([t.current, sales("s1", "z1", result.currentSales)]).font = bold;
   const checkRow = bridge.addRow([
     "Check: prior + effects - current",
     { formula: `SUM(B4:B${4 + effects.length})-B${5 + effects.length}`, result: 0 },
@@ -125,7 +127,7 @@ export async function exportExcel(
 
   const coverage = workbook.addWorksheet("Match coverage");
   coverage.columns = [{ width: 44 }, { width: 14 }, { width: 18 }, { width: 16 }];
-  coverage.addRow(["Compared against", "Share", "Current sales", "Configurations"]).font = bold;
+  coverage.addRow(["Compared against", "Share", t.current, "Configurations"]).font = bold;
   for (const c of result.coverage) coverage.addRow([c.label, c.share, c.sales, c.cells]);
   coverage.getColumn(2).numFmt = "0.0%";
   coverage.getColumn(3).numFmt = numberFormat;
@@ -152,7 +154,7 @@ export async function exportExcel(
     }
     usedNames.add(sheetName.toLowerCase());
     const sheet = workbook.addWorksheet(sheetName);
-    sheet.addRow([...level.columns, "Prior sales", "Current sales", "Change", ...effects.map((e) => e.label)]).font = bold;
+    sheet.addRow([...level.columns, t.prior, t.current, "Change", ...effects.map((e) => e.label)]).font = bold;
     for (const row of visible) {
       sheet.addRow([
         ...level.columns.map((c) => (row[c] === null ? "(blank)" : String(row[c]))),
@@ -176,7 +178,7 @@ export async function exportExcel(
   const bands = await priceDistribution(query, config);
   const bandSheet = workbook.addWorksheet("Price bands");
   bandSheet.columns = [{ width: 30 }, { width: 12 }, { width: 18 }, { width: 16 }, { width: 16 }];
-  bandSheet.addRow(["Change in average price", "Share", "Current sales", "Price effect", "Configurations"]).font = bold;
+  bandSheet.addRow(["Change in average price", "Share", t.current, "Price effect", "Configurations"]).font = bold;
   for (const b of bands.buckets) bandSheet.addRow([b.label, b.share, b.sales, b.priceEffect, b.cells]);
   bandSheet.addRow([]);
   bandSheet.addRow(["Average change, matched configurations", bands.averageChange]);
@@ -252,9 +254,11 @@ export async function exportExcel(
   for (const line of description) setup.addRow(line.split(": ", 2));
   setup.addRow([]);
   setup.addRow(["Money tie-out"]).font = bold;
+  /** The zero section shows the sign as text, so a numeric -0 keeps the sign the app shows. */
+  const moneyFormat = (value: number) => (Object.is(value, -0) ? '#,##0;-#,##0;"-0"' : "#,##0");
   for (const line of tieOutLines(config, tieOut, result)) {
     const row = setup.addRow([line.label, Number.isFinite(line.value) ? line.value : null]);
-    row.getCell(2).numFmt = "#,##0";
+    row.getCell(2).numFmt = moneyFormat(line.value);
   }
   setup.addRow([]);
   setup.addRow(["Rows read", check.rows]);
