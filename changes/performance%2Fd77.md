@@ -1,0 +1,1 @@
+- `scripts/perf/worker.mjs` now starts local `wrangler dev` with `--var BETTER_AUTH_URL:http://localhost:8790`, matching `npm run cf:dev` and the local wrangler smoke run, so the measured Worker trusts the local origin instead of `https://pvmbridge.com`.
