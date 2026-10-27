@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { exportExcel, finiteOrBlank } from "../src/app/exportExcel.ts";
 import { toExportCsv } from "../src/app/files.ts";
-import type { BridgeConfig, BridgeResult, DataCheck, Query, TieOut } from "../src/engine.ts";
+import type { BridgeConfig, BridgeResult, DataCheck, Level, Query, TieOut } from "../src/engine.ts";
 
 test("finiteOrBlank keeps everything except a number that is not finite", () => {
   assert.equal(finiteOrBlank(12.5), 12.5);
@@ -120,4 +120,128 @@ test("a workbook exported with zero prior sales carries no NaN or Infinity and n
   const share = bridge.getRow(shareRow).getCell(3).value as { formula?: string; result?: unknown };
   assert.equal(share.formula, `IF(B4=0,"",B${shareRow}/B4)`);
   assert.equal("result" in share, false, "the share cell carries no cached result");
+});
+
+const markerRow: Record<string, unknown> = new Proxy(
+  {},
+  {
+    get: (_target, key) => (typeof key === "symbol" ? undefined : key === "n" || key === "q0" ? 1 : 0),
+  },
+);
+
+async function levelSheetNames(levels: Level[]): Promise<string[]> {
+  const { default: ExcelJS } = await import("exceljs");
+  const captured: { blob?: Blob } = {};
+  const fakeDocument = {
+    createElement: () => ({ href: "", download: "", click() {} }),
+  };
+  const realDocument = (globalThis as any).document;
+  const realCreate = URL.createObjectURL;
+  const realRevoke = URL.revokeObjectURL;
+  (globalThis as any).document = fakeDocument;
+  (URL as any).createObjectURL = (blob: Blob) => {
+    captured.blob = blob;
+    return "blob:sheets";
+  };
+  (URL as any).revokeObjectURL = () => {};
+  const config: BridgeConfig = {
+    table: "sales",
+    periodColumn: "period",
+    prior: "2025",
+    current: "2026",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels,
+  };
+  const result: BridgeResult = {
+    priorSales: 0,
+    currentSales: 0,
+    effects: [
+      { key: "volume", label: "Volume", value: 0 },
+      ...levels.map((level, i) => ({ key: `mix_${i + 1}`, label: `Mix: ${level.name}`, value: 0 })),
+      { key: "price", label: "Price (like-for-like)", value: 0 },
+      { key: "new_config", label: "New configurations", value: 0 },
+      { key: "discontinued", label: "Discontinued configurations", value: 0 },
+      { key: "no_units", label: "Sales with no units", value: 0 },
+    ],
+    coverage: [],
+    cellsTable: "bridge_cells",
+  };
+  const check: DataCheck = {
+    rows: 0,
+    priorRows: 0,
+    currentRows: 0,
+    otherPeriodRows: 0,
+    blankPeriodRows: 0,
+    blankMeasureRows: 0,
+    negativeUnitRows: 0,
+    negativeSalesRows: 0,
+    zeroUnitSalesRows: 0,
+  };
+  const tieOut: TieOut = {
+    prior: { period: "2025", inFile: 0, afterFilters: 0 },
+    current: { period: "2026", inFile: 0, afterFilters: 0 },
+  };
+  const query: Query = async (sql: string) =>
+    sql.startsWith("SELECT count(*)::DOUBLE AS n") ? [{ n: 0 }] : [markerRow];
+  try {
+    await exportExcel(query, config, result, check, tieOut, ["Source: sheets.csv"]);
+  } finally {
+    (globalThis as any).document = realDocument;
+    URL.createObjectURL = realCreate;
+    URL.revokeObjectURL = realRevoke;
+  }
+  assert.ok(captured.blob, "the export downloaded a workbook");
+  const bytes = new Uint8Array(await captured.blob.arrayBuffer());
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(bytes as any);
+  return workbook.worksheets.map((sheet) => sheet.name);
+}
+
+test("level sheets whose names differ only in case get unique names", async () => {
+  const names = await levelSheetNames([
+    { name: "Product", columns: ["product"] },
+    { name: "PRODUCT", columns: ["region"] },
+  ]);
+  const levels = names.filter((name) => name.startsWith("By "));
+  assert.equal(levels.length, 2);
+  assert.equal(new Set(levels.map((name) => name.toLowerCase())).size, 2);
+  for (const name of levels) assert.ok(name.length <= 31, `${name} is over 31 characters`);
+  assert.equal(levels[0], "By Product");
+  assert.equal(levels[1], "By PRODUCT 2");
+});
+
+test("level sheets with long names that collide after the cut get unique names within 31 characters", async () => {
+  const names = await levelSheetNames([
+    { name: "Quarterly product attribute grouping variant alpha one", columns: ["a1"] },
+    { name: "QUARTERLY PRODUCT ATTRIBUTE GROUPING VARIANT ALPHA TWO", columns: ["a2"] },
+  ]);
+  const levels = names.filter((name) => name.startsWith("By "));
+  assert.equal(levels.length, 2);
+  assert.equal(new Set(levels.map((name) => name.toLowerCase())).size, 2);
+  for (const name of levels) assert.ok(name.length <= 31, `${name} is over 31 characters`);
+  assert.equal(levels[0], "By Quarterly product attribu");
+  assert.equal(levels[1], "By QUARTERLY PRODUCT ATTRIBU 2");
+});
+
+test("the tenth colliding level sheet carries a two-digit suffix within 31 characters", async () => {
+  const levels = Array.from({ length: 10 }, (_, i) => ({
+    name: i % 2 === 0 ? "Attribute" : "ATTRIBUTE",
+    columns: [`c${i + 1}`],
+  }));
+  const names = await levelSheetNames(levels);
+  const sheets = names.filter((name) => name.startsWith("By "));
+  assert.equal(sheets.length, 10);
+  assert.equal(new Set(sheets.map((name) => name.toLowerCase())).size, 10);
+  for (const name of sheets) assert.ok(name.length <= 31, `${name} is over 31 characters`);
+  assert.equal(sheets[9], "By ATTRIBUTE 10");
+});
+
+test("level sheets with ordinary names keep their names", async () => {
+  const names = await levelSheetNames([
+    { name: "Product", columns: ["product"] },
+    { name: "Region", columns: ["region"] },
+  ]);
+  const levels = names.filter((name) => name.startsWith("By "));
+  assert.deepEqual(levels, ["By Product", "By Region"]);
 });
