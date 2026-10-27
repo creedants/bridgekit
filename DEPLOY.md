@@ -46,7 +46,7 @@ Dashboard (not verified): Cloudflare > Account Home > Add a domain.
 
 ### 1.3 Create the database
 
-Do: Create the D1 database and copy the id it prints. If Wrangler offers to write that id into the config file, accept it. If it does not, put the id on `wrangler.jsonc:25` yourself, as step 1.4 describes. Done in this repository: `wrangler.jsonc:23-25` already names the database and carries its production id, so run this only when `npx wrangler d1 list` does not show `bridgekit`. That listing is how you know the database is created.
+Do: Create the D1 database and copy the id it prints. If Wrangler offers to write that id into the config file, refuse. Its default binding name is the database name, `bridgekit`, and the entry in this file is bound as `DB`, so accepting that offer adds a second entry instead of updating this one. Put the id on `wrangler.jsonc:25` yourself, as step 1.4 describes. Done in this repository: `wrangler.jsonc:23-25` already names the database and carries its production id, so run this only when `npx wrangler d1 list` does not show `bridgekit`. That listing is how you know the database is created.
 
 Run:
 ```sh
