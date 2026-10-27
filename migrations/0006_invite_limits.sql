@@ -2,8 +2,8 @@
 -- held to 20 sends in any rolling 24 hours. server/worker.ts refuses before
 -- Better Auth runs, but two requests in different isolates can both pass that
 -- check at 19 sends; the guard on the ledger's insert is where the last of them
--- is refused, and the abort rolls back the invitation insert or expiry change
--- that fired it, so no invitation row and no email survive it.
+-- is refused. The abort rolls back the invitation insert or expiry change
+-- that fired it, so the refused write changes no invitation and sends no email.
 --
 -- The ledger records sends, not invitations: a new invitation is one row
 -- written by Better Auth's insert, and a resend is one update of `expiresAt`

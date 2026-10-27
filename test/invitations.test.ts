@@ -1072,7 +1072,7 @@ test("rows that were already there survive the limits migration and ordinary req
 
     // Applying the migrations changes and deletes no row. The invitation
     // ledger's migration is applied as well, because the Worker reads it on
-    // every invitation; it adds only its own table.
+    // every invitation; it adds a ledger table, an index and three triggers.
     await env.DB.exec(readFileSync(LIMITS_MIGRATION, "utf8"));
     await env.DB.exec(readFileSync(INVITE_LIMITS_MIGRATION, "utf8"));
     assert.deepEqual(await counts(), before, "applying the migration changed a row");
