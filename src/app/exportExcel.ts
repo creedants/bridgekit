@@ -14,6 +14,7 @@ import {
   type Query,
 } from "../engine.ts";
 import { download } from "./files.ts";
+import { shareOfPrior } from "./format.ts";
 
 /** Above this many configurations the detail sheet is left out and the bridge is written as values. */
 const MAX_DETAIL_ROWS = 150_000;
@@ -101,8 +102,10 @@ export async function exportExcel(
   for (const effect of effects) {
     const value = result.effects.find((e) => e.key === effect.key)!.value;
     const row = bridge.addRow([effect.label, total(effect.key, value)]);
-    const formula = `IF(B4=0,"",B${row.number}/B4)`;
-    const share = finiteOrBlank(value / result.priorSales);
+    // Excel recalculates the formula on open, so a negative prior total needs ABS to keep the effect's sign. A positive or zero prior keeps the divisor B4, which writes the same formula and values as before.
+    const divisor = result.priorSales < 0 ? "ABS(B4)" : "B4";
+    const formula = `IF(B4=0,"",B${row.number}/${divisor})`;
+    const share = finiteOrBlank(shareOfPrior(value, result.priorSales));
     row.getCell(3).value = share === null ? { formula } : { formula, result: share };
     row.getCell(3).numFmt = "0.0%";
   }
