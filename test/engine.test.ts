@@ -395,6 +395,41 @@ test("margin account bridge foots to the bridge when one row has blank sales", a
   near(salesGroups.reduce((sum, g) => sum + g.current, 0), 130);
 });
 
+test("tied account leaders read alphabetically whatever order the rows arrive in", async () => {
+  const query = await openDatabase();
+  const config: BridgeConfig = {
+    table: "tied", periodColumn: "period", prior: "p0", current: "p1",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["customer"] }],
+  };
+  await query(`CREATE TABLE tied AS SELECT * FROM (VALUES
+    ('p0', 'alpha', 1, 100.0), ('p1', 'alpha', 1, 130.0),
+    ('p0', 'charlie', 1, 120.0), ('p1', 'charlie', 1, 150.0),
+    ('p0', 'bravo', 1, 400.0), ('p1', 'bravo', 1, 370.0),
+    ('p0', 'delta', 1, 300.0), ('p1', 'delta', 1, 270.0)
+  ) v(period, customer, units, sales)`);
+  await query(`CREATE TABLE tied_reversed AS SELECT * FROM (VALUES
+    ('p0', 'delta', 1, 300.0), ('p1', 'delta', 1, 270.0),
+    ('p0', 'bravo', 1, 400.0), ('p1', 'bravo', 1, 370.0),
+    ('p0', 'charlie', 1, 120.0), ('p1', 'charlie', 1, 150.0),
+    ('p0', 'alpha', 1, 100.0), ('p1', 'alpha', 1, 130.0)
+  ) v(period, customer, units, sales)`);
+
+  for (const table of ["tied_reversed", "tied"]) {
+    // The tie's order is engine-decided on every run until the query breaks it
+    // with the account name, so a single run can land alphabetical by luck.
+    for (let run = 0; run < 6; run += 1) {
+      const groups = await accountBridge(query, { ...config, table }, "customer");
+      const by = Object.fromEntries(groups.map((g) => [g.status, g]));
+      assert.deepEqual(by.growing.top.map((t) => t.name), ["alpha", "charlie"], `${table}: tied growing leaders read alphabetically`);
+      assert.deepEqual(by.shrinking.top.map((t) => t.name), ["bravo", "delta"], `${table}: tied shrinking leaders read alphabetically`);
+      for (const leader of [...by.growing.top, ...by.shrinking.top]) {
+        near(Math.abs(leader.change), 30, `${table}: tied leaders read alphabetically, so ${leader.name} changes by 30`);
+      }
+    }
+  }
+});
+
 test("review findings: float units that net to zero, offsetting splits, null sales with cost, reserved names", async () => {
   const query = await openDatabase();
   const base = { periodColumn: "period", prior: "p0", current: "p1", unitsColumn: "units", salesColumn: "sales" };
