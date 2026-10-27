@@ -30,6 +30,7 @@ import { summarize, type BridgeSummary } from "../summary.ts";
 import { download, toExportCsv, toExportTsv } from "./files.ts";
 import { finiteOrBlank } from "./exportExcel.ts";
 import { percent, price, signedPercent, signedWhole, whole } from "./format.ts";
+import { dateOrderNote } from "./db.ts";
 import { decimalCommaNote } from "./numbers.ts";
 import { trendPeriods } from "./periods.ts";
 import { TABLE } from "./setup.ts";
@@ -1025,21 +1026,27 @@ function checkWarnings(run: Run): string[] {
   return warnings;
 }
 
+/** The Data check's sentences about how the file was read, in the order the tab shows them. */
+export async function dataCheckNotes(query: Query, table: string): Promise<string[]> {
+  const sentences = [await decimalCommaNote(query, table)];
+  return sentences.filter((sentence): sentence is string => sentence !== null);
+}
+
 function Check(props: { run: Run; warnings: string[]; query: () => Promise<Query> }) {
   const { check, config, ms, tieOut: money } = props.run;
   const tieOut = tieOutLines(config, money, props.run.result);
-  const [note, setNote] = useState<string | null>(null);
+  const [notes, setNotes] = useState<string[]>([]);
   useEffect(() => {
     let stale = false;
-    setNote(null);
+    setNotes([]);
     props
       .query()
-      .then((query) => decimalCommaNote(query, TABLE))
-      .then((sentence) => {
-        if (!stale) setNote(sentence);
+      .then((query) => dataCheckNotes(query, TABLE))
+      .then((sentences) => {
+        if (!stale) setNotes(sentences);
       })
       .catch(() => {
-        if (!stale) setNote(null);
+        if (!stale) setNotes([]);
       });
     return () => {
       stale = true;
@@ -1071,7 +1078,7 @@ function Check(props: { run: Run; warnings: string[]; query: () => Promise<Query
       ) : (
         <ul className="warnings">{props.warnings.map((w) => <li key={w}>{w}</li>)}</ul>
       )}
-      {note ? <p className="hint">{note}</p> : null}
+      {notes.map((sentence) => <p className="hint" key={sentence}>{sentence}</p>)}
       <table className="narrow">
         <tbody>
           {lines.map(([label, value]) => (
