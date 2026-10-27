@@ -1,0 +1,1 @@
+- The app shell sets `#root { display: flow-root }` in its head, so the fallback heading's top margin cannot collapse through the mount point and move the body when the app mounts. A new test pins the rule in `app/index.html`.
