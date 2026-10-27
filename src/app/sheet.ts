@@ -129,8 +129,8 @@ function attributeValue(tag: string, name: string): string | undefined {
 
 // ExcelJS drops a worksheet whose relationship target it cannot reconcile, so
 // the first `<sheet>` in workbook.xml need not be the worksheet it imported.
-// Its worksheet id is the `<sheetId>` it read from the element, which is how the
-// library itself links the two.
+// Its worksheet id is the numeric `sheetId` it read from the element, which is
+// how the library itself links the two.
 function sheetPartPath(workbookXml: string, relsXml: string, sheetId: number): string | undefined {
   const sheetTags: string[] = [];
   for (const sheet of workbookXml.matchAll(/<sheet\b[^>]*>/g)) {
@@ -151,7 +151,6 @@ function sheetPartPath(workbookXml: string, relsXml: string, sheetId: number): s
 
 // Relationship targets follow package path rules. A leading slash is the
 // package root; anything else is relative to the folder of xl/workbook.xml.
-// Walking above the package root has no part to name, so it resolves to none.
 function resolvePartPath(target: string): string | undefined {
   const parts = target.startsWith("/") ? [] : ["xl"];
   for (const segment of target.split("/")) {
