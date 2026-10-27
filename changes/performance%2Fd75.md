@@ -1,0 +1,1 @@
+- Foot the margin account bridge to the bridge when sales are blank. `accountBridge` now uses the shared `measureSql(config)` so blank sales count as zero on margin.
