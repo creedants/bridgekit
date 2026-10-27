@@ -1712,24 +1712,57 @@ test("a numeric net_sales_note keeps the base sales guess beside text net_sales"
   assert.deepEqual(guessSetup(backward), expected);
 });
 
-test("a numeric net_revenue keeps the base sales guess beside text net_sales", () => {
+test("a numeric net_revenue stops text net_sales being held and keeps the base sales and gross guess", () => {
   const expected: Setup = {
     periodColumn: "period",
     grain: "value",
     unitsColumn: "units",
     salesColumn: "net_revenue",
-    grossColumn: undefined,
+    grossColumn: "gross_sales",
     levels: [],
     filters: [],
   };
-  const columns: Column[] = [
+  const forward: Column[] = [
     { name: "period", type: "VARCHAR" },
     { name: "product", type: "VARCHAR" },
     { name: "units", type: "INTEGER" },
     { name: "net_sales", type: "VARCHAR" },
     { name: "net_revenue", type: "DOUBLE" },
+    { name: "gross_sales", type: "DOUBLE" },
   ];
-  assert.deepEqual(guessSetup(columns), expected);
+  const reversed: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "units", type: "INTEGER" },
+    { name: "gross_sales", type: "DOUBLE" },
+    { name: "net_revenue", type: "DOUBLE" },
+    { name: "net_sales", type: "VARCHAR" },
+  ];
+  assert.deepEqual(guessSetup(forward), expected);
+  assert.deepEqual(guessSetup(reversed), expected);
+  // guessSetup asks the helper only when no numeric net column survives the note filter, so this pins the helper's own gate.
+  assert.equal(netSalesHeldAsText(forward), "");
+  assert.equal(netSalesHeldAsText(reversed), "");
+});
+
+test("a text net_sales_unit_price beside numeric sales does not withhold sales", () => {
+  for (const name of [
+    "net_sales_unit_price",
+    "net_sales_price_per_unit",
+    "net_sales_unit_cost",
+    "netSalesUnitPrice",
+  ]) {
+    const columns: Column[] = [
+      { name: "period", type: "VARCHAR" },
+      { name: "product", type: "VARCHAR" },
+      { name: "units", type: "INTEGER" },
+      { name, type: "VARCHAR" },
+      { name: "sales", type: "DOUBLE" },
+    ];
+    assert.equal(guessSetup(columns).salesColumn, "sales", name);
+    assert.equal(guessSetup(columns).grossColumn, undefined, name);
+    assert.equal(netSalesHeldAsText(columns), "", name);
+  }
 });
 
 test("network-like text columns do not withhold sales", () => {
