@@ -89,15 +89,15 @@ test("the budget sample's period column holds Budget and Actual, with Budget as 
   assert.ok(Number(totals.sales) > 0 && Number(totals.units) > 0, "the budget rows carry no sales");
 });
 
-test("an unknown or empty sample value still gives the lens sample at its default row count", () => {
+test("an unknown or empty sample value still gives the configuration sample at its default row count", () => {
   for (const value of [null, "", "nope", "SKU", "constructor", "__proto__", "999"]) {
     const { sample, rows } = resolveSample(value);
-    assert.equal(sample.name, "lens", `sample ${JSON.stringify(value)}`);
+    assert.equal(sample.name, "config", `sample ${JSON.stringify(value)}`);
     assert.equal(rows, SAMPLE_ROWS, `rows for ${JSON.stringify(value)}`);
   }
 });
 
-test("a sample number of 1000 or more stays the lens row count, capped at five million", () => {
+test("a sample number of 1000 or more stays the configuration row count, capped at five million", () => {
   for (const [value, rows] of [
     ["1000", 1_000],
     ["2500.7", 2_500],
@@ -107,7 +107,7 @@ test("a sample number of 1000 or more stays the lens row count, capped at five m
     ["9000000", MAX_SAMPLE_ROWS],
   ] as const) {
     const got = resolveSample(value);
-    assert.equal(got.sample.name, "lens", `sample for ${value}`);
+    assert.equal(got.sample.name, "config", `sample for ${value}`);
     assert.equal(got.rows, rows, `rows for ${value}`);
   }
 });
@@ -119,5 +119,5 @@ test("a named sample ignores the row count and loads at its own size", () => {
   const budget = resolveSample("budget");
   assert.equal(budget.sample.name, "budget");
   assert.equal(budget.rows, budget.sample.rows);
-  assert.equal(resolveSample("lens").rows, SAMPLE_ROWS);
+  assert.equal(resolveSample("config").rows, SAMPLE_ROWS);
 });

@@ -210,7 +210,7 @@ test("a hand-checked table reconciles across values, with the mix between them",
   await assertCatalog(query, ["bridge_cells"]);
 });
 
-test("synthetic sales reconcile by customer and by design, and the values with no bridge leave their change on the mix line", async () => {
+test("synthetic sales reconcile by customer and by model, and the values with no bridge leave their change on the mix line", async () => {
   const query = await openDatabase();
   await createSyntheticSales(query, 2_000);
   const config: BridgeConfig = {
@@ -218,16 +218,16 @@ test("synthetic sales reconcile by customer and by design, and the values with n
     periodColumn: "year",
     prior: 2025,
     current: 2026,
-    unitsColumn: "jobs",
+    unitsColumn: "units",
     salesColumn: "sales",
     levels: [
-      { name: "Design", columns: ["design"] },
-      { name: "Coating", columns: ["coating"] },
-      { name: "Color", columns: ["photochromic", "polar"] },
+      { name: "Model", columns: ["model"] },
+      { name: "Finish", columns: ["finish"] },
+      { name: "Color", columns: ["color", "upgrade"] },
       { name: "Material", columns: ["material"] },
     ],
   };
-  for (const column of ["customer", "design"]) {
+  for (const column of ["customer", "model"]) {
     const by = await bridgeBy(query, config, column);
     assert.equal(by.panels.length, 13, `${column} panels`);
     assertReconciles(by);
@@ -455,7 +455,7 @@ test("a column name and a value that carry SQL are data", async () => {
 
 test("the picked column can be an attribute, another column, or the period column", async () => {
   const query = await openDatabase();
-  await query(`CREATE TABLE m (period VARCHAR, region VARCHAR, design VARCHAR, coating VARCHAR, units INTEGER, sales DOUBLE, gross DOUBLE, cost DOUBLE)`);
+  await query(`CREATE TABLE m (period VARCHAR, region VARCHAR, design VARCHAR, finish VARCHAR, units INTEGER, sales DOUBLE, gross DOUBLE, cost DOUBLE)`);
   await query(`INSERT INTO m VALUES
     ('p0', 'North', 'D1', 'matte', 10, 100, 120, 60), ('p0', 'North', 'D2', 'matte', 5, 200, 230, 150),
     ('p0', 'South', 'D1', 'matte', 20, 200, 240, 120),
@@ -466,7 +466,7 @@ test("the picked column can be an attribute, another column, or the period colum
     table: "m",
     levels: [
       { name: "Design", columns: ["design"] },
-      { name: "Coating", columns: ["coating"] },
+      { name: "Finish", columns: ["finish"] },
     ],
   };
   const shapes: { label: string; config: BridgeConfig; keys: string[] }[] = [

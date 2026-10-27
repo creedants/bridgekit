@@ -44,11 +44,11 @@ const HEALTHY = input({
 
 test("the sample file and any file that bridges give no message", () => {
   const sample = input({
-    columns: [number("year"), text("customer"), text("design"), number("jobs"), number("sales")],
+    columns: [number("year"), text("customer"), text("design"), number("units"), number("sales")],
     rows: 1000,
     periodColumn: "year",
     periods: ["2024", "2025", "2026"],
-    unitsColumn: "jobs",
+    unitsColumn: "units",
     salesColumn: "sales",
   });
   assert.deepEqual(fileProblem(sample), { kind: "none" });
@@ -160,7 +160,7 @@ test("the message goes once the measure holds a numeric column", () => {
 
 test("a file with no column of numbers says the measures must be numbers", () => {
   const attributesOnly = input({
-    columns: [text("period"), text("design"), text("coating"), text("material")],
+    columns: [text("period"), text("design"), text("finish"), text("material")],
     rows: 12,
     periodColumn: "period",
     periods: ["2025", "2026"],
@@ -412,12 +412,12 @@ test("a chosen Boolean sales column is described without calling it text", () =>
 });
 
 test("Suggest attributes matches names, columns and order", () => {
-  const suggested = ["polar", "finish_type", "design"];
+  const suggested = ["upgrade", "delivery", "design"];
   assert.equal(
     sameSuggestedLevels(
       [
-        { name: "polar", columns: ["polar"] },
-        { name: "finish_type", columns: ["finish_type"] },
+        { name: "upgrade", columns: ["upgrade"] },
+        { name: "delivery", columns: ["delivery"] },
         { name: "design", columns: ["design"] },
       ],
       suggested,
@@ -427,8 +427,8 @@ test("Suggest attributes matches names, columns and order", () => {
   assert.equal(
     sameSuggestedLevels(
       [
-        { name: "polar", columns: ["polar", "customer"] },
-        { name: "finish_type", columns: ["finish_type"] },
+        { name: "upgrade", columns: ["upgrade", "customer"] },
+        { name: "delivery", columns: ["delivery"] },
         { name: "design", columns: ["design"] },
       ],
       suggested,
@@ -439,15 +439,15 @@ test("Suggest attributes matches names, columns and order", () => {
     sameSuggestedLevels(
       [
         { name: "design", columns: ["design"] },
-        { name: "polar", columns: ["polar"] },
-        { name: "finish_type", columns: ["finish_type"] },
+        { name: "upgrade", columns: ["upgrade"] },
+        { name: "delivery", columns: ["delivery"] },
       ],
       suggested,
     ),
     false,
   );
   assert.equal(sameSuggestedLevels([], []), true);
-  assert.equal(sameSuggestedLevels([{ name: "polar", columns: ["polar"] }], []), false);
+  assert.equal(sameSuggestedLevels([{ name: "upgrade", columns: ["upgrade"] }], []), false);
 });
 
 test("a text column named like a value in a non-measure role is left alone", () => {

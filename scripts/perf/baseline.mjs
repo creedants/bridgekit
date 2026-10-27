@@ -29,17 +29,17 @@ const BRIDGE = {
   periodColumn: "year",
   prior: 2025,
   current: 2026,
-  unitsColumn: "jobs",
+  unitsColumn: "units",
   salesColumn: "sales",
   levels: [
-    { name: "Design", columns: ["design"] },
-    { name: "Coating", columns: ["coating"] },
-    { name: "Color", columns: ["photochromic", "polar"] },
+    { name: "Model", columns: ["model"] },
+    { name: "Finish", columns: ["finish"] },
+    { name: "Color", columns: ["color", "upgrade"] },
     { name: "Material", columns: ["material"] },
   ],
 };
 
-const CSV_COLUMNS = ["year", "customer", "design", "coating", "photochromic", "polar", "material", "finish_type", "jobs", "sales"];
+const CSV_COLUMNS = ["year", "customer", "model", "finish", "color", "upgrade", "material", "delivery", "units", "sales"];
 const DEFAULT_CSV_DIR = "/tmp/bridgekit-perf";
 
 // The mark fires when the empty tool is ready. DuckDB opens after the load event, on an idle callback, unless Save-Data is on. A pick delay waits after this mark.
@@ -507,7 +507,7 @@ const CONFIGURE = `(async () => {
     el.dispatchEvent(new Event("change", { bubbles: true }));
   };
   set("Period column", "year");
-  set("Units", "jobs");
+  set("Units", "units");
   set("Sales", "sales");
   set("Gross sales", "");
   set("Cost", "");
@@ -525,25 +525,25 @@ const CONFIGURE = `(async () => {
     }
     throw new Error("attribute " + name + " did not apply");
   };
-  await add("design", 1);
-  await add("coating", 2);
-  await add("photochromic", 3);
-  const item = [...document.querySelectorAll("ol.levels li")].find((li) => li.querySelector('[aria-label="Attribute name"]')?.value === "photochromic");
+  await add("model", 1);
+  await add("finish", 2);
+  await add("color", 3);
+  const item = [...document.querySelectorAll("ol.levels li")].find((li) => li.querySelector('[aria-label="Attribute name"]')?.value === "color");
   const combo = item?.querySelector('select[aria-label="Combine another column into this attribute"]');
-  if (!combo) throw new Error("could not combine polar");
-  Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(combo, "polar");
+  if (!combo) throw new Error("could not combine upgrade");
+  Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(combo, "upgrade");
   combo.dispatchEvent(new Event("change", { bubbles: true }));
-  const polarDeadline = performance.now() + 5000;
-  while (performance.now() < polarDeadline) {
+  const upgradeDeadline = performance.now() + 5000;
+  while (performance.now() < upgradeDeadline) {
     const chips = [...document.querySelectorAll("ol.levels li .chip")].map((chip) => chip.childNodes[0].textContent.trim());
-    if (chips.includes("polar")) break;
+    if (chips.includes("upgrade")) break;
     await new Promise((resolve) => setTimeout(resolve, 16));
   }
   await add("material", 4);
   const columns = [...document.querySelectorAll("ol.levels li")].map((li) =>
     [...li.querySelectorAll(".chip")].map((chip) => chip.childNodes[0].textContent.trim()),
   );
-  const expected = JSON.stringify([["design"], ["coating"], ["photochromic", "polar"], ["material"]]);
+  const expected = JSON.stringify([["model"], ["finish"], ["color", "upgrade"], ["material"]]);
   if (JSON.stringify(columns) !== expected) throw new Error("columns " + JSON.stringify(columns));
   const deadline = performance.now() + 60_000;
   while (performance.now() < deadline) {
@@ -960,10 +960,10 @@ async function main() {
       fileToBridgeMs: "Wall time from just before the file input is set until the bridge table and the KPI row are on screen. Includes any DuckDB startup still unfinished, the CSV read, attribute setup, and the calculation.",
       parseMs: "From the file mark until the setup panel is on screen and the status text is empty. Includes any DuckDB startup still unfinished and the CSV read.",
       pickDelayMs: "Milliseconds the harness waits after the interactive mark before it sets the file. The wait is outside file-to-bridge. Zero matches the historical run. A non-zero value is a partial run.",
-      configureMs: "From parse until Calculate bridge is enabled. The script sets year, jobs, sales, and the four attributes used by the Node bridge.",
+      configureMs: "From parse until Calculate bridge is enabled. The script sets year, units, sales, and the four attributes used by the Node bridge.",
       calculateMs: "From the Calculate bridge click until the bridge table is on screen.",
       generateMs: "createSyntheticSales on one DuckDB connection, after one discarded warm-up. This is the in-app sample-data path, not a user CSV.",
-      bridgeMs: "runBridge for Design, Coating, Color (photochromic and polar), and Material. Sales, not margin. No gross column.",
+      bridgeMs: "runBridge for Model, Finish, Color (color and upgrade), and Material. Sales, not margin. No gross column.",
       dataCheckMs: "dataCheck after runBridge. The tool awaits this scan before it draws the bridge. It is not included in bridgeMs.",
       identity: `Money rounded to ${MONEY_DECIMALS} decimals and coverage shares rounded to ${SHARE_DECIMALS} decimals. Raw float sums are not bit-stable.`,
       gzipBytes: "zlib gzip at the default level.",

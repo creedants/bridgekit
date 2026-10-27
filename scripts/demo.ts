@@ -24,34 +24,34 @@ console.log(`Generated ${money(rows)} rows in ${(performance.now() - start).toFi
 
 const base = {
   table: "sales", periodColumn: "year", prior: 2025, current: 2026,
-  unitsColumn: "jobs", salesColumn: "sales",
+  unitsColumn: "units", salesColumn: "sales",
 };
 const full: BridgeConfig = {
   ...base,
   levels: [
-    { name: "Design", columns: ["design"] },
-    { name: "Coating", columns: ["coating"] },
-    { name: "Color", columns: ["photochromic", "polar"] },
+    { name: "Model", columns: ["model"] },
+    { name: "Finish", columns: ["finish"] },
+    { name: "Color", columns: ["color", "upgrade"] },
     { name: "Material", columns: ["material"] },
   ],
 };
 const single: BridgeConfig = {
   ...base,
-  levels: [{ name: "Design", columns: ["design"] }],
+  levels: [{ name: "Model", columns: ["model"] }],
   cellsTable: "single_cells",
 };
 
 start = performance.now();
 const fullResult = await runBridge(query, full);
-print("Design > Coating > Color > Material", fullResult, performance.now() - start);
+print("Model > Finish > Color > Material", fullResult, performance.now() - start);
 
 start = performance.now();
-print("Design only", await runBridge(query, single), performance.now() - start);
+print("Model only", await runBridge(query, single), performance.now() - start);
 
-console.log("\nTop designs by total effect (full bridge):");
-for (const row of await drill(query, full, { columns: ["design"], limit: 5 })) {
+console.log("\nTop models by total effect (full bridge):");
+for (const row of await drill(query, full, { columns: ["model"], limit: 5 })) {
   console.log(
-    `  ${String(row.design).padEnd(6)} price ${signed(Number(row.price)).padStart(12)}` +
+    `  ${String(row.model).padEnd(6)} price ${signed(Number(row.price)).padStart(12)}` +
       `  volume ${signed(Number(row.volume)).padStart(12)}  new ${signed(Number(row.new_config)).padStart(12)}`,
   );
 }

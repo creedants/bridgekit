@@ -1,4 +1,5 @@
 //   npm run build            && npm run smoke:preview    (serves dist/ itself)
+//   npm run build            && npm run smoke:preview -- --gallery   (rewrites the four public/img screenshots)
 //   npm run build:cloudflare && npm run smoke:wrangler   (local wrangler dev, accounts on)
 //   npm run dev   (in another terminal)
 //   npm run smoke [-- http://localhost:5173] [rows]
@@ -880,7 +881,7 @@ async function drive(browser, origin, rows) {
   const { nodeId } = await browser.send("DOM.querySelector", { nodeId: root.nodeId, selector: "input[type=file][accept*=csv]" });
   await browser.send("DOM.setFileInputFiles", { nodeId, files: [new URL("../public/sample-sales.csv", import.meta.url).pathname] });
   await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent");
-  await browser.evalJs(`T.set(document.querySelector('select[aria-label="Add attribute"]'), 'design')`);
+  await browser.evalJs(`T.set(document.querySelector('select[aria-label="Add attribute"]'), 'model')`);
   await browser.sleep(300);
   await browser.evalJs(`T.set(document.querySelector('select[aria-label="Add filter"]'), 'customer')`);
   await browser.waitFor("document.querySelectorAll('.values input').length > 0");
@@ -1049,7 +1050,7 @@ async function drive(browser, origin, rows) {
       }
     };
     const addFixtureLevels = async () => {
-      await addAttribute("design");
+      await addAttribute("model");
       await addAttribute("customer");
     };
     const waitReady = async () => {
@@ -1274,7 +1275,7 @@ async function drive(browser, origin, rows) {
 
     await setDataFile(fixtures.csvPath);
     await addAttribute("customer");
-    await addAttribute("design");
+    await addAttribute("model");
     await browser.evalJs(`T.set(T.sel('Sales'), 'units'); T.set(T.sel('Units'), 'net_sales')`);
     const readMapping = async () =>
       JSON.parse(
@@ -1282,7 +1283,7 @@ async function drive(browser, origin, rows) {
       );
     await browser.waitFor(`T.sel('Units')?.value === 'net_sales' && T.sel('Sales')?.value === 'units'`);
     const drafted = await readMapping();
-    if (drafted.levels.join(",") !== "customer,design") fail(`load setup: attributes before save are ${drafted.levels.join(", ") || "none"}`);
+    if (drafted.levels.join(",") !== "customer,model") fail(`load setup: attributes before save are ${drafted.levels.join(", ") || "none"}`);
     const setupJson = await browser.evalJs(`(async () => {
       let blob = null; const original = URL.createObjectURL;
       URL.createObjectURL = (b) => { blob = b; return original(b); };
@@ -1295,7 +1296,7 @@ async function drive(browser, origin, rows) {
     if (!setupJson) fail("load setup: no setup file was saved");
     const saved = JSON.parse(setupJson);
     if (saved.unitsColumn !== "net_sales" || saved.salesColumn !== "units") fail(`load setup: saved mapping is ${saved.unitsColumn}/${saved.salesColumn}`);
-    if (!Array.isArray(saved.levels) || saved.levels.map((level) => level.name).join(",") !== "customer,design") fail("load setup: saved attributes are not customer then design");
+    if (!Array.isArray(saved.levels) || saved.levels.map((level) => level.name).join(",") !== "customer,model") fail("load setup: saved attributes are not customer then model");
     const savedSetupPath = join(fixtureDir, "bridgekit-setup.json");
     writeFileSync(savedSetupPath, setupJson);
     await browser.evalJs("T.btn('Clear data').click()");
@@ -1313,7 +1314,7 @@ async function drive(browser, origin, rows) {
       await browser.send("DOM.setFileInputFiles", { nodeId, files: [savedSetupPath] });
     }
     try {
-      await browser.waitFor(`T.sel('Units')?.value === 'net_sales' && T.sel('Sales')?.value === 'units' && [...document.querySelectorAll('.levels input[aria-label="Attribute name"]')].map((input) => input.value).join(',') === 'customer,design'`, 40);
+      await browser.waitFor(`T.sel('Units')?.value === 'net_sales' && T.sel('Sales')?.value === 'units' && [...document.querySelectorAll('.levels input[aria-label="Attribute name"]')].map((input) => input.value).join(',') === 'customer,model'`, 40);
     } catch {
       const got = await readMapping();
       fail(`load setup: mapping is ${got.units}/${got.sales}, attributes ${got.levels.join(", ") || "none"}`);
@@ -1509,7 +1510,7 @@ async function drive(browser, origin, rows) {
     if (!(await browser.evalJs(`${exportButton}.disabled`))) {
       fail("stale bridge: Export Excel stays on while the notice says the setup changed");
     }
-    await addAttribute("design");
+    await addAttribute("model");
     await waitReady();
     await calculate();
     try {
@@ -1533,7 +1534,7 @@ async function drive(browser, origin, rows) {
         grain: "year",
         unitsColumn: "units",
         salesColumn: "net_sales",
-        levels: [{ name: "Design", columns: ["design"] }],
+        levels: [{ name: "Model", columns: ["model"] }],
         filters: [],
       }),
     );
@@ -1714,7 +1715,62 @@ async function recorded(steps) {
   }
 }
 
-const { target, rows } = parseTarget(process.argv.slice(2));
+/**
+ * Writes the four site screenshots from a served build. The size matches the
+ * gallery figures on the site, and the sample is the one the app loads by
+ * default, so a rerun reproduces the same images.
+ */
+async function captureGallery(origin) {
+  const dir = join(root, "public", "img");
+  const browser = await open(DEBUG_PORT, { chromium: CHROMIUM });
+  try {
+    await browser.size(1280, 860);
+    await browser.goto(`${origin}/app/?sample`);
+    await browser.waitFor("!!document.querySelector('.kpis') && !!document.querySelector('.bridge table')", 600);
+    const capture = async (name, ready) => {
+      if (ready) await browser.waitFor(ready, 240);
+      await browser.sleep(1500);
+      const error = await browser.evalJs("document.querySelector('.error')?.textContent ?? null");
+      if (error) fail(`gallery: ${name} shows ${JSON.stringify(error)}`);
+      await browser.shot(join(dir, name));
+      console.log(`gallery: wrote ${name}`);
+    };
+    await browser.evalJs(`T.tab("Bridge")`);
+    await capture("g-bridge.png", "!!document.querySelector('.waterfall canvas')");
+    await browser.evalJs(`T.tab("Movers")`);
+    await browser.waitFor("document.querySelectorAll('.dense tbody tr.clickable').length > 0", 240);
+    await browser.evalJs("document.querySelector('.dense tbody tr.clickable').click()");
+    await capture("g-movers.png", "document.querySelector('.dense thead th')?.textContent.trim() === 'finish'");
+    await browser.evalJs(`T.tab("Price changes")`);
+    await capture("g-price.png", "!!document.querySelector('.distribution tbody tr')");
+    await browser.evalJs(`T.tab("Setup check")`);
+    await capture("g-setup.png", "!!document.querySelector('table.narrow-wide tbody tr')");
+  } finally {
+    await browser.close();
+  }
+}
+
+const argv = process.argv.slice(2);
+const gallery = argv.includes("--gallery");
+const { target, rows } = parseTarget(argv.filter((arg) => arg !== "--gallery"));
+if (gallery) {
+  let server = null;
+  let failure = null;
+  try {
+    server = await serve(target);
+    await captureGallery(server.origin);
+  } catch (error) {
+    failure = error;
+  } finally {
+    await server?.stop().catch((error) => { failure ??= error; });
+  }
+  if (failure) {
+    console.error("FAIL: " + (failure instanceof Failure ? failure.message : failure.stack));
+    process.exit(1);
+  }
+  console.log("gallery images written to public/img");
+  process.exit(0);
+}
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => process.exit(1));
 const failures = [];
 let server = null;

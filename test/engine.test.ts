@@ -50,11 +50,11 @@ test("an unmatched configuration falls back to its parent group's prior price", 
     ('p0', 'D2', 'basic', 20, 400.0),
     ('p1', 'D1', 'basic', 10, 100.0), ('p1', 'D1', 'premium', 10, 300.0),
     ('p1', 'D2', 'basic', 20, 400.0), ('p1', 'D2', 'premium', 4, 200.0)
-  ) v(period, design, coating, units, sales)`);
+  ) v(period, design, finish, units, sales)`);
   const config: BridgeConfig = {
     table: "t", periodColumn: "period", prior: "p0", current: "p1",
     unitsColumn: "units", salesColumn: "sales",
-    levels: [{ name: "Design", columns: ["design"] }, { name: "Coating", columns: ["coating"] }],
+    levels: [{ name: "Design", columns: ["design"] }, { name: "Finish", columns: ["finish"] }],
   };
   const result = await runBridge(query, config);
 
@@ -65,21 +65,21 @@ test("an unmatched configuration falls back to its parent group's prior price", 
   near(total(result), 200);
 
   const [row] = await query(
-    `SELECT match_level, ref_price FROM ${result.cellsTable} WHERE design = 'D2' AND coating = 'premium'`,
+    `SELECT match_level, ref_price FROM ${result.cellsTable} WHERE design = 'D2' AND finish = 'premium'`,
   );
   assert.equal(Number(row.match_level), 1);
   near(Number(row.ref_price), 20);
 
   const [missing] = await unmatched(query, config);
-  assert.equal(missing.coating, "premium");
+  assert.equal(missing.finish, "premium");
   near(Number(missing.new_config), 120);
 
   const filtered = await drill(query, config, {
-    columns: ["coating"], filters: [{ column: "design", value: "D2" }], sortBy: "new_config",
+    columns: ["finish"], filters: [{ column: "design", value: "D2" }], sortBy: "new_config",
   });
-  assert.deepEqual(filtered.map((row) => row.coating), ["premium", "basic"]);
-  const searched = await drill(query, config, { columns: ["design", "coating"], search: "PREM" });
-  assert.deepEqual(searched.map((row) => `${row.design}/${row.coating}`).sort(), ["D1/premium", "D2/premium"]);
+  assert.deepEqual(filtered.map((row) => row.finish), ["premium", "basic"]);
+  const searched = await drill(query, config, { columns: ["design", "finish"], search: "PREM" });
+  assert.deepEqual(searched.map((row) => `${row.design}/${row.finish}`).sort(), ["D1/premium", "D2/premium"]);
 
   const check = await dataCheck(query, config);
   assert.equal(check.rows, 7);
@@ -96,36 +96,36 @@ test("an unmatched configuration falls back to its parent group's prior price", 
 test("multi-column levels and null attribute values reconcile", async () => {
   const query = await openDatabase();
   await query(`CREATE TABLE t AS SELECT * FROM (VALUES
-    ('p0', 'D1', 'grey', true, 5, 500.0), ('p0', 'D1', NULL, false, 10, 600.0),
-    ('p1', 'D1', 'grey', true, 6, 660.0), ('p1', 'D1', NULL, false, 8, 520.0),
-    ('p1', 'D1', 'grey', false, 2, 150.0)
-  ) v(period, design, photochromic, polar, units, sales)`);
+    ('p0', 'D1', 'blue', true, 5, 500.0), ('p0', 'D1', NULL, false, 10, 600.0),
+    ('p1', 'D1', 'blue', true, 6, 660.0), ('p1', 'D1', NULL, false, 8, 520.0),
+    ('p1', 'D1', 'blue', false, 2, 150.0)
+  ) v(period, design, color, upgrade, units, sales)`);
   const result = await runBridge(query, {
     table: "t", periodColumn: "period", prior: "p0", current: "p1",
     unitsColumn: "units", salesColumn: "sales",
     levels: [
       { name: "Design", columns: ["design"] },
-      { name: "Color", columns: ["photochromic", "polar"] },
+      { name: "Color", columns: ["color", "upgrade"] },
     ],
   });
 
   near(total(result), 1330 - 1100);
-  // grey/polar 660 - 6*100, null/non-polar 520 - 8*60: the null group matched itself.
+  // blue/upgrade 660 - 6*100, null/no upgrade 520 - 8*60: the null group matched itself.
   near(effect(result, "price"), 60 + 40);
   assert.equal(result.coverage.find((c) => c.level === 2)?.cells, 2);
 });
 
-test("synthetic lens data reconciles, and level order does not move volume or price", async () => {
+test("synthetic configuration data reconciles, and level order does not move volume or price", async () => {
   const query = await openDatabase();
   await createSyntheticSales(query, 200_000);
   const base = {
     table: "sales", periodColumn: "year", prior: 2025, current: 2026,
-    unitsColumn: "jobs", salesColumn: "sales",
+    unitsColumn: "units", salesColumn: "sales",
   };
   const levels = [
-    { name: "Design", columns: ["design"] },
-    { name: "Coating", columns: ["coating"] },
-    { name: "Color", columns: ["photochromic", "polar"] },
+    { name: "Model", columns: ["model"] },
+    { name: "Finish", columns: ["finish"] },
+    { name: "Color", columns: ["color", "upgrade"] },
     { name: "Material", columns: ["material"] },
   ];
   const forward = await runBridge(query, { ...base, levels });
@@ -137,9 +137,9 @@ test("synthetic lens data reconciles, and level order does not move volume or pr
   assert.ok(Math.abs(effect(forward, "volume") - effect(reversed, "volume")) < 1e-3);
   assert.ok(Math.abs(effect(forward, "price") - effect(reversed, "price")) < 1e-3);
 
-  // Leaving out the color attribute lets the photochromic shift leak into price.
+  // Leaving out the color attribute lets the color shift leak into price.
   const alternatives = await sensitivity(query, { ...base, levels });
-  assert.deepEqual(alternatives.map((a) => a.label), ["Your setup", "Without Design", "Without Coating", "Without Color", "Without Material"]);
+  assert.deepEqual(alternatives.map((a) => a.label), ["Your setup", "Without Model", "Without Finish", "Without Color", "Without Material"]);
   near(alternatives[0].price, effect(forward, "price"));
   assert.ok(alternatives[3].price > alternatives[0].price * 1.5);
   assert.ok(alternatives[3].exactShare > alternatives[0].exactShare);
@@ -147,8 +147,8 @@ test("synthetic lens data reconciles, and level order does not move volume or pr
   const shares = forward.coverage.reduce((sum, c) => sum + c.share, 0);
   near(shares, 1);
 
-  const byDesign = await drill(query, { ...base, levels }, { columns: ["design"], limit: 1000 });
-  const drilled = byDesign.reduce(
+  const byModel = await drill(query, { ...base, levels }, { columns: ["model"], limit: 1000 });
+  const drilled = byModel.reduce(
     (sum, row) =>
       sum + ["volume", "mix_1", "mix_2", "mix_3", "mix_4", "price", "new_config", "discontinued"]
         .reduce((s, key) => s + Number(row[key]), 0),
@@ -157,10 +157,10 @@ test("synthetic lens data reconciles, and level order does not move volume or pr
   assert.ok(Math.abs(drilled - delta) < 1e-6 * Math.abs(delta));
 
   // Each group's effects equal that group's own sales change.
-  for (const row of byDesign) {
+  for (const row of byModel) {
     const own = ["volume", "mix_1", "mix_2", "mix_3", "mix_4", "price", "new_config", "discontinued"]
       .reduce((s, key) => s + Number(row[key]), 0);
-    assert.ok(Math.abs(own - (Number(row.s1) - Number(row.s0))) < 1e-3, `design ${row.design}`);
+    assert.ok(Math.abs(own - (Number(row.s1) - Number(row.s0))) < 1e-3, `model ${row.model}`);
   }
 });
 
@@ -192,11 +192,11 @@ test("discontinued configurations mirror new ones", async () => {
     ('p0', 'D1', 'basic', 10, 100.0), ('p0', 'D1', 'premium', 10, 300.0),
     ('p0', 'D2', 'basic', 20, 400.0), ('p0', 'D3', 'basic', 10, 400.0),
     ('p1', 'D1', 'basic', 10, 100.0), ('p1', 'D2', 'basic', 20, 400.0)
-  ) v(period, design, coating, units, sales)`);
+  ) v(period, design, finish, units, sales)`);
   const config: BridgeConfig = {
     table: "t", periodColumn: "period", prior: "p0", current: "p1",
     unitsColumn: "units", salesColumn: "sales",
-    levels: [{ name: "Design", columns: ["design"] }, { name: "Coating", columns: ["coating"] }],
+    levels: [{ name: "Design", columns: ["design"] }, { name: "Finish", columns: ["finish"] }],
   };
   const result = await runBridge(query, config);
 
@@ -416,9 +416,9 @@ function assertClose(actual: number, expected: number, label: string): void {
 test("cell rows match the previous cells SQL", async () => {
   const query = await openDatabase();
   const levels: Level[] = [
-    { name: "Design", columns: ["design"] },
-    { name: "Coating", columns: ["coating"] },
-    { name: "Color", columns: ["photochromic", "polar"] },
+    { name: "Model", columns: ["model"] },
+    { name: "Finish", columns: ["finish"] },
+    { name: "Color", columns: ["color", "upgrade"] },
     { name: "Material", columns: ["material"] },
   ];
   await createSyntheticSales(query, 100, "s100");
@@ -433,8 +433,8 @@ test("cell rows match the previous cells SQL", async () => {
     ('p0', 'D1', 'basic', 10, 100.0), ('p0', 'D1', 'premium', 10, 300.0),
     ('p0', 'D2', 'old', 8, 80.0),
     ('p1', 'D1', 'basic', 10, 100.0), ('p1', 'D1', 'premium', 12, 360.0),
-    ('p1', 'D2', 'newcoat', 4, 200.0)
-  ) v(period, design, coating, units, sales)`);
+    ('p1', 'D2', 'newfinish', 4, 200.0)
+  ) v(period, design, finish, units, sales)`);
   await query(`CREATE TABLE nulls AS SELECT * FROM (VALUES
     ('p0', NULL, 'basic', 2.5, 10.0),
     ('p0', 'D1', NULL, 1.5, 20.0),
@@ -442,9 +442,9 @@ test("cell rows match the previous cells SQL", async () => {
     ('p1', NULL, 'premium', 1, 7.0),
     ('p1', 'D1', NULL, 0, 3.0),
     ('p1', 'D1', 'basic', 5, 55.0)
-  ) v(period, design, coating, units, sales)`);
+  ) v(period, design, finish, units, sales)`);
   await query(`CREATE TABLE data (
-    order_date DATE, design VARCHAR, customer VARCHAR, jobs INTEGER, sales DOUBLE
+    order_date DATE, design VARCHAR, customer VARCHAR, units INTEGER, sales DOUBLE
   )`);
   await query(`INSERT INTO data VALUES
     (DATE '2025-01-10', 'A', 'keep', 2, 20),
@@ -457,7 +457,7 @@ test("cell rows match the previous cells SQL", async () => {
   const ytd: Setup = {
     periodColumn: "order_date",
     grain: "ytd",
-    unitsColumn: "jobs",
+    unitsColumn: "units",
     salesColumn: "sales",
     levels: [{ name: "Design", columns: ["design"] }],
     filters: [{ column: "customer", mode: "include", values: ["keep"] }],
@@ -468,7 +468,7 @@ test("cell rows match the previous cells SQL", async () => {
     periodColumn: "year",
     prior: 2025,
     current: 2026,
-    unitsColumn: "jobs",
+    unitsColumn: "units",
     salesColumn: "sales",
   } as const;
   const shapes: { label: string; config: BridgeConfig; drill?: { columns: string[]; filter: { column: string; value: string } } }[] = [
@@ -492,23 +492,23 @@ test("cell rows match the previous cells SQL", async () => {
       config: {
         table: "disc", periodColumn: "period", prior: "p0", current: "p1",
         unitsColumn: "units", salesColumn: "sales",
-        levels: [{ name: "Design", columns: ["design"] }, { name: "Coating", columns: ["coating"] }],
+        levels: [{ name: "Design", columns: ["design"] }, { name: "Finish", columns: ["finish"] }],
       },
-      drill: { columns: ["coating"], filter: { column: "design", value: "D2" } },
+      drill: { columns: ["finish"], filter: { column: "design", value: "D2" } },
     },
     {
       label: "null attribute values",
       config: {
         table: "nulls", periodColumn: "period", prior: "p0", current: "p1",
         unitsColumn: "units", salesColumn: "sales",
-        levels: [{ name: "Design", columns: ["design"] }, { name: "Coating", columns: ["coating"] }],
+        levels: [{ name: "Design", columns: ["design"] }, { name: "Finish", columns: ["finish"] }],
       },
     },
     {
       label: "year-to-date view with a customer filter",
       config: {
         table: VIEW, periodColumn: PERIOD, prior: "2025 YTD", current: "2026 YTD",
-        unitsColumn: "jobs", salesColumn: "sales",
+        unitsColumn: "units", salesColumn: "sales",
         levels: [{ name: "Design", columns: ["design"] }],
       },
     },
