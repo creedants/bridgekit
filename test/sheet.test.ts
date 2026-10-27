@@ -16,6 +16,24 @@ async function formulaFile(): Promise<File> {
   return new File([await formulaWorkbook()], "book.xlsx");
 }
 
+async function datedFormulaWorkbook(): Promise<ArrayBuffer> {
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("sales");
+  sheet.addRow(["period", "day", "units", { formula: "1+1" }]);
+  sheet.addRow(["2025", new Date(Date.UTC(2025, 0, 15)), 10, { formula: "C2*4" }]);
+  sheet.addRow(["2025", new Date(Date.UTC(2025, 1, 20)), 20, { formula: "C3*4", result: "" }]);
+  return workbook.xlsx.writeBuffer();
+}
+
+async function headerOnlyWorkbook(): Promise<ArrayBuffer> {
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("sales");
+  sheet.addRow(["period", "units"]);
+  return workbook.xlsx.writeBuffer();
+}
+
 async function rewriteWorkbook(
   buffer: ArrayBuffer,
   edits: Record<string, (xml: string) => string>,
@@ -34,6 +52,22 @@ function replaceOnce(xml: string, from: string, to: string): string {
   const next = xml.replace(from, to);
   if (next === xml) throw new Error(`The workbook XML does not hold ${from}.`);
   return next;
+}
+
+// Some writers save a part with every element name bound to a prefix instead of
+// the default namespace. The prefix is declared on the root against that root's
+// own namespace, so the part means exactly what the unprefixed one means.
+function prefixPart(xml: string, prefix: string): string {
+  const root = /<([A-Za-z_][\w.-]*)([^>]*)>/.exec(xml);
+  if (!root) throw new Error("The part has no root element.");
+  const namespace = /(?:^|\s)xmlns\s*=\s*"([^"]*)"/.exec(root[2]);
+  if (!namespace) throw new Error("The part root declares no default namespace.");
+  const insertAt = root.index + 1 + root[1].length;
+  const opened = `${xml.slice(0, insertAt)} xmlns:${prefix}="${namespace[1]}"${xml.slice(insertAt)}`;
+  return opened.replace(
+    /<(\/?)([A-Za-z_][\w.-]*)(?=[\s/>])/g,
+    (_, slash: string, name: string) => `<${slash}${prefix}:${name}`,
+  );
 }
 
 // A styled but empty row 1, with every real row and cell reference moved down one.
@@ -356,4 +390,45 @@ test("reads a single-quoted worksheet relationship id", async () => {
     }),
   );
   assert.equal(quotedRelationship.formulaBlanks, 1);
+});
+
+test("loads a workbook whose worksheet and shared strings use a namespace prefix", async () => {
+  const book = await formulaWorkbook();
+  const plain = await firstSheetAsCsv(new File([book], "book.xlsx"));
+  const prefixed = await firstSheetAsCsv(
+    await rewriteWorkbook(book, {
+      "xl/worksheets/sheet1.xml": (xml) => prefixPart(xml, "x"),
+      "xl/sharedStrings.xml": (xml) => prefixPart(xml, "sst"),
+    }),
+  );
+  assert.equal(prefixed.csv, plain.csv);
+  assert.equal(prefixed.formulaBlanks, plain.formulaBlanks);
+  assert.equal(prefixed.formulaBlanks, 1);
+});
+
+test("loads a workbook whose every spreadsheet part uses a namespace prefix", async () => {
+  const book = await datedFormulaWorkbook();
+  const plain = await firstSheetAsCsv(new File([book], "book.xlsx"));
+  const prefixed = await firstSheetAsCsv(
+    await rewriteWorkbook(book, {
+      "xl/worksheets/sheet1.xml": (xml) => prefixPart(xml, "x"),
+      "xl/sharedStrings.xml": (xml) => prefixPart(xml, "sst"),
+      "xl/styles.xml": (xml) => prefixPart(xml, "st"),
+      "xl/workbook.xml": (xml) => prefixPart(xml, "w"),
+      "xl/_rels/workbook.xml.rels": (xml) => prefixPart(xml, "rel"),
+    }),
+  );
+  // The date is the cell that reads back as a serial number when the styles
+  // part does not reach the reader.
+  assert.match(plain.csv, /2025-01-15/);
+  assert.equal(prefixed.csv, plain.csv);
+  assert.equal(prefixed.formulaBlanks, plain.formulaBlanks);
+  assert.equal(prefixed.formulaBlanks, 1);
+});
+
+test("rejects a prefixed workbook with no data rows instead of loading it empty", async () => {
+  const book = await rewriteWorkbook(await headerOnlyWorkbook(), {
+    "xl/worksheets/sheet1.xml": (xml) => prefixPart(xml, "x"),
+  });
+  await assert.rejects(firstSheetAsCsv(book), /The first sheet of that workbook has no data rows\./);
 });
