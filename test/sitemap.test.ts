@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -15,6 +17,10 @@ function committedSitemap(): string {
   const path = new URL("../public/sitemap.xml", import.meta.url);
   assert.ok(existsSync(path), "public/sitemap.xml is stale: run node scripts/sitemap.mjs");
   return readFileSync(path, "utf8");
+}
+
+function ownAddress(file: string): string {
+  return file === "index.html" ? `${ORIGIN}/` : `${ORIGIN}/${file}`;
 }
 
 function canonicalOf(file: string): string {
@@ -62,9 +68,75 @@ test("public/sitemap.xml is what scripts/sitemap.mjs prints", () => {
   assert.equal(run.stdout, committedSitemap(), "public/sitemap.xml is stale: run node scripts/sitemap.mjs");
 });
 
+const SENTINEL = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset>the sitemap from before the run</urlset>\n';
+
+function configWithInputBlock(): { lines: string[]; open: number } {
+  const lines = readFileSync(new URL("../vite.config.ts", import.meta.url), "utf8").split("\n");
+  const open = lines.findIndex((line) => line.includes("input: {"));
+  assert.notEqual(open, -1, "vite.config.ts has no input: { line: these tests edit the block it opens");
+  return { lines, open };
+}
+
+// The generator finds its config and sitemap next to itself, so a run that must
+// refuse needs its own tree to show it wrote nothing.
+function runGeneratorOn(config: string): { status: number | null; stderr: string; sitemap: string } {
+  const dir = mkdtempSync(join(tmpdir(), "sitemap-"));
+  try {
+    mkdirSync(join(dir, "scripts"));
+    mkdirSync(join(dir, "public"));
+    copyFileSync(fileURLToPath(new URL("../scripts/sitemap.mjs", import.meta.url)), join(dir, "scripts", "sitemap.mjs"));
+    writeFileSync(join(dir, "vite.config.ts"), config);
+    writeFileSync(join(dir, "public", "sitemap.xml"), SENTINEL);
+    const run = spawnSync(process.execPath, [join(dir, "scripts", "sitemap.mjs")], { encoding: "utf8" });
+    return { status: run.status, stderr: run.stderr, sitemap: readFileSync(join(dir, "public", "sitemap.xml"), "utf8") };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("the generator refuses a page entry on the input: { opening line", () => {
+  const { lines, open } = configWithInputBlock();
+  lines[open] = `${lines[open]} ${lines[open + 1].trim()}`;
+  lines.splice(open + 1, 1);
+  const run = runGeneratorOn(lines.join("\n"));
+  assert.equal(
+    run.status,
+    1,
+    `the generator exited ${run.status}: a page entry on the input: { opening line is not read (stderr: ${run.stderr.trim()})`,
+  );
+  assert.match(run.stderr, /does not read entries on the opening line/);
+  assert.equal(run.sitemap, SENTINEL, "the generator replaced public/sitemap.xml on a run it refused");
+});
+
+test("the generator refuses an input block that closes with anything but } or },", () => {
+  const { lines, open } = configWithInputBlock();
+  const close = lines.findIndex((line, index) => index > open && line.trim() === "},");
+  assert.notEqual(close, -1, "vite.config.ts has no }, line after input: {");
+  lines[close] += " // pages";
+  const run = runGeneratorOn(lines.join("\n"));
+  assert.equal(
+    run.status,
+    1,
+    `the generator exited ${run.status}: an input block closed as }, // pages is not read (stderr: ${run.stderr.trim()})`,
+  );
+  assert.match(run.stderr, /closes the input block as/);
+  assert.equal(run.sitemap, SENTINEL, "the generator replaced public/sitemap.xml on a run it refused");
+});
+
 test("every root page names exactly one absolute canonical", () => {
   for (const file of PAGE_FILES) {
     canonicalOf(file);
+  }
+});
+
+test("each root page names its own address as canonical and og:url", () => {
+  for (const file of PAGE_FILES) {
+    const address = ownAddress(file);
+    const canonical = canonicalOf(file);
+    assert.equal(canonical, address, `${file} has canonical ${canonical}: a page's canonical is its own address, ${address}`);
+    const url = /<meta property="og:url" content="([^"]*)"/.exec(readFileSync(new URL(`../${file}`, import.meta.url), "utf8"));
+    assert.ok(url, `${file} has no og:url: add <meta property="og:url" content="${address}" /> after its og:description`);
+    assert.equal(url[1], address, `${file} has og:url ${url[1]}: a page's og:url is its own address, ${address}`);
   }
 });
 
