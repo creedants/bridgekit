@@ -141,7 +141,7 @@ npx wrangler secret put BETTER_AUTH_SECRET
 
 - Source: `server/env.ts:9` has `BETTER_AUTH_SECRET: string`.
 - Source: `.dev.vars.example:3` has `at-least-32-chars`.
-- Source: `wrangler.jsonc:49` has `wrangler secret put NAME`.
+- Source: `wrangler.jsonc:56` has `wrangler secret put NAME`.
 - Source: `package.json:44` has `"wrangler": "^4.147.0"`.
 - Not verified: the remote prompt, creating the draft Worker, and the retry. This session did not run secret put or deploy.
 - Worked: `npx wrangler secret list` prints `BETTER_AUTH_SECRET`.
@@ -526,7 +526,7 @@ npx wrangler secret put PADDLE_ENVIRONMENT
 
 - Source: `server/env.ts:30` has `PADDLE_ENVIRONMENT?: string`.
 - Source: `server/env.ts:29` has `"sandbox" (default) or "live"`.
-- Source: `wrangler.jsonc:49` has `wrangler secret put NAME`. `wrangler.jsonc:49` lacks `PADDLE_ENVIRONMENT`.
+- Source: `wrangler.jsonc:56` has `wrangler secret put NAME`. `wrangler.jsonc:56` lacks `PADDLE_ENVIRONMENT`.
 - Source: `.dev.vars.example:11` has `Worker switch`, `VITE_PADDLE_ENVIRONMENT`.
 - Source: `server/worker.ts:285` has `c.env.PADDLE_ENVIRONMENT === "live" ? "live" : "sandbox"`.
 - Source: `server/paddle.ts:19-20` has `https://sandbox-api.paddle.com`, `https://api.paddle.com`.
