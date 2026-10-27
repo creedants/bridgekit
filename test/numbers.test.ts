@@ -261,59 +261,127 @@ test("a semicolon file with mixed three-decimal styles loads and names the confl
   assert.equal(await decimalCommaNote(query, "mixed_three"), "net_sales mixes number styles, so it was read as text.");
 });
 
-test("every number-shaped column left as text is named", async () => {
+test("mixed number-shape pairs with a formatting mark are named when left as text", async () => {
   const query = await openDatabase();
-  const pool = [
-    "1.234,567",
+  const us = [
     "1,260.000",
     "1260.000",
     "+1,260.00",
     "$1,260.000",
     "(1,260.000)",
-    "0,000,000",
-    "1.234,56",
     "1,260.00",
+    "1,234.56",
+    "$90.00",
+    "1,260",
+    "1,234,567",
+    "0,000,000",
     "1,234",
-    "12,3456",
+    "1e3",
+    "1.260e3",
+    "$90e2",
+    "1500",
+  ];
+  const euro = [
+    "1.234,567",
+    "1.234,56",
     "12,50",
+    "12,5",
+    "12,3456",
     "0,125",
     "1.234",
-    "1500",
-    "12,5",
     "-1.234,567",
-    "$90.00",
-    "(45)",
-    "1,234.56",
-    "1.260e3",
-    "1e3",
-    "$90e2",
+    "+12,50",
+    "1 234,56",
+    "$12,50",
+    "(12,50)",
+    "-12,50",
   ];
   const named = "amount mixes number styles, so it was read as text.";
   const hasMarker = (value: string): boolean => /[,$()]/.test(value);
   let text = 0;
   let numeric = 0;
-  for (let i = 0; i < pool.length; i++) {
-    for (let j = i + 1; j < pool.length; j++) {
-      const table = `pair_${i}_${j}`;
-      await createText(query, table, { amount: [pool[i], pool[j]] });
+  for (const [i, left] of us.entries()) {
+    for (const [j, right] of euro.entries()) {
+      const table = `mix_${i}_${j}`;
+      await createText(query, table, { amount: [left, right] });
       await convertFormattedNumbers(query, table);
       const type = await columnType(query, table, "amount");
+      if (!hasMarker(left) && !hasMarker(right)) {
+        // Without a formatting mark the converter skips the column.
+        assert.equal(type, "VARCHAR");
+        assert.deepEqual(await columnValues(query, table, "amount"), [left, right]);
+        assert.equal(await decimalCommaNote(query, table), null);
+        continue;
+      }
       if (type === "DOUBLE") {
         numeric += 1;
         continue;
       }
-      assert.equal(type, "VARCHAR");
-      assert.deepEqual(await columnValues(query, table, "amount"), [pool[i], pool[j]]);
-      if (!hasMarker(pool[i]) && !hasMarker(pool[j])) {
-        assert.equal(await decimalCommaNote(query, table), null);
-        continue;
-      }
-      assert.equal(await decimalCommaNote(query, table), named);
+      assert.equal(type, "VARCHAR", `${left} with ${right}`);
+      assert.deepEqual(await columnValues(query, table, "amount"), [left, right]);
+      assert.equal(await decimalCommaNote(query, table), named, `${left} with ${right}`);
       text += 1;
     }
   }
   assert.ok(text > 0);
   assert.ok(numeric > 0);
+});
+
+test("text values, a malformed number and single decorated styles stay text and are not named", async () => {
+  const query = await openDatabase();
+  const controls = ["NA", "-", "n/a", "12,5%", "€ 12,50", "01.02.2025", "sku-12", "1,2,3"];
+  for (const [index, control] of controls.entries()) {
+    const table = `control_${index}`;
+    await createText(query, table, { amount: [control, "1.234,56"] });
+    await convertFormattedNumbers(query, table);
+    assert.equal(await columnType(query, table, "amount"), "VARCHAR");
+    assert.deepEqual(await columnValues(query, table, "amount"), [control, "1.234,56"]);
+    assert.equal(await decimalCommaNote(query, table), null);
+  }
+  const decorated: Record<string, string[]> = {
+    parens: ["(12,50)", "(1.234,56)"],
+    space: ["1 234,56", "1 234,57"],
+    dollar: ["$12,50", "$13,50"],
+    plus: ["+12,50", "+13,50"],
+    accounting_integer: ["(45)", "12,50"],
+  };
+  for (const [name, values] of Object.entries(decorated)) {
+    const table = `decorated_${name}`;
+    await createText(query, table, { amount: values });
+    await convertFormattedNumbers(query, table);
+    assert.equal(await columnType(query, table, "amount"), "VARCHAR");
+    assert.deepEqual(await columnValues(query, table, "amount"), values);
+    assert.equal(await decimalCommaNote(query, table), null);
+  }
+});
+
+test("review three decorated decimal commas beside a US value stay text and are named", async () => {
+  const query = await openDatabase();
+  const partners = ["+12,50", "1 234,56", "$12,50", "(12,50)"];
+  for (const [index, partner] of partners.entries()) {
+    const table = `review_three_${index}`;
+    await createText(query, table, { amount: ["1,260.00", partner] });
+    await convertFormattedNumbers(query, table);
+    assert.equal(await columnType(query, table, "amount"), "VARCHAR");
+    assert.deepEqual(await columnValues(query, table, "amount"), ["1,260.00", partner]);
+    assert.equal(await decimalCommaNote(query, table), "amount mixes number styles, so it was read as text.");
+  }
+});
+
+test("a semicolon file with a signed decimal comma beside a US value loads and names the conflict", async () => {
+  const directory = await mkdtemp("/tmp/bridgekit-comma-");
+  const file = path.join(directory, "signed-mixed.csv");
+  await writeFile(
+    file,
+    "period;product;units;net_sales;gross_sales\n2024;A;10;1,260.00;100\n2024;A;10;+12,50;200\n2025;A;10;1,260.00;110\n2025;A;10;+12,50;210\n",
+  );
+  const query = await openDatabase();
+  await query(`CREATE TABLE signed_mixed AS SELECT * FROM read_csv('${file}', delim=';', header=true, types={'gross_sales': 'DOUBLE'})`);
+  await convertFormattedNumbers(query, "signed_mixed");
+  assert.equal(await columnType(query, "signed_mixed", "net_sales"), "VARCHAR");
+  assert.deepEqual(await columnValues(query, "signed_mixed", "net_sales"), ["1,260.00", "+12,50", "1,260.00", "+12,50"]);
+  assert.equal(await columnType(query, "signed_mixed", "gross_sales"), "DOUBLE");
+  assert.equal(await decimalCommaNote(query, "signed_mixed"), "net_sales mixes number styles, so it was read as text.");
 });
 
 test("a decimal comma beside a north american decimal stays text", async () => {

@@ -1,0 +1,1 @@
+- A column left as text is now named when a US value such as 1,260.00 sits beside +12,50, 1 234,56, $12,50 or (12,50), while a column written in one style with these marks stays text and unnamed.
