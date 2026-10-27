@@ -143,7 +143,8 @@ export function viewSql(setup: Setup): string {
 // column mapping is remembered unless the user turns that off, keyed by the set
 // of column names. Filter selections are never stored because they are values
 // from the data. Turning it off deletes everything and leaves only the "off"
-// preference, so the choice survives a reload.
+// preference, so the choice survives a reload. Turning it on removes only that
+// preference, so a setup another tab saved stays.
 const PREFIX = "bridgekit:";
 const REMEMBER_KEY = PREFIX + "remember";
 /** Identifies a file layout by its column names, so a setup is offered again for files with the same columns. */
@@ -161,10 +162,14 @@ export function isRemembering(): boolean {
 /** Turning this off deletes everything the tool has stored. */
 export function setRemembering(on: boolean): void {
   try {
+    if (on) {
+      localStorage.removeItem(REMEMBER_KEY);
+      return;
+    }
     for (const key of Object.keys(localStorage)) {
       if (key.startsWith(PREFIX)) localStorage.removeItem(key);
     }
-    if (!on) localStorage.setItem(REMEMBER_KEY, "off");
+    localStorage.setItem(REMEMBER_KEY, "off");
   } catch {
     // Storage can be blocked; then nothing is stored, which is the safe outcome.
   }
