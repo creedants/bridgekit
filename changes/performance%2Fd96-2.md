@@ -1,0 +1,1 @@
+- The cross-tab smoke scenario treats the browser's two named navigation errors as a normal result of the second tab's reload, so a valid reload no longer fails the run. The Remember unit test's assertion message now says saving did not write exactly one setup, which is true for a count of zero or two. No app code or user-visible wording changes.
