@@ -342,6 +342,23 @@ test("the app page ships one h1 and the description inside the root element", ()
   );
 });
 
+test("the app mount point contains the fallback margin so the page does not shift", () => {
+  const head = headOf("app/index.html", readPage("app/index.html"));
+  const rules = [...head.matchAll(/<style>([\s\S]*?)<\/style>/g)].map(
+    (match) => /#root\s*\{([^}]*)\}/.exec(match[1]),
+  );
+  const root = rules.find((rule) => rule !== null);
+  assert.ok(
+    root,
+    "app/index.html <head> has no #root rule: add <style>#root { display: flow-root; }</style> after the favicon link so the fallback margin cannot collapse out of the mount point",
+  );
+  const declarations = root[1];
+  assert.ok(
+    /display:\s*flow-root/.test(declarations),
+    `app/index.html #root rule says "${declarations.trim()}" without display: flow-root: set it so the fallback margin cannot collapse out of the mount point`,
+  );
+});
+
 test("the styled images scale their width and let the height follow", () => {
   const css = readFileSync(new URL("../src/site/site.css", import.meta.url), "utf8");
   const gallery = /\.gallery img\s*\{([^}]*)\}/.exec(css);
