@@ -1,0 +1,1 @@
+- Fix plus-signed and space-grouped three-decimal comma proof so those columns stay text and named instead of converting wrong, while keeping D64 rules.

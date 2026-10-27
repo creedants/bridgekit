@@ -11,10 +11,9 @@ const GROUPED_LONG = `^-?\\d{1,3}(\\.\\d{3})*(${COMMA_LONG})$`;
 const PLAIN_LONG = `^-?\\d+${COMMA_LONG}$`;
 const DECIMAL_TAIL = `${COMMA_TAIL}$`;
 const LONG_TAIL = `${COMMA_LONG}$`;
-const DOT_GROUP_COMMA = "^-?\\d{1,3}(\\.\\d{3})+,\\d+$";
 const SIGN = "[+-]?";
 const US_PROOF = `^${SIGN}(\\d{1,3}(,\\d{3})+\\.\\d+|\\d+\\.(\\d{1,2}|\\d{4,}))$`;
-const COMMA_PROOF = `^${SIGN}(\\d{1,3}(\\.\\d{3})+,\\d+|\\d+,(\\d{1,2}|\\d{4,}))$`;
+const COMMA_PROOF = `^${SIGN}(\\d{1,3}(\\.\\d{3})+,\\d+|\\d+,(\\d{1,2}|\\d{4,})|\\d{4,},\\d{3})$`;
 const US_DECIMAL = `^${SIGN}\\d+(,\\d{3})*(\\.\\d{1,2}|\\.\\d{4,})$`;
 const US_THREE = `^${SIGN}(\\d{1,3}(,\\d{3})+|\\d{4,})\\.\\d{3}$`;
 const US_GROUPED = `^${SIGN}\\d{1,3}(,\\d{3}){2,}$`;
@@ -49,7 +48,6 @@ interface ColumnCounts {
   nonBlank: number;
   european: number;
   decimalTail: number;
-  dotGroup: number;
   usDecimal: number;
   usGrouped: number;
   ambiguous: number;
@@ -76,7 +74,7 @@ function parsesWithFormatting(counts: Pick<ColumnCounts, "present" | "parsed" | 
 }
 
 function hasDecimalProof(counts: ColumnCounts): boolean {
-  return counts.decimalTail > 0 || counts.dotGroup > 0;
+  return counts.decimalTail > 0 || counts.commaProof > 0;
 }
 
 function hasUSProof(counts: ColumnCounts): boolean {
@@ -116,7 +114,6 @@ function measures(column: string, index: number): string {
     `count(*) FILTER (WHERE NOT ${blank})::DOUBLE AS nb${index}`,
     `count(*) FILTER (WHERE NOT ${blank} AND ${european(column)})::DOUBLE AS eu${index}`,
     `count(*) FILTER (WHERE ${decimalTail})::DOUBLE AS p${index}`,
-    `count(*) FILTER (WHERE regexp_matches(${stripped(column)}, '${DOT_GROUP_COMMA}'))::DOUBLE AS dg${index}`,
     `count(*) FILTER (WHERE regexp_matches(${stripped(column)}, '${US_DECIMAL}') OR regexp_matches(${stripped(column)}, '${US_THREE}'))::DOUBLE AS ud${index}`,
     `count(*) FILTER (WHERE regexp_matches(${stripped(column)}, '${US_GROUPED}'))::DOUBLE AS ug${index}`,
     `count(*) FILTER (WHERE regexp_matches(${stripped(column)}, '${AMBIGUOUS}'))::DOUBLE AS am${index}`,
@@ -150,7 +147,6 @@ async function scan(query: Query, columns: string[], source: string): Promise<Co
     nonBlank: Number(row[`nb${index}`]),
     european: Number(row[`eu${index}`]),
     decimalTail: Number(row[`p${index}`]),
-    dotGroup: Number(row[`dg${index}`]),
     usDecimal: Number(row[`ud${index}`]),
     usGrouped: Number(row[`ug${index}`]),
     ambiguous: Number(row[`am${index}`]),
