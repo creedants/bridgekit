@@ -65,12 +65,14 @@ const isUnitPrice = (name: string) => {
 const isTrailingNote = (name: string) => noteWords.has(words(name).at(-1) ?? "");
 
 /**
- * A net sales column the file holds as a type that is neither numeric nor a
- * date, which is usually text, in file order. Such a file must not fall
- * through to gross sales: the user sees the existing setup message for the
- * column instead.
+ * First non-numeric, non-date column with a whole "net" word and a sales,
+ * revenue, amount or value word, excluding trailing notes, unit prices and
+ * quantity names. Empty when any numeric column has "net" in its name, checked
+ * before that filtering, so callers keep the base guess whenever a numeric net
+ * column exists. Callers decide whether to withhold or explain Sales.
  */
 export function netSalesHeldAsText(columns: readonly Column[]): string {
+  if (columns.some((column) => isNumeric(column.type) && /net/i.test(column.name))) return "";
   return columns.find((column) => {
     if (isNumeric(column.type) || isDate(column.type)) return false;
     const parts = words(column.name);

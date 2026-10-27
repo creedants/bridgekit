@@ -112,10 +112,12 @@ function numericAvailable(input: FileProblemInput, role: Role): boolean {
 }
 
 /**
- * The column guessSetup would pick for a missing measure if that column were
- * numeric. Notes and unit prices stay excluded because guessSetup excludes them.
- * A number the user has not picked yet is not named. A column is described as
- * text only when its recorded type is VARCHAR.
+ * A non-numeric candidate for a missing measure, ordered by its file position.
+ * An empty Sales choice first uses netSalesHeldAsText, which is empty when any
+ * numeric column has "net" in its name, so a numeric net keeps the promoted
+ * guess. Otherwise the candidate comes from guessSetup with every non-period,
+ * non-numeric column promoted to a number.
+ * A column is described as text only when its recorded type is VARCHAR.
  */
 function soundMeasure(input: FileProblemInput): { name: string; role: Role; text: boolean } | undefined {
   const probed = guessSetup(promoted(input.columns, input.periodColumn));
