@@ -2,6 +2,54 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { excelHeaderNames, excelHoleIndexes, firstSheetAsCsv, holeRenames } from "../src/app/sheet.ts";
 
+async function formulaWorkbook(): Promise<ArrayBuffer> {
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("sales");
+  sheet.addRow(["period", "units", { formula: "1+1" }]);
+  sheet.addRow(["2025", 10, { formula: "B2*C2" }]);
+  sheet.addRow(["2025", 20, { formula: "B3*C3", result: "" }]);
+  return workbook.xlsx.writeBuffer();
+}
+
+async function formulaFile(): Promise<File> {
+  return new File([await formulaWorkbook()], "book.xlsx");
+}
+
+async function rewriteWorkbook(
+  buffer: ArrayBuffer,
+  edits: Record<string, (xml: string) => string>,
+): Promise<File> {
+  const { default: JSZip } = await import("jszip");
+  const zip = await JSZip.loadAsync(buffer);
+  for (const [path, edit] of Object.entries(edits)) {
+    const entry = zip.file(path);
+    if (!entry) throw new Error(`The workbook has no ${path}.`);
+    zip.file(path, edit(await entry.async("text")));
+  }
+  return new File([await zip.generateAsync({ type: "nodebuffer" })], "book.xlsx");
+}
+
+function replaceOnce(xml: string, from: string, to: string): string {
+  const next = xml.replace(from, to);
+  if (next === xml) throw new Error(`The workbook XML does not hold ${from}.`);
+  return next;
+}
+
+// A styled but empty row 1, with every real row and cell reference moved down one.
+function prependStyledBlankRow(xml: string): string {
+  const moved = xml
+    .replace(/(<row\b[^>]*?\br=")(\d+)(")/g, (_, head, number, tail) => `${head}${Number(number) + 1}${tail}`)
+    .replace(
+      /(<c\b[^>]*?\br=")([A-Z]+)(\d+)(")/g,
+      (_, head, column, number, tail) => `${head}${column}${Number(number) + 1}${tail}`,
+    )
+    .replace(/(<dimension\b[^>]*?\bref=")([^"]*)(")/, (_, head, ref, tail) =>
+      `${head}${ref.replace(/([A-Z]+)(\d+)/g, (__, column, number) => `${column}${Number(number) + 1}`)}${tail}`,
+    );
+  return moved.replace(/<sheetData>/, '<sheetData><row r="1"><c r="A1" s="0"/></row>');
+}
+
 test("writes the word undefined for a missing header cell", () => {
   assert.deepEqual(excelHeaderNames(["region", undefined, undefined, undefined], 4), [
     "region",
@@ -221,4 +269,41 @@ test("counts a single blank formula and no blanks for a fully cached sheet", asy
   two.addRow(["2026", { formula: "B3*2", result: 0 }]);
   const cachedBook = new File([await cached.xlsx.writeBuffer()], "cached.xlsx");
   assert.equal((await firstSheetAsCsv(cachedBook)).formulaBlanks, 0);
+});
+
+test("counts a formula header under a leading styled blank row as the header", async () => {
+  const book = await rewriteWorkbook(await formulaWorkbook(), {
+    "xl/worksheets/sheet1.xml": prependStyledBlankRow,
+  });
+  const loaded = await firstSheetAsCsv(book);
+  assert.equal(loaded.csv.split("\n").length, 3);
+  assert.equal(loaded.formulaBlanks, 1);
+});
+
+test("finds the first sheet through a relative and through an absolute target", async () => {
+  const relative = await firstSheetAsCsv(await formulaFile());
+  const absolute = await firstSheetAsCsv(
+    await rewriteWorkbook(await formulaWorkbook(), {
+      "xl/_rels/workbook.xml.rels": (xml) =>
+        replaceOnce(xml, 'Target="worksheets/sheet1.xml"', 'Target="/xl/worksheets/sheet1.xml"'),
+    }),
+  );
+  assert.equal(relative.formulaBlanks, 1);
+  assert.equal(absolute.formulaBlanks, 1);
+  assert.equal(absolute.csv, relative.csv);
+});
+
+test("reads a single-quoted worksheet relationship id", async () => {
+  const quotedSheetId = await firstSheetAsCsv(
+    await rewriteWorkbook(await formulaWorkbook(), {
+      "xl/workbook.xml": (xml) => replaceOnce(xml, 'r:id="rId4"', "r:id='rId4'"),
+    }),
+  );
+  assert.equal(quotedSheetId.formulaBlanks, 1);
+  const quotedRelationship = await firstSheetAsCsv(
+    await rewriteWorkbook(await formulaWorkbook(), {
+      "xl/_rels/workbook.xml.rels": (xml) => replaceOnce(xml, 'Id="rId4"', "Id='rId4'"),
+    }),
+  );
+  assert.equal(quotedRelationship.formulaBlanks, 1);
 });
