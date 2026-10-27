@@ -203,7 +203,7 @@ test("a whole number of at most three digits beside a decimal comma converts", a
   assert.equal(await decimalCommaNote(query, "short"), ONE);
 });
 
-test("a four-digit whole number beside a decimal comma stays text", async () => {
+test("a four-digit whole number beside a decimal comma stays text and is not named", async () => {
   const query = await openDatabase();
   await createText(query, "long", {
     fifteen: ["1500", "12,50"],
@@ -214,14 +214,13 @@ test("a four-digit whole number beside a decimal comma stays text", async () => 
   assert.equal(await columnType(query, "long", "thousand"), "VARCHAR");
   assert.deepEqual(await columnValues(query, "long", "fifteen"), ["1500", "12,50"]);
   assert.deepEqual(await columnValues(query, "long", "thousand"), ["1000", "12,50"]);
-  assert.equal(await decimalCommaNote(query, "long"), "fifteen and thousand mix number styles, so they were read as text.");
+  assert.equal(await decimalCommaNote(query, "long"), null);
 });
 
 test("review two mixed US three-decimal columns stay text and are named", async () => {
   const query = await openDatabase();
   const cases: Record<string, [string, string]> = {
     grouped: ["1.234,567", "1,260.000"],
-    plain: ["1.234,567", "1260.000"],
     plus: ["1.234,567", "+1,260.00"],
     dollar: ["1.234,567", "$1,260.000"],
     parens: ["1.234,567", "(1,260.000)"],
@@ -236,13 +235,22 @@ test("review two mixed US three-decimal columns stay text and are named", async 
   }
 });
 
-test("a plain integer beside three-decimal comma proof stays text and is named", async () => {
+test("a plain three-decimal value beside three-decimal comma proof stays text and is not named", async () => {
+  const query = await openDatabase();
+  await createText(query, "plain_three", { amount: ["1.234,567", "1260.000"] });
+  await convertFormattedNumbers(query, "plain_three");
+  assert.equal(await columnType(query, "plain_three", "amount"), "VARCHAR");
+  assert.deepEqual(await columnValues(query, "plain_three", "amount"), ["1.234,567", "1260.000"]);
+  assert.equal(await decimalCommaNote(query, "plain_three"), null);
+});
+
+test("a plain integer beside three-decimal comma proof stays text and is not named", async () => {
   const query = await openDatabase();
   await createText(query, "intproof", { amount: ["1500", "1.234,567"] });
   await convertFormattedNumbers(query, "intproof");
   assert.equal(await columnType(query, "intproof", "amount"), "VARCHAR");
   assert.deepEqual(await columnValues(query, "intproof", "amount"), ["1500", "1.234,567"]);
-  assert.equal(await decimalCommaNote(query, "intproof"), "amount mixes number styles, so it was read as text.");
+  assert.equal(await decimalCommaNote(query, "intproof"), null);
 });
 
 test("a semicolon file with mixed three-decimal styles loads and names the conflict", async () => {
@@ -261,69 +269,72 @@ test("a semicolon file with mixed three-decimal styles loads and names the confl
   assert.equal(await decimalCommaNote(query, "mixed_three"), "net_sales mixes number styles, so it was read as text.");
 });
 
-test("mixed number-shape pairs with a formatting mark are named when left as text", async () => {
+test("mixed number-shape pairs are named only when both sides prove a style", async () => {
   const query = await openDatabase();
-  const us = [
-    "1,260.000",
-    "1260.000",
-    "+1,260.00",
-    "$1,260.000",
-    "(1,260.000)",
-    "1,260.00",
-    "1,234.56",
-    "$90.00",
-    "1,260",
-    "1,234,567",
-    "0,000,000",
-    "1,234",
-    "1e3",
-    "1.260e3",
-    "$90e2",
-    "1500",
-  ];
-  const euro = [
-    "1.234,567",
-    "1.234,56",
-    "12,50",
-    "12,5",
-    "12,3456",
-    "0,125",
-    "1.234",
-    "-1.234,567",
-    "+12,50",
-    "1 234,56",
-    "$12,50",
-    "(12,50)",
-    "-12,50",
+  const values: { text: string; us: boolean; comma: boolean }[] = [
+    { text: "1,260.00", us: true, comma: false },
+    { text: "1,234.56", us: true, comma: false },
+    { text: "1,260.000", us: true, comma: false },
+    { text: "+1,260.00", us: true, comma: false },
+    { text: "$1,260.000", us: true, comma: false },
+    { text: "(1,260.000)", us: true, comma: false },
+    { text: "$90.00", us: true, comma: false },
+    { text: "12.5", us: true, comma: false },
+    { text: "12.3456", us: true, comma: false },
+    { text: "1.234,567", us: false, comma: true },
+    { text: "1.234,56", us: false, comma: true },
+    { text: "12,50", us: false, comma: true },
+    { text: "12,5", us: false, comma: true },
+    { text: "12,3456", us: false, comma: true },
+    { text: "-1.234,567", us: false, comma: true },
+    { text: "+12,50", us: false, comma: true },
+    { text: "1 234,56", us: false, comma: true },
+    { text: "$12,50", us: false, comma: true },
+    { text: "(12,50)", us: false, comma: true },
+    { text: "-12,50", us: false, comma: true },
+    { text: "1500", us: false, comma: false },
+    { text: "1000", us: false, comma: false },
+    { text: "1260.000", us: false, comma: false },
+    { text: "1,260", us: false, comma: false },
+    { text: "1,234", us: false, comma: false },
+    { text: "1,234,567", us: false, comma: false },
+    { text: "0,000,000", us: false, comma: false },
+    { text: "1.234", us: false, comma: false },
+    { text: "0,125", us: false, comma: false },
+    { text: "1e3", us: false, comma: false },
+    { text: "1.260e3", us: false, comma: false },
+    { text: "$90e2", us: false, comma: false },
   ];
   const named = "amount mixes number styles, so it was read as text.";
   const hasMarker = (value: string): boolean => /[,$()]/.test(value);
-  let text = 0;
+  let namedCount = 0;
+  let unnamedCount = 0;
   let numeric = 0;
-  for (const [i, left] of us.entries()) {
-    for (const [j, right] of euro.entries()) {
-      const table = `mix_${i}_${j}`;
-      await createText(query, table, { amount: [left, right] });
+  for (let i = 0; i < values.length; i++) {
+    for (let j = i; j < values.length; j++) {
+      const left = values[i];
+      const right = values[j];
+      const table = `proof_${i}_${j}`;
+      await createText(query, table, { amount: [left.text, right.text] });
       await convertFormattedNumbers(query, table);
-      const type = await columnType(query, table, "amount");
-      if (!hasMarker(left) && !hasMarker(right)) {
-        // Without a formatting mark the converter skips the column.
-        assert.equal(type, "VARCHAR");
-        assert.deepEqual(await columnValues(query, table, "amount"), [left, right]);
-        assert.equal(await decimalCommaNote(query, table), null);
+      if (!hasMarker(left.text) && !hasMarker(right.text)) {
+        assert.equal(await columnType(query, table, "amount"), "VARCHAR", `${left.text} with ${right.text}`);
+        assert.equal(await decimalCommaNote(query, table), null, `${left.text} with ${right.text}`);
         continue;
       }
-      if (type === "DOUBLE") {
+      if ((await columnType(query, table, "amount")) === "DOUBLE") {
         numeric += 1;
         continue;
       }
-      assert.equal(type, "VARCHAR", `${left} with ${right}`);
-      assert.deepEqual(await columnValues(query, table, "amount"), [left, right]);
-      assert.equal(await decimalCommaNote(query, table), named, `${left} with ${right}`);
-      text += 1;
+      assert.deepEqual(await columnValues(query, table, "amount"), [left.text, right.text]);
+      const provesBoth = (left.us || right.us) && (left.comma || right.comma);
+      assert.equal(await decimalCommaNote(query, table), provesBoth ? named : null, `${left.text} with ${right.text}`);
+      if (provesBoth) namedCount += 1;
+      else unnamedCount += 1;
     }
   }
-  assert.ok(text > 0);
+  assert.ok(namedCount > 0);
+  assert.ok(unnamedCount > 0);
   assert.ok(numeric > 0);
 });
 
@@ -368,6 +379,42 @@ test("review three decorated decimal commas beside a US value stay text and are 
   }
 });
 
+test("review four consistent european columns stay text and are not named", async () => {
+  const query = await openDatabase();
+  const cases: Record<string, [string, string]> = {
+    space_whole: ["1 500", "1 234,56"],
+    dollar_whole: ["$1500", "$12,50"],
+    parens_whole: ["(1500)", "(12,50)"],
+    plus_whole: ["+1500", "+12,50"],
+    plain_whole: ["1500", "1 234,56"],
+    signed_whole: ["1500", "+12,50"],
+  };
+  for (const [name, values] of Object.entries(cases)) {
+    const table = `review_four_${name}`;
+    await createText(query, table, { amount: values });
+    await convertFormattedNumbers(query, table);
+    assert.equal(await columnType(query, table, "amount"), "VARCHAR");
+    assert.deepEqual(await columnValues(query, table, "amount"), values);
+    assert.equal(await decimalCommaNote(query, table), null);
+  }
+});
+
+test("a semicolon file of one european style loads as text and is not named", async () => {
+  const directory = await mkdtemp("/tmp/bridgekit-comma-");
+  const file = path.join(directory, "european-whole.csv");
+  await writeFile(
+    file,
+    "period;product;units;net_sales;gross_sales\n2024;A;10;1 500;100\n2024;A;10;1 234,56;200\n2025;A;10;1 500;110\n2025;A;10;1 234,56;210\n",
+  );
+  const query = await openDatabase();
+  await query(`CREATE TABLE european_whole AS SELECT * FROM read_csv('${file}', delim=';', header=true, types={'gross_sales': 'DOUBLE'})`);
+  await convertFormattedNumbers(query, "european_whole");
+  assert.equal(await columnType(query, "european_whole", "net_sales"), "VARCHAR");
+  assert.deepEqual(await columnValues(query, "european_whole", "net_sales"), ["1 500", "1 234,56", "1 500", "1 234,56"]);
+  assert.equal(await columnType(query, "european_whole", "gross_sales"), "DOUBLE");
+  assert.equal(await decimalCommaNote(query, "european_whole"), null);
+});
+
 test("a semicolon file with a signed decimal comma beside a US value loads and names the conflict", async () => {
   const directory = await mkdtemp("/tmp/bridgekit-comma-");
   const file = path.join(directory, "signed-mixed.csv");
@@ -393,18 +440,18 @@ test("a decimal comma beside a north american decimal stays text", async () => {
   assert.equal(await decimalCommaNote(query, "mixed"), "amount mixes number styles, so it was read as text.");
 });
 
-test("scientific notation beside a decimal comma stays text and is named", async () => {
+test("scientific notation beside a decimal comma stays text and is not named", async () => {
   const query = await openDatabase();
   await createText(query, "sci_three", { amount: ["1.234,567", "1.260e3"] });
   await convertFormattedNumbers(query, "sci_three");
   assert.equal(await columnType(query, "sci_three", "amount"), "VARCHAR");
   assert.deepEqual(await columnValues(query, "sci_three", "amount"), ["1.234,567", "1.260e3"]);
-  assert.equal(await decimalCommaNote(query, "sci_three"), "amount mixes number styles, so it was read as text.");
+  assert.equal(await decimalCommaNote(query, "sci_three"), null);
   await createText(query, "sci_plain", { amount: ["1.234,56", "1e3"] });
   await convertFormattedNumbers(query, "sci_plain");
   assert.equal(await columnType(query, "sci_plain", "amount"), "VARCHAR");
   assert.deepEqual(await columnValues(query, "sci_plain", "amount"), ["1.234,56", "1e3"]);
-  assert.equal(await decimalCommaNote(query, "sci_plain"), "amount mixes number styles, so it was read as text.");
+  assert.equal(await decimalCommaNote(query, "sci_plain"), null);
 });
 
 test("a space used as a thousands mark stays text", async () => {
@@ -462,7 +509,7 @@ test("three-decimal comma values convert via whole-column decision", async () =>
   assert.equal(await decimalCommaNote(query, "shorttail"), ONE);
 });
 
-test("a decimal-comma column beside an ambiguous value stays text and the note names it", async () => {
+test("a decimal-comma column beside an ambiguous value stays text, and only a proven mix is named", async () => {
   const directory = await mkdtemp("/tmp/bridgekit-comma-");
   const file = path.join(directory, "styles.csv");
   await writeFile(
@@ -475,7 +522,7 @@ test("a decimal-comma column beside an ambiguous value stays text and the note n
   assert.equal(await columnType(query, "styles", "net_sales"), "VARCHAR");
   assert.deepEqual(await columnValues(query, "styles", "net_sales"), ["1,234", "12,3456", "1,234", "12,3456"]);
   assert.equal(await columnType(query, "styles", "gross_sales"), "DOUBLE");
-  assert.equal(await decimalCommaNote(query, "styles"), "net_sales mixes number styles, so it was read as text.");
+  assert.equal(await decimalCommaNote(query, "styles"), null);
 
   await createText(query, "pair", {
     a: ["1.234,56", "1,260.00"],
@@ -486,7 +533,7 @@ test("a decimal-comma column beside an ambiguous value stays text and the note n
   assert.equal(await columnType(query, "pair", "b"), "VARCHAR");
   assert.deepEqual(await columnValues(query, "pair", "a"), ["1.234,56", "1,260.00"]);
   assert.deepEqual(await columnValues(query, "pair", "b"), ["1.234,567", "1,234"]);
-  assert.equal(await decimalCommaNote(query, "pair"), "a and b mix number styles, so they were read as text.");
+  assert.equal(await decimalCommaNote(query, "pair"), "a mixes number styles, so it was read as text.");
 });
 
 test("a decimal comma after 2000 blank rows stays text", async () => {
@@ -534,7 +581,7 @@ test("a decimal comma after 2000 thousands values stays text", async () => {
   const rows = await query(`SELECT amount FROM late ORDER BY i`);
   assert.equal(rows[0].amount, "1,260");
   assert.equal(rows[2000].amount, "1.234,56");
-  assert.equal(await decimalCommaNote(query, "late"), "amount mixes number styles, so it was read as text.");
+  assert.equal(await decimalCommaNote(query, "late"), null);
 });
 
 test("a late product code stays text", async () => {
