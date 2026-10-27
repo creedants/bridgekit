@@ -1,4 +1,4 @@
-import { guessSetup, isNumeric, type Column, type Filter, type Grain } from "./setup.ts";
+import { guessSetup, isNumeric, netSalesHeldAsText, type Column, type Filter, type Grain } from "./setup.ts";
 
 /**
  * A long period list draws a hint. Eight years of months are 96 labels, and
@@ -119,12 +119,14 @@ function numericAvailable(input: FileProblemInput, role: Role): boolean {
  */
 function soundMeasure(input: FileProblemInput): { name: string; role: Role; text: boolean } | undefined {
   const probed = guessSetup(promoted(input.columns, input.periodColumn));
+  const held = netSalesHeldAsText(input.columns);
   const found: { name: string; role: Role; text: boolean; index: number }[] = [];
   for (const role of ["sales", "units"] as const) {
     const chosen = chosenName(input, role);
+    const withheld = role === "sales" && chosen === "" && held !== "" && held !== input.periodColumn;
     if (choiceApplies(input.columns, chosen)) continue;
-    if (chosen === "" && numericAvailable(input, role)) continue;
-    const name = role === "sales" ? probed.salesColumn : probed.unitsColumn;
+    if (chosen === "" && numericAvailable(input, role) && !withheld) continue;
+    const name = withheld ? held : role === "sales" ? probed.salesColumn : probed.unitsColumn;
     if (name === "" || name === input.periodColumn) continue;
     const column = columnNamed(input.columns, name);
     if (!column || isNumeric(column.type)) continue;

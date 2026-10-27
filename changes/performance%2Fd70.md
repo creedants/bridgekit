@@ -1,0 +1,1 @@
+- When a file holds net sales as text, Sales auto-selection now leaves Sales empty instead of falling through to gross sales, so the setup shows the existing message `Sales must be a column of numbers, and "net_sales" holds text.` Files with numeric measures guess exactly as before.
