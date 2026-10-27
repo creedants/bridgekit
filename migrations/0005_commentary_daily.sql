@@ -1,8 +1,8 @@
 -- One commentary request count per member per UTC day, the second limit
 -- server/commentary.ts holds on POST /api/commentary for Pro members. The
--- 5-per-60-seconds COMMENTARY_RATE_LIMIT binding in server/worker.ts is held
--- per isolate by Cloudflare, so it caps how fast one member can ask and not
--- what a day costs; this row is shared by every isolate, so the count holds.
+-- 5-per-60-seconds COMMENTARY_RATE_LIMIT binding in server/worker.ts is
+-- approximate and local to each Cloudflare location. This database row
+-- enforces the daily count across locations.
 --
 -- Applying this migration changes no existing row: it adds one table, and no
 -- other statement reads or writes it. `requests` carries no CHECK, because the

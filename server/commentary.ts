@@ -10,9 +10,8 @@ import { parseSummary, type BridgeSummary } from "../src/summary.ts";
  * web-standard Request and Response, so it runs on Cloudflare Workers, Netlify
  * or Vercel functions, Deno, or Node behind the dev server.
  *
- * A Pro member may ask 100 times per UTC day. The daily count takes a minimal
- * database handle, so any SQLite binding fits and no Cloudflare type is
- * imported.
+ * A Pro member may ask 100 times per UTC day. The daily count needs a database
+ * handle with prepare/bind/run and meta.changes. No Cloudflare type is imported.
  */
 
 export const MODEL = "claude-opus-5-5";
