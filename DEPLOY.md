@@ -2,7 +2,7 @@
 
 Part 1 puts the free tool on `pvmbridge.com` with page counts. It stands alone. Part 2 turns on accounts and payments. Part 1 is one sitting. Step 1.2 is the only wait in that sitting.
 
-This file names the site host `pvmbridge.com` and the production database id. The client token from step 2.15 is the one value it leaves for you. Do not put a secret in a file or on a command line. `npx wrangler secret put` asks for it.
+This file names the site host `pvmbridge.com` and the production database id. The only value it leaves for you to write into a config file or a build command is the client token from step 2.15. Do not put a secret in a file or on a command line. `npx wrangler secret put` asks for it.
 
 `npm ci` installs Wrangler in this repo. It does not put `wrangler` on the shell PATH. Use `npx wrangler` for a direct command. `npm run cf:dev` and `npm run cf:deploy` already run that install, because npm puts `node_modules/.bin` on the script PATH.
 
@@ -40,13 +40,13 @@ Do: Add `pvmbridge.com` to that account. At your registrar, set the two name ser
 
 Dashboard (not verified): Cloudflare > Account Home > Add a domain.
 
-- Not verified: the repo names no zone and no route. The only domain in `wrangler.jsonc` is the site address on line 40.
+- Not verified: the repo names no zone and no route.
 - Source: `wrangler.jsonc:6` has `"name": "bridgekit"`. `wrangler.jsonc:1-41` has `"name": "bridgekit"`. `wrangler.jsonc:1-41` lacks `"routes"`.
 - Worked: `dig +short NS pvmbridge.com` prints two names that end in `ns.cloudflare.com`. The name servers may not show yet. Steps 1.3 through 1.10 do not wait. Step 1.11 does.
 
 ### 1.3 Create the database
 
-Do: Create the D1 database and copy the id it prints. If Wrangler offers to write that id into the config file, refuse. Step 1.4 writes it. Done in this repository: `wrangler.jsonc:24-25` already names the database and carries its production id, so run this only when `npx wrangler d1 list` does not show `bridgekit`. That listing is how you know the database is created.
+Do: Create the D1 database and copy the id it prints. If Wrangler offers to write that id into the config file, accept it. If it does not, put the id on `wrangler.jsonc:25` yourself, as step 1.4 describes. Done in this repository: `wrangler.jsonc:23-25` already names the database and carries its production id, so run this only when `npx wrangler d1 list` does not show `bridgekit`. That listing is how you know the database is created.
 
 Run:
 ```sh
@@ -60,7 +60,7 @@ npx wrangler d1 create bridgekit
 
 ### 1.4 Put the database id in wrangler.jsonc
 
-Do: Confirm `wrangler.jsonc:25` holds the id from step 1.3. Done in this repository: the line already carries the production id shown below, so there is nothing to paste. Read it against the `npx wrangler d1 list` output from step 1.3.
+Do: Confirm `wrangler.jsonc:25` holds the id from step 1.3. Done in this repository: the line already carries the production id shown below, so there is nothing to paste. Read it against the `npx wrangler d1 list` output from step 1.3. If that listing prints a different id, replace the id on this line with it.
 
 Edit: `wrangler.jsonc:25`
 ```text
@@ -72,7 +72,7 @@ Edit: `wrangler.jsonc:25`
 
 ### 1.5 Set the site address
 
-Do: Set `BETTER_AUTH_URL` to `https://pvmbridge.com` with no path and no trailing slash. Do not change this value in Part 2. Step 2.3 adds `ACCOUNTS` beside it. Done in this repository: `wrangler.jsonc:40` already carries that value, so confirm it and change nothing. `npm run cf:dev` overrides it to `http://localhost:8790` for local work, so a local run never sends the production address.
+Do: Set `BETTER_AUTH_URL` to `https://pvmbridge.com` with no path and no trailing slash. Do not change this value in Part 2. Step 2.3 adds `ACCOUNTS` beside it. Done in this repository: `wrangler.jsonc:40` already carries that value, so confirm it and change nothing. `npm run cf:dev` and the local wrangler smoke run override it to `http://localhost:8790`, so those two local runs never send the production address. A direct `npx wrangler dev` still reads the value in the file.
 
 Edit: `wrangler.jsonc:40`
 ```text
@@ -784,6 +784,6 @@ A path in backticks, then `has` or `lacks`, then words in backticks, is a claim 
 2. For `has`, every quoted run is in that span. For `lacks`, it is not. With no line number, `lacks` means the whole file.
 3. A `lacks` claim on a line span also has an anchor in that same span.
 4. `Not verified` has nothing to check in the repo.
-5. `BETTER_AUTH_URL` is the Part 1 edit to `wrangler.jsonc`. `ACCOUNTS` is the Part 2 edit to `wrangler.jsonc` `vars`, and the value is `on`. Every other string name in `server/env.ts` is one `npx wrangler secret put` line with that name, or one leave-unset line.
+5. `BETTER_AUTH_URL` is the Part 1 value in `wrangler.jsonc`, which step 1.5 confirms. `ACCOUNTS` is the Part 2 edit to `wrangler.jsonc` `vars`, and the value is `on`. Every other string name in `server/env.ts` is one `npx wrangler secret put` line with that name, or one leave-unset line.
 6. The nine event names in step 2.11 are the names at `server/paddle.ts:89-97`.
 7. `package.json` lacks `smoke:preview`. `package.json` lacks `smoke:wrangler`.
