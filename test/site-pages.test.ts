@@ -1,0 +1,392 @@
+import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
+import { test } from "node:test";
+
+const ORIGIN = "https://pvmbridge.com";
+const APP_TITLE = "Price-volume-mix bridge tool | PVM Bridge";
+const APP_DESCRIPTION =
+  "A price-volume-mix bridge that works across several product attributes at once. Runs in your browser, so your sales file is never uploaded. Free and open source.";
+const TERMS_DESCRIPTION =
+  "The terms for using PVM Bridge: the free tool, the open-source license, what we provide and what we do not, and how to contact us.";
+
+type Page = { file: string; address: string };
+
+const PAGES: Page[] = [
+  { file: "index.html", address: `${ORIGIN}/` },
+  { file: "guide.html", address: `${ORIGIN}/guide.html` },
+  { file: "method.html", address: `${ORIGIN}/method.html` },
+  { file: "privacy.html", address: `${ORIGIN}/privacy.html` },
+  { file: "terms.html", address: `${ORIGIN}/terms.html` },
+  {
+    file: "price-volume-mix-analysis.html",
+    address: `${ORIGIN}/price-volume-mix-analysis.html`,
+  },
+  { file: "grouping-level.html", address: `${ORIGIN}/grouping-level.html` },
+  { file: "app/index.html", address: `${ORIGIN}/app/` },
+];
+
+const ROOT_PAGES = PAGES.filter((page) => !page.file.includes("/"));
+const IMAGE_PAGES = ["index.html", "guide.html"];
+
+function readPage(file: string): string {
+  return readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+}
+
+function headOf(file: string, html: string): string {
+  const head = /<head>([\s\S]*?)<\/head>/.exec(html);
+  assert.ok(head, `${file} has no <head>: add the page head block`);
+  return head[1];
+}
+
+function titlesOf(html: string): string[] {
+  return [...html.matchAll(/<title>([\s\S]*?)<\/title>/g)].map((match) =>
+    match[1].trim(),
+  );
+}
+
+function descriptionsOf(html: string): string[] {
+  return [...html.matchAll(/<meta\s+name="description"\s+content="([^"]*)"/g)].map(
+    (match) => match[1].trim(),
+  );
+}
+
+function canonicalsOf(html: string): string[] {
+  return [
+    ...html.matchAll(/<link\s+rel="canonical"\s+href="([^"]*)"/g),
+  ].map((match) => match[1].trim());
+}
+
+function attributesOf(tag: string): Map<string, string> {
+  const attributes = new Map<string, string>();
+  for (const match of tag.matchAll(/\s([a-zA-Z][a-zA-Z0-9-]*)="([^"]*)"/g)) {
+    attributes.set(match[1], match[2]);
+  }
+  return attributes;
+}
+
+function pngSizeOf(file: string, src: string): { width: number; height: number } {
+  assert.ok(
+    src.startsWith("/img/") && src.endsWith(".png"),
+    `${file} has an image src ${src}: point it at a PNG under /img/`,
+  );
+  const path = new URL(`../public${src}`, import.meta.url);
+  assert.ok(
+    existsSync(path),
+    `${file} points at ${src}, which is missing: add the PNG under public${src}`,
+  );
+  const png = readFileSync(path);
+  return { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
+}
+
+test("every page names one title, one description and one canonical", () => {
+  for (const page of PAGES) {
+    const head = headOf(page.file, readPage(page.file));
+    const titles = titlesOf(head);
+    assert.equal(
+      titles.length,
+      1,
+      `${page.file} has ${titles.length} <title> elements in <head>: give it exactly one <title>`,
+    );
+    const descriptions = descriptionsOf(head);
+    assert.equal(
+      descriptions.length,
+      1,
+      `${page.file} has ${descriptions.length} <meta name="description"> elements in <head>: give it exactly one`,
+    );
+    const canonicals = canonicalsOf(head);
+    assert.equal(
+      canonicals.length,
+      1,
+      `${page.file} has ${canonicals.length} canonical links in <head>: give it exactly one <link rel="canonical" href="${page.address}" />`,
+    );
+    assert.equal(
+      canonicals[0],
+      page.address,
+      `${page.file} has canonical ${canonicals[0]} but its address is ${page.address}: make them the same address`,
+    );
+  }
+});
+
+test("every page has its own title and every root page its own description", () => {
+  const titles = new Map<string, string>();
+  const descriptions = new Map<string, string>();
+  for (const page of PAGES) {
+    const head = headOf(page.file, readPage(page.file));
+    const title = titlesOf(head)[0];
+    const titleOwner = titles.get(title);
+    assert.ok(
+      titleOwner === undefined,
+      `${page.file} shares its title "${title}" with ${titleOwner}: write a title that names this page`,
+    );
+    titles.set(title, page.file);
+
+    // The app page repeats the home page description by contract, so only the
+    // root pages must each say something of their own.
+    if (page.file.includes("/")) continue;
+    const description = descriptionsOf(head)[0];
+    assert.ok(
+      typeof description === "string" && description.trim() !== "",
+      `${page.file} has no <meta name="description"> content: describe the page in one sentence`,
+    );
+    const descriptionOwner = descriptions.get(description);
+    assert.ok(
+      descriptionOwner === undefined,
+      `${page.file} shares its description with ${descriptionOwner}: describe this page in its own sentence`,
+    );
+    descriptions.set(description, page.file);
+  }
+});
+
+test("the app page carries the tool contract strings", () => {
+  const head = headOf("app/index.html", readPage("app/index.html"));
+  assert.equal(
+    titlesOf(head)[0],
+    APP_TITLE,
+    `app/index.html title is "${titlesOf(head)[0]}" but should be "${APP_TITLE}": use the tool title`,
+  );
+  assert.equal(
+    descriptionsOf(head)[0],
+    APP_DESCRIPTION,
+    `app/index.html description does not match the tool description: use "${APP_DESCRIPTION}"`,
+  );
+});
+
+test("the gallery images declare their size, live in a picture and have AVIF sources", () => {
+  for (const file of IMAGE_PAGES) {
+    const html = readPage(file);
+    const images = [...html.matchAll(/<img\b[^>]*>/g)];
+    assert.ok(images.length > 0, `${file} has no <img> elements: add its gallery images`);
+    for (const image of images) {
+      const attributes = attributesOf(image[0]);
+      const src = attributes.get("src") ?? "";
+      const alt = attributes.get("alt");
+      assert.ok(
+        alt !== undefined && alt.trim() !== "",
+        `${file} has an image ${src} with no alt text: write what the image shows`,
+      );
+      assert.equal(
+        attributes.get("decoding"),
+        "async",
+        `${file} has an image ${src} without decoding="async": add it to the <img>`,
+      );
+      if (file === "guide.html") {
+        assert.equal(
+          attributes.get("loading"),
+          "lazy",
+          `${file} has an image ${src} without loading="lazy": add it to the <img>`,
+        );
+      }
+      const size = pngSizeOf(file, src);
+      assert.equal(
+        attributes.get("width"),
+        String(size.width),
+        `${file} has an image ${src} with width ${attributes.get("width") ?? "missing"} but the PNG is ${size.width} pixels wide: set width="${size.width}"`,
+      );
+      assert.equal(
+        attributes.get("height"),
+        String(size.height),
+        `${file} has an image ${src} with height ${attributes.get("height") ?? "missing"} but the PNG is ${size.height} pixels tall: set height="${size.height}"`,
+      );
+
+      const index = image.index;
+      const open = html.lastIndexOf("<picture>", index);
+      const close = html.indexOf("</picture>", index);
+      assert.ok(
+        open !== -1 &&
+          close !== -1 &&
+          open < index &&
+          html.lastIndexOf("</picture>", index) < open,
+        `${file} has an image ${src} outside a <picture>: wrap it in <picture> with a <source type="image/avif" srcset="/img/....avif" />`,
+      );
+      const block = html.slice(open, close);
+      const source = /<source\s+type="image\/avif"\s+srcset="([^"]*)"/.exec(block);
+      assert.ok(
+        source !== null,
+        `${file} has an image ${src} in a <picture> with no AVIF source: add <source type="image/avif" srcset="/img/....avif" />`,
+      );
+      const avif = source[1];
+      assert.ok(
+        avif.startsWith("/img/") && avif.endsWith(".avif"),
+        `${file} has an image ${src} with AVIF source ${avif}: point it at a .avif under /img/`,
+      );
+      assert.ok(
+        existsSync(new URL(`../public${avif}`, import.meta.url)),
+        `${file} has an image ${src} with AVIF source ${avif}, which is missing: generate public${avif} with avifenc`,
+      );
+    }
+  }
+});
+
+test("every root page footer links to the PVM analysis and grouping level pages", () => {
+  for (const page of ROOT_PAGES) {
+    const html = readPage(page.file);
+    const footer = /<footer>([\s\S]*?)<\/footer>/.exec(html);
+    assert.ok(footer, `${page.file} has no <footer>: add the shared footer links`);
+    const body = footer[1];
+    const guide = body.indexOf('<a href="/guide.html">');
+    assert.ok(
+      guide !== -1,
+      `${page.file} footer has no guide link: keep the shared footer links`,
+    );
+    const analysis = body.indexOf('<a href="/price-volume-mix-analysis.html">');
+    assert.ok(
+      analysis !== -1,
+      `${page.file} footer has no PVM analysis link: add <a href="/price-volume-mix-analysis.html">PVM analysis</a> after the guide link`,
+    );
+    const grouping = body.indexOf('<a href="/grouping-level.html">');
+    assert.ok(
+      grouping !== -1,
+      `${page.file} footer has no grouping level link: add <a href="/grouping-level.html">Grouping level</a> after the PVM analysis link`,
+    );
+    assert.ok(
+      analysis > guide,
+      `${page.file} footer puts the PVM analysis link before the guide link: move it after <a href="/guide.html">Guide</a>`,
+    );
+    assert.ok(
+      grouping > guide,
+      `${page.file} footer puts the grouping level link before the guide link: move it after <a href="/guide.html">Guide</a>`,
+    );
+  }
+});
+
+test("the home page carries exactly one WebSite block", () => {
+  const html = readPage("index.html");
+  const blocks = [
+    ...html.matchAll(
+      /<script\s+type="application\/ld\+json">([\s\S]*?)<\/script>/g,
+    ),
+  ];
+  assert.equal(
+    blocks.length,
+    1,
+    `index.html has ${blocks.length} application/ld+json blocks: add exactly one WebSite block after the twitter:card line`,
+  );
+  let site: Record<string, unknown> = {};
+  try {
+    site = JSON.parse(blocks[0][1]) as Record<string, unknown>;
+  } catch {
+    assert.fail(
+      "index.html has an application/ld+json block that is not valid JSON: write it as one valid object",
+    );
+  }
+  assert.equal(
+    site["@type"],
+    "WebSite",
+    `index.html structured data has @type ${String(site["@type"])}: use "WebSite"`,
+  );
+  assert.equal(
+    site.name,
+    "PVM Bridge",
+    `index.html structured data has name ${String(site.name)}: use "PVM Bridge"`,
+  );
+  assert.equal(
+    site.url,
+    `${ORIGIN}/`,
+    `index.html structured data has url ${String(site.url)}: use "${ORIGIN}/"`,
+  );
+});
+
+test("the description lengths and the terms description follow the contract", () => {
+  const grouping = descriptionsOf(headOf("grouping-level.html", readPage("grouping-level.html")))[0];
+  assert.ok(
+    grouping.length <= 160,
+    `grouping-level.html description is ${grouping.length} characters: cut it to 160 or fewer`,
+  );
+  const terms = descriptionsOf(headOf("terms.html", readPage("terms.html")))[0];
+  assert.equal(
+    terms,
+    TERMS_DESCRIPTION,
+    `terms.html description is "${terms}": use "${TERMS_DESCRIPTION}"`,
+  );
+});
+
+test("the app page ships one h1 and the description inside the root element", () => {
+  const html = readPage("app/index.html");
+  const headings = [...html.matchAll(/<h1>([\s\S]*?)<\/h1>/g)];
+  assert.equal(
+    headings.length,
+    1,
+    `app/index.html has ${headings.length} <h1> elements: give it exactly one`,
+  );
+  assert.equal(
+    headings[0][1].trim(),
+    "Price-volume-mix bridge tool",
+    `app/index.html h1 is "${headings[0][1].trim()}": use "Price-volume-mix bridge tool"`,
+  );
+  const root = html.indexOf('<div id="root">');
+  assert.ok(
+    root !== -1,
+    `app/index.html has no <div id="root">: keep the mount point the app replaces`,
+  );
+  const rootEnd = html.indexOf("</div>", root);
+  assert.ok(
+    rootEnd !== -1,
+    `app/index.html has no closing </div> after <div id="root">: close the mount point`,
+  );
+  const headingIndex = headings[0].index ?? -1;
+  assert.ok(
+    headingIndex > root && headingIndex < rootEnd,
+    `app/index.html puts its h1 outside <div id="root">: move the fallback inside the mount point`,
+  );
+  const paragraph = [...html.matchAll(/<p>([\s\S]*?)<\/p>/g)].find(
+    (match) => match[1].trim() === APP_DESCRIPTION,
+  );
+  assert.ok(
+    paragraph !== undefined,
+    `app/index.html has no <p> holding the tool description: add <p>${APP_DESCRIPTION}</p> inside <div id="root">`,
+  );
+  const paragraphIndex = paragraph.index ?? -1;
+  assert.ok(
+    paragraphIndex > root && paragraphIndex < rootEnd,
+    `app/index.html puts the description paragraph outside <div id="root">: move it inside the mount point`,
+  );
+});
+
+test("the app mount point contains the fallback margin so the page does not shift", () => {
+  const head = headOf("app/index.html", readPage("app/index.html"));
+  const rules = [...head.matchAll(/<style>([\s\S]*?)<\/style>/g)].map(
+    (match) => /#root\s*\{([^}]*)\}/.exec(match[1]),
+  );
+  const root = rules.find((rule) => rule !== null);
+  assert.ok(
+    root,
+    "app/index.html <head> has no #root rule: add <style>#root { display: flow-root; }</style> after the favicon link so the fallback margin cannot collapse out of the mount point",
+  );
+  const declarations = root[1];
+  assert.ok(
+    /display:\s*flow-root/.test(declarations),
+    `app/index.html #root rule says "${declarations.trim()}" without display: flow-root: set it so the fallback margin cannot collapse out of the mount point`,
+  );
+});
+
+test("the styled images scale their width and let the height follow", () => {
+  const css = readFileSync(new URL("../src/site/site.css", import.meta.url), "utf8");
+  const gallery = /\.gallery img\s*\{([^}]*)\}/.exec(css);
+  assert.ok(
+    gallery,
+    "src/site/site.css has no .gallery img rule: keep the gallery image width and add height: auto",
+  );
+  assert.ok(
+    /width:\s*100%/.test(gallery[1]),
+    "src/site/site.css .gallery img does not scale its width: keep width: 100%",
+  );
+  assert.ok(
+    /height:\s*auto/.test(gallery[1]),
+    "src/site/site.css .gallery img has no height: auto: add it so the picture keeps the PNG aspect ratio",
+  );
+
+  const guide = readPage("guide.html");
+  for (const image of guide.matchAll(/<img\b[^>]*>/g)) {
+    const attributes = attributesOf(image[0]);
+    const src = attributes.get("src") ?? "";
+    const style = attributes.get("style") ?? "";
+    assert.ok(
+      /width:\s*100%/.test(style),
+      `guide.html image ${src} has no width: 100% in its inline style: keep the width it had`,
+    );
+    assert.ok(
+      /height:\s*auto/.test(style),
+      `guide.html image ${src} has no height: auto in its inline style: append it so the picture keeps the PNG aspect ratio`,
+    );
+  }
+});
