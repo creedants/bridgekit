@@ -31,6 +31,8 @@ import {
 /** @typedef {{ origin: string, stop: () => Promise<void> }} Server */
 
 const DEBUG_PORT = 9360;
+/** The cross-tab scenario keeps no record, so it opens its own browser beside the recorded ones. */
+const SECOND_TAB_PORT = 9361;
 const CHROMIUM = process.env.CHROMIUM || "chromium";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const bin = (name) => join(root, "node_modules/.bin", name);
@@ -1707,6 +1709,168 @@ async function drive(browser, origin, rows) {
 }
 
 /**
+ * A second tab of the browser on this port, driven over its own socket. Both
+ * tabs share one browser profile and its localStorage, the way two tabs a user
+ * opens do. cdp.mjs drives the first page, so the second tab is opened here.
+ */
+async function openSecondTab(port) {
+  const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
+  const socket = new WebSocket(version.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    socket.onopen = resolve;
+    socket.onerror = () => reject(new Error(`the second tab could not reach the browser on port ${port}`));
+  });
+  let id = 0;
+  const pending = new Map();
+  socket.onmessage = (message) => {
+    const data = JSON.parse(message.data);
+    const waiter = data.id && pending.get(data.id);
+    if (!waiter) return;
+    pending.delete(data.id);
+    if (data.error) waiter.reject(new Error(`${waiter.method} failed: ${data.error.message}`));
+    else waiter.resolve(data.result);
+  };
+  const send = (method, params = {}, sessionId) =>
+    new Promise((resolve, reject) => {
+      const current = ++id;
+      pending.set(current, { resolve, reject, method });
+      socket.send(JSON.stringify({ id: current, method, params, ...(sessionId ? { sessionId } : {}) }));
+    });
+  const { targetId } = await send("Target.createTarget", { url: "about:blank" });
+  const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
+  const evaluate = async (expression) => {
+    const result = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sessionId);
+    if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? JSON.stringify(result.exceptionDetails));
+    return result.result?.value;
+  };
+  return {
+    evaluate,
+    waitFor: async (expression, tries = 600) => {
+      for (let i = 0; i < tries; i++) {
+        try {
+          if (await evaluate(expression)) return;
+        } catch {}
+        await sleep(250);
+      }
+      throw new Error(`the second tab never showed ${expression}`);
+    },
+    close: async () => {
+      await send("Target.closeTarget", { targetId }).catch(() => {});
+      socket.close();
+    },
+  };
+}
+
+/**
+ * Two tabs of one browser share localStorage. Page A turns Remember off, page B
+ * saves a setup with Remember on, then page A turns Remember on. Page B's setup
+ * must survive and be restored when page B loads the same columns again. The
+ * same walk runs once with a demonstration sample loaded in page A.
+ */
+async function rememberAcrossPages(browser, origin, { sample }) {
+  const rememberBox = `[...document.querySelectorAll('.check input')].find((input) => input.closest('label').textContent.includes('Remember'))`;
+  const readStorage = async () => JSON.parse(await browser.evalJs("JSON.stringify(Object.fromEntries(Object.entries(localStorage)))"));
+  const setupKey = (names) => `bridgekit:setup:${[...names].sort().join("|")}`;
+  const aHeader = ["year", "product", "units", "sales"];
+  const bHeader = ["period", "customer", "units", "sales"];
+  const rows = [
+    ["2025", "A1", 100, 1000],
+    ["2026", "A1", 110, 1210],
+    ["2026", "A2", 50, 550],
+  ];
+  const bRows = [
+    ["2025", "C1", 100, 1000],
+    ["2026", "C1", 110, 1210],
+    ["2026", "C2", 50, 550],
+  ];
+  const pasteCells = async (evaluate, text) => {
+    await evaluate(`(() => {
+      const data = { getData: (type) => (type === "text/plain" ? ${JSON.stringify(text)} : "") };
+      const event = new Event("paste", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "clipboardData", { value: data });
+      document.body.dispatchEvent(event);
+    })()`);
+  };
+
+  await browser.goto(sample ? `${origin}/app/?sample=${sample}` : `${origin}/app/`);
+  if (sample) {
+    await browser.waitFor("!!document.querySelector('aside') && !!document.querySelector('.check input')", 600);
+  } else {
+    await pasteCells((expression) => browser.evalJs(expression), toTsvText(aHeader, rows));
+    await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent", 600);
+  }
+
+  // Page A turns Remember off, which clears storage and leaves the opt-out.
+  await browser.evalJs(`${rememberBox}.click()`);
+  await browser.waitFor(`!!${rememberBox} && !${rememberBox}.checked`, 100);
+  const off = await readStorage();
+  if (Object.keys(off).join() !== "bridgekit:remember" || off["bridgekit:remember"] !== "off") {
+    fail(`page A turning Remember off left ${JSON.stringify(off)}, expected only the opt-out preference`);
+  }
+
+  const tab = await openSecondTab(SECOND_TAB_PORT);
+  try {
+    // Page B is the second tab: its own app, page A's storage.
+    await tab.evaluate(`location.href = ${JSON.stringify(`${origin}/app/`)}`);
+    await tab.waitFor("document.body != null && document.body.innerText.includes('Load a sales file')");
+    await pasteCells(tab.evaluate, toTsvText(bHeader, bRows));
+    await tab.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent");
+
+    // Page B turns Remember on and keeps the setup it guessed for its columns.
+    await tab.evaluate(`${rememberBox}.click()`);
+    await tab.waitFor(`[...document.querySelectorAll('.check input')].some((input) => input.closest('label').textContent.includes('Remember') && input.checked)`, 100);
+    const savedByB = (await readStorage())[setupKey(bHeader)];
+    if (!savedByB) fail(`page B turning Remember on saved no setup for its columns (storage holds ${JSON.stringify(Object.keys(await readStorage()))})`);
+    if ((await readStorage())["bridgekit:remember"] !== undefined) fail("page B turning Remember on kept the opt-out preference");
+
+    // Page A still has Remember off on screen. Turning it on must not touch what B saved.
+    await browser.evalJs(`${rememberBox}.click()`);
+    await browser.waitFor(`${rememberBox}.checked`, 100);
+    const afterA = await readStorage();
+    if (afterA[setupKey(bHeader)] !== savedByB) {
+      fail(`ticking Remember in page A lost the setup page B saved: storage holds ${JSON.stringify(Object.keys(afterA))}, expected ${JSON.stringify(setupKey(bHeader))} with page B's setup`);
+    }
+
+    // A reloaded tab shows what it restored only after the same file is loaded again.
+    await tab.evaluate("location.reload()").catch((error) => {
+      if (
+        error.message !== "Runtime.evaluate failed: Inspected target navigated or closed" &&
+        error.message !== "Runtime.evaluate failed: Execution context was destroyed."
+      ) throw error;
+    });
+    await tab.waitFor("document.body != null && document.body.innerText.includes('Load a sales file')");
+    await pasteCells(tab.evaluate, toTsvText(bHeader, bRows));
+    try {
+      await tab.waitFor("document.body.innerText.includes('Restored the setup')");
+    } catch (error) {
+      fail(`page B did not restore the setup it saved after page A ticked Remember (${error.message})`);
+    }
+  } finally {
+    await tab.close();
+  }
+}
+
+/** Runs the cross-tab walk both ways: page A holds a loaded file, then a demonstration sample. */
+async function crossPageRemembering(origin) {
+  const failures = [];
+  for (const [label, options] of [
+    ["remember across tabs", {}],
+    ["remember across tabs with a demonstration sample", { sample: "sku" }],
+  ]) {
+    const browser = await open(SECOND_TAB_PORT, { chromium: CHROMIUM });
+    try {
+      await rememberAcrossPages(browser, origin, options);
+      console.log(`ok  ${label}: turning Remember on in one tab keeps the setup another tab saved${options.sample ? " while a sample is loaded" : ""}`);
+    } catch (error) {
+      failures.push(`${label}: ${error instanceof Failure ? error.message : error.stack}`);
+    } finally {
+      await browser.close();
+    }
+  }
+  if (failures.length) fail(failures.join("\n"));
+}
+
+/**
  * Every rule that decides pass or fail for the application's record, over the whole record.
  * @param {Recording} record
  * @param {string} origin
@@ -1879,6 +2043,7 @@ try {
   const judged = judge(app.record, origin, { devServer: policies === 0 });
   for (const note of judged.notes) console.log(note);
   if (judged.failures.length) fail(judged.failures.join("\n"));
+  await crossPageRemembering(origin);
 } catch (error) {
   failures.push(error);
 } finally {
