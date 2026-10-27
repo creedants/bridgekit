@@ -282,3 +282,102 @@ test("a second conversion keeps the currency values and the sentence", async () 
   expectNumbers(await columnValues(query, "data", "amount"), [1234.5, -12.5]);
   assert.equal(await decimalCommaNote(query, "data"), DECIMAL_COMMA);
 });
+
+test("a semicolon file keeps currency-like product codes as distinct text", async () => {
+  const directory = await mkdtemp("/tmp/bridgekit-formats-");
+  const file = path.join(directory, "codes.csv");
+  await writeFile(file, "period;sku;units;sales\n2025;USD0012;1;10\n2025;USD12;2;200\n2026;USD0012;2;22\n2026;USD12;1;90\n");
+  const query = await openDatabase();
+  await query(`CREATE TABLE data AS SELECT * FROM read_csv(${sqlText(file)}, delim=';', header=true)`);
+  await convertFormattedNumbers(query, "data");
+  assert.equal(await columnType(query, "data", "sku"), "VARCHAR");
+  assert.deepEqual(await columnValues(query, "data", "sku"), ["USD0012", "USD12", "USD0012", "USD12"]);
+  const [distinct] = await query("SELECT count(DISTINCT sku) AS n FROM data");
+  assert.equal(Number(distinct.n), 2);
+  assert.equal(await decimalCommaNote(query, "data"), null);
+});
+
+test("a semicolon file keeps a currency code glued to a plain integer as text", async () => {
+  const directory = await mkdtemp("/tmp/bridgekit-formats-");
+  const file = path.join(directory, "codes.csv");
+  await writeFile(file, "period;sku\n2025;TRY12\n2025;TRY0012\n");
+  const query = await openDatabase();
+  await query(`CREATE TABLE data AS SELECT * FROM read_csv(${sqlText(file)}, delim=';', header=true)`);
+  await convertFormattedNumbers(query, "data");
+  assert.equal(await columnType(query, "data", "sku"), "VARCHAR");
+  assert.deepEqual(await columnValues(query, "data", "sku"), ["TRY12", "TRY0012"]);
+  const [distinct] = await query("SELECT count(DISTINCT sku) AS n FROM data");
+  assert.equal(Number(distinct.n), 2);
+  assert.equal(await decimalCommaNote(query, "data"), null);
+});
+
+test("a euro sign and a euro code in one column convert together", async () => {
+  const query = await openDatabase();
+  await createText(query, "data", { amount: ["€1.234,50", "1.250,50 EUR"] });
+  await convertFormattedNumbers(query, "data");
+  assert.equal(await columnType(query, "data", "amount"), "DOUBLE");
+  expectNumbers(await columnValues(query, "data", "amount"), [1234.5, 1250.5]);
+  assert.equal(await decimalCommaNote(query, "data"), DECIMAL_COMMA);
+});
+
+test("currencies outside the old short list convert beside a three letter word control", async () => {
+  const query = await openDatabase();
+  await createText(query, "data", { sar: ["SAR 1234.50"], twd: ["TWD 1234.50"], word: ["ABC 12"] });
+  await convertFormattedNumbers(query, "data");
+  assert.equal(await columnType(query, "data", "sar"), "DOUBLE");
+  expectNumbers(await columnValues(query, "data", "sar"), [1234.5]);
+  assert.equal(await columnType(query, "data", "twd"), "DOUBLE");
+  expectNumbers(await columnValues(query, "data", "twd"), [1234.5]);
+  assert.equal(await columnType(query, "data", "word"), "VARCHAR");
+  assert.deepEqual(await columnValues(query, "data", "word"), ["ABC 12"]);
+  assert.equal(await decimalCommaNote(query, "data"), null);
+});
+
+test("a currency marker after row two thousand still reaches the money path", async () => {
+  const query = await openDatabase();
+  const amount = Array.from({ length: 2001 }, (_, row) => (row === 2000 ? "SAR 1.234,50" : "1.234,50"));
+  await createText(query, "data", { amount });
+  await convertFormattedNumbers(query, "data");
+  assert.equal(await columnType(query, "data", "amount"), "DOUBLE");
+  expectNumbers(
+    await columnValues(query, "data", "amount"),
+    Array.from({ length: 2001 }, () => 1234.5),
+  );
+  assert.equal(await decimalCommaNote(query, "data"), DECIMAL_COMMA);
+});
+
+test("a bare no-break space groups thousands without a currency", async () => {
+  const query = await openDatabase();
+  await createText(query, "data", { amount: ["1\u00a0234,50"] });
+  await convertFormattedNumbers(query, "data");
+  assert.equal(await columnType(query, "data", "amount"), "DOUBLE");
+  expectNumbers(await columnValues(query, "data", "amount"), [1234.5]);
+  assert.equal(await decimalCommaNote(query, "data"), DECIMAL_COMMA);
+});
+
+test("a bare narrow no-break space groups thousands without a currency", async () => {
+  const query = await openDatabase();
+  await createText(query, "data", { amount: ["1\u202f234,50"] });
+  await convertFormattedNumbers(query, "data");
+  assert.equal(await columnType(query, "data", "amount"), "DOUBLE");
+  expectNumbers(await columnValues(query, "data", "amount"), [1234.5]);
+  assert.equal(await decimalCommaNote(query, "data"), DECIMAL_COMMA);
+});
+
+test("a bare ascii apostrophe groups thousands on a decimal comma", async () => {
+  const query = await openDatabase();
+  await createText(query, "data", { amount: ["1'234,50"] });
+  await convertFormattedNumbers(query, "data");
+  assert.equal(await columnType(query, "data", "amount"), "DOUBLE");
+  expectNumbers(await columnValues(query, "data", "amount"), [1234.5]);
+  assert.equal(await decimalCommaNote(query, "data"), DECIMAL_COMMA);
+});
+
+test("a bare right single quote groups thousands on a decimal comma", async () => {
+  const query = await openDatabase();
+  await createText(query, "data", { amount: ["1\u2019234,50"] });
+  await convertFormattedNumbers(query, "data");
+  assert.equal(await columnType(query, "data", "amount"), "DOUBLE");
+  expectNumbers(await columnValues(query, "data", "amount"), [1234.5]);
+  assert.equal(await decimalCommaNote(query, "data"), DECIMAL_COMMA);
+});

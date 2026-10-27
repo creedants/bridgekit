@@ -21,7 +21,7 @@ const AMBIGUOUS = `^${SIGN}[1-9]\\d{0,2},\\d{3}$`;
 
 const SYMBOL = "[^\\P{Sc}$]";
 const CODE =
-  "(?:AED|AUD|BGN|BRL|CAD|CHF|CNY|CZK|DKK|EUR|GBP|HKD|HUF|IDR|ILS|INR|ISK|JPY|KRW|MXN|MYR|NOK|NZD|PHP|PLN|RON|RUB|SEK|SGD|THB|TRY|UAH|USD|ZAR)";
+  "(?:AED|AFN|ALL|AMD|AOA|ARS|AUD|AWG|AZN|BAM|BBD|BDT|BGN|BHD|BIF|BMD|BND|BOB|BOV|BRL|BSD|BTN|BWP|BYN|BZD|CAD|CDF|CHE|CHF|CHW|CLF|CLP|CNY|COP|COU|CRC|CUP|CVE|CZK|DJF|DKK|DOP|DZD|EGP|ERN|ETB|EUR|FJD|FKP|GBP|GEL|GHS|GIP|GMD|GNF|GTQ|GYD|HKD|HNL|HTG|HUF|IDR|ILS|INR|IQD|IRR|ISK|JMD|JOD|JPY|KES|KGS|KHR|KMF|KPW|KRW|KWD|KYD|KZT|LAK|LBP|LKR|LRD|LSL|LYD|MAD|MDL|MGA|MKD|MMK|MNT|MOP|MRU|MUR|MVR|MWK|MXN|MXV|MYR|MZN|NAD|NGN|NIO|NOK|NPR|NZD|OMR|PAB|PEN|PGK|PHP|PKR|PLN|PYG|QAR|RON|RSD|RUB|RWF|SAR|SBD|SCR|SDG|SEK|SGD|SHP|SLE|SOS|SRD|SSP|STN|SVC|SYP|SZL|THB|TJS|TMT|TND|TOP|TRY|TTD|TWD|TZS|UAH|UGX|USD|USN|UYI|UYU|UYW|UZS|VED|VES|VND|VUV|WST|XAD|XAF|XAG|XAU|XBA|XBB|XBC|XBD|XCD|XCG|XDR|XOF|XPD|XPF|XPT|XSU|XTS|XUA|XXX|YER|ZAR|ZMW|ZWG)";
 const MARK = "[\\x{00A0}\\x{202F}\\x27\\x{2019}]";
 const MARKER_AT_START = `^(-?)((?:${SYMBOL})|(?:${CODE} ?))([+-]?\\d.*)$`;
 const MARKER_AT_END = `^(.+\\d)((?:${SYMBOL})|(?: ?${CODE}))$`;
@@ -57,9 +57,9 @@ function money(column: string): string {
   const value = `trim(${column})`;
   const opened = `CASE WHEN regexp_matches(${value}, '${MARKED_PARENS}') THEN '-' || ${replace(value, "^\\((.*)\\)$", "\\1")} ELSE ${value} END`;
   const raw = replace(opened, "^(.*\\S)-$", "-\\1");
-  const plain = replace(replace(raw, MARKER_AT_START, "\\1\\3"), MARKER_AT_END, "\\1");
+  const plain = `CASE WHEN regexp_matches(${raw}, '^[+-]?${CODE}[+-]?\\d+$|^[+-]?\\d+${CODE}$') THEN ${raw} ELSE ${replace(replace(raw, MARKER_AT_START, "\\1\\3"), MARKER_AT_END, "\\1")} END`;
   const dropped = `${plain} <> ${raw}`;
-  const currency = `CASE WHEN ${dropped} THEN nullif(regexp_extract(${raw}, '(${SYMBOL}|${CODE})', 1), '') WHEN contains(${raw}, '$') THEN '$' END`;
+  const currency = `CASE WHEN ${dropped} THEN replace(nullif(regexp_extract(${raw}, '(${SYMBOL}|${CODE})', 1), ''), '€', 'EUR') WHEN contains(${raw}, '$') THEN '$' END`;
   const grouped = `regexp_matches(${plain}, CASE WHEN ${dropped} THEN '${SPACE_GROUPS}' ELSE '${MARK_GROUPS}' END)`;
   const separator = `CASE WHEN contains(${plain}, ',') THEN '.' ELSE ',' END`;
   const text = `CASE WHEN ${grouped} THEN replace(regexp_replace(${plain}, '${MARK}', ${separator}, 'g'), ' ', ${separator}) ELSE ${plain} END`;
@@ -170,8 +170,8 @@ function moneyField(index: number, field: "text" | "currency" | "grouped"): stri
   return `(__m${index}).${field}`;
 }
 
-function withMoney(columns: string[], source: string): string {
-  const parsed = columns.map((column, index) => `, ${money(column)} AS __m${index}`).join("");
+function withMoney(columns: string[], source: string, extended: boolean[]): string {
+  const parsed = columns.map((column, index) => `, ${extended[index] ? money(column) : `struct_pack(currency := CASE WHEN contains(${column}, '$') THEN '$' END, text := trim(${column}), grouped := false)`} AS __m${index}`).join("");
   return `WITH __money AS MATERIALIZED (SELECT *${parsed} FROM ${source})`;
 }
 
@@ -187,13 +187,14 @@ async function countFormatting(
   query: Query,
   columns: string[],
   source: string,
+  extended: boolean[],
 ): Promise<Pick<ColumnCounts, "present" | "parsed" | "formatted">[]> {
-  const [row] = await query(`${withMoney(columns, source)} SELECT ${columns.map(formattingMeasures).join(", ")} FROM __money`);
+  const [row] = await query(`${withMoney(columns, source, extended)} SELECT ${columns.map(formattingMeasures).join(", ")} FROM __money`);
   return columns.map((_, index) => formattingFrom(row, index));
 }
 
-async function scan(query: Query, columns: string[], source: string): Promise<ColumnCounts[]> {
-  const [row] = await query(`${withMoney(columns, source)} SELECT ${columns.map(measures).join(", ")} FROM __money`);
+async function scan(query: Query, columns: string[], source: string, extended: boolean[]): Promise<ColumnCounts[]> {
+  const [row] = await query(`${withMoney(columns, source, extended)} SELECT ${columns.map(measures).join(", ")} FROM __money`);
   return columns.map((_, index) => ({
     nonBlank: Number(row[`nb${index}`]),
     european: Number(row[`eu${index}`]),
@@ -209,18 +210,21 @@ async function scan(query: Query, columns: string[], source: string): Promise<Co
   }));
 }
 
-function alterText(column: string): string {
-  return `(${money(column)}).text`;
+async function extendedColumns(query: Query, columns: string[], source: string): Promise<boolean[]> {
+  const [row] = await query(`SELECT ${columns.map((column, index) => `count(*) FILTER (WHERE regexp_matches(trim(${column}), '[^\\P{Sc}$]|[A-Z]{3}|[\\x{00A0}\\x{202F}\\x27\\x{2019}]|-$')) AS x${index}`).join(", ")} FROM ${source}`);
+  return columns.map((_, index) => Number(row[`x${index}`]) > 0);
 }
 
 export async function convertFormattedNumbers(query: Query, table: string): Promise<void> {
   const tableName = quotedName(table);
   const columns = varcharColumns(await query(`DESCRIBE ${tableName}`));
   if (columns.length === 0) return;
-  const sampled = await countFormatting(query, columns, `(SELECT * FROM ${tableName} LIMIT ${FIRST_ROWS})`);
+  const sample = `(SELECT * FROM ${tableName} LIMIT ${FIRST_ROWS})`;
+  const sampled = await countFormatting(query, columns, sample, await extendedColumns(query, columns, sample));
   const likely = columns.filter((_, index) => parsesWithFormatting(sampled[index]));
   if (likely.length === 0) return;
-  const full = await scan(query, likely, tableName);
+  const extended = await extendedColumns(query, likely, tableName);
+  const full = await scan(query, likely, tableName, extended);
   for (const [index, column] of likely.entries()) {
     const counts = full[index];
     if (counts.currencies > 1) {
@@ -230,14 +234,25 @@ export async function convertFormattedNumbers(query: Query, table: string): Prom
       continue;
     }
     if (!parsesWithFormatting(counts)) continue;
+    let canonical = column;
+    let temporary = `__money_${index}`;
+    if (extended[index] && (isDecimalComma(counts) || lacksDecimalProof(counts))) {
+      const existing = new Set((await query(`DESCRIBE ${tableName}`)).map((row) => String(row.column_name).toLowerCase()));
+      while (existing.has(temporary.toLowerCase())) temporary += "_";
+      const parsedColumn = quotedName(temporary);
+      canonical = `(${parsedColumn}).text`;
+      await query(`ALTER TABLE ${tableName} ADD COLUMN ${parsedColumn} STRUCT(currency VARCHAR, text VARCHAR, grouped BOOLEAN)`);
+      await query(`UPDATE ${tableName} SET ${parsedColumn} = ${money(column)}`);
+    }
     if (isDecimalComma(counts)) {
-      await query(`ALTER TABLE ${tableName} ALTER ${column} TYPE DOUBLE USING ${decimalComma(alterText(column))}`);
+      await query(`ALTER TABLE ${tableName} ALTER ${column} TYPE DOUBLE USING ${decimalComma(canonical)}`);
       await query(`COMMENT ON COLUMN ${tableName}.${column} IS 'decimal comma'`);
     } else if (lacksDecimalProof(counts)) {
-      await query(`ALTER TABLE ${tableName} ALTER ${column} TYPE DOUBLE USING ${northAmerican(alterText(column))}`);
+      await query(`ALTER TABLE ${tableName} ALTER ${column} TYPE DOUBLE USING ${northAmerican(canonical)}`);
     } else if (counts.present > 0 && counts.wellFormed === counts.nonBlank && provesBothStyles(counts)) {
       await query(`COMMENT ON COLUMN ${tableName}.${column} IS 'mixed number styles'`);
     }
+    if (canonical !== column) await query(`ALTER TABLE ${tableName} DROP COLUMN ${quotedName(temporary)}`);
   }
 }
 
