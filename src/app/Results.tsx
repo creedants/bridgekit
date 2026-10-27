@@ -49,6 +49,8 @@ export interface Run {
   /** Structured setup and file name, so the ticked report rebuilds Setup without copying values. */
   setup: Setup;
   source: string;
+  /** Data-row Excel formulas with no saved result, read as blank. Zero for a CSV, a paste, or a sample. */
+  formulaBlanks: number;
   config: BridgeConfig;
   result: BridgeResult;
   check: DataCheck;
@@ -1038,13 +1040,23 @@ function checkWarnings(run: Run): string[] {
 }
 
 /** The Data check's sentences about how the file was read, in the order the tab shows them. */
-export async function dataCheckNotes(query: Query, table: string): Promise<string[]> {
+export async function dataCheckNotes(query: Query, table: string, formulaBlanks = 0): Promise<string[]> {
   // One note's query failing must not hide the other's sentence.
   const sentences = [
     await decimalCommaNote(query, table).catch(() => null),
     await dateOrderNote(query, table).catch(() => null),
   ];
-  return sentences.filter((sentence): sentence is string => sentence !== null);
+  const read = sentences.filter((sentence): sentence is string => sentence !== null);
+  if (formulaBlanks > 0) read.push(formulaBlankNote(formulaBlanks));
+  return read;
+}
+
+function formulaBlankNote(count: number): string {
+  const formatted = count.toLocaleString("en-US");
+  if (count === 1) {
+    return "1 cell in the Excel file holds a formula with no saved result, so it was read as blank. Open and save the file in Excel, then load it again.";
+  }
+  return `${formatted} cells in the Excel file hold a formula with no saved result, so they were read as blank. Open and save the file in Excel, then load it again.`;
 }
 
 function Check(props: { run: Run; warnings: string[]; query: () => Promise<Query> }) {
@@ -1056,7 +1068,7 @@ function Check(props: { run: Run; warnings: string[]; query: () => Promise<Query
     setNotes([]);
     props
       .query()
-      .then((query) => dataCheckNotes(query, TABLE))
+      .then((query) => dataCheckNotes(query, TABLE, props.run.formulaBlanks))
       .then((sentences) => {
         if (!stale) setNotes(sentences);
       })

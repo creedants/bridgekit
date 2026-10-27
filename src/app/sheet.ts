@@ -61,10 +61,11 @@ export function holeRenames(
   return renames;
 }
 
-export async function firstSheetAsCsv(file: File): Promise<{ csv: string; holes: readonly number[] }> {
+export async function firstSheetAsCsv(file: File): Promise<{ csv: string; holes: readonly number[]; formulaBlanks: number }> {
   const { default: ExcelJS } = await import("exceljs");
+  const data = await file.arrayBuffer();
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(await file.arrayBuffer());
+  await workbook.xlsx.load(data);
   const sheet = workbook.worksheets[0];
   if (!sheet || sheet.rowCount < 2) throw new Error("The first sheet of that workbook has no data rows.");
   const width = sheet.columnCount;
@@ -75,8 +76,47 @@ export async function firstSheetAsCsv(file: File): Promise<{ csv: string; holes:
   });
   const header = excelHeaderNames(rows[0], width);
   const holes = excelHoleIndexes(rows[0], width);
-  const data = rows.slice(1).map((values) =>
+  const dataRows = rows.slice(1).map((values) =>
     Array.from({ length: width }, (_, index) => flattenCell(values[index])),
   );
-  return { csv: toCsv(header, data), holes };
+  return { csv: toCsv(header, dataRows), holes, formulaBlanks: await countFormulaBlanks(data) };
+}
+
+// A formula cell with no `<v>` in the sheet XML has no cached result, so the
+// reader loads it as blank. A cached empty string still writes `<v></v>`, so
+// the presence of the element, not its text, decides. Only data rows count.
+async function countFormulaBlanks(data: ArrayBuffer): Promise<number> {
+  try {
+    const { default: JSZip } = await import("jszip");
+    const zip = await JSZip.loadAsync(data);
+    const workbookXml = await zip.file("xl/workbook.xml")?.async("text");
+    if (!workbookXml) return 0;
+    const sheetId = /<sheet\b[^>]*r:id="([^"]+)"/.exec(workbookXml)?.[1];
+    if (!sheetId) return 0;
+    const relsXml = await zip.file("xl/_rels/workbook.xml.rels")?.async("text");
+    if (!relsXml) return 0;
+    const escaped = sheetId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const target =
+      new RegExp(`<Relationship\\b[^>]*Id="${escaped}"[^>]*Target="([^"]+)"`).exec(relsXml)?.[1] ??
+      new RegExp(`<Relationship\\b[^>]*Target="([^"]+)"[^>]*Id="${escaped}"`).exec(relsXml)?.[1];
+    if (!target) return 0;
+    const sheetPath = target.startsWith("xl/") ? target : `xl/${target}`;
+    const sheetXml = await zip.file(sheetPath)?.async("text");
+    if (!sheetXml) return 0;
+    const rows = [...sheetXml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)];
+    if (rows.length < 2) return 0;
+    let blanks = 0;
+    for (const row of rows.slice(1)) {
+      const body = row[1] ?? "";
+      for (const cell of body.matchAll(/<c\b[^>]*>([\s\S]*?)<\/c>/g)) {
+        const inner = cell[1] ?? "";
+        if (!/<f[\s>/]/.test(inner)) continue;
+        if (/<v[\s>/]/.test(inner)) continue;
+        blanks += 1;
+      }
+    }
+    return blanks;
+  } catch {
+    return 0;
+  }
 }

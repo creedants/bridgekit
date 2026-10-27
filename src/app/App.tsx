@@ -129,6 +129,7 @@ export function App() {
   const [preview, setPreview] = useState<Record<string, unknown>[]>([]);
   const [rollups, setRollups] = useState<string[][]>([]);
   const [run, setRun] = useState<(Run & { id: number; signature: string }) | null>(null);
+  const [formulaBlanks, setFormulaBlanks] = useState(0);
   // A demonstration sample must not overwrite a setup saved for a file with the same columns.
   const writesSetup = useRef(true);
 
@@ -181,6 +182,7 @@ export function App() {
     const { sample, rows } = resolveSample(new URLSearchParams(location.search).get("sample"));
     return task("Generating sample data…", async () => {
       await sample.create(await query(), rows, TABLE);
+      setFormulaBlanks(0);
       await afterLoad(sample.label, sample);
     });
   };
@@ -193,7 +195,7 @@ export function App() {
     }
     prefetchResults();
     return task(`Reading ${file.name}…`, async () => {
-      await (await db()).loadFile(file, TABLE);
+      setFormulaBlanks(await (await db()).loadFile(file, TABLE));
       await afterLoad(file.name);
     });
   };
@@ -279,6 +281,7 @@ export function App() {
         description: describeSetup(setup, prior, current, source),
         setup,
         source,
+        formulaBlanks,
         id: Date.now(),
         signature,
       });
