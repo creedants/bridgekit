@@ -15,6 +15,7 @@ const METHOD = "<!doctype html><title>Method</title>";
 const PRIVACY = "<!doctype html><title>Privacy</title>";
 const ARTICLE = "<!doctype html><title>Price volume mix</title>";
 const TERMS = "<!doctype html><title>Terms</title>";
+const PAGE_NOT_FOUND = "<!doctype html><title>Page not found</title>";
 
 function redirect(location: string): Response {
   return new Response("redirect", { status: 307, headers: { location, "content-type": "text/html; charset=utf-8" } });
@@ -189,6 +190,33 @@ test("index.html redirects stay redirects", async () => {
     ["/index.html", "/app/index.html", "/pay/index.html"],
   );
   assert.deepEqual(await views(db), []);
+});
+
+test("/404 and /404.html answer 404 with the not-found page, and a missing path and the pages around it stay as they were", async () => {
+  const { env } = bindings({
+    "/404": html(PAGE_NOT_FOUND),
+    "/404.html": redirect("/404"),
+    "/nope": new Response(PAGE_NOT_FOUND, { status: 404, headers: { "content-type": "text/html; charset=utf-8" } }),
+    "/guide.html": redirect("/guide"),
+    "/guide": html(GUIDE),
+    "/": html(GUIDE),
+  });
+  for (const path of ["/404", "/404.html", "/nope"]) {
+    const response = await open(path, env);
+    assert.equal(response.status, 404, path);
+    assert.equal(response.headers.get("location"), null, `${path} redirected`);
+    assert.equal(await response.text(), PAGE_NOT_FOUND, path);
+  }
+  const guide = await open("/guide", env);
+  assert.equal(guide.status, 301);
+  assert.equal(guide.headers.get("location"), "/guide.html");
+  const guideHtml = await open("/guide.html", env);
+  assert.equal(guideHtml.status, 200);
+  assert.equal(guideHtml.headers.get("location"), null);
+  assert.equal(await guideHtml.text(), GUIDE);
+  const home = await open("/", env);
+  assert.equal(home.status, 200);
+  assert.equal(await home.text(), GUIDE);
 });
 
 test("HEAD does not count", async () => {
