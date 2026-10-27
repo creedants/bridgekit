@@ -43,6 +43,9 @@ const moverRow = (name: string) => ({
   volume: 0,
   mix_1: 0,
   price: 0,
+  new_config: 0,
+  discontinued: 0,
+  no_units: 0,
 });
 
 test("a mover name that begins with a formula character takes a leading apostrophe", () => {
@@ -368,4 +371,112 @@ test("a ticked report ignores private text after a second separator in recognize
       assert.equal(lowered.includes(keep.toLowerCase()), true, `${keep} left the ticked report`);
     }
   }
+});
+
+const moversSection = (html: string): string => {
+  const start = html.indexOf("Largest movers");
+  const tableStart = html.indexOf("<table", start);
+  const tableEnd = html.indexOf("</table>", tableStart);
+  return html.slice(tableStart, tableEnd);
+};
+
+const moversNumbers = (html: string): number[][] => {
+  const section = moversSection(html);
+  const rows = [...section.matchAll(/<tr>(.*?)<\/tr>/gs)].map((m) => m[1]);
+  return rows
+    .filter((row) => row.includes("<td"))
+    .map((row) =>
+      [...row.matchAll(/<td class="n">([^<]*)<\/td>/g)].map((m) =>
+        Number(m[1].replaceAll(",", "").replace("+", ""))
+      )
+    );
+};
+
+const assertMoversFoot = (html: string) => {
+  for (const label of ["New config.", "Discontinued", "No units"]) {
+    assert.equal(html.includes(`<th class="n">${label}</th>`), true, `${label} header is missing`);
+  }
+  const rows = moversNumbers(html);
+  assert.ok(rows.length > 0, "the movers table has no rows");
+  for (const numbers of rows) {
+    assert.equal(numbers.length, 7, `a movers row has ${numbers.length} numbers instead of 7`);
+    const [change, ...parts] = numbers;
+    assert.equal(
+      change,
+      parts.reduce((a, b) => a + b, 0),
+      `a movers row does not foot: change ${change} against parts ${parts.join(", ")}`,
+    );
+  }
+  assert.ok(
+    rows.some((numbers) => numbers[4] !== 0 || numbers[5] !== 0 || numbers[6] !== 0),
+    "no movers row carries a new, discontinued or no-units amount",
+  );
+};
+
+const footConfig = (overrides: Partial<BridgeConfig> = {}): BridgeConfig => ({
+  table: "t",
+  periodColumn: "period",
+  prior: "2025",
+  current: "2026",
+  unitsColumn: "units",
+  salesColumn: "sales",
+  levels: [{ name: "Product", columns: ["product"] }],
+  ...overrides,
+});
+
+const footReport = async (engineConfig: BridgeConfig, ddl: string, values: string, omitNames = false) => {
+  const query = await openDatabase();
+  await query(ddl);
+  await query(`INSERT INTO t VALUES ${values}`);
+  const engineResult = await runBridge(query, engineConfig);
+  const moverRows = await drill(query, engineConfig, { columns: ["product"], limit: 15 });
+  return buildReport({
+    config: engineConfig,
+    result: engineResult,
+    description: ["Source: zx-foot.csv", "Periods: 2025 to 2026 (period)"],
+    movers: { label: "Product", rows: moverRows, columns: ["product"] },
+    priceBands: [],
+    omitNames,
+  });
+};
+
+const FOOT_VALUES = `('2025', 'ZX-41', 10, 100),
+    ('2026', 'ZX-41', 10, 120),
+    ('2026', 'ZX-42', 5, 80),
+    ('2025', 'ZX-43', 8, 90),
+    ('2025', 'ZX-44', 0, 20),
+    ('2026', 'ZX-44', 0, 50)`;
+const FOOT_DDL = `CREATE TABLE t (period VARCHAR, product VARCHAR, units INTEGER, sales DOUBLE)`;
+
+test("movers rows foot in difference mode", async () => {
+  const html = await footReport(footConfig({ newAndDiscontinued: "difference" }), FOOT_DDL, FOOT_VALUES);
+  assertMoversFoot(html);
+});
+
+test("movers rows foot in full mode", async () => {
+  const html = await footReport(footConfig({ newAndDiscontinued: "full" }), FOOT_DDL, FOOT_VALUES);
+  assertMoversFoot(html);
+});
+
+test("movers rows foot on a margin bridge", async () => {
+  const html = await footReport(
+    footConfig({ costColumn: "cost", newAndDiscontinued: "full" }),
+    `CREATE TABLE t (period VARCHAR, product VARCHAR, units INTEGER, sales DOUBLE, cost DOUBLE)`,
+    `('2025', 'ZX-41', 10, 100, 60),
+    ('2026', 'ZX-41', 10, 120, 70),
+    ('2026', 'ZX-42', 5, 80, 50),
+    ('2025', 'ZX-43', 8, 90, 55),
+    ('2025', 'ZX-44', 0, 20, 0),
+    ('2026', 'ZX-44', 0, 50, 0)`,
+  );
+  assertMoversFoot(html);
+});
+
+test("a ticked movers table keeps ranks and the footing columns", async () => {
+  const html = await footReport(footConfig({ newAndDiscontinued: "full" }), FOOT_DDL, FOOT_VALUES, true);
+  assertMoversFoot(html);
+  for (const name of ["ZX-41", "ZX-42", "ZX-43", "ZX-44"]) {
+    assert.equal(moversSection(html).includes(name), false, `${name} is still in the ticked movers table`);
+  }
+  assert.equal(moversSection(html).includes("<td>1</td>"), true, "rank 1 is missing from the ticked movers table");
 });
