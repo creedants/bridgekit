@@ -216,8 +216,8 @@ async function extendedColumns(query: Query, columns: string[], source: string):
 }
 
 /**
- * The columns this function may retype. None when an index on the table or a foreign key from another
- * table makes DuckDB refuse every ALTER and DROP there; otherwise those no constraint other than NOT NULL names.
+ * Filter candidates using the index and constraint catalogs. A matching index or referenced-table
+ * row excludes every candidate; other constraints except NOT NULL exclude their named columns.
  */
 async function alterableColumns(query: Query, table: string, columns: string[]): Promise<string[]> {
   if (columns.length === 0) return columns;
