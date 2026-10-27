@@ -44,11 +44,11 @@ const HEALTHY = input({
 
 test("the sample file and any file that bridges give no message", () => {
   const sample = input({
-    columns: [number("year"), text("customer"), text("design"), number("jobs"), number("sales")],
+    columns: [number("year"), text("customer"), text("design"), number("units"), number("sales")],
     rows: 1000,
     periodColumn: "year",
     periods: ["2024", "2025", "2026"],
-    unitsColumn: "jobs",
+    unitsColumn: "units",
     salesColumn: "sales",
   });
   assert.deepEqual(fileProblem(sample), { kind: "none" });

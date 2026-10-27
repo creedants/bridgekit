@@ -2,7 +2,7 @@ import type { Setup } from "./app/setup.ts";
 import type { Query } from "./engine.ts";
 
 /**
- * Made-up configuration sales in the shape of a real export: one row per unit,
+ * Made-up configuration sales in the shape of a real export: one row per sales line,
  * add-ons folded into the line price, no stable SKU. 2026 differs from 2025 by a
  * price increase on the top models, five new models, one retired finish and a
  * shift toward color. gross_sales is the price before customer discounts, which

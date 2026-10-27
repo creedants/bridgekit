@@ -433,7 +433,7 @@ test("cell rows match the previous cells SQL", async () => {
     ('p0', 'D1', 'basic', 10, 100.0), ('p0', 'D1', 'premium', 10, 300.0),
     ('p0', 'D2', 'old', 8, 80.0),
     ('p1', 'D1', 'basic', 10, 100.0), ('p1', 'D1', 'premium', 12, 360.0),
-    ('p1', 'D2', 'newcoat', 4, 200.0)
+    ('p1', 'D2', 'newfinish', 4, 200.0)
   ) v(period, design, finish, units, sales)`);
   await query(`CREATE TABLE nulls AS SELECT * FROM (VALUES
     ('p0', NULL, 'basic', 2.5, 10.0),
@@ -444,7 +444,7 @@ test("cell rows match the previous cells SQL", async () => {
     ('p1', 'D1', 'basic', 5, 55.0)
   ) v(period, design, finish, units, sales)`);
   await query(`CREATE TABLE data (
-    order_date DATE, design VARCHAR, customer VARCHAR, jobs INTEGER, sales DOUBLE
+    order_date DATE, design VARCHAR, customer VARCHAR, units INTEGER, sales DOUBLE
   )`);
   await query(`INSERT INTO data VALUES
     (DATE '2025-01-10', 'A', 'keep', 2, 20),
@@ -457,7 +457,7 @@ test("cell rows match the previous cells SQL", async () => {
   const ytd: Setup = {
     periodColumn: "order_date",
     grain: "ytd",
-    unitsColumn: "jobs",
+    unitsColumn: "units",
     salesColumn: "sales",
     levels: [{ name: "Design", columns: ["design"] }],
     filters: [{ column: "customer", mode: "include", values: ["keep"] }],
@@ -508,7 +508,7 @@ test("cell rows match the previous cells SQL", async () => {
       label: "year-to-date view with a customer filter",
       config: {
         table: VIEW, periodColumn: PERIOD, prior: "2025 YTD", current: "2026 YTD",
-        unitsColumn: "jobs", salesColumn: "sales",
+        unitsColumn: "units", salesColumn: "sales",
         levels: [{ name: "Design", columns: ["design"] }],
       },
     },

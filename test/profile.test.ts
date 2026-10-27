@@ -287,17 +287,17 @@ test("customer, region, date and id names are left out", () => {
 test("used period and measure columns are left out", () => {
   const columns: Column[] = [
     { name: "year", type: "VARCHAR" },
-    { name: "jobs", type: "VARCHAR" },
+    { name: "units", type: "VARCHAR" },
     { name: "sales", type: "VARCHAR" },
     { name: "product", type: "VARCHAR" },
   ];
   const distinct = new Map([
     ["year", 4],
-    ["jobs", 4],
+    ["units", 4],
     ["sales", 4],
     ["product", 4],
   ]);
-  assert.deepEqual(suggestAttributes(columns, distinct, new Set(["year", "jobs", "sales"])), ["product"]);
+  assert.deepEqual(suggestAttributes(columns, distinct, new Set(["year", "units", "sales"])), ["product"]);
 });
 
 test("ties keep file order", () => {
