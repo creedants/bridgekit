@@ -70,11 +70,15 @@ async function call(url: string, env: Env, init: RequestInit = {}): Promise<Resp
   return response;
 }
 
-async function open(path: string, env: Env, init: RequestInit = {}): Promise<Response> {
+async function visit(url: string, env: Env, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   if (!headers.has("user-agent")) headers.set("user-agent", "Mozilla/5.0");
   if (!headers.has("sec-fetch-dest")) headers.set("sec-fetch-dest", "document");
-  return call(`http://127.0.0.1:8790${path}`, env, { ...init, headers });
+  return call(url, env, { ...init, headers });
+}
+
+async function open(path: string, env: Env, init: RequestInit = {}): Promise<Response> {
+  return visit(`http://127.0.0.1:8790${path}`, env, init);
 }
 
 async function views(db: Env["DB"]): Promise<{ path: string; referrer: string; views: number }[]> {
@@ -125,14 +129,18 @@ test("an html address returns that page and counts the request once", async () =
   ]);
 });
 
-test("the extensionless address counts its own path and not the html address", async () => {
-  const { env, db } = bindings({
-    "/guide.html": redirect("/guide"),
+test("the extensionless address answers 301 without counting, and the html address it points at counts once", async () => {
+  const { env, db, calls } = bindings({
     "/guide": html(GUIDE),
   });
-  const response = await open("/guide", env);
-  assert.equal(response.status, 200);
-  assert.equal(await response.text(), GUIDE);
+  const moved = await open("/guide", env);
+  assert.equal(moved.status, 301);
+  assert.equal(moved.headers.get("location"), "/guide.html");
+  assert.deepEqual(calls, []);
+  assert.deepEqual(await views(db), []);
+  const landed = await open("/guide.html", env);
+  assert.equal(landed.status, 200);
+  assert.equal(await landed.text(), GUIDE);
   assert.deepEqual(await views(db), [{ path: "/guide", referrer: "", views: 1 }]);
 });
 
@@ -271,6 +279,106 @@ test("a redirect for a path that is not an html page is returned and not counted
 });
 
 const HOME = "<!doctype html><title>Home</title>";
+
+const GROUPING = "<!doctype html><title>Grouping level</title>";
+const EXTENSIONLESS: readonly [address: string, page: string][] = [
+  ["/guide", GUIDE],
+  ["/method", METHOD],
+  ["/privacy", PRIVACY],
+  ["/terms", TERMS],
+  ["/price-volume-mix-analysis", ARTICLE],
+  ["/grouping-level", GROUPING],
+];
+
+test("the six extensionless addresses answer 301 to their html address with the query kept, and only the html address counts", async () => {
+  for (const [address, page] of EXTENSIONLESS) {
+    const { env, db, calls } = bindings({ [address]: html(page) });
+    const moved = await open(`${address}?a=1&a=2&encoded=%2F`, env);
+    assert.equal(moved.status, 301, address);
+    assert.equal(moved.headers.get("location"), `${address}.html?a=1&a=2&encoded=%2F`, address);
+    assert.equal(await moved.text(), "", address);
+    assert.deepEqual(calls, [], `${address} asked ASSETS before redirecting`);
+    assert.deepEqual(await views(db), [], `${address} counted the redirect`);
+    const landed = await open(`${address}.html?a=1&a=2&encoded=%2F`, env);
+    assert.equal(landed.status, 200, address);
+    assert.equal(await landed.text(), page, address);
+    assert.deepEqual(calls.map((call) => call.pathname), [address], address);
+    assert.deepEqual(await views(db), [{ path: address, referrer: "", views: 1 }], address);
+  }
+});
+
+test("HEAD on an extensionless address answers 301 with no body and no count", async () => {
+  const { env, db, calls } = bindings({ "/guide": html(GUIDE) });
+  const response = await open("/guide?x=1", env, { method: "HEAD" });
+  assert.equal(response.status, 301);
+  assert.equal(response.headers.get("location"), "/guide.html?x=1");
+  assert.equal(await response.text(), "");
+  assert.deepEqual(calls, []);
+  assert.deepEqual(await views(db), []);
+});
+
+test("plain http on a public host answers 301 to https and an extensionless name reaches its html address in the same hop", async () => {
+  for (const [address, page] of EXTENSIONLESS) {
+    const { env, db, calls } = bindings({ [address]: html(page) });
+    const moved = await visit(`http://pvmbridge.com${address}?a=1`, env);
+    assert.equal(moved.status, 301, address);
+    assert.equal(moved.headers.get("location"), `https://pvmbridge.com${address}.html?a=1`, address);
+    assert.deepEqual(calls, [], address);
+    assert.deepEqual(await views(db), [], address);
+    const landed = await visit(`https://pvmbridge.com${address}.html?a=1`, env);
+    assert.equal(landed.status, 200, address);
+    assert.equal(await landed.text(), page, address);
+    assert.deepEqual(calls.map((call) => call.pathname), [address], address);
+    assert.deepEqual(await views(db), [{ path: address, referrer: "", views: 1 }], address);
+  }
+});
+
+test("plain http on a public host answers 301 to https without adding a second html suffix", async () => {
+  const { env, db, calls } = bindings({ "/": html(HOME), "/guide": html(GUIDE) });
+  const home = await visit("http://pvmbridge.com/", env);
+  assert.equal(home.status, 301);
+  assert.equal(home.headers.get("location"), "https://pvmbridge.com/");
+  const page = await visit("http://pvmbridge.com/guide.html?a=1", env);
+  assert.equal(page.status, 301);
+  assert.equal(page.headers.get("location"), "https://pvmbridge.com/guide.html?a=1");
+  assert.deepEqual(calls, []);
+  assert.deepEqual(await views(db), []);
+});
+
+test("https on the root, an html address and the app is served as before", async () => {
+  const { env, db, calls } = bindings({ "/": html(HOME), "/guide": html(GUIDE), "/app/": html(METHOD) });
+  const home = await visit("https://pvmbridge.com/", env);
+  const guide = await visit("https://pvmbridge.com/guide.html", env);
+  const appPage = await visit("https://pvmbridge.com/app/", env);
+  assert.deepEqual([home.status, guide.status, appPage.status], [200, 200, 200]);
+  assert.deepEqual([await home.text(), await guide.text(), await appPage.text()], [HOME, GUIDE, METHOD]);
+  assert.deepEqual(calls.map((call) => call.pathname), ["/", "/guide", "/app/"]);
+  assert.deepEqual(await views(db), [
+    { path: "/", referrer: "", views: 1 },
+    { path: "/app/", referrer: "", views: 1 },
+    { path: "/guide", referrer: "", views: 1 },
+  ]);
+});
+
+test("plain http on localhost and 127.0.0.1 is served as before", async () => {
+  for (const host of ["localhost:8790", "127.0.0.1:8790"]) {
+    const { env, db, calls } = bindings({ "/": html(HOME), "/guide": html(GUIDE) });
+    const home = await visit(`http://${host}/`, env);
+    const guide = await visit(`http://${host}/guide.html`, env);
+    assert.deepEqual([home.status, guide.status], [200, 200], host);
+    assert.deepEqual([await home.text(), await guide.text()], [HOME, GUIDE], host);
+    assert.deepEqual(calls.map((call) => call.pathname), ["/", "/guide"], host);
+    assert.deepEqual(
+      await views(db),
+      [
+        { path: "/", referrer: "", views: 1 },
+        { path: "/guide", referrer: "", views: 1 },
+      ],
+      host,
+    );
+  }
+});
+
 const ORIGIN = "http://127.0.0.1:8790";
 const AUTH_SECRET = "0123456789abcdef0123456789abcdef";
 const SIGN_IN = JSON.stringify({ email: "review@example.invalid", callbackURL: `${ORIGIN}/app/` });
@@ -387,7 +495,7 @@ test("accounts stay closed unless ACCOUNTS is on", async () => {
       body: SIGN_IN,
     });
     await assertNotFound(hosted, `POST magic-link with Host other.example and ACCOUNTS ${accountsLabel}`);
-    const otherHost = await call("http://other.example/api/auth/sign-in/magic-link", env, {
+    const otherHost = await call("https://other.example/api/auth/sign-in/magic-link", env, {
       method: "POST",
       headers: { origin: ORIGIN, "content-type": "application/json" },
       body: SIGN_IN,
