@@ -1,0 +1,1 @@
+- Loading a CSV or TSV file, or pasting cells, after an Excel file in the same tab no longer fails with `File already registered: upload.csv`. `src/app/db.ts` drops the file the previous load registered before it registers the next one, so every load in a tab replaces the last and no earlier file is left behind.
