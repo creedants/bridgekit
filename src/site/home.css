@@ -1,0 +1,251 @@
+@font-face { font-family: Newsreader; src: url(/fonts/newsreader.woff2) format("woff2"); font-weight: 400 700; font-style: normal; font-display: swap; }
+
+@font-face { font-family: Instrument Sans; src: url(/fonts/instrument-sans.woff2) format("woff2"); font-weight: 400 700; font-style: normal; font-display: swap; }
+
+:root { --sun: #f4bf3a; --plum: #42203d; --plum-2: #6a4b64; --blush: #e7d3e2; --wrong: #b01f2e; --paper: #ffffff; }
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body { margin: 0; background: var(--paper); color: var(--plum); font-family: Newsreader, Georgia, "Times New Roman", serif; font-size: 1.1875rem; line-height: 1.6; font-variant-numeric: tabular-nums lining-nums; }
+
+h1,
+h2,
+h3,
+p,
+dl,
+dd,
+figure { margin: 0; }
+
+h1,
+h2,
+h3 { font-weight: 500; }
+
+h1 { font-size: clamp(2.5rem, 5.2vw, 4.25rem); line-height: 1.03; letter-spacing: -0.015em; }
+
+h2 { font-size: clamp(1.5rem, 2.4vw, 1.875rem); line-height: 1.15; letter-spacing: -0.01em; }
+
+p { max-width: 38rem; }
+
+a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 0.18em; }
+
+a:hover { color: var(--plum-2); }
+
+.shell { max-width: 76rem; margin-inline: auto; padding-inline: clamp(1.25rem, 5vw, 5rem); }
+
+section { padding-block: clamp(3rem, 6vw, 5.5rem); }
+
+/* Nav */
+
+.nav { background: var(--paper); border-bottom: 1px solid var(--blush); }
+
+.nav-inner { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; height: 4rem; }
+
+.wordmark { display: inline-flex; align-items: center; gap: 0.625rem; font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; font-size: 0.9375rem; font-weight: 600; color: var(--plum); text-decoration: none; }
+
+.wordmark .mark { display: block; width: 32px; height: 32px; }
+
+.nav nav { display: flex; align-items: center; gap: clamp(1rem, 2.5vw, 1.75rem); }
+
+.nav nav a { font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; font-size: 0.875rem; font-weight: 500; text-decoration: none; }
+
+.nav nav a:not(.button) { color: var(--plum); }
+
+.nav nav a:not(.button):hover { color: var(--plum-2); }
+
+/* Buttons */
+
+.button { display: inline-flex; align-items: center; justify-content: center; padding: 0.8rem 1.15rem; border: 1px solid var(--plum); background: var(--plum); color: var(--paper); font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; font-size: 0.875rem; font-weight: 600; line-height: 1; text-decoration: none; }
+
+a.button:hover { border-color: #33182f; background: #33182f; color: var(--paper); }
+
+.button.ghost { background: transparent; color: var(--plum); }
+
+a.button.ghost:hover { border-color: var(--plum); background: var(--blush); color: var(--plum); }
+
+.nav nav a.button { padding: 0.6rem 1rem; }
+
+/* Hero */
+
+.hero { background: var(--sun); }
+
+.hero-grid { display: grid; grid-template-columns: 5fr 7fr; grid-template-areas: "title chart" "problem chart" "answer chart" "cta chart" "fine chart"; gap: 0 clamp(2rem, 4vw, 3.5rem); align-items: center; }
+
+.hero h1 { grid-area: title; margin-bottom: clamp(1.25rem, 2.4vw, 1.75rem); }
+
+.hero .problem { grid-area: problem; margin-bottom: 1rem; }
+
+.hero .answer { grid-area: answer; margin-bottom: clamp(1.5rem, 2.8vw, 2rem); }
+
+.hero .cta { grid-area: cta; display: flex; flex-wrap: wrap; gap: 0.75rem; }
+
+.hero .fine { grid-area: fine; margin-top: 0.875rem; font-size: 1rem; }
+
+/* Chart */
+
+.chart { grid-area: chart; padding: clamp(1rem, 2.2vw, 1.5rem); border-radius: 0.5rem; background: var(--paper); }
+
+.chart-lede { margin-bottom: 0.5rem; font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; font-size: 0.75rem; font-weight: 500; color: var(--plum); }
+
+.chart svg { display: block; width: 100%; height: auto; }
+
+.chart figcaption { margin-top: 0.5rem; font-size: 0.9375rem; line-height: 1.45; }
+
+.chart text { font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; }
+
+.chart .axis-head { font-size: 12px; font-weight: 500; fill: var(--plum); }
+
+.chart .row-name { font-size: 13px; font-weight: 500; fill: var(--plum); }
+
+.chart .none { font-size: 12px; fill: var(--plum-2); }
+
+.chart .value { font-size: 15px; font-weight: 600; fill: var(--plum); }
+
+.chart .value.wrong { fill: var(--wrong); }
+
+.track { stroke: var(--blush); stroke-width: 1; }
+
+.bar { fill: var(--plum); opacity: 0.28; transform-box: fill-box; transform-origin: 0 50%; transform: scaleX(0); animation: bar-in 600ms ease-out both; }
+
+.bar.total { opacity: 1; }
+
+.bar.wrong { fill: var(--wrong); opacity: 1; }
+
+.row:nth-of-type(1) .bar { animation-delay: 0ms; }
+
+.row:nth-of-type(2) .bar { animation-delay: 45ms; }
+
+.row:nth-of-type(3) .bar { animation-delay: 90ms; }
+
+.row:nth-of-type(4) .bar { animation-delay: 135ms; }
+
+.row:nth-of-type(5) .bar { animation-delay: 180ms; }
+
+.row:nth-of-type(6) .bar { animation-delay: 225ms; }
+
+@keyframes bar-in {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+/* What you get */
+
+.get-grid { display: grid; grid-template-columns: 4fr 8fr; gap: clamp(2rem, 4vw, 3.5rem); align-items: start; }
+
+.get-body .lead { margin-bottom: 2rem; }
+
+.get dl { display: grid; grid-template-columns: minmax(7rem, auto) 1fr; gap: 0.9rem 1.5rem; max-width: 38rem; }
+
+.get dt { padding-top: 0.15rem; font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; font-size: 0.8125rem; font-weight: 600; color: var(--plum); }
+
+.get dd { font-size: 1.0625rem; line-height: 1.5; }
+
+.more { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; margin-top: 1.75rem; }
+
+/* Privacy */
+
+.keeps { background: var(--plum); color: var(--blush); }
+
+.keeps-inner { max-width: 38rem; }
+
+.keeps h2 { margin-bottom: 1rem; color: var(--sun); }
+
+.keeps p + p { margin-top: 1rem; }
+
+.keeps a { color: var(--sun); text-decoration: underline; }
+
+.keeps a:hover { /* plum-2 fails contrast on the plum band */ color: var(--sun); }
+
+/* Pricing */
+
+.price h2 { margin-bottom: clamp(1.5rem, 3vw, 2.5rem); }
+
+.plans { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
+
+.plan { position: relative; }
+
+.plan:first-child { padding-right: clamp(1.5rem, 3vw, 2.5rem); }
+
+.plan + .plan { padding-left: clamp(1.5rem, 3vw, 2.5rem); }
+
+.plan + .plan::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; border-left: 1px solid var(--blush); }
+
+.tag { display: inline-block; padding: 0.2rem 0.5rem; background: var(--plum); color: var(--paper); font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; font-size: 0.8125rem; font-weight: 500; }
+
+.tag.muted { background: var(--blush); color: var(--plum-2); }
+
+.plan h3 { margin: 0.75rem 0 0.25rem; font-size: 1.375rem; }
+
+.plan .price { font-size: clamp(2rem, 3vw, 2.5rem); font-weight: 500; line-height: 1.1; }
+
+.plan .price span { font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; font-size: 0.8125rem; font-weight: 500; color: var(--plum-2); }
+
+.plan p { margin-top: 0.5rem; }
+
+.plan ul { margin: 1.25rem 0 1.75rem; padding-left: 1.1rem; display: grid; gap: 0.4rem; }
+
+.plan li { font-size: 1.0625rem; line-height: 1.45; }
+
+/* Footer */
+
+footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
+
+.footer-inner { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.5rem; font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; font-size: 0.8125rem; }
+
+.footer-inner span { color: var(--plum-2); }
+
+.footer-inner a { color: var(--plum); text-decoration: none; }
+
+.footer-inner a:hover { color: var(--plum-2); }
+
+/* Focus */
+
+:focus-visible { outline: 3px solid currentColor; outline-offset: 3px; }
+
+.keeps :focus-visible { outline-color: var(--sun); }
+
+/* Narrow screens */
+
+@media (max-width: 56rem) {
+  .hero-grid { grid-template-columns: 1fr; grid-template-areas: none; row-gap: 0; }
+
+  /* Beats the hero's own grid-area rules, which are more specific than a child selector. */
+  .hero .hero-grid > * { grid-area: auto; }
+
+  .chart { margin-block: 1.75rem 2rem; }
+
+  .get-grid { grid-template-columns: 1fr; gap: 1.25rem; }
+
+  .plans { grid-template-columns: 1fr; }
+
+  .plan:first-child { padding-right: 0; }
+
+  .plan + .plan { padding-left: 0; padding-top: 2.5rem; }
+
+  .plan + .plan::before { right: 0; bottom: auto; height: 0; border-left: 0; border-top: 1px solid var(--blush); }
+}
+
+@media (max-width: 40rem) {
+  .nav nav a.wide { display: none; }
+}
+
+@media (max-width: 34rem) {
+  .get dl { grid-template-columns: 1fr; gap: 0.15rem; }
+
+  .get dd { margin-bottom: 1rem; }
+
+  .chart .axis-head { font-size: 15px; }
+
+  .chart .row-name { font-size: 17px; }
+
+  .chart .none { font-size: 15px; }
+
+  .chart .value { font-size: 20px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar { animation: none; transform: none; }
+}
