@@ -149,6 +149,10 @@ test("month-name labels in either case and either length order by the month they
     (await loadOnly(["MARCH 2024", "January 2025", "february 2024"])).values,
     ["february 2024", "MARCH 2024", "January 2025"],
   );
+  assert.deepEqual(
+    (await loadOnly(["January 2024", "Mar 2025", "September 2024"])).values,
+    ["January 2024", "September 2024", "Mar 2025"],
+  );
 });
 
 test("year-month labels order by the month they name", async () => {
@@ -179,6 +183,10 @@ test("a mix of label shapes, or a value that matches none, stays in text order",
   const mixed = await loadOnly(["Q1 2025", "2024-Q4", "Jan 2025"]);
   assert.equal(mixed.sort, "text");
   assert.deepEqual(mixed.values, ["2024-Q4", "Jan 2025", "Q1 2025"]);
+
+  // Two shapes that differ only in the separator are still two formats.
+  const separators = await loadOnly(["2025-Q1", "2025 Q2"]);
+  assert.deepEqual(separators.values, ["2025 Q2", "2025-Q1"]);
 
   const alien = await loadOnly(["Q1 2025", "Q4 2024", "Q3 24"]);
   assert.deepEqual(alien.values, ["Q1 2025", "Q3 24", "Q4 2024"]);

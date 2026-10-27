@@ -18,6 +18,20 @@ const PLAIN_NUMBER_SOURCE = String.raw`^-?\d+(\.\d+)?$`;
 const MAX_DIGITS = 15;
 
 /**
+ * A text label that names a date. One pattern per format, matched against the
+ * upper-cased label so case never splits a column. A quarter takes its first
+ * month, a fiscal year its first day, and a two-digit fiscal year is 20nn.
+ */
+const ISO_QUARTER_SOURCE = String.raw`^\d{4}-Q[1-4]$`;
+const YEAR_QUARTER_SOURCE = String.raw`^\d{4} Q[1-4]$`;
+const QUARTER_YEAR_SOURCE = String.raw`^Q[1-4] \d{4}$`;
+const QUARTER_DASH_YEAR_SOURCE = String.raw`^Q[1-4]-\d{4}$`;
+const MONTH_NAME_SOURCE =
+  String.raw`^(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC|JANUARY|FEBRUARY|MARCH|APRIL|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER) \d{4}$`;
+const YEAR_MONTH_SOURCE = String.raw`^\d{4}-(0[1-9]|1[0-2])$`;
+const FISCAL_YEAR_SOURCE = String.raw`^FY(\d{2}|\d{4})$`;
+
+/**
  * `column` and `view` are already quoted identifiers.
  * Zero rows return `{ values: [], sort: "text" }`.
  * A missing or mixed decision flag throws.
@@ -27,29 +41,60 @@ export async function loadPeriodList(
   column: string,
   view: string,
 ): Promise<PeriodList> {
+  // A dated label becomes `shape * 1000000 + year * 100 + month`, one shape
+  // number per format. The date is below 1000000, so the key compares by date
+  // inside one shape, and the shape number is what `dated` below counts.
   const rows = await query(
     `WITH distinct_periods AS (
-       SELECT DISTINCT ${column} AS p
+       SELECT DISTINCT ${column} AS p, upper(${column}) AS u
        FROM ${view}
        WHERE ${column} IS NOT NULL
+     ),
+     labels AS (
+       SELECT p,
+              CASE
+                WHEN regexp_matches(u, '${ISO_QUARTER_SOURCE}')
+                  THEN 1000000 + CAST(substr(u, 1, 4) AS INTEGER) * 100
+                       + (CAST(substr(u, 7, 1) AS INTEGER) - 1) * 3 + 1
+                WHEN regexp_matches(u, '${YEAR_QUARTER_SOURCE}')
+                  THEN 2000000 + CAST(substr(u, 1, 4) AS INTEGER) * 100
+                       + (CAST(substr(u, 7, 1) AS INTEGER) - 1) * 3 + 1
+                WHEN regexp_matches(u, '${QUARTER_YEAR_SOURCE}')
+                  THEN 3000000 + CAST(substr(u, 4, 4) AS INTEGER) * 100
+                       + (CAST(substr(u, 2, 1) AS INTEGER) - 1) * 3 + 1
+                WHEN regexp_matches(u, '${QUARTER_DASH_YEAR_SOURCE}')
+                  THEN 4000000 + CAST(substr(u, 4, 4) AS INTEGER) * 100
+                       + (CAST(substr(u, 2, 1) AS INTEGER) - 1) * 3 + 1
+                WHEN regexp_matches(u, '${MONTH_NAME_SOURCE}')
+                  THEN 5000000 + CAST(substr(u, length(u) - 3, 4) AS INTEGER) * 100
+                       + list_position(['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'], substr(u, 1, 3))
+                WHEN regexp_matches(u, '${YEAR_MONTH_SOURCE}')
+                  THEN 6000000 + CAST(substr(u, 1, 4) AS INTEGER) * 100 + CAST(substr(u, 6, 2) AS INTEGER)
+                WHEN regexp_matches(u, '${FISCAL_YEAR_SOURCE}')
+                  THEN 7000000 + (CAST(substr(u, 3, length(u) - 2) AS INTEGER)
+                       + CASE WHEN length(u) = 4 THEN 2000 ELSE 0 END) * 100
+              END AS k
+       FROM distinct_periods
      ),
      decision AS (
        SELECT bool_and(
                 regexp_matches(p, '${PLAIN_NUMBER_SOURCE}')
                 AND length(regexp_replace(p, '[^0-9]', '', 'g')) <= ${MAX_DIGITS}
-              ) AS numeric
-       FROM distinct_periods
+              ) AS numeric,
+              count(*) = count(k) AND count(DISTINCT k // 1000000) = 1 AS dated
+       FROM labels
      ),
      ranked AS (
        SELECT p,
-              CASE WHEN (SELECT numeric FROM decision) THEN TRY_CAST(p AS DOUBLE) END AS n
-       FROM distinct_periods
-       ORDER BY n DESC, p DESC
+              CASE WHEN (SELECT numeric FROM decision) THEN TRY_CAST(p AS DOUBLE) END AS n,
+              CASE WHEN (SELECT dated FROM decision) THEN k END AS d
+       FROM labels
+       ORDER BY n DESC, d DESC, p DESC
        LIMIT 200
      )
      SELECT p, (SELECT numeric FROM decision) AS numeric
      FROM ranked
-     ORDER BY n ASC, p ASC`,
+     ORDER BY n ASC, d ASC, p ASC`,
   );
   if (rows.length === 0) return { values: [], sort: "text" };
   const flags = rows.map((row) => row.numeric);
