@@ -275,7 +275,7 @@ function AiCommentary(props: { summary: BridgeSummary; offer: "hint" | "button" 
         <>
           <p className="hint">
             A longer commentary written by Anthropic&rsquo;s Claude. Pressing the button sends the bridge totals below to
-            Bridgekit&rsquo;s server, which passes them to Anthropic. No rows are sent, and no values from your data such as
+            PVM Bridge&rsquo;s server, which passes them to Anthropic. No rows are sent, and no values from your data such as
             customer or product names. Nothing is sent until you press it.
           </p>
           <details>

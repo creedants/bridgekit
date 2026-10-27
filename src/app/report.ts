@@ -105,7 +105,7 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:#4a5360;bo
 .plain tr td{font-weight:400}img{max-width:100%}
 </style></head><body>
 <h1>${markup(t.bridgeTitle)}: ${markup(config.prior)} to ${markup(config.current)}</h1>
-<p class="muted">Created ${new Date().toISOString().slice(0, 10)} with Bridgekit. It holds totals and a written summary, names the file, the setup, its filter values and the largest movers, and holds no rows.</p>
+<p class="muted">Created ${new Date().toISOString().slice(0, 10)} with PVM Bridge. It holds totals and a written summary, names the file, the setup, its filter values and the largest movers, and holds no rows.</p>
 ${commentary(result, config).map((p) => `<p>${markup(p)}</p>`).join("\n")}
 ${input.chartUrl ? `<img alt="Waterfall chart of the bridge" src="${input.chartUrl}">` : ""}
 <h2>Bridge</h2>

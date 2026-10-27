@@ -26,7 +26,7 @@ function tooManyRequests(): Response {
  */
 export function authOptions(env: Env, seatsFor: (workspaceId: string) => Promise<number>) {
   return {
-    appName: "Bridgekit",
+    appName: "PVM Bridge",
     baseURL: env.BETTER_AUTH_URL,
     basePath: AUTH_BASE_PATH,
     secret: env.BETTER_AUTH_SECRET,
@@ -63,7 +63,7 @@ export function authOptions(env: Env, seatsFor: (workspaceId: string) => Promise
       magicLink({
         expiresIn: 15 * 60,
         sendMagicLink: ({ email, url }) =>
-          sendEmail(env, email, "Your Bridgekit sign-in link", `Sign in to Bridgekit:\n\n${url}\n\nThe link works once and expires in 15 minutes. If you did not ask for it, ignore this email.`),
+          sendEmail(env, email, "Your PVM Bridge sign-in link", `Sign in to PVM Bridge:\n\n${url}\n\nThe link works once and expires in 15 minutes. If you did not ask for it, ignore this email.`),
       }),
       organization({
         // A workspace holds as many members as it has paid seats; one (the owner) before it subscribes.
@@ -99,7 +99,7 @@ export function authOptions(env: Env, seatsFor: (workspaceId: string) => Promise
           return sendEmail(
             env,
             email,
-            `${inviter.user.name || inviter.user.email} invited you to a Bridgekit workspace`,
+            `${inviter.user.name || inviter.user.email} invited you to a PVM Bridge workspace`,
             `You have been invited to the workspace "${workspace.name}".\n\nTo accept, sign in with this email address and open:\n${env.BETTER_AUTH_URL}/app/?invitation=${id}\n\nThe invitation expires in 7 days.`,
           );
         },

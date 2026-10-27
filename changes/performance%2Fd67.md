@@ -1,0 +1,1 @@
+- The user-visible product name is now PVM Bridge across the marketing pages, the tool, the 404 page, the sign-in and invitation emails, the report export, the README and deploy docs, and the tests that assert those strings. Identifiers, storage keys, setup file names, worker and database names, temp paths, test hosts, and every URL are unchanged.

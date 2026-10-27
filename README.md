@@ -1,16 +1,16 @@
-# Bridgekit
+# PVM Bridge
 
 A price-volume-mix (PVM) bridge that works for one attribute or many. It runs
 entirely in the browser: the sales file you load is not uploaded anywhere.
 
-Bridgekit is a working name.
+PVM Bridge is a working name.
 
 ## Why
 
 A classic PVM bridge needs a stable product key. When products are configured
 rather than catalogued, no single grouping works: group finely and most
 configurations have no prior-period match, group coarsely and mix shows up as
-price. Bridgekit takes an ordered list of attributes, compares each
+price. PVM Bridge takes an ordered list of attributes, compares each
 configuration against the same configuration in the prior period, and falls
 back up the list to the nearest group that existed when there is no match.
 

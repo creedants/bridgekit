@@ -1,5 +1,5 @@
 /**
- * Paddle Billing for Bridgekit Pro: webhook verification, subscription
+ * Paddle Billing for PVM Bridge Pro: webhook verification, subscription
  * parsing, entitlement, and starting a checkout.
  *
  * A workspace (Better Auth organization) buys Pro. We tag every checkout with

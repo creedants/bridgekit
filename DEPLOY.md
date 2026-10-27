@@ -1,4 +1,4 @@
-# Deploy Bridgekit
+# Deploy PVM Bridge
 
 Part 1 puts the free tool on `<domain>` with page counts. It stands alone. Part 2 turns on accounts and payments. Part 1 is one sitting. Step 1.2 is the only wait in that sitting.
 
