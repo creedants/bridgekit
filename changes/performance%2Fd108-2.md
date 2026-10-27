@@ -1,0 +1,2 @@
+- The HTML body of support mail is now turned into text in time proportional to its length. The scan for an entity's `;` stops after 12 characters, and the scan for a close tag stops at the first tag with no `>` after it, so a long body no longer costs minutes of Worker CPU.
+- The forwarded copy now leaves before the message is parsed or converted, so a slow body cannot delay it and a body that fails to parse cannot stop it.

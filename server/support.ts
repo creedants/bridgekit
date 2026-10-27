@@ -99,7 +99,9 @@ function closeOf(html: string, name: string, from: number): number {
       const end = open + 2 + name.length;
       if (html.slice(open + 2, end).toLowerCase() === name) {
         const close = html.indexOf(">", end);
-        if (close !== -1) return close + 1;
+        // A later candidate's search starts after this one, so it cannot find a `>` this one missed.
+        if (close === -1) return -1;
+        return close + 1;
       }
     }
     index = open + 1;
@@ -136,52 +138,84 @@ function numericEntity(body: string): string | null {
   return null;
 }
 
+const OUTPUT_BATCH = 1024;
+
+/** Joins output fragments in batches, so a hostile body cannot build a long join list. */
+function collector(): { add(part: string): void; text(): string } {
+  const batches: string[] = [];
+  let pending: string[] = [];
+  return {
+    add(part) {
+      if (part === "") return;
+      pending.push(part);
+      if (pending.length === OUTPUT_BATCH) {
+        batches.push(pending.join(""));
+        pending = [];
+      }
+    },
+    text() {
+      batches.push(pending.join(""));
+      pending = [];
+      return batches.join("");
+    },
+  };
+}
+
 function decodeEntities(text: string): string {
-  let output = "";
+  const out = collector();
   let index = 0;
   while (index < text.length) {
     const amp = text.indexOf("&", index);
     if (amp === -1) {
-      output += text.slice(index);
+      out.add(text.slice(index));
       break;
     }
-    output += text.slice(index, amp);
-    const semicolon = text.indexOf(";", amp + 1);
-    if (semicolon === -1 || semicolon - amp > 12) {
-      output += "&";
+    out.add(text.slice(index, amp));
+    // The `;` has to sit within 12 code units of the `&`, so only that window is searched.
+    const window = text.slice(amp + 1, amp + 13);
+    const relative = window.indexOf(";");
+    if (relative === -1) {
+      out.add("&");
       index = amp + 1;
       continue;
     }
+    const semicolon = amp + 1 + relative;
     const body = text.slice(amp + 1, semicolon);
     const named = NAMED_ENTITIES.get(body);
     if (named !== undefined) {
-      output += named;
+      out.add(named);
       index = semicolon + 1;
       continue;
     }
     const numeric = numericEntity(body);
     if (numeric !== null) {
-      output += numeric;
+      out.add(numeric);
       index = semicolon + 1;
       continue;
     }
-    output += "&";
+    out.add("&");
     index = amp + 1;
   }
-  return output;
+  return out.text();
 }
 
-/** The text an HTML part says, in one left-to-right pass so hostile input cannot backtrack. */
+/**
+ * The text an HTML part says, collected in one left-to-right pass. Each scan starts where the
+ * previous one stopped: a tag at its `>`, a comment at its `-->`, a dropped element at its close
+ * tag, whose `>` search ends the walk once no `>` is left. The entity scan that follows reads at
+ * most 12 code units past its `&`. No search restarts over the remaining input, so hostile input
+ * cannot make this pass quadratic.
+ */
 function htmlText(html: string): string {
-  let output = "";
+  const out = collector();
   let index = 0;
   while (index < html.length) {
     const open = html.indexOf("<", index);
     if (open === -1) {
-      output += html.slice(index);
+      out.add(html.slice(index));
       break;
     }
-    output += html.slice(index, open);
+    out.add(html.slice(index, open));
     if (html.startsWith("<!--", open)) {
       const end = html.indexOf("-->", open + 4);
       if (end === -1) break;
@@ -193,13 +227,13 @@ function htmlText(html: string): string {
     if (closing) nameStart += 1;
     const first = html[nameStart];
     if (first === undefined || !isAsciiLetterOrDigit(first)) {
-      output += "<";
+      out.add("<");
       index = open + 1;
       continue;
     }
     const end = html.indexOf(">", nameStart);
     if (end === -1) {
-      output += html.slice(open);
+      out.add(html.slice(open));
       break;
     }
     const name = tagNameAt(html, nameStart).toLowerCase();
@@ -213,10 +247,10 @@ function htmlText(html: string): string {
       index = close;
       continue;
     }
-    if (BLOCK_TAGS.has(name)) output += "\n";
+    if (BLOCK_TAGS.has(name)) out.add("\n");
     index = end + 1;
   }
-  return decodeEntities(output)
+  return decodeEntities(out.text())
     .replace(/[ \t]+/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -235,10 +269,43 @@ function capBody(text: string): Body {
   return { text, cut: false };
 }
 
-async function bodyOf(message: ForwardableEmailMessage): Promise<Body> {
-  if (message.rawSize > RAW_PARSE_LIMIT) return { text: "", cut: true };
+/** The raw bytes to parse, or null when the message is too large to parse or its stream fails. */
+async function rawOf(message: ForwardableEmailMessage): Promise<ArrayBuffer | null> {
+  if (message.rawSize > RAW_PARSE_LIMIT) return null;
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
   try {
-    const parsed = await PostalMime.parse(message.raw, { forceRfc822Attachments: true });
+    reader = message.raw.getReader();
+  } catch {
+    return null;
+  }
+  try {
+    const chunks: Uint8Array[] = [];
+    let length = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      length += value.length;
+    }
+    const bytes = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return bytes.buffer;
+  } catch {
+    return null;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/** Parses the buffered message and returns its text. Never throws. */
+async function bodyOf(raw: ArrayBuffer | null): Promise<Body> {
+  if (raw === null) return { text: "", cut: true };
+  try {
+    const parsed = await PostalMime.parse(raw, { forceRfc822Attachments: true });
     const text =
       parsed.text !== undefined && parsed.text !== ""
         ? parsed.text
@@ -251,8 +318,7 @@ async function bodyOf(message: ForwardableEmailMessage): Promise<Body> {
   }
 }
 
-async function rowOf(message: ForwardableEmailMessage, receivedAt: string): Promise<SupportMailRow> {
-  const body = await bodyOf(message);
+function rowOf(message: ForwardableEmailMessage, receivedAt: string, body: Body): SupportMailRow {
   return {
     id: crypto.randomUUID(),
     receivedAt,
@@ -314,12 +380,16 @@ export async function receiveSupportMail(
 ): Promise<void> {
   const receivedAt = new Date().toISOString();
   const skip = skipReason(message);
-  const row = skip === null ? await rowOf(message, receivedAt) : null;
+  // The bytes are read now but parsed only after the forward, so conversion cannot delay it.
+  const raw = skip === null ? await rawOf(message) : null;
   const failures: string[] = [];
+
   const forwarded = await forward(message, env.SUPPORT_FORWARD_TO);
   if (forwarded !== null) failures.push(forwarded);
-  if (row !== null) {
-    const stored = await store(env.DB, row);
+
+  if (skip === null) {
+    const body = await bodyOf(raw);
+    const stored = await store(env.DB, rowOf(message, receivedAt, body));
     if (stored !== null) failures.push(stored);
   }
   if (failures.length > 0) {

@@ -405,3 +405,67 @@ test("the Worker exposes fetch, email and scheduled", () => {
   assert.equal(typeof worker.email, "function");
   assert.equal(typeof worker.scheduled, "function");
 });
+
+const HOSTILE_HEADERS = [
+  "From: Customer <customer@example.invalid>",
+  `To: ${SUPPORT}`,
+  "Subject: Hostile body",
+  "Content-Type: text/html; charset=utf-8",
+];
+
+test("a 5 MiB HTML body of ampersands is converted and cut within the time limit", async () => {
+  const message = mail({
+    headerLines: [...HOSTILE_HEADERS, "Content-Transfer-Encoding: 8bit"],
+    body: "&".repeat(5_242_624),
+  });
+  assert.ok(message.rawSize < RAW_PARSE_LIMIT, `fixture raw size ${message.rawSize}`);
+  const env = supportEnv({ SUPPORT_FORWARD_TO: FORWARD_TO });
+  const started = performance.now();
+  await worker.email(message, env, CTX);
+  const elapsed = performance.now() - started;
+  assert.deepEqual(message.forwarded, [FORWARD_TO]);
+  assert.deepEqual(message.rejected, []);
+  assert.ok(elapsed < 2000, `the 5 MiB body took ${elapsed.toFixed(1)} ms`);
+  const stored = await rows(env.DB);
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0]!.body, "&".repeat(BODY_LIMIT));
+  assert.equal(stored[0]!.bodyCut, 1);
+});
+
+test("a quoted-printable HTML body of ampersands is converted and cut within the time limit", async () => {
+  const message = mail({
+    headerLines: [...HOSTILE_HEADERS, "Content-Transfer-Encoding: quoted-printable"],
+    body: ("&".repeat(72) + "=\r\n").repeat(41_666) + "&".repeat(48),
+  });
+  assert.ok(message.rawSize < RAW_PARSE_LIMIT, `fixture raw size ${message.rawSize}`);
+  const env = supportEnv({ SUPPORT_FORWARD_TO: FORWARD_TO });
+  const started = performance.now();
+  await worker.email(message, env, CTX);
+  const elapsed = performance.now() - started;
+  assert.deepEqual(message.forwarded, [FORWARD_TO]);
+  assert.deepEqual(message.rejected, []);
+  assert.ok(elapsed < 2000, `the quoted-printable body took ${elapsed.toFixed(1)} ms`);
+  const stored = await rows(env.DB);
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0]!.body, "&".repeat(BODY_LIMIT));
+  assert.equal(stored[0]!.bodyCut, 1);
+});
+
+test("an unterminated head close tag stops the close-tag search", async () => {
+  const message = mail({
+    headerLines: [...HOSTILE_HEADERS, "Content-Transfer-Encoding: 8bit"],
+    body: "<head>" + "</head".repeat(866_666),
+  });
+  assert.ok(message.rawSize < RAW_PARSE_LIMIT, `fixture raw size ${message.rawSize}`);
+  const env = supportEnv({ SUPPORT_FORWARD_TO: FORWARD_TO });
+  const started = performance.now();
+  await worker.email(message, env, CTX);
+  const elapsed = performance.now() - started;
+  assert.deepEqual(message.forwarded, [FORWARD_TO]);
+  assert.deepEqual(message.rejected, []);
+  assert.ok(elapsed < 2000, `the unterminated close tag body took ${elapsed.toFixed(1)} ms`);
+  const stored = await rows(env.DB);
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0]!.body, "");
+  assert.equal(stored[0]!.bodyCut, 0);
+});
