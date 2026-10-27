@@ -1,0 +1,3 @@
+- The results heading, Price-volume-mix bridge, stays on screen and is now hidden in print. Printed bridges look as they did before the heading was added: a class on the heading puts it in the existing print-only `display: none` list, and nothing else in the stylesheet changed.
+- The heading appears once results are calculated, on every results tab. The loaded-file preview before Calculate still has no heading.
+- `scripts/smoke.mjs` now asserts that each results tab shows exactly one visible h1 with that text, and that the heading is not visible with print media emulated.

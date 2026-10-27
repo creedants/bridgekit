@@ -35,7 +35,8 @@ registerHooks({
 const ONE_ROW = "With one attribute there is nothing to leave out.";
 const FIRST = "Across these setups the price effect ranges from";
 const RENAMED_LABEL =
-  "When leaving out an attribute moves price a lot, that attribute separates products whose mix changed. Keep it if it describes the product itself; a label that changed between periods can hide a real price change.";
+  "When leaving out an attribute moves price a lot, the bridge depends on that attribute. Keep it if it describes the product itself; a label that changed between periods can hide a real price change.";
+const MIX_SENTENCE = "that attribute separates products whose mix changed";
 const LAST = "One that barely moves price and lowers the match rate can be dropped.";
 const OLD = "An attribute whose removal moves price a lot is one that carries real mix: keep it.";
 
@@ -51,6 +52,7 @@ test("the Setup check hint keeps its one-attribute sentence", async () => {
 test("the Setup check hint names a label that changed between periods", async () => {
   const text = await hint([0, 200], 2);
   assert.ok(text.includes(RENAMED_LABEL), `the hint does not hold the new sentence: ${text}`);
+  assert.ok(!text.includes(MIX_SENTENCE), `the hint still says the attribute separates products whose mix changed: ${text}`);
   assert.ok(!text.includes(OLD), `the hint still holds the old sentence: ${text}`);
   assert.ok(!text.includes("keep it."), `the hint still says to keep it: ${text}`);
 });

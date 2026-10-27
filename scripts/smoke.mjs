@@ -823,6 +823,11 @@ async function drive(browser, origin, rows) {
   // The period a bridge total line names, from "Sales 2025".
   const periodOf = (label) => label.replace(/^(?:Sales|Margin) /i, "");
 
+  const resultsTitle = "Price-volume-mix bridge";
+  const visibleHeadingsJs = `JSON.stringify([...document.querySelectorAll('h1')].filter((h) => {
+    const style = getComputedStyle(h);
+    return h.getClientRects().length > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+  }).map((h) => h.textContent.trim()))`;
   const tabs = ["Movers", "Accounts", "Price changes", "Price gaps", "Trend", "Unmatched", "Setup check", "Data check", "Bridge"];
   for (const tab of tabs) {
     await browser.evalJs(`T.tab(${JSON.stringify(tab)})`);
@@ -835,8 +840,19 @@ async function drive(browser, origin, rows) {
     if (state.error) fail(`${tab}: ${state.error}`);
     if (state.text < 200) fail(`${tab}: tab looks empty`);
     if (state.overflow > 0) fail(`${tab}: page overflows by ${state.overflow}px`);
+    const headings = JSON.parse(await browser.evalJs(visibleHeadingsJs));
+    if (headings.length !== 1 || headings[0] !== resultsTitle) {
+      fail(`${tab}: ${headings.length} visible h1 (${JSON.stringify(headings)}), expected exactly one ${JSON.stringify(resultsTitle)}`);
+    }
     console.log(`ok  ${tab}`);
   }
+
+  // The loop leaves the Bridge tab selected.
+  await browser.send("Emulation.setEmulatedMedia", { media: "print" });
+  const onPaper = JSON.parse(await browser.evalJs(visibleHeadingsJs));
+  await browser.send("Emulation.setEmulatedMedia", { media: "" });
+  if (onPaper.length !== 0) fail(`print: ${onPaper.length} visible h1 (${JSON.stringify(onPaper)}), expected none`);
+  console.log("ok  results heading: one visible h1 on every tab, hidden in print");
 
   // With no filter there is nothing to exclude, and the file's money is the bridge's.
   await browser.evalJs(`T.tab("Data check")`);

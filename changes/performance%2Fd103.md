@@ -1,0 +1,2 @@
+- The Setup check hint now says, when leaving out an attribute moves price a lot, that the bridge depends on that attribute. It no longer says the attribute separates products whose mix changed, which was not true when only a label changed between periods.
+- The results view has a heading, Price-volume-mix bridge, so the page keeps one h1 after a file loads, on every tab.
