@@ -5,6 +5,7 @@ import type { BridgeConfig } from "../src/engine.ts";
 import { accountBridge, drill, priceDistribution, runBridge } from "../src/engine.ts";
 import { buildReport, moverHeader, terms } from "../src/app/report.ts";
 import { signedWhole, whole } from "../src/app/format.ts";
+import { PERIOD, VIEW, viewSql, type Setup } from "../src/app/setup.ts";
 
 const config: BridgeConfig = {
   table: "sales",
@@ -48,24 +49,61 @@ const moverRow = (name: string) => ({
   no_units: 0,
 });
 
+const distinctMovers = () => [
+  { product: "ZX-11", s0: 100, s1: 130, z0: 0, z1: 0, volume: 12, mix_1: 3, price: 15, new_config: 0, discontinued: 0, no_units: 0 },
+  { product: "ZX-12", s0: 0, s1: 45, z0: 0, z1: 0, volume: 0, mix_1: 0, price: 0, new_config: 45, discontinued: 0, no_units: 0 },
+  { product: "ZX-13", s0: 30, s1: 0, z0: 0, z1: 0, volume: 0, mix_1: 0, price: 0, new_config: 0, discontinued: -30, no_units: 0 },
+  { product: "ZX-14", s0: 20, s1: 50, z0: 0, z1: 0, volume: 0, mix_1: 0, price: 0, new_config: 0, discontinued: 0, no_units: 30 },
+];
+
+/** Each `<h2>` heading's text and the span from its closing tag to the next heading, or to the end of the document. */
+const sectionsOf = (html: string): { text: string; start: number; end: number }[] =>
+  [...html.matchAll(/<h2>([\s\S]*?)<\/h2>/g)].map((match, index, all) => ({
+    text: match[1].trim(),
+    start: (match.index ?? 0) + match[0].length,
+    end: all[index + 1]?.index ?? html.length,
+  }));
+
+/** Whole-heading matchers, one per section the tests read. */
+const HEADINGS: Record<string, RegExp> = {
+  Bridge: /^Bridge$/,
+  Setup: /^Setup$/,
+  "Largest movers": /^Largest movers by .+$/,
+};
+
+/** A table's rows as ordered cell text, from the one section whose whole heading matches, with tag attributes and the spacing between tags ignored. */
+const tableRows = (html: string, heading: string): string[][] => {
+  const matcher = HEADINGS[heading];
+  assert.ok(matcher, `the test has no heading matcher for ${heading}`);
+  const matches = sectionsOf(html).filter((section) => matcher.test(section.text));
+  assert.equal(matches.length, 1, `the report has ${matches.length} ${heading} sections, wanted 1`);
+  const { start: from, end: to } = matches[0];
+  const section = html.slice(from, to);
+  const start = section.indexOf("<table");
+  const end = section.indexOf("</table>", start);
+  assert.ok(start !== -1 && end > start, `the ${heading} section holds no table`);
+  return [...section.slice(start, end).matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)].map(([, row]) =>
+    [...row.matchAll(/<t[hd]\b[^>]*>([\s\S]*?)<\/t[hd]>/g)].map(([, text]) => text.trim()),
+  );
+};
+
 test("a mover name that begins with a formula character takes a leading apostrophe", () => {
   for (const name of ["=1+1", "+SUM(1)", "-name", "@name"]) {
     const html = build({ movers: { label: "Product", rows: [moverRow(name)], columns: ["product"] } });
-    assert.equal(html.includes(`<td>'${name}</td>`), true, `${name} is not written as text`);
-    assert.equal(html.includes(`<td>${name}</td>`), false, `${name} is still a formula`);
+    const [, row] = tableRows(html, "Largest movers");
+    assert.equal(row[0], `'${name}`, `${name} is not written as text`);
+    assert.notEqual(row[0], name, `${name} is still a formula`);
   }
 });
 
 test("a setup value that begins with = takes a leading apostrophe", () => {
-  const html = build({ description: ["Source: =1+1.csv"] });
-  assert.equal(html.includes(`<td class="n">'=1+1.csv</td>`), true, "setup value is not written as text");
-  assert.equal(html.includes(`<td class="n">=1+1.csv</td>`), false, "setup value is still a formula");
+  const [source] = tableRows(build({ description: ["Source: =1+1.csv"] }), "Setup");
+  assert.deepEqual(source, ["Source", "'=1+1.csv"], "setup value is not written as text");
 });
 
 test("a negative effect amount stays a formatted number", () => {
-  const html = build();
-  assert.equal(html.includes(`<td class="n">-100</td>`), true, "negative amount changed");
-  assert.equal(html.includes(`<td class="n">'-100</td>`), false, "negative amount took an apostrophe");
+  const volume = tableRows(build(), "Bridge").find(([label]) => label === "Volume");
+  assert.deepEqual(volume, ["Volume", "-100", "-10.0%"], "negative amount changed or took an apostrophe");
 });
 
 const marginConfig: BridgeConfig = { ...config, costColumn: "cost" };
@@ -82,7 +120,8 @@ test("a sales report keeps the sales title and headers", () => {
   assert.equal(html.includes("<title>Sales bridge: 2025 to 2026</title>"), true, "sales title changed");
   assert.equal(html.includes("<h1>Sales bridge: 2025 to 2026</h1>"), true, "sales heading changed");
   assert.equal(html.includes("% of prior sales"), true, "sales bridge header changed");
-  assert.equal(html.includes(`<th class="n">Price</th>`), true, "sales movers header changed");
+  const [moversHeaders] = tableRows(html, "Largest movers");
+  assert.ok(moversHeaders.includes("Price"), "sales movers header changed");
   assert.equal(html.includes("Margin bridge"), false, "sales report names margin");
   assert.equal(html.includes("className"), false, "sales report carries a React attribute");
 });
@@ -194,9 +233,9 @@ test("a names-out report leaves mover values, filter values and the file name ou
   assert.equal(html.includes("<img"), false, "the chart image is still in the report");
   assert.equal(html.includes(TICKED_SENTENCE), true, "the ticked sentence is missing");
   assert.equal(html.includes(UNTICKED_SENTENCE), false, "the unticked sentence is still in the report");
-  assert.equal(html.includes(">product</th>"), true, "the movers header lost the safe column label");
-  assert.equal(html.includes("<td>1</td>"), true, "rank 1 is missing");
-  assert.equal(html.includes("<td>2</td>"), true, "rank 2 is missing");
+  const [moversHeaders, ...rankRows] = tableRows(html, "Largest movers");
+  assert.equal(moversHeaders[0], "product", "the movers header lost the safe column label");
+  assert.deepEqual(rankRows.map(([rank]) => rank), ["1", "2"], "the mover ranks are missing");
   assert.equal(html.includes("left out"), true, "the setup stand-in is missing");
   for (const kept of ["Volume", "-100", "Up 0.5% to 2%", "+30", "2025 to 2026", "Change by Customer"]) {
     assert.equal(html.includes(kept), true, `${kept} left the report`);
@@ -212,7 +251,56 @@ test("an unticked report keeps today output and names", () => {
   }
 });
 
-test("a ticked engine report leaves custom attribute, filter and separator-free names out", async () => {
+const BRIDGE_BASELINE = [
+  ["", "Amount", "% of prior sales"],
+  ["Sales 2025", "1,000", ""],
+  ["Volume", "-100", "-10.0%"],
+  ["Sales 2026", "900", ""],
+];
+
+const MOVERS_BASELINE = [
+  ["Product", "Change", "Volume", "Mix", "Price", "New config.", "Discontinued", "No units"],
+  ["ZX-11", "+30", "+12", "+3", "+15", "0", "0", "0"],
+  ["ZX-12", "+45", "0", "0", "0", "+45", "0", "0"],
+  ["ZX-13", "-30", "0", "0", "0", "0", "-30", "0"],
+  ["ZX-14", "+30", "0", "0", "0", "0", "0", "+30"],
+];
+
+test("an unticked report keeps a fixed baseline whether the flag is absent or false", () => {
+  const fixture = {
+    movers: { label: "Product", rows: distinctMovers(), columns: ["product"] },
+  };
+  const states = [
+    ["absent", build(fixture)],
+    ["false", build({ ...fixture, omitNames: false })],
+  ] as const;
+  for (const [label, html] of states) {
+    assert.equal(html.includes("<title>Sales bridge: 2025 to 2026</title>"), true, `${label}: title changed`);
+    assert.equal(html.includes("<h1>Sales bridge: 2025 to 2026</h1>"), true, `${label}: heading changed`);
+    assert.deepEqual(tableRows(html, "Bridge"), BRIDGE_BASELINE, `${label}: bridge cells changed`);
+    assert.deepEqual(tableRows(html, "Largest movers"), MOVERS_BASELINE, `${label}: movers cells changed`);
+    assert.equal(html.includes(UNTICKED_SENTENCE), true, `${label}: unticked sentence changed`);
+  }
+});
+
+test("a section lookup rejects a heading that is missing, duplicated or renamed", () => {
+  const html = build();
+  assert.equal(tableRows(html, "Bridge").length, BRIDGE_BASELINE.length, "the unedited report does not read the Bridge table");
+
+  const intruder = html.replace("<h2>Bridge</h2>", "<h2>Bridge</h2>\n<h2>Unrelated section</h2>");
+  assert.throws(() => tableRows(intruder, "Bridge"), /Bridge section holds no table/, "an unrelated heading between the Bridge heading and its table still reads a table");
+
+  const duplicated = html.replace("<h2>Bridge</h2>", "<h2>Bridge</h2>\n<h2>Bridge</h2>");
+  assert.throws(() => tableRows(duplicated, "Bridge"), /2 Bridge sections, wanted 1/, "a second Bridge heading still reads one table");
+
+  const renamed = html.replace("<h2>Bridge</h2>", "<h2>Bridge archive</h2>");
+  assert.throws(() => tableRows(renamed, "Bridge"), /0 Bridge sections, wanted 1/, "a Bridge archive heading still reads the Bridge table");
+
+  const wrongMovers = html.replace("<h2>Largest movers by Product</h2>", "<h2>Largest movers Product</h2>");
+  assert.throws(() => tableRows(wrongMovers, "Largest movers"), /0 Largest movers sections, wanted 1/, "a movers heading without 'by' still reads the movers table");
+});
+
+test("a ticked engine report applies its region filter and leaves custom attribute, filter and separator-free names out", async () => {
   const prodValue = "ZX-PROD-A";
   const acctValue = "ZX-ACCT-OLD";
   const filterValue = "ZX-REGION-IN";
@@ -221,30 +309,53 @@ test("a ticked engine report leaves custom attribute, filter and separator-free 
   const attrOne = `${prodValue} assortment`;
   const attrTwo = `${acctValue} segment`;
   const query = await openDatabase();
-  await query(`CREATE TABLE t (period VARCHAR, product VARCHAR, customer VARCHAR, region VARCHAR, units INTEGER, sales DOUBLE)`);
-  await query(`INSERT INTO t VALUES
+  await query(`DROP TABLE IF EXISTS data`);
+  await query(`CREATE TABLE data (period VARCHAR, product VARCHAR, customer VARCHAR, region VARCHAR, units INTEGER, sales DOUBLE)`);
+  await query(`INSERT INTO data VALUES
     ('2025', '${prodValue}', '${acctValue}', '${filterValue}', 10, 100),
     ('2025', '${prodValue}', 'ZX-ACCT-LOST', '${filterValue}', 10, 300),
     ('2025', 'ZX-PROD-GONE', 'ZX-ACCT-LOST', '${filterValue}', 10, 200),
     ('2026', '${prodValue}', '${acctValue}', '${filterValue}', 25, 350),
     ('2026', '${prodValue}', 'ZX-ACCT-NEW', '${filterValue}', 5, 150),
-    ('2026', 'ZX-PROD-NEW', 'ZX-ACCT-NEW', '${filterValue}', 10, 400)`);
-  const engineConfig: BridgeConfig = {
-    table: "t",
+    ('2026', 'ZX-PROD-NEW', 'ZX-ACCT-NEW', '${filterValue}', 10, 400),
+    ('2025', 'ZX-PROD-OUT', 'ZX-ACCT-OUT', 'ZX-REGION-OUT', 40, 900),
+    ('2026', 'ZX-PROD-OUT', 'ZX-ACCT-OUT', 'ZX-REGION-OUT', 50, 950)`);
+  const setup: Setup = {
     periodColumn: "period",
-    prior: "2025",
-    current: "2026",
+    grain: "value",
     unitsColumn: "units",
     salesColumn: "sales",
     levels: [
       { name: attrOne, columns: ["product"] },
       { name: attrTwo, columns: ["customer"] },
     ],
+    filters: [{ column: "region", mode: "include", values: [filterValue] }],
+    newAndDiscontinued: "difference",
   };
+  const engineConfig: BridgeConfig = {
+    table: VIEW,
+    periodColumn: PERIOD,
+    prior: "2025",
+    current: "2026",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: setup.levels,
+    newAndDiscontinued: "difference",
+  };
+  await query(`DROP VIEW IF EXISTS ${VIEW}`);
+  await query(viewSql(setup));
   const engineResult = await runBridge(query, engineConfig);
+  assert.equal(engineResult.priorSales, 600, "the region filter did not hold the prior total to the in-region rows");
+  assert.equal(engineResult.currentSales, 900, "the region filter did not hold the current total to the in-region rows");
   const moverRows = await drill(query, engineConfig, { columns: ["product"], limit: 15 });
   const bands = (await priceDistribution(query, engineConfig)).buckets;
   const groups = await accountBridge(query, engineConfig, "customer");
+  await query(`DROP VIEW IF EXISTS ${VIEW}`);
+  await query(viewSql({ ...setup, filters: [] }));
+  const unfiltered = await runBridge(query, engineConfig);
+  assert.equal(unfiltered.priorSales, 1500, "the unfiltered prior total is not the whole file");
+  assert.equal(unfiltered.currentSales, 1850, "the unfiltered current total is not the whole file");
+  assert.notEqual(engineResult.priorSales, unfiltered.priorSales, "the filter changed no total, so the test cannot catch a dropped filter");
   const description = [
     `Source: ${fileName}`,
     "Periods: 2025 to 2026 (period)",
@@ -261,18 +372,7 @@ test("a ticked engine report leaves custom attribute, filter and separator-free 
     result: engineResult,
     chartUrl: "data:image/png;base64,AAA",
     description,
-    setup: {
-      periodColumn: "period",
-      grain: "value" as const,
-      unitsColumn: "units",
-      salesColumn: "sales",
-      levels: [
-        { name: attrOne, columns: ["product"] },
-        { name: attrTwo, columns: ["customer"] },
-      ],
-      filters: [{ column: "region", mode: "include" as const, values: [filterValue] }],
-      newAndDiscontinued: "difference" as const,
-    },
+    setup,
     source: fileName,
     movers: { label: attrOne, rows: moverRows, columns: ["product"] },
     priceBands: bands,
@@ -373,31 +473,19 @@ test("a ticked report ignores private text after a second separator in recognize
   }
 });
 
-const moversSection = (html: string): string => {
-  const start = html.indexOf("Largest movers");
-  const tableStart = html.indexOf("<table", start);
-  const tableEnd = html.indexOf("</table>", tableStart);
-  return html.slice(tableStart, tableEnd);
-};
-
-const moversNumbers = (html: string): number[][] => {
-  const section = moversSection(html);
-  const rows = [...section.matchAll(/<tr>(.*?)<\/tr>/gs)].map((m) => m[1]);
-  return rows
-    .filter((row) => row.includes("<td"))
-    .map((row) =>
-      [...row.matchAll(/<td class="n">([^<]*)<\/td>/g)].map((m) =>
-        Number(m[1].replaceAll(",", "").replace("+", ""))
-      )
-    );
-};
+/** Each movers data row's seven signed amounts, left to right. */
+const moversNumbers = (html: string): number[][] =>
+  tableRows(html, "Largest movers")
+    .slice(1)
+    .map((cells) => cells.slice(1).map((text) => Number(text.replaceAll(",", "").replace("+", ""))));
 
 const assertMoversFoot = (html: string) => {
+  const [headers = [], ...dataRows] = tableRows(html, "Largest movers");
   for (const label of ["New config.", "Discontinued", "No units"]) {
-    assert.equal(html.includes(`<th class="n">${label}</th>`), true, `${label} header is missing`);
+    assert.ok(headers.includes(label), `${label} header is missing`);
   }
+  assert.ok(dataRows.length > 0, "the movers table has no rows");
   const rows = moversNumbers(html);
-  assert.ok(rows.length > 0, "the movers table has no rows");
   for (const numbers of rows) {
     assert.equal(numbers.length, 7, `a movers row has ${numbers.length} numbers instead of 7`);
     const [change, ...parts] = numbers;
@@ -475,8 +563,9 @@ test("movers rows foot on a margin bridge", async () => {
 test("a ticked movers table keeps ranks and the footing columns", async () => {
   const html = await footReport(footConfig({ newAndDiscontinued: "full" }), FOOT_DDL, FOOT_VALUES, true);
   assertMoversFoot(html);
+  const [, ...rows] = tableRows(html, "Largest movers");
   for (const name of ["ZX-41", "ZX-42", "ZX-43", "ZX-44"]) {
-    assert.equal(moversSection(html).includes(name), false, `${name} is still in the ticked movers table`);
+    assert.equal(rows.some(([cell]) => cell === name), false, `${name} is still in the ticked movers table`);
   }
-  assert.equal(moversSection(html).includes("<td>1</td>"), true, "rank 1 is missing from the ticked movers table");
+  assert.equal(rows[0]?.[0], "1", "rank 1 is missing from the ticked movers table");
 });

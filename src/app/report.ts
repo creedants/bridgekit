@@ -81,9 +81,13 @@ export function describeSetup(setup: Setup, prior: string | number, current: str
 }
 
 /**
- * A single self-contained HTML file with the chart, bridge, coverage, summary
- * and top movers. It holds totals and a written summary, names the file, the
- * setup and its filter values, and holds no rows, so it can be emailed.
+ * A self-contained HTML file, with no raw rows, so it can be emailed. By
+ * default it holds the chart when one is given, the bridge, coverage, summary
+ * and top movers, and names the file, the setup, its filter values and the
+ * largest movers. With
+ * omitNames it holds no chart, mover rows show ranks instead of names,
+ * attribute labels fall back to column names, and Setup leaves out the file
+ * name and filter values.
  */
 export function buildReport(input: {
   config: BridgeConfig;
