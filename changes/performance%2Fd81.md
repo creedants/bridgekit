@@ -1,0 +1,1 @@
+- The downloaded report's Largest movers table now shows the New config., Discontinued and No units amounts, so every row's parts add up to its Change.

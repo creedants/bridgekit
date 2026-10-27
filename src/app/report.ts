@@ -126,13 +126,20 @@ export function buildReport(input: {
   ];
   const mixOf = (r: Record<string, unknown>) =>
     config.levels.reduce((sum, _, i) => sum + Number(r[`mix_${i + 1}`] ?? 0), 0);
+  const [, , change, volume, mix, priceEffect, newConfig, discontinued, noUnits] = moverHeader(config);
+  const moverColumns = [
+    { label: change, value: (r: Record<string, unknown>) => Number(r.s1) + Number(r.z1) - Number(r.s0) - Number(r.z0) },
+    { label: volume, value: (r: Record<string, unknown>) => Number(r.volume) },
+    { label: mix, value: mixOf },
+    { label: priceEffect, value: (r: Record<string, unknown>) => Number(r.price) },
+    { label: newConfig, value: (r: Record<string, unknown>) => Number(r.new_config) },
+    { label: discontinued, value: (r: Record<string, unknown>) => Number(r.discontinued) },
+    { label: noUnits, value: (r: Record<string, unknown>) => Number(r.no_units) },
+  ];
   const movers = input.movers.rows.map((r, i) =>
     row([
       omit ? String(i + 1) : cell(input.movers.columns.map((c) => r[c] ?? "(blank)").join(" / ")),
-      signedWhole(Number(r.s1) + Number(r.z1) - Number(r.s0) - Number(r.z0)),
-      signedWhole(Number(r.volume)),
-      signedWhole(mixOf(r)),
-      signedWhole(Number(r.price)),
+      ...moverColumns.map((c) => signedWhole(c.value(r))),
     ]),
   );
   const summarySentence = omit
@@ -197,7 +204,7 @@ ${omit ? "" : input.chartUrl ? `<img alt="Waterfall chart of the bridge" src="${
     .map((c) => row([cell(c.label), percent(c.share), whole(c.cells)]))
     .join("")}</table>
 <h2>Largest movers by ${markup(viewMoversLabel)}</h2>
-<table class="plain">${row([cell(viewMoversLabel), "Change", "Volume", "Mix", t.priceEffect], "th")}${movers.join("")}</table>
+<table class="plain">${row([cell(viewMoversLabel), ...moverColumns.map((c) => c.label)], "th")}${movers.join("")}</table>
 <h2>How widely price moved</h2>
 <table class="plain">${row(["Change in average price", "Share of matched sales", "Price effect"], "th")}${input.priceBands
     .map((b) => row([cell(b.label), percent(b.share), signedWhole(b.priceEffect)]))
