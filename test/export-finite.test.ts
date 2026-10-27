@@ -542,3 +542,102 @@ test("ten same-name sheets keep the two-digit suffix in range", async () => {
     assert.equal(sheet.getRow(2).getCell(1).value, `u${i + 1}_val`);
   });
 });
+
+test("tied By groups keep the limit-5000 rows and order with a cap note only over the cap (D79-2)", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { runBridge, drill, dataCheck, periodMoney } = await import("../src/engine.ts");
+  const { default: ExcelJS } = await import("exceljs");
+  const expectedNote =
+    "This sheet shows the 5,000 rows with the largest change. The Bridge sheet totals include every row.";
+  for (const total of [4999, 5000, 6000]) {
+    const query = await openDatabase();
+    await query(`SET threads=1`);
+    await query(
+      `CREATE OR REPLACE TABLE sales AS SELECT period, 'P' || i::VARCHAR AS product, 1.0 AS units, CASE WHEN period='2025' THEN 10.0 ELSE 11.0 + (i % 2) END AS sales FROM range(${total}) r(i) CROSS JOIN (VALUES ('2025'),('2026')) p(period)`,
+    );
+    const config = {
+      table: "sales",
+      periodColumn: "period",
+      prior: "2025",
+      current: "2026",
+      unitsColumn: "units",
+      salesColumn: "sales",
+      levels: [{ name: "Product", columns: ["product"] }],
+    };
+    const result = await runBridge(query, config);
+    const canonical = await drill(query, config, { columns: ["product"], limit: 5000 });
+    assert.equal(canonical.length, Math.min(total, 5000), `canonical holds ${Math.min(total, 5000)} rows at ${total}`);
+    const repeat = await drill(query, config, { columns: ["product"], limit: 5000 });
+    assert.deepEqual(
+      repeat.map((row) => String(row.product)),
+      canonical.map((row) => String(row.product)),
+      `the limit-5000 order repeats at ${total}`,
+    );
+    const check = await dataCheck(query, config);
+    const tieOut = await periodMoney(query, config, { table: "sales", periodColumn: "period" });
+    const captured: { blob?: Blob } = {};
+    const fakeDocument = {
+      createElement: () => ({ href: "", download: "", click() {} }),
+    };
+    const realDocument = (globalThis as any).document;
+    const realCreate = URL.createObjectURL;
+    const realRevoke = URL.revokeObjectURL;
+    (globalThis as any).document = fakeDocument;
+    (URL as any).createObjectURL = (blob: Blob) => {
+      captured.blob = blob;
+      return "blob:tied";
+    };
+    (URL as any).revokeObjectURL = () => {};
+    try {
+      await exportExcel(query, config, result, check, tieOut, ["Source: tied.csv"]);
+    } finally {
+      (globalThis as any).document = realDocument;
+      URL.createObjectURL = realCreate;
+      URL.revokeObjectURL = realRevoke;
+    }
+    assert.ok(captured.blob, `the export downloaded a workbook at ${total}`);
+    const bytes = new Uint8Array(await captured.blob.arrayBuffer());
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(bytes as any);
+    const sheet = workbook.getWorksheet("By Product")!;
+    assert.equal(sheet.getRow(1).getCell(1).value, "product");
+    const effectKeys = result.effects.map((effect) => effect.key);
+    if (total <= 5000) {
+      assert.equal(sheet.rowCount, 1 + total, `4999 and 5000 keep every row at ${total}`);
+      let foundNote = false;
+      sheet.eachRow((row) => {
+        if (row.getCell(1).value === expectedNote) foundNote = true;
+      });
+      assert.equal(foundNote, false, `no note at or below the cap at ${total}`);
+      for (let i = 0; i < canonical.length; i++) {
+        const row = sheet.getRow(2 + i);
+        const expected = canonical[i];
+        const prior = Number(expected.s0) + Number(expected.z0);
+        const current = Number(expected.s1) + Number(expected.z1);
+        assert.equal(row.getCell(1).value, String(expected.product), `row ${i} keeps its group at ${total}`);
+        assert.equal(row.getCell(2).value, prior, `row ${i} keeps prior at ${total}`);
+        assert.equal(row.getCell(3).value, current, `row ${i} keeps current at ${total}`);
+        assert.equal(row.getCell(4).value, current - prior, `row ${i} keeps change at ${total}`);
+        effectKeys.forEach((key, j) => {
+          assert.equal(row.getCell(5 + j).value, Number(expected[key]), `row ${i} keeps ${key} at ${total}`);
+        });
+      }
+    } else {
+      assert.equal(sheet.rowCount, 1 + 5000 + 1, `over the cap keeps 5000 rows plus the note at ${total}`);
+      for (let i = 0; i < 5000; i++) {
+        const row = sheet.getRow(2 + i);
+        const expected = canonical[i];
+        const prior = Number(expected.s0) + Number(expected.z0);
+        const current = Number(expected.s1) + Number(expected.z1);
+        assert.equal(row.getCell(1).value, String(expected.product), `row ${i} keeps its group at ${total}`);
+        assert.equal(row.getCell(2).value, prior, `row ${i} keeps prior at ${total}`);
+        assert.equal(row.getCell(3).value, current, `row ${i} keeps current at ${total}`);
+        assert.equal(row.getCell(4).value, current - prior, `row ${i} keeps change at ${total}`);
+        effectKeys.forEach((key, j) => {
+          assert.equal(row.getCell(5 + j).value, Number(expected[key]), `row ${i} keeps ${key} at ${total}`);
+        });
+      }
+      assert.equal(sheet.getRow(5002).getCell(1).value, expectedNote, `the note follows 5000 data rows at ${total}`);
+    }
+  }
+});
