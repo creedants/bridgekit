@@ -575,7 +575,7 @@ function runWrangler(args) {
 
 function startDev(port, file) {
   if (listenPids(port).length) die(`port ${port} is already in use. Stop that process before npm run perf:worker.`);
-  const args = localOnly(["dev", "--port", String(port), "--ip", "127.0.0.1", `--env-file=${file}`]);
+  const args = localOnly(["dev", "--port", String(port), "--ip", "127.0.0.1", "--var", "BETTER_AUTH_URL:http://localhost:8790", `--env-file=${file}`]);
   const child = spawn(wranglerBin, args, {
     cwd: root,
     env: wranglerEnv(),
@@ -779,7 +779,7 @@ async function main() {
       machine: { ...atStart, loadAvgAtEnd: loadavg() },
       wrangler: {
         version: version.stdout.trim(),
-        command: "wrangler <command> --env-file <private file>. dev uses --port <wrangler.jsonc dev.port> and --ip 127.0.0.1",
+        command: "wrangler <command> --env-file <private file>. dev uses --port <wrangler.jsonc dev.port>, --ip 127.0.0.1, and --var BETTER_AUTH_URL:http://localhost:8790",
         remote: false,
         port,
         ip: "127.0.0.1",
