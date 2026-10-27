@@ -6,12 +6,12 @@ import { authOptions, createAuth } from "../server/auth.ts";
 import { testDatabase } from "./support/d1.ts";
 
 /**
- * Better Auth links a provider account to an existing account by matching the
- * email the provider reports. Microsoft's common tenant reports an email
- * without proving the user owns it, so a Microsoft sign-in must not be allowed
- * to link to an existing account. These tests check that the built options do
- * not trust Microsoft, and that a real callback whose email matches an existing
- * account is refused without touching it.
+ * Better Auth can link a provider account to an existing user by matching the
+ * email the provider reports. A Microsoft common-tenant email is not proof of
+ * ownership, so an unverified Microsoft email must not authorize a new link.
+ * These tests check that Google stays trusted and Microsoft is untrusted, and
+ * that a real callback with a matching, unverified Microsoft email is refused
+ * without adding a user or account row or setting a session cookie.
  */
 
 const ORIGIN = "http://127.0.0.1:8791";
@@ -99,7 +99,7 @@ function idToken(): string {
   return `${base64url({ alg: "none", typ: "JWT" })}.${base64url(claims)}.sig`;
 }
 
-/** Microsoft's token and photo endpoints, and nothing else. */
+/** Microsoft token and photo fakes; unrecognized URLs throw, with no network fallback. */
 function providerFetch(token: string): typeof fetch {
   return async (input) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -124,7 +124,7 @@ test("the built options do not trust Microsoft for account linking", async () =>
   assert.equal((trusted as string[]).includes("microsoft"), false, "Microsoft is not a trusted provider");
 });
 
-test("a Microsoft sign-in whose email matches an existing account is not linked to it", async () => {
+test("a Microsoft sign-in with a matching, unverified email is not linked to an existing account", async () => {
   const logs = captureConsole();
   try {
     const env = bindings();
