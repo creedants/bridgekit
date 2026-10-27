@@ -1,0 +1,1 @@
+- A workbook whose XML parts a writer saved under a namespace prefix now loads the same table as its unprefixed twin, with the same dates and the same count of formulas that have no saved result, and one with no data rows still reports that the first sheet has none.
