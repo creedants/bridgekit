@@ -6,9 +6,9 @@ This file names the site host `pvmbridge.com` and the production database id. Th
 
 `npm ci` installs Wrangler in this repo. It does not put `wrangler` on the shell PATH. Use `npx wrangler` for a direct command. `npm run cf:dev` and `npm run cf:deploy` already run that install, because npm puts `node_modules/.bin` on the script PATH.
 
-- Source: `package.json:44` has `"wrangler": "^4.147.0"`.
-- Source: `package.json:21` has `wrangler dev`.
-- Source: `package.json:22` has `wrangler deploy`.
+- Source: `package.json:46` has `"wrangler": "^4.153.0"`.
+- Source: `package.json:22` has `wrangler dev`.
+- Source: `package.json:23` has `wrangler deploy`.
 - Not verified: npm's script PATH is not a line in this repo.
 
 Each step uses the same lines. `Do` says what to do. One of `Run`, `Edit`, `Open`, or `Dashboard (not verified)` says where. `Source` names a file and a line, and the words on that line. `Derived from` means those lines support the step and do not state it. When a derived command was not run, the line says so. `Not verified` means the repo is silent. `Worked` says what you see before the next step. When that check shows a value is set and not that it is right, the next line says what a wrong value looks like later.
@@ -31,7 +31,7 @@ npx wrangler login
 
 - Source: `.github/workflows/ci.yml:21` has `node-version: 24`.
 - Source: `.github/workflows/ci.yml:23` has `npm ci`.
-- Source: `package.json:44` has `"wrangler": "^4.147.0"`.
+- Source: `package.json:46` has `"wrangler": "^4.153.0"`.
 - Worked: `npx wrangler whoami` prints the account you mean to use.
 
 ### 1.2 Put the domain on Cloudflare
@@ -101,7 +101,7 @@ ls .env*
 - Source: `vite.config.ts:53` has `loadEnv(mode, import.meta.dirname, "")`.
 - Source: `vite.config.ts:59-61` has `VITE_AI_COMMENTARY === "1"`, `VITE_PAGE_COUNTS === "1"`, `VITE_WORKSPACES === "1"`.
 - Source: `.env.example:4` has `VITE_AI_COMMENTARY=1`.
-- Source: `README.md:99` has `.env.local`.
+- Source: `README.md:100` has `.env.local`.
 - Derived from: Vite's env guide says an environment variable that already exists when Vite runs is not overwritten by an env file ([Env Variables and Modes](https://vite.dev/guide/env-and-mode)). The assignments on the step 1.7 command set the three names before Vite runs. It was not run.
 - Not verified: this repo does not state that priority.
 - Worked: the first command prints nothing, or only `VITE_PAGE_COUNTS`, `VITE_WORKSPACES`, and `VITE_AI_COMMENTARY`. The second command prints only `.env.example`.
@@ -117,15 +117,15 @@ VITE_PAGE_COUNTS=1 VITE_WORKSPACES=0 VITE_AI_COMMENTARY=0 npx vite build && node
 
 `npm run build:cloudflare:free` wrote the same files, with the same hashes, as the command above.
 
-- Derived from: `package.json:20` has `"build:cloudflare:free": "VITE_PAGE_COUNTS=1 VITE_WORKSPACES=0 VITE_AI_COMMENTARY=0 vite build && node scripts/compress-wasm.mjs"`. The command above keeps page counts. It sets the other two flags to 0. The author's session ran this command locally. `ls dist/pay` failed. The raw wasm count was 0. `dist/index.html` had `No tracking scripts.` once. `dist/index.html` had `No cookies, no accounts.` once. `dist/index.html` had `Cookies are used for sign-in.` zero times. The reviewer's session ran the same command locally, including a repeat. Both runs exited 0. The Worked checks matched. The reviewer's Node was v26.7.0. The author's report records no Node version. Node 24 was not installed in the reviewer's session. Neither session deployed.
+- Derived from: `package.json:21` has `"build:cloudflare:free": "npm run sitemap && VITE_PAGE_COUNTS=1 VITE_WORKSPACES=0 VITE_AI_COMMENTARY=0 vite build && node scripts/compress-wasm.mjs"`. The command above keeps page counts. It sets the other two flags to 0. The author's session ran this command locally. `ls dist/pay` failed. The raw wasm count was 0. `dist/index.html` had `No tracking scripts.` once. `dist/index.html` had `No cookies, no accounts.` once. `dist/index.html` had `Cookies are used for sign-in.` zero times. The reviewer's session ran the same command locally, including a repeat. Both runs exited 0. The Worked checks matched. The reviewer's Node was v26.7.0. The author's report records no Node version. Node 24 was not installed in the reviewer's session. Neither session deployed.
 - Source: `wrangler.jsonc:2` has `npm run build:cloudflare`. That line tells you to run the script in `package.json`. This step does not follow that line.
-- Source: `package.json:19` has `VITE_AI_COMMENTARY=${VITE_AI_COMMENTARY:-1}`.
-- Source: `package.json:9` has `"build": "vite build"`.
-- Derived from: `index.html:232` has `No analytics.`, `No tracking scripts.`. `scripts/feature-blocks.ts:4` has `kept only when it applies`. `npm run build` does not set `VITE_PAGE_COUNTS`. The home page would keep `No analytics.` while the server counts page loads. The author's session ran `npm run build`. The reviewer's session ran `npm run build`. That run exited 0. Neither report records a reading of the home page after that build. Whether that page keeps `No analytics.` was not checked.
+- Source: `package.json:20` has `VITE_AI_COMMENTARY=${VITE_AI_COMMENTARY:-1}`.
+- Source: `package.json:9` has `"build": "npm run sitemap && vite build"`.
+- Derived from: `index.html:237` has `No analytics.`, `No tracking scripts.`. `scripts/feature-blocks.ts:4` has `kept only when it applies`. `npm run build` does not set `VITE_PAGE_COUNTS`. The home page would keep `No analytics.` while the server counts page loads. The author's session ran `npm run build`. The reviewer's session ran `npm run build`. That run exited 0. Neither report records a reading of the home page after that build. Whether that page keeps `No analytics.` was not checked.
 - Source: `vite.config.ts:60` has `VITE_PAGE_COUNTS === "1"`.
 - Source: `vite.config.ts:77` has `VITE_WORKSPACES === "1"`, `pay/index.html`.
 - Source: `scripts/compress-wasm.mjs:30` has `rmSync(file)`.
-- Source: `index.html:232` has `No cookies, no accounts.`, `Cookies are used for sign-in.`
+- Source: `index.html:237` has `No cookies, no accounts.`, `Cookies are used for sign-in.`
 - Worked: `ls dist/pay` fails, `ls dist/assets | grep -c '\.wasm$'` prints 0, `grep -c 'No tracking scripts.' dist/index.html` prints 1, `grep -c 'No cookies, no accounts.' dist/index.html` prints 1, and `grep -c 'Cookies are used for sign-in.' dist/index.html` prints 0.
 
 ### 1.8 Store the one secret Part 1 needs
@@ -142,7 +142,7 @@ openssl rand -base64 32 | npx wrangler secret put BETTER_AUTH_SECRET
 - Source: `server/env.ts:9` has `BETTER_AUTH_SECRET: string`.
 - Source: `.dev.vars.example:3` has `at-least-32-chars`.
 - Source: `wrangler.jsonc:56` has `wrangler secret put NAME`.
-- Source: `package.json:44` has `"wrangler": "^4.147.0"`.
+- Source: `package.json:46` has `"wrangler": "^4.153.0"`.
 - Not verified: the remote prompt, creating the draft Worker, and the retry. This session did not run secret put or deploy.
 - Worked: `npx wrangler secret list` prints `BETTER_AUTH_SECRET`.
 
@@ -169,7 +169,7 @@ Run:
 npm run cf:deploy
 ```
 
-- Source: `package.json:22` has `"cf:deploy": "wrangler d1 migrations apply bridgekit --remote && wrangler deploy"`. `package.json:22` lacks `vite build`.
+- Source: `package.json:23` has `"cf:deploy": "wrangler d1 migrations apply bridgekit --remote && wrangler deploy"`. `package.json:23` lacks `vite build`.
 - Source: `wrangler.jsonc:26` has `"migrations_dir": "migrations"`.
 - Source: `migrations/0001_page_views.sql:2` has `CREATE TABLE page_views`.
 - Source: `migrations/0002_auth.sql:2` has `create table "user"`.
@@ -205,7 +205,7 @@ curl -sS -w '\n%{http_code}\n' -X POST 'https://pvmbridge.com/api/auth/sign-in/m
 - Source: `server/worker.ts:57` has `providers: [] as string[]`, `commentary: false`, `billing: false`.
 - Source: `server/worker.ts:63-64` has `function closedApiResponse`, `pathname === "/api/config"`, `CLOSED_CONFIG`.
 - Source: `server/worker.ts:60` has `{ error: "Not found." }`, `status: 404`.
-- Source: `server/worker.ts:414-415` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`.
+- Source: `server/worker.ts:444-445` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`.
 - Worked: the config body has no providers, `commentary` is false, and `billing` is false. The sign-in body is `{"error":"Not found."}` and the status is 404.
 
 ### 1.13 Check the home page and the pay address
@@ -220,7 +220,7 @@ curl -s https://pvmbridge.com/ | grep -c 'Cookies are used for sign-in.'
 curl -s -o /dev/null -w '%{http_code}\n' https://pvmbridge.com/pay/
 ```
 
-- Source: `index.html:232` has `No tracking scripts.`, `Cookies are used for sign-in.`
+- Source: `index.html:237` has `No tracking scripts.`, `Cookies are used for sign-in.`
 - Derived from: `vite.config.ts:77` has `pay/index.html`. `wrangler.jsonc:13` has `"not_found_handling": "404-page"`. The Part 1 build has no pay page. The address is not found. The author's session saw this on a local Part 1 Worker. The home page had `No tracking scripts.` once. The home page had `Cookies are used for sign-in.` zero times. `GET /pay/` returned 404. The prior reviewer's session checked `No tracking scripts.`, `sign in for Pro`, and the pay address against `http://127.0.0.1:8790`; those checks printed 1, 0, and 404. That session did not run either current cookie-sentence command. The later local Part 1 build check counted `No cookies, no accounts.` once and `Cookies are used for sign-in.` zero times in `dist/index.html`. Neither current cookie-sentence command was run against a served build or the live domain.
 - Worked: the four commands print 1, 1, 0, then 404.
 
@@ -233,7 +233,7 @@ Open:
 https://pvmbridge.com/app/?sample
 ```
 
-- Source: `README.md:61` has `/app/?sample`.
+- Source: `README.md:62` has `/app/?sample`.
 - Source: `wrangler.jsonc:18` has `/assets/*.wasm`.
 - Source: `server/assets.ts:6` has `removes the original`.
 - Worked: the sample bridge appears, with its chart and its table.
@@ -248,8 +248,8 @@ https://pvmbridge.com/
 ```
 
 - Source: `server/counts.ts:16` has `headless|curl|wget`.
-- Source: `server/worker.ts:402` has `countPageView(`.
-- Source: `package.json:23` has `SELECT day, path, referrer, views FROM page_views`.
+- Source: `server/worker.ts:424` has `countPageView(`.
+- Source: `package.json:24` has `SELECT day, path, referrer, views FROM page_views`.
 - Worked: `npm run stats` prints a row whose path is `/`.
 
 ### 1.16 Optional. Run the smoke test against the live site
@@ -261,10 +261,10 @@ Run:
 npm run smoke -- https://pvmbridge.com
 ```
 
-- Source: `package.json:14` has `"smoke": "node scripts/smoke.mjs"`.
-- Source: `scripts/smoke.mjs:202` has `where ?? "http://localhost:5173"`.
-- Source: `scripts/smoke.mjs:1891` has `smoke test passed`.
-- Source: `README.md:161` has `npm run smoke -- http://localhost:8790`.
+- Source: `package.json:15` has `"smoke": "node scripts/smoke.mjs"`.
+- Source: `scripts/smoke.mjs:204` has `where ?? "http://localhost:5173"`.
+- Source: `scripts/smoke.mjs:2056` has `smoke test passed`.
+- Source: `README.md:162` has `npm run smoke -- http://localhost:8790`.
 - Not verified: that this passes against a deployed site. The repo shows it against a local server.
 - Worked: the last line is `smoke test passed`.
 
@@ -276,14 +276,14 @@ Account, workspace, checkout, webhook, and commentary routes are off because `AC
 - Source: `server/worker.ts:57` has `CLOSED_CONFIG`.
 - Source: `server/worker.ts:63-66` has `closedApiResponse`, `gatedApiPath`, `notFound()`.
 - Source: `server/worker.ts:73` has `createAuth(c.env`.
-- Source: `server/worker.ts:414-416` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`, `open.fetch`.
+- Source: `server/worker.ts:444-446` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`, `open.fetch`.
 - Source: `wrangler.jsonc:30-32` has `ACCOUNTS is a Worker variable`, `This file does not`, `set it`.
 - Source: `src/app/App.tsx:38` has `elsewhere the code is left out`.
 - Source: `src/app/App.tsx:39` has `import.meta.env.VITE_WORKSPACES === "1"`.
 
 `worker.fetch` returns the closed response before `open.fetch` when accounts are off. `createAuth` is on the open app, so that return does not call it. A gated path returns 404 and `{"error":"Not found."}`. It does not write a verification row, because the auth handler does not run.
 
-- Derived from: `server/worker.ts:73` has `createAuth(c.env`. `server/worker.ts:415-416` has `return closed`, `open.fetch`. The verification write is not a line in this return. It was not run.
+- Derived from: `server/worker.ts:73` has `createAuth(c.env`. `server/worker.ts:445-446` has `return closed`, `open.fetch`. The verification write is not a line in this return. It was not run.
 
 A path whose first segment is `api` in another letter case does not match `run_worker_first`. `/API/auth/sign-in/magic-link` is that kind of path. A local wrangler measurement returned the site's HTML 404 page for GET and 405 with an empty body for POST. That path never reaches an account route. The measurement is the local one. It was not a live zone.
 
@@ -407,7 +407,7 @@ npx wrangler secret put PADDLE_PRICE_ID
 - Source: `server/env.ts:28` has `PADDLE_PRICE_ID?: string`.
 - Source: `server/paddle.ts:383` has `quantity: options.seats`.
 - Source: `src/app/Workspace.tsx:294` has `max={200}`.
-- Source: `index.html:282` has `per user per month`.
+- Source: `index.html:287` has `per user per month`.
 - Source: `server/worker.ts:285` has `env.PADDLE_PRICE_ID ? [env.PADDLE_PRICE_ID] : undefined`.
 - Source: `server/worker.ts:339` has `"ignored"`.
 - Not verified: Paddle's default quantity limit for a price.
@@ -433,7 +433,7 @@ Dashboard (not verified): Paddle > Checkout > Checkout configuration.
 https://pvmbridge.com/pay/
 ```
 
-- Derived from: `server/paddle.ts:331-332` has `default payment link`, `?_ptxn=`. `vite.config.ts:77` has `pay/index.html`. `README.md:143-144` has `Checkout opens on`, `/pay/`. The code names no path for that link. `/pay/` is the page built to load Paddle's script. It was not run.
+- Derived from: `server/paddle.ts:331-332` has `default payment link`, `?_ptxn=`. `vite.config.ts:77` has `pay/index.html`. `README.md:144-145` has `Checkout opens on`, `/pay/`. The code names no path for that link. `/pay/` is the page built to load Paddle's script. It was not run.
 - Source: `scripts/policy.ts:10` has `script-src 'self' 'wasm-unsafe-eval'`.
 - Source: `scripts/policy.ts:25` has `https://cdn.paddle.com`.
 - Source: `src/app/Workspace.tsx:137-139` has `const { checkoutUrl } = await api.checkout(active, seats);`, `location.href = checkoutUrl;`.
@@ -570,12 +570,12 @@ Run:
 VITE_PAGE_COUNTS=1 VITE_WORKSPACES=1 VITE_AI_COMMENTARY=0 VITE_PADDLE_CLIENT_TOKEN=<client-token> VITE_PADDLE_ENVIRONMENT=live npx vite build && node scripts/compress-wasm.mjs
 ```
 
-- Derived from: `package.json:20` has `VITE_PAGE_COUNTS=1 VITE_WORKSPACES=0 VITE_AI_COMMENTARY=0 vite build && node scripts/compress-wasm.mjs`. `package.json` lacks `VITE_PADDLE`. The command above sets AI commentary to 0. It adds the two Paddle variables. No npm script sets those variables. The author's session ran this command locally with a stand-in client token. `dist/pay/index.html` existed. The stand-in token was in one dist file. The `Cookies are used for sign-in.` count is 1. The `No tracking scripts.` count was 1. The raw wasm count was 0. The reviewer's session ran the same command locally with a different stand-in token. The command exited 0. The Worked checks passed. Neither session deployed. Neither session used a live Paddle client token.
+- Derived from: `package.json:21` has `VITE_PAGE_COUNTS=1 VITE_WORKSPACES=0 VITE_AI_COMMENTARY=0 vite build && node scripts/compress-wasm.mjs`. `package.json` lacks `VITE_PADDLE`. The command above sets AI commentary to 0. It adds the two Paddle variables. No npm script sets those variables. The author's session ran this command locally with a stand-in client token. `dist/pay/index.html` existed. The stand-in token was in one dist file. The `Cookies are used for sign-in.` count is 1. The `No tracking scripts.` count was 1. The raw wasm count was 0. The reviewer's session ran the same command locally with a different stand-in token. The command exited 0. The Worked checks passed. Neither session deployed. Neither session used a live Paddle client token.
 - Source: `src/pay/pay.ts:37` has `import.meta.env.VITE_PADDLE_CLIENT_TOKEN`.
 - Source: `src/pay/pay.ts:12` has `There is no checkout to open. Start from the Workspace panel in the tool.`
 - Source: `src/pay/pay.ts:47` has `VITE_PADDLE_ENVIRONMENT !== "live"`.
 - Source: `src/app/App.tsx:39` has `import.meta.env.VITE_WORKSPACES === "1"`.
-- Source: `index.html:232` has `No cookies, no accounts.`, `Cookies are used for sign-in.`
+- Source: `index.html:237` has `No cookies, no accounts.`, `Cookies are used for sign-in.`
 - Worked: `test -f dist/pay/index.html` succeeds, `grep -R -l '<client-token>' dist` prints a path, `grep -c 'Cookies are used for sign-in.' dist/index.html` prints 1, `grep -c 'No cookies, no accounts.' dist/index.html` prints 0, `grep -c 'No tracking scripts.' dist/index.html` prints 1, and `ls dist/assets | grep -c '\.wasm$'` prints 0.
 
 ### 2.17 Confirm the sign-in rate limit
@@ -603,7 +603,7 @@ grep -n -A 4 '"ratelimits"' wrangler.jsonc
 - Source: `wrangler.jsonc:45` has `"namespace_id": "1001"`.
 - Source: `wrangler.jsonc:46` has `"limit": 3`, `"period": 60`.
 - Source: `server/env.ts:33` has `MAGIC_LINK_RATE_LIMIT?: RateLimit`.
-- Derived from: `server/worker.ts:46` has `value === "on"`. `server/worker.ts:206` has `limitMagicLinkSignIn`. `server/worker.ts:414-415` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`. Part 1 returns the closed response and does not call `limitMagicLinkSignIn`. It was not run.
+- Derived from: `server/worker.ts:46` has `value === "on"`. `server/worker.ts:206` has `limitMagicLinkSignIn`. `server/worker.ts:444-445` has `closedApiResponse`, `!accountsEnabled(env.ACCOUNTS)`. Part 1 returns the closed response and does not call `limitMagicLinkSignIn`. It was not run.
 - Source: `server/auth.ts:123` has `if (rateLimit === undefined) return null`.
 - Source: `server/auth.ts:49-51` has `customRules: {`, `[signInMagicLink.path]: () => false`. The library's own limit for this route is off, so a missing binding leaves sign-in unlimited.
 - Not verified: which plan includes the binding. The [Limits](https://developers.cloudflare.com/workers/platform/limits/) page does not name it. The [Pricing](https://developers.cloudflare.com/workers/platform/pricing/) page does not name it.
@@ -623,7 +623,7 @@ Run:
 npm run cf:deploy
 ```
 
-- Source: `package.json:22` has `"cf:deploy": "wrangler d1 migrations apply bridgekit --remote && wrangler deploy"`. `package.json:22` lacks `vite build`.
+- Source: `package.json:23` has `"cf:deploy": "wrangler d1 migrations apply bridgekit --remote && wrangler deploy"`. `package.json:23` lacks `vite build`.
 - Source: `migrations/0001_page_views.sql:2` has `CREATE TABLE page_views`.
 - Source: `migrations/0002_auth.sql:2` has `create table "user"`.
 - Source: `migrations/0003_workspaces.sql:4` has `CREATE TABLE subscription`.
@@ -770,8 +770,8 @@ npx wrangler d1 execute bridgekit --remote --command "SELECT status, currentPeri
 
 ## What Part 2 leaves untrue
 
-- Source: `index.html:263` has `planned and not available yet`. The Pricing section still says the paid plan is not available yet.
-- Source: `index.html:282` has `per user per month, expected`. That expected price is the static sentence on the page. It is not rewritten from the Paddle price you chose.
+- Source: `index.html:268` has `planned and not available yet`. The Pricing section still says the paid plan is not available yet.
+- Source: `index.html:287` has `per user per month, expected`. That expected price is the static sentence on the page. It is not rewritten from the Paddle price you chose.
 - Source: `src/app/Workspace.tsx:291` has `/#pricing`. The Subscribe hint links there.
 - Source: `wrangler.jsonc:18` has `/assets/*.wasm`. `wrangler.jsonc:18` lacks `/pay`. The pay page is not counted.
 - Source: `src/app/account.ts:268` has `Thank you. Pro switches on as soon as Paddle confirms the payment`. `src/app/account.ts:273` has `CHECKOUT_RETURN_MS = 90_000`. `src/app/account.ts:492` has `PRO_ON_SENTENCE : PRO_WAITING_SENTENCE`. The waiting sentence shows before Pro is on, and it stays when that wait ends. That is a code follow-up, not a launch check.
@@ -788,4 +788,4 @@ A path in backticks, then `has` or `lacks`, then words in backticks, is a claim 
 4. `Not verified` has nothing to check in the repo.
 5. `BETTER_AUTH_URL` is the Part 1 value in `wrangler.jsonc`, which step 1.5 confirms. `ACCOUNTS` is the Part 2 edit to `wrangler.jsonc` `vars`, and the value is `on`. Every other string name in `server/env.ts` is one `npx wrangler secret put` line with that name, or one leave-unset line.
 6. The nine event names in step 2.11 are the names at `server/paddle.ts:89-97`.
-7. `package.json:15-16` has `smoke:preview`, `smoke:wrangler`.
+7. `package.json:16-17` has `smoke:preview`, `smoke:wrangler`.
