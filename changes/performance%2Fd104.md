@@ -1,3 +1,3 @@
-- An invitation email now has the fixed subject `You have been invited to a PVM Bridge workspace`, and the inviter's and the workspace's names in its body are each cut at 80 characters, with `...` after a name that was cut, so a long name can no longer fill the subject line.
+- An invitation email now has the fixed subject `You have been invited to a PVM Bridge workspace`, and the inviter's and the workspace's names in its body are each cut at 80 characters, with `...` after a name that was cut, so neither name can crowd the message.
 - A workspace can send at most 20 invitation emails in any rolling 24 hours, counted in the database, and a resend counts as one. The next one is refused with `This workspace has sent 20 invitations in the last 24 hours. Try again tomorrow.` and sends no email and writes no invitation.
 - A workspace can save at most 100 bridges. The next one is refused with `This workspace has 100 saved bridges. Delete one to save another.`
