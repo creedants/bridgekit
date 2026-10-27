@@ -1,0 +1,1 @@
+- The six page addresses that also answer without `.html` answer 301 to their `.html` address, and plain-http requests to the public host answer 301 to https. Each move is one hop, and page counts are unchanged.
