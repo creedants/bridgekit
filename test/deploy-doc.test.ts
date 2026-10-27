@@ -90,6 +90,40 @@ test("a lacks claim on a line span without an anchor is skipped, not guessed", a
   assert.equal(result.skipped[0]?.reason, "lacks on a line span with no anchor");
 });
 
+test("an anchored lacks claim on the documentation line after its anchor is checked", async () => {
+  const root = await fixture();
+  const present = checkDoc(
+    "- Source: `notes.txt:1-2` has `first line`.\n- Source: `notes.txt:1-2` lacks `second line here`.\n",
+    root,
+  );
+  assert.equal(present.failures.length, 1);
+  assert.equal(present.failures[0]?.line, 2);
+  assert.equal(present.failures[0]?.verb, "lacks");
+  assert.equal(present.failures[0]?.run, "second line here");
+  assert.equal(present.checked, 2);
+  assert.deepEqual(present.skipped, []);
+
+  const absent = checkDoc(
+    "- Source: `notes.txt:1-2` has `first line`.\n- Source: `notes.txt:1-2` lacks `zebra`.\n",
+    root,
+  );
+  assert.deepEqual(absent.failures, []);
+  assert.equal(absent.checked, 2);
+  assert.deepEqual(absent.skipped, []);
+});
+
+test("an anchor for a different line span does not anchor a lacks claim", async () => {
+  const root = await fixture();
+  const result = checkDoc(
+    "- Source: `notes.txt:2-3` has `second line here`.\n- Source: `notes.txt:1-2` lacks `zebra`.\n",
+    root,
+  );
+  assert.deepEqual(result.failures, []);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0]?.reason, "lacks on a line span with no anchor");
+  assert.equal(result.checked, 1);
+});
+
 test("a claim with no quoted run is skipped and counted", async () => {
   const root = await fixture();
   const result = checkDoc("- Source: `notes.txt:1` has nothing quoted.\n", root);
