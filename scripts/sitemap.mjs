@@ -30,12 +30,22 @@ function pagesInConfig() {
   const lines = readFileSync(CONFIG, "utf8").split("\n");
   const open = lines.findIndex((line) => line.includes("input: {"));
   if (open === -1) throw new Error("vite.config.ts has no input: { block to read pages from");
+  const afterOpen = lines[open].slice(lines[open].indexOf("input: {") + "input: {".length).trim();
+  if (afterOpen !== "") {
+    throw new Error(`vite.config.ts line ${open + 1} has ${afterOpen} after input: {; scripts/sitemap.mjs does not read entries on the opening line, so put every page on its own line`);
+  }
   const files = [];
   let depth = 1;
   for (let index = open + 1; index < lines.length; index += 1) {
     const line = lines[index];
     depth += (line.match(/\{/g) ?? []).length - (line.match(/\}/g) ?? []).length;
-    if (depth === 0) break;
+    if (depth === 0) {
+      const closing = line.trim();
+      if (closing !== "}" && closing !== "},") {
+        throw new Error(`vite.config.ts line ${index + 1} closes the input block as ${closing}; scripts/sitemap.mjs reads only } or }, on the closing line`);
+      }
+      break;
+    }
     const entry = line.trim();
     if (entry === "" || entry === KNOWN_SPREAD || entry === `${KNOWN_SPREAD},`) continue;
     const match = /^\w+: resolve\(import\.meta\.dirname, "([^"]+\.html)"\),$/.exec(entry);
