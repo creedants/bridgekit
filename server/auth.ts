@@ -57,7 +57,7 @@ export function authOptions(env: Env, seatsFor: (workspaceId: string) => Promise
     // into that sentence. Everything Better Auth refuses itself is an APIError
     // and is still answered by Better Auth, exactly as before.
     onAPIError: { throw: true },
-    account: { accountLinking: { enabled: true, trustedProviders: ["microsoft", "google"] } },
+    account: { accountLinking: { enabled: true, trustedProviders: ["google"] } },
     user: { deleteUser: { enabled: true, beforeDelete: (user) => deleteSoleWorkspaces(env.DB, user.id) } },
     plugins: [
       magicLink({
