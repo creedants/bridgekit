@@ -1,0 +1,1 @@
+- Level sheets in the Excel export get names that stay unique ignoring letter case and within 31 characters, keeping the current cleaning and 28-character cut and reserving the later fixed sheets.
