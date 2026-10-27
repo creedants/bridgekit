@@ -1832,7 +1832,12 @@ async function rememberAcrossPages(browser, origin, { sample }) {
     }
 
     // A reloaded tab shows what it restored only after the same file is loaded again.
-    await tab.evaluate("location.reload()");
+    await tab.evaluate("location.reload()").catch((error) => {
+      if (
+        error.message !== "Runtime.evaluate failed: Inspected target navigated or closed" &&
+        error.message !== "Runtime.evaluate failed: Execution context was destroyed."
+      ) throw error;
+    });
     await tab.waitFor("document.body != null && document.body.innerText.includes('Load a sales file')");
     await pasteCells(tab.evaluate, toTsvText(bHeader, bRows));
     try {
