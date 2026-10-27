@@ -965,7 +965,7 @@ export async function accountBridge(
   );
   const leaders = await query(
     `SELECT status, name, s0, s1 FROM (
-       SELECT *, row_number() OVER (PARTITION BY status ORDER BY abs(s1 - s0) DESC) AS position FROM (${accounts})
+       SELECT *, row_number() OVER (PARTITION BY status ORDER BY abs(s1 - s0) DESC, name ASC) AS position FROM (${accounts})
      ) WHERE position <= ${Math.floor(top)} ORDER BY status, position`,
   );
   return (["new", "lost", "growing", "shrinking"] as const).map((status) => {

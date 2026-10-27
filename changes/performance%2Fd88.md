@@ -1,0 +1,1 @@
+- `src/engine.ts` orders accounts that tie on absolute change by name, read alphabetically, after the change itself. The Accounts tab and the exported report now put those leaders in the same place on every run instead of the order the query happened to return.
