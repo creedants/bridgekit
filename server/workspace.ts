@@ -196,6 +196,10 @@ export async function listSetups(db: D1Database, userId: string, workspaceId: st
 const SAVED_SETUP_CAP = 50;
 const SAVED_SETUP_FULL = `This workspace has ${SAVED_SETUP_CAP} saved setups. Delete one to save another.`;
 
+/** The most bridges one workspace keeps; the same atomic count-then-insert as setups. */
+const SAVED_BRIDGE_CAP = 100;
+const SAVED_BRIDGE_FULL = `This workspace has ${SAVED_BRIDGE_CAP} saved bridges. Delete one to save another.`;
+
 export async function saveSetup(db: D1Database, userId: string, workspaceId: string, body: unknown, now = new Date()): Promise<{ id: string }> {
   await membership(db, userId, workspaceId);
   await requirePro(db, workspaceId);
@@ -258,12 +262,26 @@ export async function saveBridge(db: D1Database, userId: string, workspaceId: st
     throw new WorkspaceError(400, "Filtered columns must be columns of the file.");
   }
   const id = crypto.randomUUID();
-  await db
+  const { meta } = await db
     .prepare(
-      `INSERT INTO saved_bridge (id, organizationId, name, summary, setup, filterColumns, createdBy, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO saved_bridge (id, organizationId, name, summary, setup, filterColumns, createdBy, createdAt)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?
+       WHERE (SELECT COUNT(*) FROM saved_bridge WHERE organizationId = ?) < ?`,
     )
-    .bind(id, workspaceId, input.name.trim(), JSON.stringify(summary), JSON.stringify(setup), JSON.stringify(filterColumns), userId, now.toISOString())
+    .bind(
+      id,
+      workspaceId,
+      input.name.trim(),
+      JSON.stringify(summary),
+      JSON.stringify(setup),
+      JSON.stringify(filterColumns),
+      userId,
+      now.toISOString(),
+      workspaceId,
+      SAVED_BRIDGE_CAP,
+    )
     .run();
+  if (meta.changes !== 1) throw new WorkspaceError(409, SAVED_BRIDGE_FULL);
   return { id };
 }
 
