@@ -1,0 +1,1 @@
+- The period list query uppercases a text label only after its distinct values are known, so a label whose case differs from the column's other labels, such as `fy2024` beside `Fy2025` or `2024-q3` beside `2025-Q1`, still lists by the date it names. The list order, the date formats, the fallback to text order and the latest-200 window are unchanged.
