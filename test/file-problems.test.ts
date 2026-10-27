@@ -464,9 +464,9 @@ test("a text column named like a value in a non-measure role is left alone", () 
   assert.deepEqual(fileProblem(periodNamedLikeValue), { kind: "none" });
 });
 
-test("withheld text net_sales names that column although gross_sales is numeric", () => {
+test("a withheld text net_sales wins over a spare number", () => {
   const withheld = input({
-    columns: [number("period"), text("product"), number("units"), text("net_sales"), number("gross_sales")],
+    columns: [text("period"), text("product"), number("units"), text("net_sales"), number("gross_sales")],
     rows: 4,
     periodColumn: "period",
     periods: ["2025", "2026"],
@@ -479,7 +479,7 @@ test("withheld text net_sales names that column although gross_sales is numeric"
   });
 });
 
-test("network listed before net_sales still names net_sales", () => {
+test("a withheld net_sales is named rather than the network column the promoted guess picks", () => {
   const ordered = input({
     columns: [
       text("network"),
@@ -487,7 +487,6 @@ test("network listed before net_sales still names net_sales", () => {
       text("product"),
       number("units"),
       text("net_sales"),
-      number("gross_sales"),
     ],
     rows: 4,
     periodColumn: "period",
@@ -501,14 +500,14 @@ test("network listed before net_sales still names net_sales", () => {
   });
 });
 
-test("a deliberate gross_sales pick stays silent although net_sales holds text", () => {
-  const picked = input({
-    columns: [number("period"), text("product"), number("units"), text("net_sales"), number("gross_sales")],
+test("an empty Sales beside a numeric net_revenue gets no text net_sales message", () => {
+  const numericNet = input({
+    columns: [text("period"), text("product"), number("units"), text("net_sales"), number("net_revenue")],
     rows: 4,
     periodColumn: "period",
     periods: ["2025", "2026"],
     unitsColumn: "units",
-    salesColumn: "gross_sales",
+    salesColumn: "",
   });
-  assert.deepEqual(fileProblem(picked), { kind: "none" });
+  assert.deepEqual(fileProblem(numericNet), { kind: "none" });
 });
