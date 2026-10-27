@@ -1,0 +1,1 @@
+- The period list keeps up to 2,000 period values instead of 200, through one exported `MAX_PERIODS` constant in `src/app/periods.ts`, so a file with more than 200 periods no longer loses its oldest ones from the Prior and Current pickers or from `periodsFor`. A file with more than 2,000 keeps the values that sort last, as before.
