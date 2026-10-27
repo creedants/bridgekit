@@ -2,8 +2,8 @@ import { guessSetup, isNumeric, netSalesHeldAsText, type Column, type Filter, ty
 
 /**
  * A long period list draws a hint. Eight years of months are 96 labels, and
- * the period list stops at 200 values. A longer monthly history still crosses
- * this line, so the note only says the list is long.
+ * the period list stops at `MAX_PERIODS` in `periods.ts`. A longer monthly
+ * history still crosses this line, so the note only says the list is long.
  */
 export const MAX_PERIOD_VALUES = 100;
 

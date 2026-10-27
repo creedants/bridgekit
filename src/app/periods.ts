@@ -1,7 +1,13 @@
 export type PeriodSort = "numeric" | "text";
 
+/**
+ * Caps the number of period values the list keeps. A file with more keeps the
+ * ones that sort last.
+ */
+export const MAX_PERIODS = 2000;
+
 export interface PeriodList {
-  /** Oldest first. Length is at most 200. */
+  /** Oldest first. Length is at most 2000. */
   readonly values: readonly string[];
   /** Decided over every distinct value, including values absent from `values`. */
   readonly sort: PeriodSort;
@@ -113,7 +119,7 @@ export async function loadPeriodList(
               CASE WHEN (SELECT dated FROM decision) THEN k END AS d
        FROM labels
        ORDER BY n DESC, d DESC, p DESC
-       LIMIT 200
+       LIMIT ${MAX_PERIODS}
      )
      SELECT p, (SELECT numeric FROM decision) AS numeric
      FROM ranked
