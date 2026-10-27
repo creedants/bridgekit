@@ -38,11 +38,67 @@ function readPage(file: string): string {
   return readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
 }
 
-function planCardsOf(html: string): string[] {
-  return html
-    .split('<div class="plan">')
-    .slice(1)
-    .map((card) => `<div class="plan">${card}`);
+type PlanCard = { attributes: Map<string, string>; inner: string };
+
+function classTokensOf(attributes: Map<string, string>): string[] {
+  return (attributes.get("class") ?? "").split(/\s+/).filter(Boolean);
+}
+
+function collapseSpaces(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function planCardsOf(html: string): PlanCard[] {
+  const cards: Array<PlanCard & { start: number }> = [];
+  const open: Array<{ start: number; innerStart: number; tag: string }> = [];
+  for (const match of html.matchAll(/<(\/?)div\b[^>]*>/gi)) {
+    const start = match.index ?? 0;
+    if (match[1] === "/") {
+      const card = open.pop();
+      if (card === undefined) continue;
+      const attributes = attributesOf(card.tag);
+      if (!classTokensOf(attributes).includes("plan")) continue;
+      cards.push({
+        start: card.start,
+        attributes,
+        inner: html.slice(card.innerStart, start),
+      });
+    } else {
+      open.push({ start, innerStart: start + match[0].length, tag: match[0] });
+    }
+  }
+  return cards
+    .sort((left, right) => left.start - right.start)
+    .map(({ attributes, inner }) => ({ attributes, inner }));
+}
+
+function plannedFeaturesOf(html: string, label: string): string[] {
+  const card = planCardsOf(html).find((candidate) =>
+    [...candidate.inner.matchAll(/<span\b[^>]*>([\s\S]*?)<\/span>/gi)].some(
+      (span) => {
+        const tokens = classTokensOf(attributesOf(span[0]));
+        return (
+          tokens.includes("tag") &&
+          tokens.includes("muted") &&
+          collapseSpaces(span[1]) === "Planned"
+        );
+      },
+    ),
+  );
+  if (card === undefined) {
+    throw new Error(
+      `${label} has no plan card that says Planned: keep the <div class="plan"> whose <span class="tag muted"> reads Planned`,
+    );
+  }
+  const list = /<ul\b[^>]*>([\s\S]*?)<\/ul>/i.exec(card.inner);
+  if (list === null) {
+    throw new Error(
+      `${label} has a plan card that says Planned but no <ul>: keep one list of the planned features in it`,
+    );
+  }
+  return [...list[1].matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi)].map((item) =>
+    collapseSpaces(item[1]),
+  );
 }
 
 function headOf(file: string, html: string): string {
@@ -373,27 +429,107 @@ test("the app mount point contains the fallback margin so the page does not shif
 });
 
 test("the Pro plan card lists only the planned features", () => {
-  const cards = planCardsOf(readPage("index.html"));
-  const pro = cards.find((card) =>
-    /<span class="tag muted">Planned<\/span>/.test(card),
-  );
-  assert.ok(
-    pro !== undefined,
-    'index.html has no Pro plan card: keep the <div class="plan"> whose tag says "Planned"',
-  );
-  const list = /<ul>([\s\S]*?)<\/ul>/.exec(pro);
-  assert.ok(
-    list !== null,
-    "the Pro plan card has no <ul>: keep one list of the planned features",
-  );
-  const features = [...list[1].matchAll(/<li>([\s\S]*?)<\/li>/g)].map((match) =>
-    match[1].trim(),
-  );
+  const features = plannedFeaturesOf(readPage("index.html"), "index.html");
   assert.deepEqual(
     features,
     PRO_FEATURES,
     `the Pro plan card lists ${features.join(", ")}: it should list exactly ${PRO_FEATURES.join(", ")}`,
   );
+});
+
+const FREE_PLAN_CARD = `<div class="plan">
+  <span class="tag">Available now</span>
+  <h3>Free</h3>
+  <ul>
+    <li>The full bridge, any number of attributes</li>
+    <li>Excel and CSV export</li>
+  </ul>
+  <a class="button" href="https://example.com/">Open the tool</a>
+</div>`;
+
+const PRO_ITEMS = PRO_FEATURES.map((feature) => `<li>${feature}</li>`);
+
+function planCardMarkup({
+  open = '<div class="plan">',
+  tagClass = "tag muted",
+  listOpen = "<ul>",
+  items = PRO_ITEMS,
+}: {
+  open?: string;
+  tagClass?: string;
+  listOpen?: string;
+  items?: string[];
+} = {}): string {
+  return `${open}
+  <span class="${tagClass}">Planned</span>
+  <h3>Pro</h3>
+  <div class="price">$19</div>
+  ${listOpen}
+  ${items.join("\n  ")}
+  </ul>
+  <a class="button secondary" href="https://example.com/">Follow on GitHub</a>
+</div>`;
+}
+
+const PLAN_PROBES: Array<{
+  name: string;
+  card: string;
+  expected: string[];
+  rejectsProFeatures?: boolean;
+}> = [
+  {
+    name: "extra space in the Pro card opening tag",
+    card: planCardMarkup({ open: '<div  class="plan">' }),
+    expected: PRO_FEATURES,
+  },
+  {
+    name: "an attribute before class on the Pro card",
+    card: planCardMarkup({ open: '<div data-plan="pro" class="plan">' }),
+    expected: PRO_FEATURES,
+  },
+  {
+    name: "<ul > in the Pro card",
+    card: planCardMarkup({ listOpen: "<ul >" }),
+    expected: PRO_FEATURES,
+  },
+  {
+    name: "the Planned tag class tokens reversed",
+    card: planCardMarkup({ tagClass: "muted tag" }),
+    expected: PRO_FEATURES,
+  },
+  {
+    name: "a line break inside an item's text",
+    card: planCardMarkup({
+      items: ["<li>Saved workspaces\n        across devices</li>", ...PRO_ITEMS.slice(1)],
+    }),
+    expected: PRO_FEATURES,
+  },
+  {
+    name: "an attributed fifth item",
+    card: planCardMarkup({
+      items: [...PRO_ITEMS, '<li class="feature">Unexpected feature</li>'],
+    }),
+    expected: [...PRO_FEATURES, "Unexpected feature"],
+    rejectsProFeatures: true,
+  },
+];
+
+test("the Pro plan card extraction tolerates formatting and reads every list item", () => {
+  for (const probe of PLAN_PROBES) {
+    const html = `<div class="plans">${FREE_PLAN_CARD}${probe.card}</div>`;
+    const features = plannedFeaturesOf(html, probe.name);
+    assert.deepEqual(
+      features,
+      probe.expected,
+      `${probe.name} extracted ${features.join(", ")}: it should extract ${probe.expected.join(", ")}`,
+    );
+    if (probe.rejectsProFeatures) {
+      assert.throws(
+        () => assert.deepEqual(features, PRO_FEATURES),
+        `${probe.name} extracted ${features.join(", ")}, which must not match ${PRO_FEATURES.join(", ")}`,
+      );
+    }
+  }
 });
 
 test("the styled images scale their width and let the height follow", () => {
