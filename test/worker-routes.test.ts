@@ -219,6 +219,32 @@ test("/404 and /404.html answer 404 with the not-found page, and a missing path 
   assert.equal(await home.text(), GUIDE);
 });
 
+test("a conditional request to /404 and /404.html still answers the whole not-found page", async () => {
+  const assetHeaders = {
+    etag: '"404"',
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "public, max-age=0, must-revalidate",
+  };
+  const notFound = (request: Request): Response =>
+    request.headers.get("if-none-match") === '"404"'
+      ? new Response(null, { status: 304, headers: assetHeaders })
+      : new Response(PAGE_NOT_FOUND, { status: 200, headers: assetHeaders });
+  const { env } = bindings({
+    "/404": notFound,
+    "/404.html": redirect("/404"),
+  });
+  for (const path of ["/404", "/404.html"]) {
+    const response = await open(path, env, { headers: { "if-none-match": '"404"' } });
+    assert.equal(response.status, 404, path);
+    assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8", path);
+    assert.equal(response.headers.get("cache-control"), "public, max-age=0, must-revalidate", path);
+    assert.equal(await response.text(), PAGE_NOT_FOUND, path);
+  }
+  const head = await open("/404", env, { method: "HEAD", headers: { "if-none-match": '"404"' } });
+  assert.equal(head.status, 404);
+  assert.equal(await head.text(), "");
+});
+
 test("HEAD does not count", async () => {
   const { env, db, calls } = bindings({
     "/guide.html": redirect("/guide"),
