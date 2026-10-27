@@ -53,6 +53,29 @@ export const MAX_WORKSPACES_PER_USER = 3;
 export const WORKSPACE_LIMIT_SENTENCE = `You can own up to ${MAX_WORKSPACES_PER_USER} workspaces, so delete one before creating another.`;
 export const SEAT_LIMIT_SENTENCE = "This workspace has no free seat, so cancel a pending invitation or add seats.";
 
+/**
+ * How many invitation emails a workspace may send in a rolling 24 hours. The
+ * count lives in D1's invitation_send ledger, which migrations/0006_invite_limits.sql
+ * writes from the invitation table and guards with the same number.
+ */
+export const INVITATIONS_PER_DAY = 20;
+export const INVITATION_RATE_SENTENCE = `This workspace has sent ${INVITATIONS_PER_DAY} invitations in the last 24 hours. Try again tomorrow.`;
+
+/**
+ * Whether one more invitation email fits the rolling 24 hours. The window and
+ * the clock are D1's, the same expressions the ledger's guard uses, so the
+ * pre-check and the trigger cannot disagree about the boundary.
+ */
+export async function invitationSendAllowed(db: D1Database, workspaceId: string): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM invitation_send WHERE organizationId = ? AND sentAt > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')`,
+    )
+    .bind(workspaceId)
+    .first<{ n: number }>();
+  return (row?.n ?? 0) < INVITATIONS_PER_DAY;
+}
+
 /** The workspaces the account owns. Memberships in other people's workspaces
  * cost nothing here: joining a colleague's workspace must not use up the
  * account's own allowance. Deleting an owned workspace lowers this. */
