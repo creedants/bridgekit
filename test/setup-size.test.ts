@@ -338,7 +338,7 @@ test("refuses a column that appears in two levels", () => {
   );
 });
 
-test("refuses filters past one per column, 500 values, or a 300-character value", () => {
+test("refuses more filters than columns, a 501st value, or a 301-character value", () => {
   const columns = columnNames(3, "a");
   const filtered = (values: string[]) => setupWith([], [{ column: columns[0], mode: "include", values }]);
   assert.equal(isValidSetup(filtered(filterValues(MAX_FILTER_VALUES + 1, "v", 10)), columnsOf(columns)), false);
