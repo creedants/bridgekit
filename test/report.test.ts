@@ -141,7 +141,7 @@ const TICKED_SENTENCE =
   "It holds totals, a written summary and the setup, leaves out the file name, filter values, mover names and chart, and holds no rows.";
 
 const namesFixture = () => ({
-  config,
+  config: { ...config, newAndDiscontinued: "full" as const },
   result,
   description: [
     "Source: q3-sample.csv",
@@ -152,6 +152,16 @@ const namesFixture = () => ({
     "New and discontinued: full sales, outside volume and mix",
     "Filter: region is one of ZX-90, ZX-91",
   ],
+  setup: {
+    periodColumn: "period",
+    grain: "month" as const,
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+    filters: [{ column: "region", mode: "include" as const, values: ["ZX-90", "ZX-91"] }],
+    newAndDiscontinued: "full" as const,
+  },
+  source: "q3-sample.csv",
   movers: {
     label: "Product",
     columns: ["product"],
@@ -248,6 +258,19 @@ test("a ticked engine report leaves custom attribute, filter and separator-free 
     result: engineResult,
     chartUrl: "data:image/png;base64,AAA",
     description,
+    setup: {
+      periodColumn: "period",
+      grain: "value" as const,
+      unitsColumn: "units",
+      salesColumn: "sales",
+      levels: [
+        { name: attrOne, columns: ["product"] },
+        { name: attrTwo, columns: ["customer"] },
+      ],
+      filters: [{ column: "region", mode: "include" as const, values: [filterValue] }],
+      newAndDiscontinued: "difference" as const,
+    },
+    source: fileName,
     movers: { label: attrOne, rows: moverRows, columns: ["product"] },
     priceBands: bands,
     accounts: { column: "customer", groups },
@@ -268,4 +291,81 @@ test("a ticked engine report leaves custom attribute, filter and separator-free 
     assert.equal(ticked.includes(band.label), true, `price band ${band.label} left the ticked report`);
   }
   assert.equal(ticked.includes("left out"), true, "the setup stand-in is missing");
+});
+
+test("a ticked report ignores private text after a second separator in recognized setup lines", () => {
+  const privateText = "ZX-PRIVATE-ORG";
+  const dirtyDescription = [
+    "Source: q3-sample.csv",
+    `Periods: 2025 to 2026 (period): ${privateText}`,
+    `Units column: units: ${privateText}`,
+    `Sales column: sales: ${privateText}`,
+    `Gross sales column: gross_sales: ${privateText}`,
+    `Cost column: cost (bridge is on margin): ${privateText}`,
+    `New and discontinued: price difference only, units in volume: ${privateText}`,
+    `Filter: region is one of ZX-90: ${privateText}`,
+    `Attribute 1: Product (product): ${privateText}`,
+  ];
+  const grossSetup = {
+    periodColumn: "period",
+    grain: "value" as const,
+    unitsColumn: "units",
+    salesColumn: "sales",
+    grossColumn: "gross_sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+    filters: [{ column: "region", mode: "include" as const, values: ["ZX-90"] }],
+    newAndDiscontinued: "difference" as const,
+  };
+  const grossConfig: BridgeConfig = {
+    table: "sales",
+    periodColumn: "period",
+    prior: "2025",
+    current: "2026",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    grossColumn: "gross_sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+    newAndDiscontinued: "difference",
+  };
+  const costSetup = {
+    periodColumn: "period",
+    grain: "month" as const,
+    unitsColumn: "units",
+    salesColumn: "sales",
+    costColumn: "cost",
+    levels: [{ name: "Product", columns: ["product"] }],
+    filters: [{ column: "region", mode: "include" as const, values: ["ZX-90"] }],
+    newAndDiscontinued: "full" as const,
+  };
+  const costConfig: BridgeConfig = {
+    table: "sales",
+    periodColumn: "period",
+    prior: "2025",
+    current: "2026",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    costColumn: "cost",
+    levels: [{ name: "Product", columns: ["product"] }],
+    newAndDiscontinued: "full",
+  };
+  for (const [setup, cfg, wanted] of [
+    [grossSetup, grossConfig, ["period", "units", "sales", "gross_sales", "2025 to 2026", "price difference only, units in volume"]],
+    [costSetup, costConfig, ["period", "units", "sales", "cost (bridge is on margin)", "2025 to 2026", "full sales, outside volume and mix"]],
+  ] as const) {
+    const ticked = reportWith({
+      config: cfg,
+      result,
+      description: dirtyDescription,
+      setup,
+      source: "q3-sample.csv",
+      movers: { label: "Product", rows: [], columns: ["product"] },
+      priceBands: [],
+      omitNames: true,
+    });
+    const lowered = ticked.toLowerCase();
+    assert.equal(lowered.includes(privateText.toLowerCase()), false, `${privateText} is still in the ticked report`);
+    for (const keep of wanted) {
+      assert.equal(lowered.includes(keep.toLowerCase()), true, `${keep} left the ticked report`);
+    }
+  }
 });
