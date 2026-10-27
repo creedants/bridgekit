@@ -386,7 +386,7 @@ export function App() {
       <header className="topbar">
         <a className="wordmark" href="/">
           <svg className="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="6" fill="var(--accent)" /><rect x="6" y="17" width="5" height="9" fill="#fff" /><rect x="13.5" y="12" width="5" height="5" fill="#fff" opacity=".75" /><rect x="21" y="6" width="5" height="20" fill="#fff" /></svg>
-          Bridgekit
+          PVM Bridge
         </a>
         <span className="source">
           {source ? `${source} · ${whole(rowCount)} rows · ${columns.length} columns` : "No data loaded"}

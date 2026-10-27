@@ -1,8 +1,8 @@
 # Deploy PVM Bridge
 
-Part 1 puts the free tool on `<domain>` with page counts. It stands alone. Part 2 turns on accounts and payments. Part 1 is one sitting. Step 1.2 is the only wait in that sitting.
+Part 1 puts the free tool on `pvmbridge.com` with page counts. It stands alone. Part 2 turns on accounts and payments. Part 1 is one sitting. Step 1.2 is the only wait in that sitting.
 
-Write the site host for `<domain>`, the database id from step 1.3 for `<id>`, and the client token from step 2.15 for `<client-token>`. This file has no real value for any of them. Do not put a secret in a file or on a command line. `npx wrangler secret put` asks for it.
+This file names the site host `pvmbridge.com` and the production database id. The only placeholder left in a config snippet or build command is `<client-token>` from step 2.15. Part 2 also tells you to add `ACCOUNTS` and, if necessary, change the rate-limit namespace id. Do not put a secret in a file or on a command line. `npx wrangler secret put` asks for it.
 
 `npm ci` installs Wrangler in this repo. It does not put `wrangler` on the shell PATH. Use `npx wrangler` for a direct command. `npm run cf:dev` and `npm run cf:deploy` already run that install, because npm puts `node_modules/.bin` on the script PATH.
 
@@ -36,17 +36,17 @@ npx wrangler login
 
 ### 1.2 Put the domain on Cloudflare
 
-Do: Add `<domain>` to that account. At your registrar, set the two name servers Cloudflare gives you.
+Do: Add `pvmbridge.com` to that account. At your registrar, set the two name servers Cloudflare gives you.
 
 Dashboard (not verified): Cloudflare > Account Home > Add a domain.
 
-- Not verified: the repo names no domain, no zone, and no route.
+- Not verified: the repo names no zone and no route.
 - Source: `wrangler.jsonc:6` has `"name": "bridgekit"`. `wrangler.jsonc:1-41` has `"name": "bridgekit"`. `wrangler.jsonc:1-41` lacks `"routes"`.
-- Worked: `dig +short NS <domain>` prints two names that end in `ns.cloudflare.com`. The name servers may not show yet. Steps 1.3 through 1.10 do not wait. Step 1.11 does.
+- Worked: `dig +short NS pvmbridge.com` prints two names that end in `ns.cloudflare.com`. The name servers may not show yet. Steps 1.3 through 1.10 do not wait. Step 1.11 does.
 
 ### 1.3 Create the database
 
-Do: Create the D1 database and copy the id it prints. If Wrangler offers to write that id into the config file, refuse. Step 1.4 writes it.
+Do: Create the D1 database and copy the id it prints. If Wrangler offers to write that id into the config file, refuse. Its default binding name is the database name, `bridgekit`, and the entry in this file is bound as `DB`. Accepting that default binding name adds a second entry; choosing `DB` at the binding-name prompt updates the existing entry. Put the id on `wrangler.jsonc:25` yourself, as step 1.4 describes. Done in this repository: `wrangler.jsonc:23-25` already names the database and carries its production id, so run this only when `npx wrangler d1 list` does not show `bridgekit`. That listing is how you know the database is created.
 
 Run:
 ```sh
@@ -60,11 +60,11 @@ npx wrangler d1 create bridgekit
 
 ### 1.4 Put the database id in wrangler.jsonc
 
-Do: Replace the row of zeros on the database id line with the id from step 1.3.
+Do: Confirm `wrangler.jsonc:25` holds the id from step 1.3. Done in this repository: the line already carries the production id shown below, so there is nothing to paste. Read it against the `npx wrangler d1 list` output from step 1.3. If that listing prints a different id, replace the id on this line with it.
 
 Edit: `wrangler.jsonc:25`
 ```text
-      "database_id": "<id>",
+      "database_id": "919c2ed7-4a73-4d18-842d-02e392927a69",
 ```
 
 - Source: `wrangler.jsonc:25` has `"database_id"`.
@@ -72,19 +72,19 @@ Edit: `wrangler.jsonc:25`
 
 ### 1.5 Set the site address
 
-Do: Set `BETTER_AUTH_URL` to `https://<domain>` with no path and no trailing slash. Do not change this value in Part 2. Step 2.3 adds `ACCOUNTS` beside it.
+Do: Set `BETTER_AUTH_URL` to `https://pvmbridge.com` with no path and no trailing slash. Do not change this value in Part 2. Step 2.3 adds `ACCOUNTS` beside it. Done in this repository: `wrangler.jsonc:40` already carries that value, so confirm it and change nothing. `npm run cf:dev` and the local wrangler smoke run override it to `http://localhost:8790`, so those two local runs never send the production address. A direct `npx wrangler dev` still reads the value in the file.
 
 Edit: `wrangler.jsonc:40`
 ```text
-    "BETTER_AUTH_URL": "https://<domain>",
+    "BETTER_AUTH_URL": "https://pvmbridge.com",
 ```
 
 - Source: `wrangler.jsonc:40` has `"BETTER_AUTH_URL"`.
-- Source: `wrangler.jsonc:39` has `Replaced with the real address in production.`
+- Source: `wrangler.jsonc:39` has `The site address in production. Local development overrides it with http://localhost:8790.`
 - Source: `server/auth.ts:33` has `trustedOrigins: [env.BETTER_AUTH_URL]`.
 - Source: `server/auth.ts:103` has `${env.BETTER_AUTH_URL}/app/?invitation=${id}`.
 - Source: `server/env.ts:8` has `BETTER_AUTH_URL: string`.
-- Worked: `grep -n BETTER_AUTH_URL wrangler.jsonc` prints one line, and that line contains `"BETTER_AUTH_URL": "https://<domain>"`.
+- Worked: `grep -n BETTER_AUTH_URL wrangler.jsonc` prints one line, and that line contains `"BETTER_AUTH_URL": "https://pvmbridge.com"`.
 
 ### 1.6 Check the build environment
 
@@ -180,25 +180,25 @@ npm run cf:deploy
 
 ### 1.11 Put the Worker on the domain
 
-Do: Add `<domain>` as a custom domain on the Worker named `bridgekit`. Wait until step 1.2 has finished.
+Do: Add `pvmbridge.com` as a custom domain on the Worker named `bridgekit`. Wait until step 1.2 has finished.
 
 Dashboard (not verified): Cloudflare > Workers & Pages > bridgekit > Settings > Domains & Routes > Add > Custom Domain.
 
 - Not verified: the repo does not name this dashboard screen.
 - Source: `wrangler.jsonc:6` has `"name": "bridgekit"`. `wrangler.jsonc:1-41` has `"name": "bridgekit"`. `wrangler.jsonc:1-41` lacks `custom_domain`.
-- Worked: `curl -sI https://<domain>/ | head -n 1` prints a status line with 200.
+- Worked: `curl -sI https://pvmbridge.com/ | head -n 1` prints a status line with 200.
 
 ### 1.12 Check that accounts are off
 
-Do: Ask the live site what it offers. Send POST `/api/auth/sign-in/magic-link` with Origin `https://<domain>` and JSON `{"email":"review@example.invalid","callbackURL":"https://<domain>/app/"}`.
+Do: Ask the live site what it offers. Send POST `/api/auth/sign-in/magic-link` with Origin `https://pvmbridge.com` and JSON `{"email":"review@example.invalid","callbackURL":"https://pvmbridge.com/app/"}`.
 
 Run:
 ```sh
-curl -sS https://<domain>/api/config
-curl -sS -w '\n%{http_code}\n' -X POST 'https://<domain>/api/auth/sign-in/magic-link' \
-  -H 'Origin: https://<domain>' \
+curl -sS https://pvmbridge.com/api/config
+curl -sS -w '\n%{http_code}\n' -X POST 'https://pvmbridge.com/api/auth/sign-in/magic-link' \
+  -H 'Origin: https://pvmbridge.com' \
   -H 'content-type: application/json' \
-  --data '{"email":"review@example.invalid","callbackURL":"https://<domain>/app/"}'
+  --data '{"email":"review@example.invalid","callbackURL":"https://pvmbridge.com/app/"}'
 ```
 
 - Source: `server/worker.ts:43-44` has `function accountsEnabled`, `value === "on"`.
@@ -214,9 +214,9 @@ Do: Read the live home page, and request the pay address.
 
 Run:
 ```sh
-curl -s https://<domain>/ | grep -c 'No tracking scripts.'
-curl -s https://<domain>/ | grep -c 'sign in for Pro'
-curl -s -o /dev/null -w '%{http_code}\n' https://<domain>/pay/
+curl -s https://pvmbridge.com/ | grep -c 'No tracking scripts.'
+curl -s https://pvmbridge.com/ | grep -c 'sign in for Pro'
+curl -s -o /dev/null -w '%{http_code}\n' https://pvmbridge.com/pay/
 ```
 
 - Source: `index.html:232` has `No tracking scripts.`, `No cookies or accounts unless you sign in for Pro.`
@@ -229,7 +229,7 @@ Do: Open the tool with the sample data.
 
 Open:
 ```text
-https://<domain>/app/?sample
+https://pvmbridge.com/app/?sample
 ```
 
 - Source: `README.md:61` has `/app/?sample`.
@@ -243,7 +243,7 @@ Do: Open the home page in a browser, then print the counts. A request from `curl
 
 Open:
 ```text
-https://<domain>/
+https://pvmbridge.com/
 ```
 
 - Source: `server/counts.ts:16` has `headless|curl|wget`.
@@ -257,7 +257,7 @@ Do: Run the smoke test against the live site. It needs Chromium on this machine.
 
 Run:
 ```sh
-npm run smoke -- https://<domain>
+npm run smoke -- https://pvmbridge.com
 ```
 
 - Source: `package.json:14` has `"smoke": "node scripts/smoke.mjs"`.
@@ -310,7 +310,7 @@ Dashboard (not verified): Cloudflare > Workers & Pages > Plans.
 
 ### 2.2 Confirm the site address
 
-Do: Confirm `BETTER_AUTH_URL` is still `https://<domain>`, with no path and no trailing slash. The host is the host you will use in step 2.10. Do not edit the value.
+Do: Confirm `BETTER_AUTH_URL` is still `https://pvmbridge.com`, with no path and no trailing slash. The host is the host you will use in step 2.10. Do not edit the value.
 
 Run:
 ```sh
@@ -322,7 +322,7 @@ grep -n BETTER_AUTH_URL wrangler.jsonc
 - Source: `server/worker.ts:79-80` has `new URL(c.env.BETTER_AUTH_URL).origin`, `Requests must come from this site.`
 - Source: `server/auth.ts:103` has `${env.BETTER_AUTH_URL}/app/?invitation=${id}`.
 - Not verified: what the sign-in routes answer when the address is outside `trustedOrigins`. That code is not in this repo.
-- Worked: the printed line contains `"BETTER_AUTH_URL": "https://<domain>"`. This proves it is set, not that it is right.
+- Worked: the printed line contains `"BETTER_AUTH_URL": "https://pvmbridge.com"`. This proves it is set, not that it is right.
 - If this is wrong you will see: trustedOrigins is this address. Saving, deleting, and Subscribe answer `Requests must come from this site.` An invitation link is this address joined to `/app/?invitation=`, and a trailing slash puts a second slash before `app`.
 
 ### 2.3 Set ACCOUNTS to on
@@ -413,22 +413,22 @@ npx wrangler secret put PADDLE_PRICE_ID
 
 ### 2.9 Get the website approved
 
-Do: Ask Paddle to approve `<domain>`. Wait until Paddle lists `<domain>` as approved.
+Do: Ask Paddle to approve `pvmbridge.com`. Wait until Paddle lists `pvmbridge.com` as approved.
 
 Dashboard (not verified): Paddle > My account > Settings > Website approval.
 
 - Source: `server/paddle.ts:333` has `domain approved in Paddle (Website approval)`.
 - Source: `server/paddle.ts:219` has `Check the default payment link is set and approved.`
 - Not verified: how long approval takes, and what Paddle asks for. Nobody entered an account. Paddle's guide names this screen and places approval before the default payment link, at [Set your default payment link](https://developer.paddle.com/build/transactions/default-payment-link).
-- Worked: Paddle lists `<domain>` as approved.
+- Worked: Paddle lists `pvmbridge.com` as approved.
 
 ### 2.10 Point the default payment link at the pay page
 
-Do: Set the default payment link to `https://<domain>/pay/` with the final slash. Use the same host as `BETTER_AUTH_URL` from step 1.5. Run this only after step 2.9 has the result in its Worked line.
+Do: Set the default payment link to `https://pvmbridge.com/pay/` with the final slash. Use the same host as `BETTER_AUTH_URL` from step 1.5. Run this only after step 2.9 has the result in its Worked line.
 
 Dashboard (not verified): Paddle > Checkout > Checkout configuration.
 ```text
-https://<domain>/pay/
+https://pvmbridge.com/pay/
 ```
 
 - Derived from: `server/paddle.ts:331-332` has `default payment link`, `?_ptxn=`. `vite.config.ts:76` has `pay/index.html`. `README.md:140-141` has `Checkout opens on`, `/pay/`. The code names no path for that link. `/pay/` is the page built to load Paddle's script. It was not run.
@@ -459,7 +459,7 @@ Do: Add one notification destination at the address below. Select these nine eve
 
 Dashboard (not verified): Paddle > Developer Tools > Notifications > New destination.
 ```text
-https://<domain>/api/paddle/webhook
+https://pvmbridge.com/api/paddle/webhook
 ```
 
 Each of these events carries the subscription, but the Worker does not store the status from the event. For a known workspace it reads the account's subscription list from Paddle, keeps the subscriptions tagged for that workspace, and stores the state Paddle reports. The event only says which workspace and subscription to look at; the row holds what Paddle reports when the delivery is handled.
@@ -627,7 +627,7 @@ npm run cf:deploy
 - Source: `migrations/0003_workspaces.sql:4` has `CREATE TABLE subscription`.
 - Source: `migrations/0004_workspace_limits.sql` adds `CREATE VIEW workspace_seats` and two `BEFORE` triggers on `invitation` that refuse a write with `RAISE(ABORT)`. Applying it changes no row, so `wrangler d1 migrations apply` applies it to a database that already holds workspaces and invitations at or over the limits without touching them; the `BEFORE INSERT` and `BEFORE UPDATE` triggers on `invitation` then refuse only a write that leaves a live pending invitation the workspace has no seat for.
 - Not verified: whether a second apply of the same migrations is a no-op.
-- Worked: the command ends without an error, and `curl -s -o /dev/null -w '%{http_code}\n' https://<domain>/pay/` prints 200.
+- Worked: the command ends without an error, and `curl -s -o /dev/null -w '%{http_code}\n' https://pvmbridge.com/pay/` prints 200.
 
 ### 2.19 Check what the site offers
 
@@ -635,11 +635,11 @@ Do: Ask the live site what it offers. Send the same sign-in POST as step 1.12.
 
 Run:
 ```sh
-curl -sS https://<domain>/api/config
-curl -sS -w '\n%{http_code}\n' -X POST 'https://<domain>/api/auth/sign-in/magic-link' \
-  -H 'Origin: https://<domain>' \
+curl -sS https://pvmbridge.com/api/config
+curl -sS -w '\n%{http_code}\n' -X POST 'https://pvmbridge.com/api/auth/sign-in/magic-link' \
+  -H 'Origin: https://pvmbridge.com' \
   -H 'content-type: application/json' \
-  --data '{"email":"review@example.invalid","callbackURL":"https://<domain>/app/"}'
+  --data '{"email":"review@example.invalid","callbackURL":"https://pvmbridge.com/app/"}'
 ```
 
 - Source: `server/worker.ts:246-247` has `commentary: Boolean(c.env.ANTHROPIC_API_KEY)`, `billing: Boolean(c.env.PADDLE_API_KEY && c.env.PADDLE_PRICE_ID)`.
@@ -656,7 +656,7 @@ Do: Open the tool. The Workspace fieldset is already on the page. It is not a pa
 
 Open:
 ```text
-https://<domain>/app/
+https://pvmbridge.com/app/
 ```
 
 - Source: `src/app/Workspace.tsx:89` has `return <SignIn`.
@@ -664,7 +664,7 @@ https://<domain>/app/
 - Source: `src/app/Workspace.tsx:239` has `Check your email for a sign-in link.`
 - Derived from: `server/auth.ts:30` has `baseURL: env.BETTER_AUTH_URL`. `server/auth.ts:31` has `basePath: AUTH_BASE_PATH`. `server/auth.ts:9` has `AUTH_BASE_PATH = "/api/auth"`. The link is built from the base URL and that path. It was not run.
 - Source: `server/auth.ts:64` has `expiresIn: 15 * 60`.
-- Worked: mail from the address in step 2.6 arrives, its link starts with `https://<domain>/api/auth/`, and the link signs you in.
+- Worked: mail from the address in step 2.6 arrives, its link starts with `https://pvmbridge.com/api/auth/`, and the link signs you in.
 
 Do: Check the sign-in limit from one connection.
 Do: Wait until a minute has passed with no successful sign-in from this connection.
@@ -678,23 +678,23 @@ The counter key is the `cf-connecting-ip` header. A different address on the sam
 
 Run:
 ```sh
-curl -sS -w '\n%{http_code}\n' -X POST 'https://<domain>/api/auth/sign-in/magic-link' \
-  -H 'Origin: https://<domain>' \
+curl -sS -w '\n%{http_code}\n' -X POST 'https://pvmbridge.com/api/auth/sign-in/magic-link' \
+  -H 'Origin: https://pvmbridge.com' \
   -H 'content-type: text/plain' \
-  --data '{"email":"not-an-email","callbackURL":"https://<domain>/app/"}'
+  --data '{"email":"not-an-email","callbackURL":"https://pvmbridge.com/app/"}'
 
 for n in 1 2 3; do
-  curl -sS -w '\n%{http_code}\n' -X POST 'https://<domain>/api/auth/sign-in/magic-link' \
-    -H 'Origin: https://<domain>' \
+  curl -sS -w '\n%{http_code}\n' -X POST 'https://pvmbridge.com/api/auth/sign-in/magic-link' \
+    -H 'Origin: https://pvmbridge.com' \
     -H 'content-type: application/json' \
-    --data '{"email":"not-an-email","callbackURL":"https://<domain>/app/"}'
+    --data '{"email":"not-an-email","callbackURL":"https://pvmbridge.com/app/"}'
 done
 
 for n in 1 2 3 4; do
-  curl -sS -w '\n%{http_code}\n' -X POST 'https://<domain>/api/auth/sign-in/magic-link' \
-    -H 'Origin: https://<domain>' \
+  curl -sS -w '\n%{http_code}\n' -X POST 'https://pvmbridge.com/api/auth/sign-in/magic-link' \
+    -H 'Origin: https://pvmbridge.com' \
     -H 'content-type: application/json' \
-    --data '{"email":"review@example.invalid","callbackURL":"https://<domain>/app/"}'
+    --data '{"email":"review@example.invalid","callbackURL":"https://pvmbridge.com/app/"}'
 done
 ```
 
@@ -715,12 +715,12 @@ Do: While signed in, create a workspace and press Subscribe.
 
 Open:
 ```text
-https://<domain>/app/
+https://pvmbridge.com/app/
 ```
 
 - Source: `src/app/Workspace.tsx:115` has `location.href = (await api.checkout(active, seats)).checkoutUrl`.
 - Source: `server/paddle.ts:332` has `?_ptxn=`.
-- Worked: the address bar shows `https://<domain>/pay/?_ptxn=` followed by an id, and the checkout shows the price you chose.
+- Worked: the address bar shows `https://pvmbridge.com/pay/?_ptxn=` followed by an id, and the checkout shows the price you chose.
 
 ### 2.22 Check that a payment turns Pro on
 
@@ -728,7 +728,7 @@ Do: Finish one purchase. Open the tool. Load the sample or a file so columns exi
 
 Open:
 ```text
-https://<domain>/app/?sample
+https://pvmbridge.com/app/?sample
 ```
 
 - Source: `src/app/Workspace.tsx:113` has `Pro,`, `"seat"`, `"seats"`.
@@ -784,6 +784,6 @@ A path in backticks, then `has` or `lacks`, then words in backticks, is a claim 
 2. For `has`, every quoted run is in that span. For `lacks`, it is not. With no line number, `lacks` means the whole file.
 3. A `lacks` claim on a line span also has an anchor in that same span.
 4. `Not verified` has nothing to check in the repo.
-5. `BETTER_AUTH_URL` is the Part 1 edit to `wrangler.jsonc`. `ACCOUNTS` is the Part 2 edit to `wrangler.jsonc` `vars`, and the value is `on`. Every other string name in `server/env.ts` is one `npx wrangler secret put` line with that name, or one leave-unset line.
+5. `BETTER_AUTH_URL` is the Part 1 value in `wrangler.jsonc`, which step 1.5 confirms. `ACCOUNTS` is the Part 2 edit to `wrangler.jsonc` `vars`, and the value is `on`. Every other string name in `server/env.ts` is one `npx wrangler secret put` line with that name, or one leave-unset line.
 6. The nine event names in step 2.11 are the names at `server/paddle.ts:89-97`.
 7. `package.json` lacks `smoke:preview`. `package.json` lacks `smoke:wrangler`.
