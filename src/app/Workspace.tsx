@@ -220,7 +220,7 @@ export default function WorkspacePanel(props: {
         <button
           disabled={busy}
           onClick={() => {
-            if (confirm("Delete your Bridgekit account? This cannot be undone.")) {
+            if (confirm("Delete your PVM Bridge account? This cannot be undone.")) {
               act(async () => { await api.deleteAccount(); setUser(null); }, "Account deleted.");
             }
           }}

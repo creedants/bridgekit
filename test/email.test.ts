@@ -8,10 +8,10 @@ import { sendEmail } from "../server/email.ts";
 import { testDatabase } from "./support/d1.ts";
 
 const TO = "review@example.invalid";
-const SUBJECT = "Your Bridgekit sign-in link";
+const SUBJECT = "Your PVM Bridge sign-in link";
 const LINK =
   "http://127.0.0.1:8790/api/auth/magic-link/verify?token=8f2504e0d4f4e5f6a7b8c9d0e1f2a3b4&callbackURL=http%3A%2F%2F127.0.0.1%3A8790%2Fapp%2F";
-const TEXT = `Sign in to Bridgekit:\n\n${LINK}\n\nThe link works once and expires in 15 minutes. If you did not ask for it, ignore this email.`;
+const TEXT = `Sign in to PVM Bridge:\n\n${LINK}\n\nThe link works once and expires in 15 minutes. If you did not ask for it, ignore this email.`;
 
 const assets: Fetcher = {
   async fetch() {
@@ -76,7 +76,7 @@ function assertNoSecretLeaked(lines: string[], label: string): void {
 
 test("a key and a sender put the same request on the wire", async () => {
   const sent = await withFetch(async () => {
-    await sendEmail(mailEnv({ RESEND_API_KEY: "re_test_key", EMAIL_FROM: "Bridgekit <no-reply@example.invalid>" }), TO, SUBJECT, TEXT);
+    await sendEmail(mailEnv({ RESEND_API_KEY: "re_test_key", EMAIL_FROM: "PVM Bridge <no-reply@example.invalid>" }), TO, SUBJECT, TEXT);
   });
   assert.deepEqual(sent, [
     {
@@ -84,7 +84,7 @@ test("a key and a sender put the same request on the wire", async () => {
       init: {
         method: "POST",
         headers: { authorization: "Bearer re_test_key", "content-type": "application/json" },
-        body: JSON.stringify({ from: "Bridgekit <no-reply@example.invalid>", to: TO, subject: SUBJECT, text: TEXT }),
+        body: JSON.stringify({ from: "PVM Bridge <no-reply@example.invalid>", to: TO, subject: SUBJECT, text: TEXT }),
       },
     },
   ]);

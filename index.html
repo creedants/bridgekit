@@ -3,13 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Bridgekit: price-volume-mix analysis for configured products</title>
+    <title>PVM Bridge: price-volume-mix analysis for configured products</title>
     <meta
       name="description"
       content="A price-volume-mix bridge that works across several product attributes at once. Runs in your browser, so your sales file is never uploaded. Free and open source."
     />
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="Bridgekit: price-volume-mix analysis for configured products" />
+    <meta property="og:title" content="PVM Bridge: price-volume-mix analysis for configured products" />
     <meta property="og:description" content="A price-volume-mix bridge that works across several product attributes at once. Runs in your browser, so your sales file is never uploaded. Free and open source." />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/src/site/site.css" />
@@ -17,7 +17,7 @@
   <body>
     <div class="nav">
       <div class="wrap">
-        <a class="wordmark" href="/"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="6" fill="var(--accent)"/><rect x="6" y="17" width="5" height="9" fill="#fff"/><rect x="13.5" y="12" width="5" height="5" fill="#fff" opacity=".75"/><rect x="21" y="6" width="5" height="20" fill="#fff"/></svg>Bridgekit</a>
+        <a class="wordmark" href="/"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="6" fill="var(--accent)"/><rect x="6" y="17" width="5" height="9" fill="#fff"/><rect x="13.5" y="12" width="5" height="5" fill="#fff" opacity=".75"/><rect x="21" y="6" width="5" height="20" fill="#fff"/></svg>PVM Bridge</a>
         <nav>
           <a class="optional" href="#how">How it works</a>
           <a class="optional" href="/guide.html">Guide</a>
@@ -34,7 +34,7 @@
       <div class="wrap">
         <h1>Price-volume-mix analysis for products that don’t fit a SKU list</h1>
         <p class="lede">
-          Bridgekit splits a change in sales into volume, mix and price across as many product attributes as you
+          PVM Bridge splits a change in sales into volume, mix and price across as many product attributes as you
           need. It runs in your browser, so your sales file never leaves your computer.
         </p>
         <div class="cta">
@@ -133,7 +133,7 @@
             <p>A customer moving to a premium finish raises the average price of the model. The bridge reports it as a price increase, and it is not one.</p>
           </div>
           <div>
-            <h3>What Bridgekit does</h3>
+            <h3>What PVM Bridge does</h3>
             <p>It compares each configuration with the same configuration last period. Where there is no match, it falls back to the nearest group that did exist, in the attribute order you set.</p>
           </div>
         </div>
@@ -144,7 +144,7 @@
             </thead>
             <tbody>
               <tr><td>Grouped by model only</td><td class="num flag">+9.72M</td><td class="num flag">3 times too high</td></tr>
-              <tr><td>Bridgekit, four attributes</td><td class="num">+3.19M</td><td class="num">Within 1%</td></tr>
+              <tr><td>PVM Bridge, four attributes</td><td class="num">+3.19M</td><td class="num">Within 1%</td></tr>
             </tbody>
           </table>
         </div>
@@ -225,7 +225,7 @@
       <div class="wrap">
         <h2>Your data stays on your computer</h2>
         <p class="sub">
-          Invoice-level sales by customer is not something to upload to a website. Bridgekit loads a database engine
+          Invoice-level sales by customer is not something to upload to a website. PVM Bridge loads a database engine
           into the browser tab and does the calculation there.
         </p>
         <div class="cols">
@@ -240,10 +240,10 @@
     <section class="tinted">
       <div class="wrap">
         <h2>Where it fits</h2>
-        <p class="sub">Most teams choose between a spreadsheet they rebuild every month and a pricing suite they cannot justify. Bridgekit sits between the two.</p>
+        <p class="sub">Most teams choose between a spreadsheet they rebuild every month and a pricing suite they cannot justify. PVM Bridge sits between the two.</p>
         <div class="boxed">
           <table>
-            <thead><tr><th></th><th>Spreadsheet template</th><th>Bridgekit</th><th>Enterprise pricing suite</th></tr></thead>
+            <thead><tr><th></th><th>Spreadsheet template</th><th>PVM Bridge</th><th>Enterprise pricing suite</th></tr></thead>
             <tbody>
               <tr><td>Time to a first bridge</td><td>Hours, then again each period</td><td>Minutes; the setup is remembered</td><td>An implementation project</td></tr>
               <tr><td>Products built from several attributes</td><td>One grouping level at a time</td><td>Any number of attributes, with fallback matching</td><td>Usually yes, after configuration</td></tr>
@@ -317,7 +317,7 @@
 
     <footer>
       <div class="wrap">
-        <span>Bridgekit. MIT license.</span>
+        <span>PVM Bridge. MIT license.</span>
         <a href="/app/">Tool</a>
         <a href="/guide.html">Guide</a>
         <a href="/method.html">Method</a>

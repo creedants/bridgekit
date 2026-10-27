@@ -287,7 +287,7 @@ async function userIdFor(env: Env, email: string): Promise<string> {
   return row.id;
 }
 
-const invitations = (lines: string[]): string[] => lines.filter((line) => line.includes("invited you to a Bridgekit workspace"));
+const invitations = (lines: string[]): string[] => lines.filter((line) => line.includes("invited you to a PVM Bridge workspace"));
 
 /** The invitation ids the sent emails carry, from the link in each message. */
 const emailedInvitations = (lines: string[]): string[] =>
