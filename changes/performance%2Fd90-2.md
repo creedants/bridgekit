@@ -1,0 +1,1 @@
+- A workbook whose XML parts a writer saved under a namespace prefix no longer loses the Data check warning for formulas with no saved result.
