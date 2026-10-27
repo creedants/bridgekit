@@ -27,7 +27,10 @@ const ORIGIN = "http://127.0.0.1:8790";
 const AUTH_SECRET = "0123456789abcdef0123456789abcdef";
 const NO_WORKSPACES = "You can own up to 3 workspaces, so delete one before creating another.";
 const NO_SEAT = "This workspace has no free seat, so cancel a pending invitation or add seats.";
+const INVITATION_SUBJECT = "You have been invited to a PVM Bridge workspace";
+const INVITATION_LIMIT = "This workspace has sent 20 invitations in the last 24 hours. Try again tomorrow.";
 const LIMITS_MIGRATION = new URL("../migrations/0004_workspace_limits.sql", import.meta.url);
+const INVITE_LIMITS_MIGRATION = new URL("../migrations/0006_invite_limits.sql", import.meta.url);
 const INSERT_INVITATION = /insert into "invitation"/i;
 
 // Better Auth reads pragma_table_info through D1 batch. The shared stand-in
@@ -46,15 +49,16 @@ function wrap(db: D1Database): Env["DB"] {
 }
 
 /**
- * A database holding only the tables the limits migration is applied onto. The
- * migration itself is applied by the test that needs it, so it can show what it
- * does to rows that were already there.
+ * A database holding only the tables the migration under test is applied onto.
+ * The migration itself is applied by the test that needs it, so it can show
+ * what it does to rows that were already there. `cutoff` names the first
+ * migration left out, so a test can start from any migration's table set.
  */
-function legacyDatabase(): D1Database {
+function legacyDatabase(cutoff = "0004_"): D1Database {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec("PRAGMA foreign_keys = ON");
   const dir = new URL("../migrations/", import.meta.url);
-  for (const file of readdirSync(dir).filter((name) => name.endsWith(".sql") && name < "0004_").sort()) {
+  for (const file of readdirSync(dir).filter((name) => name.endsWith(".sql") && name < cutoff).sort()) {
     sqlite.exec(readFileSync(new URL(file, dir), "utf8"));
   }
   const statement = (sql: string, values: unknown[]): D1PreparedStatement => ({
@@ -287,7 +291,7 @@ async function userIdFor(env: Env, email: string): Promise<string> {
   return row.id;
 }
 
-const invitations = (lines: string[]): string[] => lines.filter((line) => line.includes("invited you to a PVM Bridge workspace"));
+const invitations = (lines: string[]): string[] => lines.filter((line) => line.includes(INVITATION_SUBJECT));
 
 /** The invitation ids the sent emails carry, from the link in each message. */
 const emailedInvitations = (lines: string[]): string[] =>
@@ -296,6 +300,29 @@ const emailedInvitations = (lines: string[]): string[] =>
 async function rows(env: Env, table: string, where = ""): Promise<number> {
   const row = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} ${where}`).first<{ n: number }>();
   return row?.n ?? 0;
+}
+
+/** The sends the ledger holds for one workspace, whatever their age. */
+async function sendCount(env: Env, workspaceId: string): Promise<number> {
+  return rows(env, "invitation_send", `WHERE organizationId = '${workspaceId}'`);
+}
+
+/** Sends recorded directly, for a workspace already partway through its window. */
+async function seedSends(env: Env, workspaceId: string, count: number, start = 0): Promise<void> {
+  for (let index = start; index < start + count; index += 1) {
+    await env.DB.prepare(`INSERT INTO invitation_send (organizationId, invitationId) VALUES (?, ?)`)
+      .bind(workspaceId, `seeded-send-${workspaceId}-${index}`)
+      .run();
+  }
+}
+
+/** The pending invitation a resend moves, or null. */
+async function invitationByEmail(env: Env, workspaceId: string, email: string) {
+  const row = await env.DB
+    .prepare(`SELECT id, status, expiresAt FROM invitation WHERE organizationId = ? AND email = ?`)
+    .bind(workspaceId, email.toLowerCase())
+    .first<{ id: string; status: string; expiresAt: string }>();
+  return row ? { ...row } : null;
 }
 
 /** Every invitation row, whole and ordered, so a refusal can be shown to change none of it. */
@@ -319,9 +346,14 @@ async function expireInvitation(env: Env, invitationId: string): Promise<void> {
   await env.DB.prepare(`UPDATE invitation SET expiresAt = '2020-01-01T00:00:00.000Z' WHERE id = ?`).bind(invitationId).run();
 }
 
-async function refusal(response: Response, sentence: string): Promise<void> {
-  assert.equal(response.status, 403, await response.clone().text());
+async function refusal(response: Response, sentence: string, status = 403): Promise<void> {
+  assert.equal(response.status, status, await response.clone().text());
   assert.equal(((await response.json()) as { message?: string }).message, sentence);
+}
+
+/** The rolling-window refusal, which is the one answer that carries 429. */
+async function limited(response: Response): Promise<void> {
+  await refusal(response, INVITATION_LIMIT, 429);
 }
 
 test("the limits migration carries the invitation sentence as its marker", async () => {
@@ -369,6 +401,69 @@ test("an invitation to a workspace with no free seat is refused, with no row and
     await refusal(await invite(env, client, cookie, workspace.id, "stranger@example.com"), NO_SEAT);
     await unchanged(env, logs.lines, before);
     assert.equal(await rows(env, "invitation"), 0);
+  } finally {
+    logs.restore();
+  }
+});
+
+test("the invitation email has a fixed subject and cuts both names at 80 characters", async () => {
+  const logs = captureConsole();
+  try {
+    const env = bindings(database());
+    const client = "198.51.100.50";
+    const cookie = await signIn(env, logs.lines, "owner@example.com", client);
+    const workspace = (await (await createWorkspace(env, client, cookie, "Team")).json()) as { id: string };
+    await subscribe(env, workspace.id, 10);
+    const ownerId = await userIdFor(env, "owner@example.com");
+
+    const rename = async (inviter: string, name: string): Promise<void> => {
+      await env.DB.prepare(`UPDATE user SET name = ? WHERE id = ?`).bind(inviter, ownerId).run();
+      await env.DB.prepare(`UPDATE organization SET name = ? WHERE id = ?`).bind(name, workspace.id).run();
+    };
+    const sent = async (email: string): Promise<{ id: string; message: string }> => {
+      const start = logs.lines.length;
+      const response = await invite(env, client, cookie, workspace.id, email);
+      assert.equal(response.status, 200, await response.clone().text());
+      const { id } = (await response.json()) as { id: string };
+      const message = logs.lines.slice(start).find((line) => line.includes(INVITATION_SUBJECT));
+      assert.ok(message, "the invitation email was not logged");
+      return { id, message };
+    };
+    const body = (cutWorkspace: string, cutInviter: string, id: string): string =>
+      `You have been invited to the workspace "${cutWorkspace}" by ${cutInviter}.\n\nTo accept, sign in with this email address and open:\n${ORIGIN}/app/?invitation=${id}\n\nThe invitation expires in 7 days.`;
+    const mail = (email: string, cutWorkspace: string, cutInviter: string, id: string): string =>
+      `[email] to ${email}: ${INVITATION_SUBJECT}\n${body(cutWorkspace, cutInviter, id)}`;
+
+    await rename("I".repeat(200), "W".repeat(200));
+    const long = await sent("long@example.com");
+    assert.equal(
+      long.message,
+      mail("long@example.com", `${"W".repeat(80)}...`, `${"I".repeat(80)}...`, long.id),
+      "a 200-character name was not cut at 80 characters",
+    );
+
+    await rename("E".repeat(80), "F".repeat(80));
+    const exact = await sent("exact@example.com");
+    assert.equal(exact.message, mail("exact@example.com", "F".repeat(80), "E".repeat(80), exact.id));
+    assert.equal(exact.message.includes("..."), false, "an 80-character name was cut");
+
+    await rename("N".repeat(81), "M".repeat(81));
+    const over = await sent("over@example.com");
+    assert.equal(over.message, mail("over@example.com", `${"M".repeat(80)}...`, `${"N".repeat(80)}...`, over.id));
+
+    // Every character here is a surrogate pair, and the workspace name has one
+    // plain character in front, so a cut counted in UTF-16 units would land
+    // inside a pair and leave a lone surrogate in the email.
+    const astral = "😀".repeat(81);
+    await rename(astral, `A${astral}`);
+    const mixed = await sent("astral@example.com");
+    assert.equal(
+      mixed.message,
+      mail("astral@example.com", `A${"😀".repeat(79)}...`, `${"😀".repeat(80)}...`, mixed.id),
+      "an astral name was not cut on a code-point boundary",
+    );
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    assert.equal(loneSurrogate.test(mixed.message), false, "the cut left a lone surrogate");
   } finally {
     logs.restore();
   }
@@ -469,6 +564,211 @@ test("re-sending an invitation that already holds a paid seat still sends one em
     assert.equal(resent.status, 200, await resent.clone().text());
     assert.equal(invitations(logs.lines).length, before + 1);
     assert.equal(await rows(env, "invitation"), 1);
+  } finally {
+    logs.restore();
+  }
+});
+
+test("the 21st invitation in 24 hours is refused, with no row and no email", async () => {
+  const logs = captureConsole();
+  try {
+    const env = bindings(database());
+    const client = "198.51.100.51";
+    const cookie = await signIn(env, logs.lines, "owner@example.com", client);
+    const workspace = (await (await createWorkspace(env, client, cookie, "Team")).json()) as { id: string };
+    await subscribe(env, workspace.id, 25);
+    for (let index = 0; index < 20; index += 1) {
+      const response = await invite(env, client, cookie, workspace.id, `guest-${index}@example.com`);
+      assert.equal(response.status, 200, await response.clone().text());
+    }
+    const before = await snapshot(env, logs.lines);
+    assert.deepEqual({ rows: before.rows.length, emails: before.emails }, { rows: 20, emails: 20 });
+    assert.equal(await sendCount(env, workspace.id), 20);
+
+    await limited(await invite(env, client, cookie, workspace.id, "guest-20@example.com"));
+    await unchanged(env, logs.lines, before);
+    assert.equal(await sendCount(env, workspace.id), 20, "the refused invitation wrote a send");
+  } finally {
+    logs.restore();
+  }
+});
+
+test("a resend counts as one of the 20", async () => {
+  const logs = captureConsole();
+  try {
+    const env = bindings(database());
+    const client = "198.51.100.52";
+    const cookie = await signIn(env, logs.lines, "owner@example.com", client);
+    const workspace = (await (await createWorkspace(env, client, cookie, "Team")).json()) as { id: string };
+    await subscribe(env, workspace.id, 25);
+    const addresses = Array.from({ length: 19 }, (_, index) => `guest-${index}@example.com`);
+    for (const address of addresses) {
+      assert.equal((await invite(env, client, cookie, workspace.id, address)).status, 200);
+    }
+    const before = await invitationByEmail(env, workspace.id, addresses[0]);
+    assert.ok(before);
+    const sentBefore = invitations(logs.lines).length;
+
+    const resent = await invite(env, client, cookie, workspace.id, addresses[0], true);
+    assert.equal(resent.status, 200, await resent.clone().text());
+    const after = await invitationByEmail(env, workspace.id, addresses[0]);
+    assert.equal(after?.id, before.id, "the resend wrote a new invitation row");
+    assert.equal(await rows(env, "invitation"), 19, "the resend wrote a new invitation row");
+    assert.equal(invitations(logs.lines).length, sentBefore + 1, "the resend sent no email");
+    assert.equal(await sendCount(env, workspace.id), 20, "the resend counted as no send");
+
+    const full = await snapshot(env, logs.lines);
+    await limited(await invite(env, client, cookie, workspace.id, "fresh@example.com"));
+    await unchanged(env, logs.lines, full);
+
+    const kept = await invitationByEmail(env, workspace.id, addresses[0]);
+    await limited(await invite(env, client, cookie, workspace.id, addresses[0], true));
+    assert.deepEqual(await invitationByEmail(env, workspace.id, addresses[0]), kept, "the refused resend moved the expiry");
+    await unchanged(env, logs.lines, full);
+  } finally {
+    logs.restore();
+  }
+});
+
+test("an invitation sent more than 24 hours ago does not count", async () => {
+  const logs = captureConsole();
+  try {
+    const env = bindings(database());
+    const client = "198.51.100.53";
+    const cookie = await signIn(env, logs.lines, "owner@example.com", client);
+    const workspace = (await (await createWorkspace(env, client, cookie, "Team")).json()) as { id: string };
+    await subscribe(env, workspace.id, 30);
+    for (let index = 0; index < 20; index += 1) {
+      assert.equal((await invite(env, client, cookie, workspace.id, `guest-${index}@example.com`)).status, 200);
+    }
+    const backdate = (hours: number) =>
+      env.DB.prepare(`UPDATE invitation_send SET sentAt = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?) WHERE organizationId = ?`)
+        .bind(`-${hours} hours`, workspace.id)
+        .run();
+
+    await backdate(25);
+    assert.equal((await invite(env, client, cookie, workspace.id, "after-window@example.com")).status, 200);
+
+    // Every send is inside the window again, the one just made included, so
+    // the limit holds on a rolling window rather than a daily bucket.
+    await backdate(23);
+    await limited(await invite(env, client, cookie, workspace.id, "inside-window@example.com"));
+  } finally {
+    logs.restore();
+  }
+});
+
+test("two invitations for the last send slot at the same moment send one email", async () => {
+  const logs = captureConsole();
+  try {
+    const store = pausingDatabase();
+    const env = bindings(store.db);
+    const client = "198.51.100.54";
+    const cookie = await signIn(env, logs.lines, "owner@example.com", client);
+    const workspace = (await (await createWorkspace(env, client, cookie, "Team")).json()) as { id: string };
+    await subscribe(env, workspace.id, 5);
+    await seedSends(env, workspace.id, 19);
+
+    const reached = latch();
+    const release = latch();
+    let writes = 0;
+    // Both requests pass the worker's check with the 20th send still open, then
+    // meet at the database: the winner writes the 20th send, and the loser's
+    // ledger row is refused by the guard inside its own invitation insert.
+    store.pause(async (sql) => {
+      if (!INSERT_INVITATION.test(sql)) return;
+      writes += 1;
+      if (writes === 2) reached.release();
+      await release.promise;
+    });
+    const before = await snapshot(env, logs.lines);
+    const first = invite(env, "198.51.100.105", cookie, workspace.id, "race-a@example.com");
+    const second = invite(env, "198.51.100.106", cookie, workspace.id, "race-b@example.com");
+    await reached.promise;
+    release.release();
+    const [one, other] = await Promise.all([first, second]);
+    store.pause(undefined);
+
+    assert.deepEqual([one.status, other.status].sort(), [200, 429], `the pair answered ${one.status} and ${other.status}`);
+    await limited(other.status === 429 ? other : one);
+    const after = await snapshot(env, logs.lines);
+    assert.equal(after.rows.length, before.rows.length + 1, "the losing invitation left a row behind");
+    assert.equal(after.emails, before.emails + 1, "the losing invitation sent an email");
+    assert.equal(await sendCount(env, workspace.id), 20, "the pair wrote more than the 20th send");
+  } finally {
+    logs.restore();
+  }
+});
+
+test("the database holds the limit when the Worker does not", async () => {
+  const logs = captureConsole();
+  try {
+    const env = bindings(database());
+    const client = "198.51.100.55";
+    const cookie = await signIn(env, logs.lines, "owner@example.com", client);
+    const workspace = (await (await createWorkspace(env, client, cookie, "Team")).json()) as { id: string };
+    await subscribe(env, workspace.id, 3);
+    await seedSends(env, workspace.id, 19);
+    // The older-Worker pattern: Better Auth's own handler, with no Worker check
+    // in front of it, so only the trigger can refuse the 21st send.
+    const auth = createAuth(env, async (id) => (await plan(env.DB, id)).seats);
+    const send = (email: string) =>
+      auth.handler(
+        new Request(`${ORIGIN}/api/auth/organization/invite-member`, {
+          method: "POST",
+          headers: headers(client, cookie),
+          body: JSON.stringify({ organizationId: workspace.id, email, role: "member" }),
+        }),
+      );
+
+    const accepted = await send("old-worker-ok@example.com");
+    assert.equal(accepted.status, 200, await accepted.clone().text());
+    assert.equal(await rows(env, "invitation"), 1, "the accepted invitation wrote no row");
+    assert.equal(invitations(logs.lines).length, 1, "the accepted invitation sent no email");
+    assert.equal(await sendCount(env, workspace.id), 20, "the accepted invitation wrote no send");
+
+    const before = await snapshot(env, logs.lines);
+    await assert.rejects(
+      send("old-worker-full@example.com"),
+      (error) => error instanceof Error && error.message.includes(INVITATION_LIMIT),
+      "the trigger did not refuse the 21st send",
+    );
+    await unchanged(env, logs.lines, before);
+  } finally {
+    logs.restore();
+  }
+});
+
+test("a workspace at its invitation limit does not use up another workspace's", async () => {
+  const logs = captureConsole();
+  try {
+    const env = bindings(database());
+    const client = "198.51.100.56";
+    const cookie = await signIn(env, logs.lines, "owner@example.com", client);
+    const busy = (await (await createWorkspace(env, client, cookie, "Busy")).json()) as { id: string };
+    const quiet = (await (await createWorkspace(env, client, cookie, "Quiet")).json()) as { id: string };
+    await subscribe(env, busy.id, 3);
+    await subscribe(env, quiet.id, 3);
+    await seedSends(env, busy.id, 20);
+
+    const first = await invite(env, client, cookie, quiet.id, "guest@example.com");
+    assert.equal(first.status, 200, await first.clone().text());
+    assert.equal(await sendCount(env, quiet.id), 1, "the send was not recorded against the second workspace");
+  } finally {
+    logs.restore();
+  }
+});
+
+test("seat and rate refusals keep their own status", async () => {
+  const logs = captureConsole();
+  try {
+    const env = bindings(database());
+    const client = "198.51.100.57";
+    const cookie = await signIn(env, logs.lines, "owner@example.com", client);
+    const workspace = (await (await createWorkspace(env, client, cookie, "Solo")).json()) as { id: string };
+    // One unpaid seat, which the owner holds, and a full send window.
+    await seedSends(env, workspace.id, 20);
+    await refusal(await invite(env, client, cookie, workspace.id, "guest@example.com"), NO_SEAT);
   } finally {
     logs.restore();
   }
@@ -770,8 +1070,11 @@ test("rows that were already there survive the limits migration and ordinary req
     });
     const before = await counts();
 
-    // Applying the migration changes and deletes no row.
+    // Applying the migrations changes and deletes no row. The invitation
+    // ledger's migration is applied as well, because the Worker reads it on
+    // every invitation; it adds only its own table.
     await env.DB.exec(readFileSync(LIMITS_MIGRATION, "utf8"));
+    await env.DB.exec(readFileSync(INVITE_LIMITS_MIGRATION, "utf8"));
     assert.deepEqual(await counts(), before, "applying the migration changed a row");
 
     // An owner-role membership in a workspace nobody else is in, which is what
@@ -814,6 +1117,56 @@ test("rows that were already there survive the limits migration and ordinary req
   } finally {
     logs.restore();
   }
+});
+
+test("the invitation limits migration changes no existing row", async () => {
+  const migration = readFileSync(INVITE_LIMITS_MIGRATION, "utf8");
+  assert.equal((migration.match(/CREATE TABLE/gi) ?? []).length, 1, "the migration creates one table");
+  assert.equal((migration.match(/CREATE INDEX/gi) ?? []).length, 1, "the migration creates one index");
+  assert.match(migration, /BEFORE INSERT ON invitation_send[\s\S]*RAISE\(ABORT/, "the guard is a refusal on the ledger's insert");
+  assert.equal(/UPDATE\s+\S+\s+SET/i.test(migration), false, "a statement updates an existing table");
+  assert.equal(migration.includes("DELETE FROM"), false, "a statement deletes a row");
+
+  const db = legacyDatabase("0006_");
+  const seed = (sql: string, values: unknown[] = []) => db.prepare(sql).bind(...values).run();
+  await seed(`INSERT INTO "user" VALUES ('old', 'Old owner', 'old@example.com', 1, NULL, '2020-01-01', '2020-01-01')`);
+  await seed(
+    `INSERT INTO account (id, accountId, providerId, userId, createdAt, updatedAt) VALUES ('old-account', 'old', 'credential', 'old', '2020-01-01', '2020-01-01')`,
+  );
+  await seed(`INSERT INTO organization VALUES ('old-workspace', 'Legacy', 'legacy', NULL, '2020-01-01', NULL)`);
+  await seed(`INSERT INTO member VALUES ('old-member', 'old-workspace', 'old', 'owner', '2020-01-01')`);
+  // Seats for the owner and both invitations, so the seat trigger leaves the
+  // seed alone and only the migration under test is examined.
+  await seed(
+    `INSERT INTO subscription VALUES ('old-workspace', 'sub_old', 'ctm_old', 'active', 'pri_old', 4, '2099-01-01T00:00:00Z', '2020-01-01')`,
+  );
+  await seed(
+    `INSERT INTO invitation VALUES ('old-pending', 'old-workspace', 'pending@example.com', 'member', 'pending', '2099-01-01T00:00:00Z', '2020-01-01', 'old')`,
+  );
+  await seed(
+    `INSERT INTO invitation VALUES ('old-canceled', 'old-workspace', 'canceled@example.com', 'member', 'canceled', '2020-01-01T00:00:00Z', '2020-01-01', 'old')`,
+  );
+
+  const tables = (
+    await db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all<{ name: string }>()
+  ).results.map((row) => row.name);
+  const all = async () =>
+    Object.fromEntries(
+      await Promise.all(
+        tables.map(async (table) => [table, (await db.prepare(`SELECT * FROM "${table}" ORDER BY rowid`).all()).results] as const),
+      ),
+    );
+  const before = await all();
+  assert.equal(before.invitation.length, 2, "the seed wrote two invitations");
+
+  await db.exec(migration);
+
+  assert.deepEqual(await all(), before, "applying the migration changed an existing row");
+  assert.deepEqual(
+    (await db.prepare(`SELECT * FROM invitation_send`).all()).results,
+    [],
+    "the migration wrote a send",
+  );
 });
 
 test("deleting a workspace frees the owner's count", async () => {
