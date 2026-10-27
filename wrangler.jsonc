@@ -21,8 +21,8 @@
     {
       "binding": "DB",
       "database_name": "bridgekit",
-      // Replaced with the real id after `wrangler d1 create bridgekit`.
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      // The production database id, from `wrangler d1 create bridgekit` (DEPLOY.md step 1.3).
+      "database_id": "919c2ed7-4a73-4d18-842d-02e392927a69",
       "migrations_dir": "migrations"
     }
   ],
@@ -36,8 +36,8 @@
   // with no mail key an email is written to the Worker log. Missing, empty, and
   // any other value mean a missing mail key is an error.
   "vars": {
-    // Replaced with the real address in production.
-    "BETTER_AUTH_URL": "http://localhost:8790"
+    // The site address in production. Local development overrides it with http://localhost:8790.
+    "BETTER_AUTH_URL": "https://pvmbridge.com"
   },
   "ratelimits": [
     {

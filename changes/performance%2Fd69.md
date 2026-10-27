@@ -1,0 +1,1 @@
+- `wrangler.jsonc` and `DEPLOY.md` now carry the production values: the site is `pvmbridge.com` and the D1 database id is set, while `npm run cf:dev` and the local wrangler smoke run override the site address to `http://localhost:8790` so local sign-in still works. The app's wordmark now reads PVM Bridge.

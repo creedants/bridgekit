@@ -177,13 +177,13 @@ const BUILDS = {
     rebuild: "npm run build:cloudflare",
     secrets: ["BETTER_AUTH_SECRET"],
     prepare: (dir) => [[bin("wrangler"), "d1", "migrations", "apply", "bridgekit", "--local", ...local(dir)]],
-    // The Cloudflare build asks for the session on load, and the Worker answers
-    // account routes with 404 unless ACCOUNTS is exactly "on", so this local run
-    // starts it open. LOCAL_EMAIL_LOG writes a sign-in link to the log instead of
-    // refusing it. Both are constants for this test; they protect nothing.
+    // The Cloudflare build asks for the session on load, and account routes answer 404
+    // unless ACCOUNTS is exactly "on", so this run sets it. LOCAL_EMAIL_LOG logs the
+    // sign-in link instead of refusing it. wrangler.jsonc names the production host, so
+    // this run overrides BETTER_AUTH_URL. All three are constants and protect nothing.
     command: (dir) => [
       bin("wrangler"), "dev", "--port", devPort(), "--ip", "127.0.0.1", ...local(dir),
-      "--var", "ACCOUNTS:on", "--var", "LOCAL_EMAIL_LOG:on",
+      "--var", "ACCOUNTS:on", "--var", "LOCAL_EMAIL_LOG:on", "--var", "BETTER_AUTH_URL:http://localhost:8790",
     ],
     policy: { headers: 1, metas: 1 },
   },
