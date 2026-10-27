@@ -221,7 +221,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://pvmbridge.com/pay/
 ```
 
 - Source: `index.html:232` has `No tracking scripts.`, `Cookies are used for sign-in.`
-- Derived from: `vite.config.ts:77` has `pay/index.html`. `wrangler.jsonc:13` has `"not_found_handling": "404-page"`. The Part 1 build has no pay page. The address is not found. The author's session saw this on a local Part 1 Worker. The home page had `No tracking scripts.` once. The home page had `Cookies are used for sign-in.` zero times. `GET /pay/` returned 404. The reviewer's session ran the first, third, and fourth commands in this step against `http://127.0.0.1:8790`, and they printed 1, 0, and 404. Neither session ran the second command against a served build or the live domain. Step 1.7 counted `No cookies, no accounts.` once in `dist/index.html`.
+- Derived from: `vite.config.ts:77` has `pay/index.html`. `wrangler.jsonc:13` has `"not_found_handling": "404-page"`. The Part 1 build has no pay page. The address is not found. The author's session saw this on a local Part 1 Worker. The home page had `No tracking scripts.` once. The home page had `Cookies are used for sign-in.` zero times. `GET /pay/` returned 404. The prior reviewer's session checked `No tracking scripts.`, `sign in for Pro`, and the pay address against `http://127.0.0.1:8790`; those checks printed 1, 0, and 404. That session did not run either current cookie-sentence command. The later local Part 1 build check counted `No cookies, no accounts.` once and `Cookies are used for sign-in.` zero times in `dist/index.html`. Neither current cookie-sentence command was run against a served build or the live domain.
 - Worked: the four commands print 1, 1, 0, then 404.
 
 ### 1.14 Check the tool
