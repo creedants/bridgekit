@@ -149,6 +149,13 @@ test("three-letter and full month-name labels each order by the month they name"
     (await loadOnly(["MARCH 2024", "January 2025", "february 2024"])).values,
     ["february 2024", "MARCH 2024", "January 2025"],
   );
+  // May is the same word as a three-letter and as a full month name, so it
+  // joins whichever of the two the rest of the column is written in.
+  assert.deepEqual((await loadOnly(["Jan 2025", "May 2024", "Mar 2025"])).values, ["May 2024", "Jan 2025", "Mar 2025"]);
+  assert.deepEqual(
+    (await loadOnly(["January 2025", "May 2024", "March 2025"])).values,
+    ["May 2024", "January 2025", "March 2025"],
+  );
 });
 
 test("year-month labels order by the month they name", async () => {

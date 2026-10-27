@@ -44,9 +44,12 @@ export async function loadPeriodList(
   column: string,
   view: string,
 ): Promise<PeriodList> {
-  // A dated label becomes `shape * 1000000 + year * 100 + month`, one shape
-  // number per format. The date is below 1000000, so the key compares by date
-  // inside one shape, and the shape number is what `dated` below counts.
+  // A dated label becomes `shape * 1000000 + year * 100 + month`. The date is
+  // below 1000000, so the key compares by date inside one shape. `v` tells
+  // apart the pairs whose two formats share a key: a three-letter month name
+  // from a full one, and a two-digit fiscal year from a four-digit one. `MAY`
+  // is both a three-letter and a full month name, so it leaves `v` at 0 and
+  // fits either. `dated` below requires one shape and at most one `v`.
   const rows = await query(
     `WITH distinct_periods AS (
        SELECT DISTINCT ${column} AS p, upper(${column}) AS u
@@ -69,18 +72,25 @@ export async function loadPeriodList(
                   THEN 4000000 + CAST(substr(u, 4, 4) AS INTEGER) * 100
                        + (CAST(substr(u, 2, 1) AS INTEGER) - 1) * 3 + 1
                 WHEN regexp_matches(u, '${MONTH_ABBREVIATION_SOURCE}')
+                  OR regexp_matches(u, '${MONTH_FULL_SOURCE}')
                   THEN 5000000 + CAST(substr(u, length(u) - 3, 4) AS INTEGER) * 100
                        + list_position(['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'], substr(u, 1, 3))
-                WHEN regexp_matches(u, '${MONTH_FULL_SOURCE}')
-                  THEN 6000000 + CAST(substr(u, length(u) - 3, 4) AS INTEGER) * 100
-                       + list_position(['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'], substr(u, 1, 3))
                 WHEN regexp_matches(u, '${YEAR_MONTH_SOURCE}')
-                  THEN 7000000 + CAST(substr(u, 1, 4) AS INTEGER) * 100 + CAST(substr(u, 6, 2) AS INTEGER)
+                  THEN 6000000 + CAST(substr(u, 1, 4) AS INTEGER) * 100 + CAST(substr(u, 6, 2) AS INTEGER)
                 WHEN regexp_matches(u, '${FISCAL_YEAR_SHORT_SOURCE}')
-                  THEN 8000000 + (2000 + CAST(substr(u, 3, 2) AS INTEGER)) * 100
+                  THEN 7000000 + (2000 + CAST(substr(u, 3, 2) AS INTEGER)) * 100
                 WHEN regexp_matches(u, '${FISCAL_YEAR_LONG_SOURCE}')
-                  THEN 9000000 + CAST(substr(u, 3, 4) AS INTEGER) * 100
-              END AS k
+                  THEN 7000000 + CAST(substr(u, 3, 4) AS INTEGER) * 100
+              END AS k,
+              CASE
+                WHEN regexp_matches(u, '${MONTH_ABBREVIATION_SOURCE}')
+                  AND NOT regexp_matches(u, '${MONTH_FULL_SOURCE}') THEN 1
+                WHEN regexp_matches(u, '${MONTH_FULL_SOURCE}')
+                  AND NOT regexp_matches(u, '${MONTH_ABBREVIATION_SOURCE}') THEN 2
+                WHEN regexp_matches(u, '${FISCAL_YEAR_SHORT_SOURCE}') THEN 3
+                WHEN regexp_matches(u, '${FISCAL_YEAR_LONG_SOURCE}') THEN 4
+                ELSE 0
+              END AS v
        FROM distinct_periods
      ),
      decision AS (
@@ -88,7 +98,9 @@ export async function loadPeriodList(
                 regexp_matches(p, '${PLAIN_NUMBER_SOURCE}')
                 AND length(regexp_replace(p, '[^0-9]', '', 'g')) <= ${MAX_DIGITS}
               ) AS numeric,
-              count(*) = count(k) AND count(DISTINCT k // 1000000) = 1 AS dated
+              count(*) = count(k)
+                AND count(DISTINCT k // 1000000) = 1
+                AND count(DISTINCT nullif(v, 0)) <= 1 AS dated
        FROM labels
      ),
      ranked AS (
