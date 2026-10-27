@@ -293,6 +293,56 @@ test("finds the first sheet through a relative and through an absolute target", 
   assert.equal(absolute.csv, relative.csv);
 });
 
+async function twoSheetWorkbook(): Promise<ArrayBuffer> {
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const skipped = workbook.addWorksheet("skipped");
+  skipped.addRow(["period", "units"]);
+  skipped.addRow(["2025", { formula: "1+1" }]);
+  const used = workbook.addWorksheet("used");
+  used.addRow(["period", "units"]);
+  used.addRow(["2026", 20]);
+  return workbook.xlsx.writeBuffer();
+}
+
+test("counts nothing when the skipped first sheet resolves to a different target form", async () => {
+  const targets = [
+    "./worksheets/sheet1.xml",
+    "../xl/worksheets/sheet1.xml",
+    "../../xl/worksheets/sheet1.xml",
+    "/../../xl/worksheets/sheet1.xml",
+  ];
+  for (const target of targets) {
+    const book = await rewriteWorkbook(await twoSheetWorkbook(), {
+      "xl/_rels/workbook.xml.rels": (xml) =>
+        replaceOnce(xml, 'Target="worksheets/sheet1.xml"', `Target="${target}"`),
+    });
+    const loaded = await firstSheetAsCsv(book);
+    assert.equal(loaded.csv, "period,units\n2026,20", target);
+    assert.equal(loaded.formulaBlanks, 0, target);
+  }
+});
+
+test("counts the imported sheet's formulas, not a skipped sheet's matching rows", async () => {
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const skipped = workbook.addWorksheet("skipped");
+  skipped.addRow(["period", "units"]);
+  skipped.addRow(["2025", { formula: "1+1" }]);
+  skipped.addRow(["2025", { formula: "2+2" }]);
+  const used = workbook.addWorksheet("used");
+  used.addRow(["period", "units"]);
+  used.addRow(["2026", { formula: "3+3" }]);
+  used.addRow(["2026", 30]);
+  const book = await rewriteWorkbook(await workbook.xlsx.writeBuffer(), {
+    "xl/_rels/workbook.xml.rels": (xml) =>
+      replaceOnce(xml, 'Target="worksheets/sheet1.xml"', 'Target="./worksheets/sheet1.xml"'),
+  });
+  const loaded = await firstSheetAsCsv(book);
+  assert.equal(loaded.csv, "period,units\n2026,\n2026,30");
+  assert.equal(loaded.formulaBlanks, 1);
+});
+
 test("reads a single-quoted worksheet relationship id", async () => {
   const quotedSheetId = await firstSheetAsCsv(
     await rewriteWorkbook(await formulaWorkbook(), {
