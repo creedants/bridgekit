@@ -18,6 +18,23 @@ const PLAIN_NUMBER_SOURCE = String.raw`^-?\d+(\.\d+)?$`;
 const MAX_DIGITS = 15;
 
 /**
+ * A text label that names a date, upper-cased before matching so case never
+ * splits a column. One pattern per format. A quarter takes its first month, a
+ * fiscal year month 0, and a two-digit fiscal year is 20nn.
+ */
+const ISO_QUARTER_SOURCE = String.raw`^\d{4}-Q[1-4]$`;
+const YEAR_QUARTER_SOURCE = String.raw`^\d{4} Q[1-4]$`;
+const QUARTER_YEAR_SOURCE = String.raw`^Q[1-4] \d{4}$`;
+const QUARTER_DASH_YEAR_SOURCE = String.raw`^Q[1-4]-\d{4}$`;
+const MONTH_ABBREVIATION_SOURCE =
+  String.raw`^(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC) \d{4}$`;
+const MONTH_FULL_SOURCE =
+  String.raw`^(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER) \d{4}$`;
+const YEAR_MONTH_SOURCE = String.raw`^\d{4}-(0[1-9]|1[0-2])$`;
+const FISCAL_YEAR_SHORT_SOURCE = String.raw`^FY(\d{2})$`;
+const FISCAL_YEAR_LONG_SOURCE = String.raw`^FY(\d{4})$`;
+
+/**
  * `column` and `view` are already quoted identifiers.
  * Zero rows return `{ values: [], sort: "text" }`.
  * A missing or mixed decision flag throws.
@@ -27,29 +44,80 @@ export async function loadPeriodList(
   column: string,
   view: string,
 ): Promise<PeriodList> {
+  // A dated label becomes `shape * 1000000 + year * 100 + month`. The date is
+  // below 1000000, so the key compares by date inside one shape. `v` tells
+  // apart the pairs whose two formats share a key: a three-letter month name
+  // from a full one, and a two-digit fiscal year from a four-digit one. `MAY`
+  // is both a three-letter and a full month name, so it leaves `v` at 0 and
+  // fits either. `dated` below requires one shape and at most one `v`.
   const rows = await query(
-    `WITH distinct_periods AS (
+    `WITH distinct_labels AS (
        SELECT DISTINCT ${column} AS p
        FROM ${view}
        WHERE ${column} IS NOT NULL
+     ),
+     distinct_periods AS (
+       SELECT p, upper(p) AS u
+       FROM distinct_labels
+     ),
+     labels AS (
+       SELECT p,
+              CASE
+                WHEN regexp_matches(u, '${ISO_QUARTER_SOURCE}')
+                  THEN 1000000 + CAST(substr(u, 1, 4) AS INTEGER) * 100
+                       + (CAST(substr(u, 7, 1) AS INTEGER) - 1) * 3 + 1
+                WHEN regexp_matches(u, '${YEAR_QUARTER_SOURCE}')
+                  THEN 2000000 + CAST(substr(u, 1, 4) AS INTEGER) * 100
+                       + (CAST(substr(u, 7, 1) AS INTEGER) - 1) * 3 + 1
+                WHEN regexp_matches(u, '${QUARTER_YEAR_SOURCE}')
+                  THEN 3000000 + CAST(substr(u, 4, 4) AS INTEGER) * 100
+                       + (CAST(substr(u, 2, 1) AS INTEGER) - 1) * 3 + 1
+                WHEN regexp_matches(u, '${QUARTER_DASH_YEAR_SOURCE}')
+                  THEN 4000000 + CAST(substr(u, 4, 4) AS INTEGER) * 100
+                       + (CAST(substr(u, 2, 1) AS INTEGER) - 1) * 3 + 1
+                WHEN regexp_matches(u, '${MONTH_ABBREVIATION_SOURCE}')
+                  OR regexp_matches(u, '${MONTH_FULL_SOURCE}')
+                  THEN 5000000 + CAST(substr(u, length(u) - 3, 4) AS INTEGER) * 100
+                       + list_position(['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'], substr(u, 1, 3))
+                WHEN regexp_matches(u, '${YEAR_MONTH_SOURCE}')
+                  THEN 6000000 + CAST(substr(u, 1, 4) AS INTEGER) * 100 + CAST(substr(u, 6, 2) AS INTEGER)
+                WHEN regexp_matches(u, '${FISCAL_YEAR_SHORT_SOURCE}')
+                  THEN 7000000 + (2000 + CAST(substr(u, 3, 2) AS INTEGER)) * 100
+                WHEN regexp_matches(u, '${FISCAL_YEAR_LONG_SOURCE}')
+                  THEN 7000000 + CAST(substr(u, 3, 4) AS INTEGER) * 100
+              END AS k,
+              CASE
+                WHEN regexp_matches(u, '${MONTH_ABBREVIATION_SOURCE}')
+                  AND NOT regexp_matches(u, '${MONTH_FULL_SOURCE}') THEN 1
+                WHEN regexp_matches(u, '${MONTH_FULL_SOURCE}')
+                  AND NOT regexp_matches(u, '${MONTH_ABBREVIATION_SOURCE}') THEN 2
+                WHEN regexp_matches(u, '${FISCAL_YEAR_SHORT_SOURCE}') THEN 3
+                WHEN regexp_matches(u, '${FISCAL_YEAR_LONG_SOURCE}') THEN 4
+                ELSE 0
+              END AS v
+       FROM distinct_periods
      ),
      decision AS (
        SELECT bool_and(
                 regexp_matches(p, '${PLAIN_NUMBER_SOURCE}')
                 AND length(regexp_replace(p, '[^0-9]', '', 'g')) <= ${MAX_DIGITS}
-              ) AS numeric
-       FROM distinct_periods
+              ) AS numeric,
+              count(*) = count(k)
+                AND count(DISTINCT k // 1000000) = 1
+                AND count(DISTINCT nullif(v, 0)) <= 1 AS dated
+       FROM labels
      ),
      ranked AS (
        SELECT p,
-              CASE WHEN (SELECT numeric FROM decision) THEN TRY_CAST(p AS DOUBLE) END AS n
-       FROM distinct_periods
-       ORDER BY n DESC, p DESC
+              CASE WHEN (SELECT numeric FROM decision) THEN TRY_CAST(p AS DOUBLE) END AS n,
+              CASE WHEN (SELECT dated FROM decision) THEN k END AS d
+       FROM labels
+       ORDER BY n DESC, d DESC, p DESC
        LIMIT 200
      )
      SELECT p, (SELECT numeric FROM decision) AS numeric
      FROM ranked
-     ORDER BY n ASC, p ASC`,
+     ORDER BY n ASC, d ASC, p ASC`,
   );
   if (rows.length === 0) return { values: [], sort: "text" };
   const flags = rows.map((row) => row.numeric);

@@ -112,14 +112,119 @@ test("negative numbers and decimals sort by the number", async () => {
   assert.deepEqual((await loadOnly(["1.5", "1.10"])).values, ["1.10", "1.5"]);
 });
 
-test("quarter labels, prefixed labels, and month names stay in text order", async () => {
+test("quarter labels in each of the four shapes order by the quarter they name", async () => {
+  const shapes = [
+    ["Q1 2025", "Q4 2024", "Q3 2024"],
+    ["Q1-2025", "Q4-2024", "Q3-2024"],
+    ["2025-Q2", "2024-Q4", "2025-Q1"],
+    ["2025 Q2", "2024 Q4", "2025 Q1"],
+  ];
+  const expected = [
+    ["Q3 2024", "Q4 2024", "Q1 2025"],
+    ["Q3-2024", "Q4-2024", "Q1-2025"],
+    ["2024-Q4", "2025-Q1", "2025-Q2"],
+    ["2024 Q4", "2025 Q1", "2025 Q2"],
+  ];
+  for (const [index, values] of shapes.entries()) {
+    const list = await loadOnly(values);
+    assert.equal(list.sort, "text");
+    assert.deepEqual(list.values, expected[index], values.join(", "));
+  }
+});
+
+test("a quarterly text sample defaults to the last two quarters as prior and current", async () => {
+  const { list, ordered, steps } = await trendFor(["Q3 2024", "Q4 2024", "Q1 2025"], [100, 200, 320]);
+  assert.equal(list.sort, "text");
+  assert.deepEqual(list.values, ["Q3 2024", "Q4 2024", "Q1 2025"]);
+  assert.deepEqual(ordered, ["Q3 2024", "Q4 2024", "Q1 2025"]);
+  assert.deepEqual(steps.map((s) => [s.prior, s.current]), [["Q3 2024", "Q4 2024"], ["Q4 2024", "Q1 2025"]]);
+});
+
+test("three-letter and full month-name labels each order by the month they name", async () => {
+  assert.deepEqual(
+    (await loadOnly(["Jan 2025", "Mar 2024", "Feb 2025"])).values,
+    ["Mar 2024", "Jan 2025", "Feb 2025"],
+  );
+  assert.deepEqual(
+    (await loadOnly(["MARCH 2024", "January 2025", "february 2024"])).values,
+    ["february 2024", "MARCH 2024", "January 2025"],
+  );
+  // May is the same word as a three-letter and as a full month name, so it
+  // joins whichever of the two the rest of the column is written in.
+  assert.deepEqual((await loadOnly(["Jan 2025", "May 2024", "Mar 2025"])).values, ["May 2024", "Jan 2025", "Mar 2025"]);
+  assert.deepEqual(
+    (await loadOnly(["January 2025", "May 2024", "March 2025"])).values,
+    ["May 2024", "January 2025", "March 2025"],
+  );
+});
+
+test("year-month labels order by the month they name", async () => {
+  assert.deepEqual((await loadOnly(["2025-10", "2025-03", "2024-12"])).values, ["2024-12", "2025-03", "2025-10"]);
+});
+
+test("fiscal-year labels order by year", async () => {
+  assert.deepEqual((await loadOnly(["FY24", "FY25", "FY19"])).values, ["FY19", "FY24", "FY25"]);
+  assert.deepEqual((await loadOnly(["FY2024", "FY2025", "FY2019"])).values, ["FY2019", "FY2024", "FY2025"]);
+});
+
+test("fiscal-year labels are read in either case and order by year", async () => {
+  const list = await loadOnly(["fy2024", "Fy2025", "FY2023"]);
+  assert.equal(list.sort, "text");
+  assert.deepEqual(list.values, ["FY2023", "fy2024", "Fy2025"]);
+});
+
+test("ISO quarter labels are read in either case and order by the quarter they name", async () => {
+  const list = await loadOnly(["2024-q3", "2024-Q4", "2025-q1"]);
+  assert.equal(list.sort, "text");
+  assert.deepEqual(list.values, ["2024-q3", "2024-Q4", "2025-q1"]);
+});
+
+test("labels that name the same period stay separate and order by their string", async () => {
+  assert.deepEqual((await loadOnly(["q1 2025", "Q1 2025", "Q4 2024"])).values, ["Q4 2024", "Q1 2025", "q1 2025"]);
+});
+
+test("a column of 250 month labels keeps the latest 200", async () => {
+  const names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const months = Array.from({ length: 250 }, (_, index) => `${names[index % 12]} ${2000 + Math.floor(index / 12)}`);
+  const shuffled = months.filter((_, index) => index % 2 === 1).concat(months.filter((_, index) => index % 2 === 0));
+  const list = await loadOnly(shuffled);
+  assert.equal(list.sort, "text");
+  assert.equal(list.values.length, 200);
+  assert.equal(list.values[0], "Mar 2004");
+  assert.equal(list.values.at(-1), "Oct 2020");
+});
+
+test("a mix of label shapes, or a value that matches none, stays in text order", async () => {
+  const mixed = await loadOnly(["Q1 2025", "2024-Q4", "Jan 2025"]);
+  assert.equal(mixed.sort, "text");
+  assert.deepEqual(mixed.values, ["2024-Q4", "Jan 2025", "Q1 2025"]);
+
+  // Two shapes that differ only in the separator are still two formats.
+  const separators = await loadOnly(["2025-Q1", "2025 Q2"]);
+  assert.deepEqual(separators.values, ["2025 Q2", "2025-Q1"]);
+
+  // A three-letter month name and a full one are two formats, as are the two
+  // fiscal-year lengths.
+  assert.deepEqual(
+    (await loadOnly(["January 2024", "Mar 2025", "September 2024"])).values,
+    ["January 2024", "Mar 2025", "September 2024"],
+  );
+  assert.deepEqual((await loadOnly(["FY24", "FY2025"])).values, ["FY2025", "FY24"]);
+
+  const alien = await loadOnly(["Q1 2025", "Q4 2024", "Q3 24"]);
+  assert.deepEqual(alien.values, ["Q1 2025", "Q3 24", "Q4 2024"]);
+});
+
+test("Actual and Budget stay in text order", async () => {
+  const list = await loadOnly(["Budget", "Actual"]);
+  assert.equal(list.sort, "text");
+  assert.deepEqual(list.values, ["Actual", "Budget"]);
+});
+
+test("quarter labels, prefixed labels, and bare month names stay in text order", async () => {
   const quarters = await loadOnly(["Q3", "Q1", "Q4", "Q2"]);
   assert.equal(quarters.sort, "text");
   assert.deepEqual(quarters.values, ["Q1", "Q2", "Q3", "Q4"]);
-
-  const isoQuarters = await loadOnly(["2025-Q2", "2024-Q4", "2025-Q1"]);
-  assert.equal(isoQuarters.sort, "text");
-  assert.deepEqual(isoQuarters.values, ["2024-Q4", "2025-Q1", "2025-Q2"]);
 
   const prefixed = await loadOnly(["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "P11", "P12"]);
   assert.equal(prefixed.sort, "text");
@@ -130,11 +235,7 @@ test("quarter labels, prefixed labels, and month names stay in text order", asyn
   assert.deepEqual(names.values, ["Apr", "Aug", "Dec", "Feb", "Jan", "Jul", "Jun", "Mar", "May", "Nov", "Oct", "Sep"]);
 });
 
-test("date grains and year-to-date labels stay in text order", async () => {
-  const isoMonths = await loadOnly(["2025-10", "2025-03", "2025-09"]);
-  assert.equal(isoMonths.sort, "text");
-  assert.deepEqual(isoMonths.values, ["2025-03", "2025-09", "2025-10"]);
-
+test("year-to-date labels stay in text order", async () => {
   const ytd = await loadOnly(["2025 YTD", "2024 YTD"]);
   assert.equal(ytd.sort, "text");
   assert.deepEqual(ytd.values, ["2024 YTD", "2025 YTD"]);

@@ -1,0 +1,1 @@
+- The period list still orders case-varied text labels by the date they name, such as `fy2024` beside `Fy2025` or `2024-Q4` beside `2025-q1`, while uppercasing only the distinct labels instead of every row. The list order, the date formats, the fallback to text order and the latest-200 window are unchanged.
