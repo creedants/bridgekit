@@ -432,3 +432,59 @@ test("rejects a prefixed workbook with no data rows instead of loading it empty"
   });
   await assert.rejects(firstSheetAsCsv(book), /The first sheet of that workbook has no data rows\./);
 });
+
+async function payloadWorkbook(): Promise<ArrayBuffer> {
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("sales");
+  sheet.addRow(["period", "units", "check"]);
+  sheet.addRow([2025, 10, { formula: "B2*4" }]);
+  sheet.addRow([2026, 20, { formula: "B3*4", result: 80 }]);
+  return workbook.xlsx.writeBuffer();
+}
+
+type SheetLoad = { csv: string; holes: readonly number[]; formulaBlanks: number };
+
+// The payload spells a prefixed `<v/>` inside markup the repair must not touch,
+// so a plain string rewrite would leave a bare `<v/>` the formula scan reads as
+// a saved result. The prefixed twin prefixes the formula element only.
+async function payloadTwins(
+  formula: (open: string, close: string) => string,
+): Promise<{ plain: SheetLoad; prefixed: SheetLoad }> {
+  const book = await payloadWorkbook();
+  const edit = (xml: string, prefix: string) =>
+    replaceOnce(xml, `<${prefix}f>B2*4</${prefix}f>`, formula(`<${prefix}f>`, `</${prefix}f>`));
+  const plain = await firstSheetAsCsv(
+    await rewriteWorkbook(book, { "xl/worksheets/sheet1.xml": (xml) => edit(xml, "") }),
+  );
+  const prefixed = await firstSheetAsCsv(
+    await rewriteWorkbook(book, {
+      "xl/worksheets/sheet1.xml": (xml) => edit(prefixPart(xml, "x"), "x:"),
+    }),
+  );
+  return { plain, prefixed };
+}
+
+function assertPayloadTwins(plain: SheetLoad, prefixed: SheetLoad): void {
+  assert.equal(plain.csv, "period,units,check\n2025,10,\n2026,20,80");
+  assert.equal(plain.formulaBlanks, 1);
+  assert.equal(prefixed.csv, plain.csv);
+  assert.equal(prefixed.formulaBlanks, plain.formulaBlanks);
+}
+
+test("keeps a comment in a prefixed worksheet out of the formula count", async () => {
+  const { plain, prefixed } = await payloadTwins((open, close) => `${open}B2*4${close}<!-- <x:v/> -->`);
+  assertPayloadTwins(plain, prefixed);
+});
+
+test("keeps a processing instruction in a prefixed worksheet out of the formula count", async () => {
+  const { plain, prefixed } = await payloadTwins((open, close) => `${open}B2*4${close}<?review <x:v/> ?>`);
+  assertPayloadTwins(plain, prefixed);
+});
+
+test("keeps a CDATA payload in a prefixed worksheet formula out of the formula count", async () => {
+  const { plain, prefixed } = await payloadTwins(
+    (open, close) => `${open}IF(B2&gt;0,"<![CDATA[<x:v/>]]>","")${close}`,
+  );
+  assertPayloadTwins(plain, prefixed);
+});
