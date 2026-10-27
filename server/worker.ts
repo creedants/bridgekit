@@ -2,12 +2,13 @@ import { Hono, type Context, type ExecutionContext as HonoExecutionContext, type
 import { getPath } from "hono/utils/url";
 import { serveCompressedWasm } from "./assets.ts";
 import { createAuth, limitMagicLinkSignIn, type Auth } from "./auth.ts";
-import type { ExecutionContext, Fetcher } from "./cloudflare.ts";
+import type { ExecutionContext, ForwardableEmailMessage, Fetcher, ScheduledController } from "./cloudflare.ts";
 import { handleCommentary, type CommentarySpender } from "./commentary.ts";
 import { countPageView, pageView } from "./counts.ts";
 import { canSendEmail, EMAIL_NOT_SET_UP } from "./email.ts";
 import type { Env } from "./env.ts";
 import { createCheckout, createPortalSession, parseSubscriptionEvent, PaddleReadError, verifyPaddleSignature, type PaddleAccount, type PaddleEnvironment } from "./paddle.ts";
+import { purgeSupportMail, receiveSupportMail } from "./support.ts";
 import {
   assertCheckoutOpen,
   deleteSaved,
@@ -40,6 +41,7 @@ import {
  *   /api/commentary    AI commentary, for Pro members
  *   /api/paddle/*      subscriptions
  *   pages              served as they are, with a count per page per day
+ *   mail to support@   forwarded, and kept for 90 days
  */
 
 type App = { Bindings: Env; Variables: { auth: Auth } };
@@ -464,6 +466,14 @@ const worker = {
     const closed = closedApiResponse(request.method, getPath(request));
     if (closed !== null && !accountsEnabled(env.ACCOUNTS)) return closed;
     return open.fetch(request, env, ctx);
+  },
+  /** Mail to the support address (Email Routing): forwarded, and kept 90 days when a person sent it. */
+  email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext): Promise<void> {
+    return receiveSupportMail(message, env);
+  },
+  /** The daily cron in wrangler.jsonc: deletes support mail past its 90 days. */
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    await purgeSupportMail(env.DB, new Date(controller.scheduledTime));
   },
 };
 
