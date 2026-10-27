@@ -1,0 +1,1 @@
+- `src/engine.ts` orders accounts tied on absolute change by account name in ascending order. The Accounts tab now shows tied leaders in a stable order.
