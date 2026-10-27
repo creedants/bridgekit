@@ -215,18 +215,34 @@ async function extendedColumns(query: Query, columns: string[], source: string):
   return columns.map((_, index) => Number(row[`x${index}`]) > 0);
 }
 
+/**
+ * The columns this function may retype. None when an index on the table or a foreign key from another
+ * table makes DuckDB refuse every ALTER and DROP there; otherwise those no constraint other than NOT NULL names.
+ */
+async function alterableColumns(query: Query, table: string, columns: string[]): Promise<string[]> {
+  if (columns.length === 0) return columns;
+  const name = `'${table.replaceAll("'", "''")}'`;
+  const rows = await query(
+    `SELECT NULL AS name FROM duckdb_indexes() WHERE schema_name = current_schema() AND table_name = ${name} UNION ALL SELECT NULL FROM duckdb_constraints() WHERE constraint_type = 'FOREIGN KEY' AND referenced_table = ${name} UNION ALL SELECT unnest(constraint_column_names) FROM duckdb_constraints() WHERE schema_name = current_schema() AND table_name = ${name} AND constraint_type <> 'NOT NULL'`,
+  );
+  if (rows.some((row) => row.name === null)) return [];
+  const pinned = new Set(rows.map((row) => quotedName(String(row.name)).toLowerCase()));
+  return columns.filter((column) => !pinned.has(column.toLowerCase()));
+}
+
 export async function convertFormattedNumbers(query: Query, table: string): Promise<void> {
   const tableName = quotedName(table);
   const columns = varcharColumns(await query(`DESCRIBE ${tableName}`));
   if (columns.length === 0) return;
   const sample = `(SELECT * FROM ${tableName} LIMIT ${FIRST_ROWS})`;
   const sampled = await countFormatting(query, columns, sample, await extendedColumns(query, columns, sample));
-  const likely = columns.filter((_, index) => parsesWithFormatting(sampled[index]));
+  const likely = await alterableColumns(query, table, columns.filter((_, index) => parsesWithFormatting(sampled[index])));
   if (likely.length === 0) return;
   const extended = await extendedColumns(query, likely, tableName);
   const existing = new Set((await query(`DESCRIBE ${tableName}`)).map((row) => String(row.column_name).toLowerCase()));
   const temporary: string[] = [];
   const parsed = likely.map(() => "");
+  let failure: { error: unknown } | undefined;
   try {
     for (const [index, column] of likely.entries()) {
       if (!extended[index]) continue;
@@ -259,9 +275,17 @@ export async function convertFormattedNumbers(query: Query, table: string): Prom
         await query(`COMMENT ON COLUMN ${tableName}.${column} IS 'mixed number styles'`);
       }
     }
-  } finally {
-    for (const field of temporary) await query(`ALTER TABLE ${tableName} DROP COLUMN ${field}`);
+  } catch (error) {
+    failure = { error };
   }
+  for (const field of temporary) {
+    try {
+      await query(`ALTER TABLE ${tableName} DROP COLUMN ${field}`);
+    } catch (error) {
+      failure ??= { error };
+    }
+  }
+  if (failure) throw failure.error;
 }
 
 export async function decimalCommaNote(query: Query, table: string): Promise<string | null> {

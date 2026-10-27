@@ -1,0 +1,2 @@
+- A file whose conversion fails partway now loads with the table it started with, instead of keeping an internal helper column and its parsed values.
+- A table that carries an index, or a constraint DuckDB will not let the tool retype, keeps that column as text instead of failing the load.

@@ -381,3 +381,99 @@ test("a bare right single quote groups thousands on a decimal comma", async () =
   expectNumbers(await columnValues(query, "data", "amount"), [1234.5]);
   assert.equal(await decimalCommaNote(query, "data"), DECIMAL_COMMA);
 });
+
+function refusing(query: Query, refusals: [RegExp, Error][]): Query {
+  return async (sql) => {
+    const refusal = refusals.find(([pattern]) => pattern.test(sql));
+    if (refusal) throw refusal[1];
+    return query(sql);
+  };
+}
+
+function tableChanges(statements: string[]): string[] {
+  return statements.filter((sql) => /\b(ADD COLUMN|ALTER|UPDATE|COMMENT|DROP)\b/i.test(sql));
+}
+
+test("an index on the money column leaves it as text with no internal column", async () => {
+  const query = await openDatabase();
+  await query("CREATE TABLE data AS SELECT '€1.234,50' amount");
+  await query("CREATE INDEX amount_index ON data(amount)");
+  const indexes = "SELECT index_name, sql FROM duckdb_indexes() WHERE table_name = 'data'";
+  const before = await query(indexes);
+  const issued: string[] = [];
+  await convertFormattedNumbers(async (sql) => {
+    issued.push(sql);
+    return query(sql);
+  }, "data");
+  assert.deepEqual((await query("DESCRIBE data")).map((row) => [row.column_name, row.column_type]), [["amount", "VARCHAR"]]);
+  assert.deepEqual(await columnValues(query, "data", "amount"), ["€1.234,50"]);
+  assert.equal(await decimalCommaNote(query, "data"), null);
+  assert.deepEqual(await query(indexes), before);
+  assert.deepEqual(tableChanges(issued), []);
+});
+
+test("an index on another column leaves every money column as text", async () => {
+  const query = await openDatabase();
+  await query("CREATE TABLE data (id VARCHAR, amount VARCHAR, net VARCHAR)");
+  await query("CREATE INDEX id_index ON data(id)");
+  await query("INSERT INTO data VALUES ('a', '€1.234,50', '1.234,50')");
+  const issued: string[] = [];
+  await convertFormattedNumbers(async (sql) => {
+    issued.push(sql);
+    return query(sql);
+  }, "data");
+  assert.deepEqual(
+    (await query("DESCRIBE data")).map((row) => [row.column_name, row.column_type]),
+    [["id", "VARCHAR"], ["amount", "VARCHAR"], ["net", "VARCHAR"]],
+  );
+  assert.deepEqual(await columnValues(query, "data", "amount"), ["€1.234,50"]);
+  assert.deepEqual(await columnValues(query, "data", "net"), ["1.234,50"]);
+  assert.equal(await decimalCommaNote(query, "data"), null);
+  assert.deepEqual(tableChanges(issued), []);
+});
+
+test("a unique money column stays text beside a peer that converts", async () => {
+  const query = await openDatabase();
+  await query("CREATE TABLE data (amount VARCHAR UNIQUE, net VARCHAR)");
+  await query("INSERT INTO data VALUES ('€1.234,50', '€1.250,50')");
+  await convertFormattedNumbers(query, "data");
+  assert.deepEqual(
+    (await query("DESCRIBE data")).map((row) => [row.column_name, row.column_type]),
+    [["amount", "VARCHAR"], ["net", "DOUBLE"]],
+  );
+  assert.deepEqual(await columnValues(query, "data", "amount"), ["€1.234,50"]);
+  expectNumbers(await columnValues(query, "data", "net"), [1250.5]);
+  assert.equal(await decimalCommaNote(query, "data"), DECIMAL_COMMA);
+});
+
+test("a not null money column still converts", async () => {
+  const query = await openDatabase();
+  await query("CREATE TABLE data (amount VARCHAR NOT NULL)");
+  await query("INSERT INTO data VALUES ('€1.234,50')");
+  await convertFormattedNumbers(query, "data");
+  assert.deepEqual((await query("DESCRIBE data")).map((row) => [row.column_name, row.column_type]), [["amount", "DOUBLE"]]);
+  expectNumbers(await columnValues(query, "data", "amount"), [1234.5]);
+  assert.equal(await decimalCommaNote(query, "data"), DECIMAL_COMMA);
+});
+
+test("a failed conversion drops the internal column and rethrows its own error", async () => {
+  for (const step of [/^UPDATE /, /^ALTER TABLE \S+ ALTER /, /^COMMENT ON /]) {
+    const query = await openDatabase();
+    await createText(query, "data", { amount: ["€1.234,50"] });
+    const refused = new Error("refused");
+    await assert.rejects(convertFormattedNumbers(refusing(query, [[step, refused]]), "data"), (error) => error === refused);
+    const names = (await query("DESCRIBE data")).map((row) => String(row.column_name));
+    assert.deepEqual(names.filter((name) => name.startsWith("__money_")), []);
+  }
+});
+
+test("a refused drop after a failed step still rethrows the step's error", async () => {
+  const query = await openDatabase();
+  await createText(query, "data", { amount: ["€1.234,50"] });
+  const refused = new Error("refused");
+  const dropRefused = new Error("drop refused");
+  await assert.rejects(
+    convertFormattedNumbers(refusing(query, [[/^ALTER TABLE \S+ ALTER /, refused], [/ DROP COLUMN /, dropRefused]]), "data"),
+    (error) => error === refused,
+  );
+});
