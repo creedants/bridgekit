@@ -13,6 +13,7 @@ const GUIDE = "<!doctype html><title>Guide</title>";
 const METHOD = "<!doctype html><title>Method</title>";
 const PRIVACY = "<!doctype html><title>Privacy</title>";
 const ARTICLE = "<!doctype html><title>Price volume mix</title>";
+const TERMS = "<!doctype html><title>Terms</title>";
 
 function redirect(location: string): Response {
   return new Response("redirect", { status: 307, headers: { location, "content-type": "text/html; charset=utf-8" } });
@@ -90,6 +91,8 @@ test("an html address returns that page and counts the request once", async () =
     "/privacy": html(PRIVACY),
     "/price-volume-mix-analysis.html": redirect("/price-volume-mix-analysis"),
     "/price-volume-mix-analysis": html(ARTICLE),
+    "/terms.html": redirect("/terms"),
+    "/terms": html(TERMS),
   });
   const guide = await open("/guide.html", env);
   assert.equal(guide.status, 200);
@@ -98,21 +101,26 @@ test("an html address returns that page and counts the request once", async () =
   const method = await open("/method.html", env);
   const privacy = await open("/privacy.html", env);
   const article = await open("/price-volume-mix-analysis.html", env);
+  const terms = await open("/terms.html", env);
   assert.equal(method.status, 200);
   assert.equal(await method.text(), METHOD);
   assert.equal(privacy.status, 200);
   assert.equal(await privacy.text(), PRIVACY);
   assert.equal(article.status, 200);
   assert.equal(await article.text(), ARTICLE);
+  assert.equal(terms.status, 200);
+  assert.equal(terms.headers.get("location"), null);
+  assert.equal(await terms.text(), TERMS);
   assert.deepEqual(
     calls.map((call) => call.pathname),
-    ["/guide", "/method", "/privacy", "/price-volume-mix-analysis"],
+    ["/guide", "/method", "/privacy", "/price-volume-mix-analysis", "/terms"],
   );
   assert.deepEqual(await views(db), [
     { path: "/guide", referrer: "", views: 1 },
     { path: "/method", referrer: "", views: 1 },
     { path: "/price-volume-mix-analysis", referrer: "", views: 1 },
     { path: "/privacy", referrer: "", views: 1 },
+    { path: "/terms", referrer: "", views: 1 },
   ]);
 });
 

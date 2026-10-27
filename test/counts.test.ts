@@ -9,12 +9,13 @@ const articles = new Set([
   "/privacy.html",
   "/price-volume-mix-analysis.html",
   "/grouping-level.html",
+  "/terms.html",
 ]);
 
 const html = () => new Response("<html>", { headers: { "content-type": "text/html; charset=utf-8" } });
 
 test("a known page has one stored path", () => {
-  const pages = ["guide", "method", "privacy", "price-volume-mix-analysis", "grouping-level"];
+  const pages = ["guide", "method", "privacy", "price-volume-mix-analysis", "grouping-level", "terms"];
   for (const page of pages) {
     assert.equal(canonicalPagePath(`/${page}`, articles), `/${page}`);
     assert.equal(canonicalPagePath(`/${page}.html`, articles), `/${page}`);

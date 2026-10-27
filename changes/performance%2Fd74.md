@@ -1,0 +1,1 @@
+- Add the Terms of use page at /terms with Terms and Contact links in every page footer and one sentence on the privacy page about keeping support email.

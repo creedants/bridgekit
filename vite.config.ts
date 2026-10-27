@@ -70,6 +70,7 @@ export default defineConfig(({ mode }) => {
           method: resolve(import.meta.dirname, "method.html"),
           guide: resolve(import.meta.dirname, "guide.html"),
           privacy: resolve(import.meta.dirname, "privacy.html"),
+          terms: resolve(import.meta.dirname, "terms.html"),
           article: resolve(import.meta.dirname, "price-volume-mix-analysis.html"),
           groupingLevel: resolve(import.meta.dirname, "grouping-level.html"),
           app: resolve(import.meta.dirname, "app/index.html"),
