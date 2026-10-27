@@ -1,0 +1,1 @@
+- Regenerated the four gallery screenshots in public/img so the app header reads PVM Bridge.
