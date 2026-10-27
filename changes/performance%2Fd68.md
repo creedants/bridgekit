@@ -1,0 +1,1 @@
+- The Data check tab now shows the sentence `dateOrderNote` returns beside the decimal comma sentence: `1 column with slash dates was read month-first: order_date.` Both come from one helper, `dataCheckNotes`, in `src/app/Results.tsx`, and each sentence is its own `hint` line with the decimal comma sentence first.
