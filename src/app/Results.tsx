@@ -96,6 +96,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
 
   return (
     <>
+      <h1>Price-volume-mix bridge</h1>
       <div className="kpis">
         <Kpi label={`${measureName(config)} ${config.prior}`} value={whole(result.priorSales)} />
         <Kpi label={`${measureName(config)} ${config.current}`} value={whole(result.currentSales)} />
@@ -476,7 +477,7 @@ function Trend(props: { run: Run; query: () => Promise<Query> }) {
  */
 export function setupCheckHint(prices: number[], rowCount: number): string {
   if (rowCount === 1) return "With one attribute there is nothing to leave out.";
-  return `Across these setups the price effect ranges from ${signedWhole(Math.min(...prices))} to ${signedWhole(Math.max(...prices))}. When leaving out an attribute moves price a lot, that attribute separates products whose mix changed. Keep it if it describes the product itself; a label that changed between periods can hide a real price change. One that barely moves price and lowers the match rate can be dropped.`;
+  return `Across these setups the price effect ranges from ${signedWhole(Math.min(...prices))} to ${signedWhole(Math.max(...prices))}. When leaving out an attribute moves price a lot, the bridge depends on that attribute. Keep it if it describes the product itself; a label that changed between periods can hide a real price change. One that barely moves price and lowers the match rate can be dropped.`;
 }
 
 function SetupCheck(props: { run: Run; query: () => Promise<Query> }) {
