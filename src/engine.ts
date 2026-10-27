@@ -944,9 +944,7 @@ export async function accountBridge(
   top = 15,
 ): Promise<AccountGroup[]> {
   const period = ident(config.periodColumn);
-  const measure = config.costColumn
-    ? `(${ident(config.salesColumn)} - coalesce(${ident(config.costColumn)}, 0))`
-    : ident(config.salesColumn);
+  const measure = measureSql(config);
   const accounts = `
     SELECT *, CASE
         WHEN s0 = 0 AND s1 <> 0 THEN 'new'
