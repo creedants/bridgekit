@@ -1,0 +1,1 @@
+- The downloaded report has a Leave out names box that removes names from the file when ticked.

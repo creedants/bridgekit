@@ -58,6 +58,17 @@ const cell = (value: unknown) => {
   return markup(/^[=+\-@\t\r]/.test(text) ? `'${text}` : text);
 };
 
+const NAME_FREE_LABELS = new Set([
+  "Periods",
+  "Units column",
+  "Sales column",
+  "Gross sales column",
+  "Cost column",
+  "New and discontinued",
+]);
+
+const isNameFree = (label: string) => NAME_FREE_LABELS.has(label) || /^Attribute \d+$/.test(label);
+
 /**
  * A single self-contained HTML file with the chart, bridge, coverage, summary
  * and top movers. It holds totals and a written summary, names the file, the
@@ -71,8 +82,10 @@ export function buildReport(input: {
   movers: { label: string; rows: Record<string, unknown>[]; columns: string[] };
   priceBands: PriceBucket[];
   accounts?: { column: string; groups: AccountGroup[] };
+  omitNames?: boolean;
 }): string {
   const { config, result } = input;
+  const omit = input.omitNames === true;
   const t = terms(config);
   const row = (cells: string[], tag = "td") =>
     `<tr>${cells.map((c, i) => `<${tag}${i > 0 ? ' class="n"' : ""}>${c}</${tag}>`).join("")}</tr>`;
@@ -83,15 +96,25 @@ export function buildReport(input: {
   ];
   const mixOf = (r: Record<string, unknown>) =>
     config.levels.reduce((sum, _, i) => sum + Number(r[`mix_${i + 1}`] ?? 0), 0);
-  const movers = input.movers.rows.map((r) =>
+  const movers = input.movers.rows.map((r, i) =>
     row([
-      cell(input.movers.columns.map((c) => r[c] ?? "(blank)").join(" / ")),
+      omit ? String(i + 1) : cell(input.movers.columns.map((c) => r[c] ?? "(blank)").join(" / ")),
       signedWhole(Number(r.s1) + Number(r.z1) - Number(r.s0) - Number(r.z0)),
       signedWhole(Number(r.volume)),
       signedWhole(mixOf(r)),
       signedWhole(Number(r.price)),
     ]),
   );
+  const summarySentence = omit
+    ? "It holds totals, a written summary and the setup, leaves out the file name, filter values, mover names and chart, and holds no rows."
+    : "It holds totals and a written summary, names the file, the setup, its filter values and the largest movers, and holds no rows.";
+  const setupRows = input.description.map((line) => {
+    if (!omit) return row(line.split(": ", 2).map(cell));
+    const parts = line.split(": ", 2);
+    if (parts.length < 2) return row(parts.map(cell));
+    if (isNameFree(parts[0])) return row(parts.map(cell));
+    return row([cell(parts[0]), cell("left out")]);
+  });
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${markup(t.bridgeTitle)}: ${markup(config.prior)} to ${markup(config.current)}</title>
@@ -105,9 +128,9 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:#4a5360;bo
 .plain tr td{font-weight:400}img{max-width:100%}
 </style></head><body>
 <h1>${markup(t.bridgeTitle)}: ${markup(config.prior)} to ${markup(config.current)}</h1>
-<p class="muted">Created ${new Date().toISOString().slice(0, 10)} with PVM Bridge. It holds totals and a written summary, names the file, the setup, its filter values and the largest movers, and holds no rows.</p>
+<p class="muted">Created ${new Date().toISOString().slice(0, 10)} with PVM Bridge. ${summarySentence}</p>
 ${commentary(result, config).map((p) => `<p>${markup(p)}</p>`).join("\n")}
-${input.chartUrl ? `<img alt="Waterfall chart of the bridge" src="${input.chartUrl}">` : ""}
+${omit ? "" : input.chartUrl ? `<img alt="Waterfall chart of the bridge" src="${input.chartUrl}">` : ""}
 <h2>Bridge</h2>
 <table>${row(["", "Amount", t.ofPrior], "th")}${bridge.join("")}</table>
 <h2>How current sales were matched</h2>
@@ -129,6 +152,6 @@ ${
     : ""
 }
 <h2>Setup</h2>
-<table class="plain">${input.description.map((line) => row(line.split(": ", 2).map(cell))).join("")}</table>
+<table class="plain">${setupRows.join("")}</table>
 </body></html>`;
 }

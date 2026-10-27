@@ -181,6 +181,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
 }
 
 function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<Query> }) {
+  const [omitNames, setOmitNames] = useState(false);
   const paragraphs = commentary(props.result, props.run.config);
   const downloadReport = async () => {
     const { config } = props.run;
@@ -199,6 +200,7 @@ function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<
       accounts: accountColumn
         ? { column: accountColumn, groups: await accountBridge(query, config, accountColumn) }
         : undefined,
+      omitNames,
     });
     download(`bridge-${config.prior}-to-${config.current}.html`, html, "text/html");
   };
@@ -208,6 +210,10 @@ function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<
         <h3>Summary</h3>
         <span className="actions">
           <CopyButton text={() => paragraphs.join("\n\n")} />
+          <label className="check">
+            <input type="checkbox" checked={omitNames} onChange={(e) => setOmitNames(e.target.checked)} />
+            Leave out names
+          </label>
           <button onClick={downloadReport}>Download report</button>
         </span>
       </div>
