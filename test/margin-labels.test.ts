@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import type { Worksheet } from "exceljs";
 import { exportExcel } from "../src/app/exportExcel.ts";
@@ -217,6 +218,133 @@ test("a sales report keeps the sales headings it shows today", () => {
   assert.equal(html.includes("Share of matched sales"), true);
   assert.equal(html.includes("% of prior sales"), true);
   assert.equal(html.includes("Margin"), false, "the sales report names margin");
+});
+
+const resultsSource = readFileSync(new URL("../src/app/Results.tsx", import.meta.url), "utf8");
+
+/**
+ * The two wordings of one Results-tab label. Each test also reads the tab's
+ * source, because three of these labels already came from the shared terms and
+ * a wording test alone would pass without the tab using them.
+ */
+const resultsLabel = (
+  field: "exactNote" | "sharesNote" | "priceUp" | "priceFlat" | "priceDown" | "matched" | "againstPlan" | "largestGroups" | "measure" | "compared" | "ofCompared" | "matchedHeading" | "matchedShare" | "current",
+) => ({
+  margin: terms(marginConfig)[field],
+  sales: terms(salesConfig)[field],
+  used: new RegExp(`t\\.${field}(?![A-Za-z])`).test(resultsSource),
+});
+
+test("a margin bridge's matched note names margin", () => {
+  assert.deepEqual(resultsLabel("exactNote"), {
+    margin: "of current margin with units",
+    sales: "of current sales with units",
+    used: true,
+  });
+});
+
+test("a margin bridge's coverage heading names margin", () => {
+  assert.deepEqual(resultsLabel("matchedHeading"), {
+    margin: "How current margin was matched",
+    sales: "How current sales were matched",
+    used: true,
+  });
+});
+
+test("a margin bridge's coverage hint names margin", () => {
+  assert.deepEqual(resultsLabel("sharesNote"), {
+    margin: "Shares are of current margin on rows with units.",
+    sales: "Shares are of current sales on rows with units.",
+    used: true,
+  });
+});
+
+test("a margin bridge's price increase KPI names margin", () => {
+  assert.deepEqual(resultsLabel("priceUp"), {
+    margin: "Margin with a price increase",
+    sales: "Sales with a price increase",
+    used: true,
+  });
+});
+
+test("a margin bridge's no-change KPI names margin", () => {
+  assert.deepEqual(resultsLabel("priceFlat"), {
+    margin: "Margin with no change",
+    sales: "Sales with no change",
+    used: true,
+  });
+});
+
+test("a margin bridge's price decrease KPI names margin", () => {
+  assert.deepEqual(resultsLabel("priceDown"), {
+    margin: "Margin with a price decrease",
+    sales: "Sales with a price decrease",
+    used: true,
+  });
+});
+
+test("a margin bridge's band share header names margin", () => {
+  assert.deepEqual(resultsLabel("matchedShare"), {
+    margin: "Share of matched margin",
+    sales: "Share of matched sales",
+    used: true,
+  });
+});
+
+test("a margin bridge's band current header names margin", () => {
+  assert.deepEqual(resultsLabel("current"), {
+    margin: "Current margin",
+    sales: "Current sales",
+    used: true,
+  });
+});
+
+test("a margin bridge's realization column names margin", () => {
+  assert.deepEqual(resultsLabel("matched"), {
+    margin: "Matched margin",
+    sales: "Matched sales",
+    used: true,
+  });
+});
+
+test("a margin bridge's against-plan hint names margin", () => {
+  assert.deepEqual(resultsLabel("againstPlan"), {
+    margin: "Against plan is the margin above or below what the planned increase would have delivered.",
+    sales: "Against plan is the sales above or below what the planned increase would have delivered.",
+    used: true,
+  });
+});
+
+test("a margin bridge's largest-groups hint names margin", () => {
+  assert.deepEqual(resultsLabel("largestGroups"), {
+    margin: "Largest 200 groups by matched margin.",
+    sales: "Largest 200 groups by matched sales.",
+    used: true,
+  });
+});
+
+test("a margin bridge's measure column names margin", () => {
+  assert.deepEqual(resultsLabel("measure"), { margin: "Margin", sales: "Sales", used: true });
+});
+
+test("a margin bridge's compared KPI names margin", () => {
+  assert.deepEqual(resultsLabel("compared"), { margin: "Margin compared", sales: "Sales compared", used: true });
+});
+
+test("a margin bridge's compared KPI note names margin", () => {
+  assert.deepEqual(resultsLabel("ofCompared"), { margin: "of margin compared", sales: "of sales compared", used: true });
+});
+
+test("a margin bridge's low-match warning names margin", () => {
+  assert.equal(
+    terms(marginConfig).lowMatch(0.123),
+    "Only 12.3% of current margin matched an exact prior configuration. Consider fewer attributes, or check the Unmatched tab.",
+  );
+  assert.equal(
+    terms(salesConfig).lowMatch(0.123),
+    "Only 12.3% of current sales matched an exact prior configuration. Consider fewer attributes, or check the Unmatched tab.",
+  );
+  assert.ok(resultsSource.includes("t.lowMatch("), "the low-match warning does not read the shared label");
 });
 
 test("the Trend tab header list adds Unit cost only on a margin bridge", () => {
