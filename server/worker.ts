@@ -387,6 +387,27 @@ open.get("/assets/*", async (c) => serveCompressedWasm(c.req.raw, c.env.ASSETS))
 /** The asset layer redirects these names to the same file without `.html`. */
 export const HTML_PAGE = new Set(["/guide.html", "/method.html", "/privacy.html", "/terms.html", "/price-volume-mix-analysis.html", "/grouping-level.html"]);
 
+/** The hosts a local run answers on, where plain http is the normal address. */
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
+
+/**
+ * The address a request should be sent to instead, or null when it already is
+ * the canonical one. Plain http on a public host moves to https, and a GET or
+ * HEAD for one of the page names that also answers without `.html` moves to
+ * the `.html` address. Both moves happen together, so
+ * `http://pvmbridge.com/guide?x=1` lands on `https://pvmbridge.com/guide.html?x=1`
+ * in one hop.
+ */
+export function canonicalAddress(request: Request): URL | null {
+  const url = new URL(request.url);
+  const https = url.protocol === "http:" && !LOCAL_HOSTS.has(url.hostname);
+  const page = (request.method === "GET" || request.method === "HEAD") && HTML_PAGE.has(`${url.pathname}.html`);
+  if (!https && !page) return null;
+  if (https) url.protocol = "https:";
+  if (page) url.pathname = `${url.pathname}.html`;
+  return url;
+}
+
 async function pageResponse(request: Request, assets: Fetcher): Promise<Response> {
   const url = new URL(request.url);
   if (!HTML_PAGE.has(url.pathname)) return assets.fetch(request);
@@ -411,6 +432,14 @@ for (const pathname of HTML_PAGE) {
 
 const worker = {
   fetch(request: Request, env: Env, ctx: HonoExecutionContext): Response | Promise<Response> {
+    const canonical = canonicalAddress(request);
+    if (canonical !== null) {
+      // A move that only changes the path stays relative to the address the
+      // request came in on; only the move to https names the host, because the
+      // scheme changes with it.
+      const location = canonical.protocol === new URL(request.url).protocol ? `${canonical.pathname}${canonical.search}` : canonical.href;
+      return new Response(null, { status: 301, headers: { location } });
+    }
     const closed = closedApiResponse(request.method, getPath(request));
     if (closed !== null && !accountsEnabled(env.ACCOUNTS)) return closed;
     return open.fetch(request, env, ctx);
