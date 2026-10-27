@@ -1,1 +1,1 @@
-- The report tests now pin the unticked report's title, bridge cells and movers rows, apply the ticked engine test's region filter through the real setup view so its totals must change, and check each movers amount under its own header.
+- The report tests now pin the unticked report's title and the ordered bridge and movers cell text for both the absent and false flag paths, and apply the ticked engine test's region filter through the real setup view so its totals must change.
