@@ -56,14 +56,33 @@ const distinctMovers = () => [
   { product: "ZX-14", s0: 20, s1: 50, z0: 0, z1: 0, volume: 0, mix_1: 0, price: 0, new_config: 0, discontinued: 0, no_units: 30 },
 ];
 
-/** A table's rows as ordered cell text, from its section heading, with tag attributes and the spacing between tags ignored. */
+/** Each `<h2>` heading's text and the span from its closing tag to the next heading, or to the end of the document. */
+const sectionsOf = (html: string): { text: string; start: number; end: number }[] =>
+  [...html.matchAll(/<h2>([\s\S]*?)<\/h2>/g)].map((match, index, all) => ({
+    text: match[1].trim(),
+    start: (match.index ?? 0) + match[0].length,
+    end: all[index + 1]?.index ?? html.length,
+  }));
+
+/** Whole-heading matchers, one per section the tests read. */
+const HEADINGS: Record<string, RegExp> = {
+  Bridge: /^Bridge$/,
+  Setup: /^Setup$/,
+  "Largest movers": /^Largest movers by .+$/,
+};
+
+/** A table's rows as ordered cell text, from the one section whose whole heading matches, with tag attributes and the spacing between tags ignored. */
 const tableRows = (html: string, heading: string): string[][] => {
-  const section = html.indexOf(`<h2>${heading}`);
-  assert.notEqual(section, -1, `the report has no ${heading} section`);
-  const start = html.indexOf("<table", section);
-  const end = html.indexOf("</table>", start);
-  assert.ok(start > section && end > start, `the ${heading} section holds no table`);
-  return [...html.slice(start, end).matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)].map(([, row]) =>
+  const matcher = HEADINGS[heading];
+  assert.ok(matcher, `the test has no heading matcher for ${heading}`);
+  const matches = sectionsOf(html).filter((section) => matcher.test(section.text));
+  assert.equal(matches.length, 1, `the report has ${matches.length} ${heading} sections, wanted 1`);
+  const { start: from, end: to } = matches[0];
+  const section = html.slice(from, to);
+  const start = section.indexOf("<table");
+  const end = section.indexOf("</table>", start);
+  assert.ok(start !== -1 && end > start, `the ${heading} section holds no table`);
+  return [...section.slice(start, end).matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)].map(([, row]) =>
     [...row.matchAll(/<t[hd]\b[^>]*>([\s\S]*?)<\/t[hd]>/g)].map(([, text]) => text.trim()),
   );
 };
