@@ -264,6 +264,23 @@ test("an unticked report keeps a fixed baseline whether the flag is absent or fa
   }
 });
 
+test("a section lookup rejects a heading that is missing, duplicated or renamed", () => {
+  const html = build();
+  assert.equal(tableRows(html, "Bridge").length, BRIDGE_BASELINE.length, "the unedited report does not read the Bridge table");
+
+  const intruder = html.replace("<h2>Bridge</h2>", "<h2>Bridge</h2>\n<h2>Unrelated section</h2>");
+  assert.throws(() => tableRows(intruder, "Bridge"), /Bridge section holds no table/, "an unrelated heading between the Bridge heading and its table still reads a table");
+
+  const duplicated = html.replace("<h2>Bridge</h2>", "<h2>Bridge</h2>\n<h2>Bridge</h2>");
+  assert.throws(() => tableRows(duplicated, "Bridge"), /2 Bridge sections, wanted 1/, "a second Bridge heading still reads one table");
+
+  const renamed = html.replace("<h2>Bridge</h2>", "<h2>Bridge archive</h2>");
+  assert.throws(() => tableRows(renamed, "Bridge"), /0 Bridge sections, wanted 1/, "a Bridge archive heading still reads the Bridge table");
+
+  const wrongMovers = html.replace("<h2>Largest movers by Product</h2>", "<h2>Largest movers Product</h2>");
+  assert.throws(() => tableRows(wrongMovers, "Largest movers"), /0 Largest movers sections, wanted 1/, "a movers heading without 'by' still reads the movers table");
+});
+
 test("a ticked engine report applies its region filter and leaves custom attribute, filter and separator-free names out", async () => {
   const prodValue = "ZX-PROD-A";
   const acctValue = "ZX-ACCT-OLD";
