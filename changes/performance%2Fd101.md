@@ -1,0 +1,1 @@
+- An effect or change shown as a percentage of the prior total now divides by the absolute prior total, so it keeps its own sign when the prior total is negative, such as net sales after returns. A positive prior total shows the same percentages as before, and a zero prior total still shows a blank.

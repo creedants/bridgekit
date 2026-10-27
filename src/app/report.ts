@@ -1,7 +1,7 @@
 import { commentary } from "../commentary.ts";
 import { coverageLabel, measureName, type AccountGroup, type BridgeConfig, type BridgeResult, type PriceBucket } from "../engine.ts";
 import type { Setup } from "./setup.ts";
-import { percent, signedPercent, signedWhole, whole } from "./format.ts";
+import { percent, shareOfPrior, signedPercent, signedWhole, whole } from "./format.ts";
 
 const markup = (value: unknown) =>
   String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
@@ -125,7 +125,7 @@ export function buildReport(input: {
     `<tr>${cells.map((c, i) => `<${tag}${i > 0 ? ' class="n"' : ""}>${c}</${tag}>`).join("")}</tr>`;
   const bridge = [
     row([cell(`${measureName(config)} ${config.prior}`), whole(result.priorSales), ""]),
-    ...viewEffects.map((e) => row([cell(e.label), signedWhole(e.value), signedPercent(e.value / result.priorSales)])),
+    ...viewEffects.map((e) => row([cell(e.label), signedWhole(e.value), signedPercent(shareOfPrior(e.value, result.priorSales))])),
     row([cell(`${measureName(config)} ${config.current}`), whole(result.currentSales), ""]),
   ];
   const mixOf = (r: Record<string, unknown>) =>

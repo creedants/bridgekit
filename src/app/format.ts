@@ -9,3 +9,6 @@ export const signedWhole = (n: number) => (n > 0 ? "+" : "") + wholeFormat.forma
 export const price = (n: number) => (Number.isFinite(n) ? priceFormat.format(n) : "");
 export const percent = (n: number) => (Number.isFinite(n) ? (n * 100).toFixed(1) + "%" : "");
 export const signedPercent = (n: number) => (Number.isFinite(n) ? (n > 0 ? "+" : "") + (n * 100).toFixed(1) + "%" : "");
+
+/** A value as a share of the prior total. Dividing by the absolute prior keeps the value's sign when the prior total is negative, and a zero prior gives a number the formatters print as blank. */
+export const shareOfPrior = (value: number, prior: number) => value / Math.abs(prior);

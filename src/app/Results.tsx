@@ -29,7 +29,7 @@ import { commentary } from "../commentary.ts";
 import { summarize, type BridgeSummary } from "../summary.ts";
 import { download, toExportCsv, toExportTsv } from "./files.ts";
 import { finiteOrBlank } from "./exportExcel.ts";
-import { percent, price, signedPercent, signedWhole, whole } from "./format.ts";
+import { percent, price, shareOfPrior, signedPercent, signedWhole, whole } from "./format.ts";
 import { dateOrderNote } from "./db.ts";
 import { decimalCommaNote } from "./numbers.ts";
 import { trendPeriods } from "./periods.ts";
@@ -99,8 +99,8 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
       <div className="kpis">
         <Kpi label={`${measureName(config)} ${config.prior}`} value={whole(result.priorSales)} />
         <Kpi label={`${measureName(config)} ${config.current}`} value={whole(result.currentSales)} />
-        <Kpi label="Change" value={signedWhole(change)} note={signedPercent(change / result.priorSales)} />
-        <Kpi label="Like-for-like price" value={signedWhole(priceEffect)} note={signedPercent(priceEffect / result.priorSales)} />
+        <Kpi label="Change" value={signedWhole(change)} note={signedPercent(shareOfPrior(change, result.priorSales))} />
+        <Kpi label="Like-for-like price" value={signedWhole(priceEffect)} note={signedPercent(shareOfPrior(priceEffect, result.priorSales))} />
         <Kpi label="Matched exactly" value={percent(exact)} note="of current sales with units" />
       </div>
 
@@ -144,7 +144,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
                     <tr key={e.key}>
                       <td>{e.label}</td>
                       <td className="num">{signedWhole(e.value)}</td>
-                      <td className="num">{signedPercent(e.value / result.priorSales)}</td>
+                      <td className="num">{signedPercent(shareOfPrior(e.value, result.priorSales))}</td>
                     </tr>
                   ))}
                   <tr className="total"><td>{measureName(config)} {config.current}</td><td className="num">{whole(result.currentSales)}</td><td /></tr>
@@ -420,7 +420,7 @@ function Trend(props: { run: Run; query: () => Promise<Query> }) {
     );
   }
   if (!steps) return <p className="hint">Calculating a bridge for each pair of periods…</p>;
-  const widest = Math.max(...steps.map((s) => Math.abs(s.price / s.priorSales)), 0.0001);
+  const widest = Math.max(...steps.map((s) => Math.abs(shareOfPrior(s.price, s.priorSales))), 0.0001);
   return (
     <div>
       <table className="dense distribution">
@@ -445,12 +445,12 @@ function Trend(props: { run: Run; query: () => Promise<Query> }) {
               <td className="num">{signedWhole(s.volume)}</td>
               <td className="num">{signedWhole(s.mix)}</td>
               <td className="num">{signedWhole(s.price)}</td>
-              <td className="num">{signedPercent(s.price / s.priorSales)}</td>
+              <td className="num">{signedPercent(shareOfPrior(s.price, s.priorSales))}</td>
               <td className="bar-cell" style={{ width: "18%" }}>
                 <span
                   className="bar"
                   style={{
-                    width: `${(Math.abs(s.price / s.priorSales) / widest) * 100}%`,
+                    width: `${(Math.abs(shareOfPrior(s.price, s.priorSales)) / widest) * 100}%`,
                     background: s.price >= 0 ? "var(--up)" : "var(--down)",
                   }}
                 />
