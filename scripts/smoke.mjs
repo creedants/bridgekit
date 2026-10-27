@@ -1261,16 +1261,23 @@ async function drive(browser, origin, rows) {
     const moverValues = ["MD0", "MD1", "MD2", "MD3"];
     if (!moverValues.some((value) => untickedReport.includes(value))) fail("omit names: the unticked report names no top mover value");
     if (!untickedReport.includes("smoke.csv")) fail("omit names: the unticked report does not name the file");
+    const customLabel = "MD0 assortment";
+    await browser.evalJs(`T.input(document.querySelectorAll('.levels input[aria-label="Attribute name"]')[0], ${JSON.stringify(customLabel)})`);
+    await browser.waitFor(`document.querySelectorAll('.levels input[aria-label="Attribute name"]')[0].value === ${JSON.stringify(customLabel)}`);
+    await calculate();
+    await browser.evalJs(`T.tab("Bridge")`);
+    await browser.sleep(800);
     await browser.evalJs(`([...document.querySelectorAll('.summary label.check input')].find((i) => i.closest('label').textContent.includes('Leave out names'))).click()`);
     await browser.waitFor(`[...document.querySelectorAll('.summary label.check input')].some((i) => i.closest('label').textContent.includes('Leave out names') && i.checked)`);
     const tickedReport = await downloadReport();
     if (!tickedReport) fail("omit names: no ticked report was downloaded");
-    for (const absent of [...moverValues, "C0", "C1", "C2", "C3", "C4", "smoke.csv"]) {
+    for (const absent of [...moverValues, "C0", "C1", "C2", "C3", "C4", "smoke.csv", customLabel]) {
       if (tickedReport.includes(absent)) fail(`omit names: the ticked report still names ${JSON.stringify(absent)}`);
     }
+    if (tickedReport.toLowerCase().includes(customLabel.toLowerCase())) fail(`omit names: the ticked report still names ${JSON.stringify(customLabel)}`);
     if (tickedReport.includes("<img")) fail("omit names: the ticked report still holds the chart image");
     if (!tickedReport.includes("leaves out the file name, filter values, mover names and chart")) fail("omit names: the ticked report is missing its sentence");
-    console.log("ok  omit names: the ticked report leaves mover values, the file name and the chart out");
+    console.log("ok  omit names: the ticked report leaves mover values, a custom attribute label, the file name and the chart out");
 
     await setDataFile(fixtures.csvPath);
     await addFixtureLevels();

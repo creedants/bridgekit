@@ -1,5 +1,5 @@
 import { commentary } from "../commentary.ts";
-import { measureName, type AccountGroup, type BridgeConfig, type BridgeResult, type PriceBucket } from "../engine.ts";
+import { coverageLabel, measureName, type AccountGroup, type BridgeConfig, type BridgeResult, type PriceBucket } from "../engine.ts";
 import { percent, signedPercent, signedWhole, whole } from "./format.ts";
 
 const markup = (value: unknown) =>
@@ -67,7 +67,8 @@ const NAME_FREE_LABELS = new Set([
   "New and discontinued",
 ]);
 
-const isNameFree = (label: string) => NAME_FREE_LABELS.has(label) || /^Attribute \d+$/.test(label);
+const safeAttributeName = (level: BridgeConfig["levels"][number], index: number) =>
+  level.columns.join(" + ") || `Attribute ${index + 1}`;
 
 /**
  * A single self-contained HTML file with the chart, bridge, coverage, summary
@@ -87,11 +88,28 @@ export function buildReport(input: {
   const { config, result } = input;
   const omit = input.omitNames === true;
   const t = terms(config);
+  const safeLevels = config.levels.map((level, i) => ({ ...level, name: safeAttributeName(level, i) }));
+  const safeConfig: BridgeConfig = { ...config, levels: safeLevels };
+  const safeEffects = result.effects.map((e) => {
+    if (!e.key.startsWith("mix_")) return e;
+    const index = Number(e.key.slice(4)) - 1;
+    const safe = safeLevels[index]?.name ?? `Attribute ${index + 1}`;
+    return { ...e, label: `Mix: ${safe}` };
+  });
+  const viewEffects = omit ? safeEffects : result.effects;
+  const viewCoverage = omit
+    ? result.coverage.map((c) => ({ ...c, label: coverageLabel(safeConfig, c.level) }))
+    : result.coverage;
+  const paragraphs = omit
+    ? commentary({ ...result, effects: safeEffects }, safeConfig)
+    : commentary(result, config);
+  const safeMoversLabel = safeLevels[0]?.name ?? input.movers.label;
+  const viewMoversLabel = omit ? safeMoversLabel : input.movers.label;
   const row = (cells: string[], tag = "td") =>
     `<tr>${cells.map((c, i) => `<${tag}${i > 0 ? ' class="n"' : ""}>${c}</${tag}>`).join("")}</tr>`;
   const bridge = [
     row([cell(`${measureName(config)} ${config.prior}`), whole(result.priorSales), ""]),
-    ...result.effects.map((e) => row([cell(e.label), signedWhole(e.value), signedPercent(e.value / result.priorSales)])),
+    ...viewEffects.map((e) => row([cell(e.label), signedWhole(e.value), signedPercent(e.value / result.priorSales)])),
     row([cell(`${measureName(config)} ${config.current}`), whole(result.currentSales), ""]),
   ];
   const mixOf = (r: Record<string, unknown>) =>
@@ -108,12 +126,22 @@ export function buildReport(input: {
   const summarySentence = omit
     ? "It holds totals, a written summary and the setup, leaves out the file name, filter values, mover names and chart, and holds no rows."
     : "It holds totals and a written summary, names the file, the setup, its filter values and the largest movers, and holds no rows.";
-  const setupRows = input.description.map((line) => {
-    if (!omit) return row(line.split(": ", 2).map(cell));
-    const parts = line.split(": ", 2);
-    if (parts.length < 2) return row(parts.map(cell));
-    if (isNameFree(parts[0])) return row(parts.map(cell));
-    return row([cell(parts[0]), cell("left out")]);
+  const setupRows = input.description.flatMap((line) => {
+    if (!omit) return [row(line.split(": ", 2).map(cell))];
+    const sep = line.indexOf(": ");
+    if (sep < 0) return [];
+    const label = line.slice(0, sep);
+    const value = line.slice(sep + 2);
+    if (label === "Source" || label === "Filter") return [row([cell(label), cell("left out")])];
+    if (NAME_FREE_LABELS.has(label)) return [row([cell(label), cell(value)])];
+    const attr = /^Attribute (\d+)$/.exec(label);
+    if (attr) {
+      const index = Number(attr[1]) - 1;
+      const safe = safeLevels[index]?.name;
+      if (!safe) return [row([cell(label), cell("left out")])];
+      return [row([cell(label), cell(safe)])];
+    }
+    return [];
   });
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -129,16 +157,16 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:#4a5360;bo
 </style></head><body>
 <h1>${markup(t.bridgeTitle)}: ${markup(config.prior)} to ${markup(config.current)}</h1>
 <p class="muted">Created ${new Date().toISOString().slice(0, 10)} with PVM Bridge. ${summarySentence}</p>
-${commentary(result, config).map((p) => `<p>${markup(p)}</p>`).join("\n")}
+${paragraphs.map((p) => `<p>${markup(p)}</p>`).join("\n")}
 ${omit ? "" : input.chartUrl ? `<img alt="Waterfall chart of the bridge" src="${input.chartUrl}">` : ""}
 <h2>Bridge</h2>
 <table>${row(["", "Amount", t.ofPrior], "th")}${bridge.join("")}</table>
 <h2>How current sales were matched</h2>
-<table class="plain">${row(["Compared against", "Share", "Configurations"], "th")}${result.coverage
+<table class="plain">${row(["Compared against", "Share", "Configurations"], "th")}${viewCoverage
     .map((c) => row([cell(c.label), percent(c.share), whole(c.cells)]))
     .join("")}</table>
-<h2>Largest movers by ${markup(input.movers.label)}</h2>
-<table class="plain">${row([cell(input.movers.label), "Change", "Volume", "Mix", t.priceEffect], "th")}${movers.join("")}</table>
+<h2>Largest movers by ${markup(viewMoversLabel)}</h2>
+<table class="plain">${row([cell(viewMoversLabel), "Change", "Volume", "Mix", t.priceEffect], "th")}${movers.join("")}</table>
 <h2>How widely price moved</h2>
 <table class="plain">${row(["Change in average price", "Share of matched sales", "Price effect"], "th")}${input.priceBands
     .map((b) => row([cell(b.label), percent(b.share), signedWhole(b.priceEffect)]))

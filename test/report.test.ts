@@ -181,7 +181,7 @@ test("a names-out report leaves mover values, filter values and the file name ou
   assert.equal(html.includes("<img"), false, "the chart image is still in the report");
   assert.equal(html.includes(TICKED_SENTENCE), true, "the ticked sentence is missing");
   assert.equal(html.includes(UNTICKED_SENTENCE), false, "the unticked sentence is still in the report");
-  assert.equal(html.includes(">Product</th>"), true, "the movers header lost the level name");
+  assert.equal(html.includes(">product</th>"), true, "the movers header lost the safe column label");
   assert.equal(html.includes("<td>1</td>"), true, "rank 1 is missing");
   assert.equal(html.includes("<td>2</td>"), true, "rank 2 is missing");
   assert.equal(html.includes("left out"), true, "the setup stand-in is missing");
