@@ -377,6 +377,7 @@ open.post("/api/commentary", (c) =>
     apiKey: c.env.ANTHROPIC_API_KEY ?? "",
     spender: () => commentarySpender(c),
     rateLimit: c.env.COMMENTARY_RATE_LIMIT,
+    ledger: c.env.DB,
   }),
 );
 
