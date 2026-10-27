@@ -1,5 +1,6 @@
 import { commentary } from "../commentary.ts";
 import { coverageLabel, measureName, type AccountGroup, type BridgeConfig, type BridgeResult, type PriceBucket } from "../engine.ts";
+import type { Setup } from "./setup.ts";
 import { percent, signedPercent, signedWhole, whole } from "./format.ts";
 
 const markup = (value: unknown) =>
@@ -58,17 +59,26 @@ const cell = (value: unknown) => {
   return markup(/^[=+\-@\t\r]/.test(text) ? `'${text}` : text);
 };
 
-const NAME_FREE_LABELS = new Set([
-  "Periods",
-  "Units column",
-  "Sales column",
-  "Gross sales column",
-  "Cost column",
-  "New and discontinued",
-]);
-
 const safeAttributeName = (level: BridgeConfig["levels"][number], index: number) =>
   level.columns.join(" + ") || `Attribute ${index + 1}`;
+
+/** Human-readable lines describing the setup, for exports. Moved here from App.tsx so the report builds both states from one place. */
+export function describeSetup(setup: Setup, prior: string | number, current: string | number, source: string): string[] {
+  return [
+    `Source: ${source}`,
+    `Periods: ${prior} to ${current} (${setup.periodColumn}${setup.grain === "value" ? "" : ", by " + setup.grain})`,
+    `Units column: ${setup.unitsColumn}`,
+    `Sales column: ${setup.salesColumn}`,
+    // Cost takes precedence over gross in cellsSql, so Setup lists gross only when cost is not set.
+    ...(setup.grossColumn && !setup.costColumn ? [`Gross sales column: ${setup.grossColumn}`] : []),
+    ...(setup.costColumn ? [`Cost column: ${setup.costColumn} (bridge is on margin)`] : []),
+    ...setup.levels.map((level, i) => `Attribute ${i + 1}: ${level.name} (${level.columns.join(" + ")})`),
+    `New and discontinued: ${setup.newAndDiscontinued === "full" ? "full sales, outside volume and mix" : "price difference only, units in volume"}`,
+    ...setup.filters
+      .filter((f) => f.values.length > 0)
+      .map((f) => `Filter: ${f.column} ${f.mode === "include" ? "is one of" : "is not"} ${f.values.join(", ")}`),
+  ];
+}
 
 /**
  * A single self-contained HTML file with the chart, bridge, coverage, summary
@@ -80,6 +90,8 @@ export function buildReport(input: {
   result: BridgeResult;
   chartUrl?: string;
   description: string[];
+  setup?: Setup;
+  source?: string;
   movers: { label: string; rows: Record<string, unknown>[]; columns: string[] };
   priceBands: PriceBucket[];
   accounts?: { column: string; groups: AccountGroup[] };
@@ -126,23 +138,42 @@ export function buildReport(input: {
   const summarySentence = omit
     ? "It holds totals, a written summary and the setup, leaves out the file name, filter values, mover names and chart, and holds no rows."
     : "It holds totals and a written summary, names the file, the setup, its filter values and the largest movers, and holds no rows.";
-  const setupRows = input.description.flatMap((line) => {
-    if (!omit) return [row(line.split(": ", 2).map(cell))];
-    const sep = line.indexOf(": ");
-    if (sep < 0) return [];
-    const label = line.slice(0, sep);
-    const value = line.slice(sep + 2);
-    if (label === "Source" || label === "Filter") return [row([cell(label), cell("left out")])];
-    if (NAME_FREE_LABELS.has(label)) return [row([cell(label), cell(value)])];
-    const attr = /^Attribute (\d+)$/.exec(label);
-    if (attr) {
-      const index = Number(attr[1]) - 1;
-      const safe = safeLevels[index]?.name;
-      if (!safe) return [row([cell(label), cell("left out")])];
-      return [row([cell(label), cell(safe)])];
+  const hasStructured = input.setup != null && input.source != null;
+  const setupRows = (() => {
+    if (!omit) {
+      if (hasStructured) {
+        return describeSetup(input.setup!, input.config.prior, input.config.current, input.source!).map((line) =>
+          row(line.split(": ", 2).map(cell)),
+        );
+      }
+      return input.description.map((line) => row(line.split(": ", 2).map(cell)));
     }
-    return [];
-  });
+    if (!hasStructured) return [];
+    const setup = input.setup!;
+    const periodValue = `${input.config.prior} to ${input.config.current} (${setup.periodColumn}${setup.grain === "value" ? "" : ", by " + setup.grain})`;
+    return [
+      row([cell("Source"), cell("left out")]),
+      row([cell("Periods"), cell(periodValue)]),
+      row([cell("Units column"), cell(setup.unitsColumn)]),
+      row([cell("Sales column"), cell(setup.salesColumn)]),
+      ...(setup.grossColumn && !setup.costColumn
+        ? [row([cell("Gross sales column"), cell(setup.grossColumn)])]
+        : []),
+      ...(setup.costColumn ? [row([cell("Cost column"), cell(`${setup.costColumn} (bridge is on margin)`)])] : []),
+      ...safeLevels.map((safe, i) => row([cell(`Attribute ${i + 1}`), cell(safe.name)])),
+      row([
+        cell("New and discontinued"),
+        cell(
+          setup.newAndDiscontinued === "full"
+            ? "full sales, outside volume and mix"
+            : "price difference only, units in volume",
+        ),
+      ]),
+      ...setup.filters
+        .filter((f) => f.values.length > 0)
+        .map(() => row([cell("Filter"), cell("left out")])),
+    ];
+  })();
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${markup(t.bridgeTitle)}: ${markup(config.prior)} to ${markup(config.current)}</title>

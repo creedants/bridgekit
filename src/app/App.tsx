@@ -16,6 +16,7 @@ import { fileProblem, periodView, periodsFor, type FileProblem, type LoadedPerio
 import { whole } from "./format.ts";
 import { distinctCounts, findRollups } from "./profile.ts";
 import { loadPeriodList } from "./periods.ts";
+import { describeSetup } from "./report.ts";
 import type { Run } from "./Results.tsx";
 import {
   guessSetup,
@@ -96,23 +97,6 @@ function previewCell(type: string, value: unknown): string {
     }
   }
   return String(value);
-}
-
-function describeSetup(setup: Setup, prior: string, current: string, source: string): string[] {
-  return [
-    `Source: ${source}`,
-    `Periods: ${prior} to ${current} (${setup.periodColumn}${setup.grain === "value" ? "" : ", by " + setup.grain})`,
-    `Units column: ${setup.unitsColumn}`,
-    `Sales column: ${setup.salesColumn}`,
-    // Cost takes precedence over gross in cellsSql, so Setup lists gross only when cost is not set.
-    ...(setup.grossColumn && !setup.costColumn ? [`Gross sales column: ${setup.grossColumn}`] : []),
-    ...(setup.costColumn ? [`Cost column: ${setup.costColumn} (bridge is on margin)`] : []),
-    ...setup.levels.map((level, i) => `Attribute ${i + 1}: ${level.name} (${level.columns.join(" + ")})`),
-    `New and discontinued: ${setup.newAndDiscontinued === "full" ? "full sales, outside volume and mix" : "price difference only, units in volume"}`,
-    ...setup.filters
-      .filter((f) => f.values.length > 0)
-      .map((f) => `Filter: ${f.column} ${f.mode === "include" ? "is one of" : "is not"} ${f.values.join(", ")}`),
-  ];
 }
 
 /** The loaded file's rows with the same period column as VIEW, before the filters. */
@@ -293,6 +277,8 @@ export function App() {
         periods: offeredPeriods,
         textColumns: columns.filter((c) => !/INT|DOUBLE|DECIMAL|FLOAT|REAL|DATE|TIMESTAMP/i.test(c.type)).map((c) => c.name),
         description: describeSetup(setup, prior, current, source),
+        setup,
+        source,
         id: Date.now(),
         signature,
       });
