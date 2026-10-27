@@ -2,7 +2,7 @@
 
 Part 1 puts the free tool on `pvmbridge.com` with page counts. It stands alone. Part 2 turns on accounts and payments. Part 1 is one sitting. Step 1.2 is the only wait in that sitting.
 
-This file names the site host `pvmbridge.com` and the production database id. The only value it leaves for you to write into a config file or a build command is the client token from step 2.15. Do not put a secret in a file or on a command line. `npx wrangler secret put` asks for it.
+This file names the site host `pvmbridge.com` and the production database id. The only placeholder left in a config snippet or build command is `<client-token>` from step 2.15. Part 2 also tells you to add `ACCOUNTS` and, if necessary, change the rate-limit namespace id. Do not put a secret in a file or on a command line. `npx wrangler secret put` asks for it.
 
 `npm ci` installs Wrangler in this repo. It does not put `wrangler` on the shell PATH. Use `npx wrangler` for a direct command. `npm run cf:dev` and `npm run cf:deploy` already run that install, because npm puts `node_modules/.bin` on the script PATH.
 
@@ -46,7 +46,7 @@ Dashboard (not verified): Cloudflare > Account Home > Add a domain.
 
 ### 1.3 Create the database
 
-Do: Create the D1 database and copy the id it prints. If Wrangler offers to write that id into the config file, refuse. Its default binding name is the database name, `bridgekit`, and the entry in this file is bound as `DB`, so accepting that offer adds a second entry instead of updating this one. Put the id on `wrangler.jsonc:25` yourself, as step 1.4 describes. Done in this repository: `wrangler.jsonc:23-25` already names the database and carries its production id, so run this only when `npx wrangler d1 list` does not show `bridgekit`. That listing is how you know the database is created.
+Do: Create the D1 database and copy the id it prints. If Wrangler offers to write that id into the config file, refuse. Its default binding name is the database name, `bridgekit`, and the entry in this file is bound as `DB`. Accepting that default binding name adds a second entry; choosing `DB` at the binding-name prompt updates the existing entry. Put the id on `wrangler.jsonc:25` yourself, as step 1.4 describes. Done in this repository: `wrangler.jsonc:23-25` already names the database and carries its production id, so run this only when `npx wrangler d1 list` does not show `bridgekit`. That listing is how you know the database is created.
 
 Run:
 ```sh
