@@ -12,6 +12,12 @@ export interface Env {
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
   /**
+   * The verified Email Routing destination every message to the support
+   * address is forwarded to. A secret, because the repository is public.
+   * Missing or empty: support mail is still stored, then refused.
+   */
+  SUPPORT_FORWARD_TO?: string;
+  /**
    * On only when the value is exactly "on". A local development deployment sets
    * it, so a missing mail key writes the email to the Worker log instead of
    * failing. Production never sets it: a missing, empty or misspelled value
