@@ -33,7 +33,7 @@ import { percent, price, signedPercent, signedWhole, whole } from "./format.ts";
 import { dateOrderNote } from "./db.ts";
 import { decimalCommaNote } from "./numbers.ts";
 import { trendPeriods } from "./periods.ts";
-import { TABLE } from "./setup.ts";
+import { TABLE, type Setup } from "./setup.ts";
 import { useCommentaryOffer } from "./useConfig.ts";
 import { buildReport, moverHeader, terms } from "./report.ts";
 import { SmallBridges } from "./SmallBridges.tsx";
@@ -46,6 +46,9 @@ export interface Run {
   periods: string[];
   /** Human-readable lines describing the setup, for exports. */
   description: string[];
+  /** Structured setup and file name, so the ticked report rebuilds Setup without copying values. */
+  setup: Setup;
+  source: string;
   config: BridgeConfig;
   result: BridgeResult;
   check: DataCheck;
@@ -181,6 +184,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
 }
 
 function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<Query> }) {
+  const [omitNames, setOmitNames] = useState(false);
   const paragraphs = commentary(props.result, props.run.config);
   const downloadReport = async () => {
     const { config } = props.run;
@@ -194,11 +198,14 @@ function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<
       result: props.result,
       chartUrl: canvas?.toDataURL("image/png"),
       description: props.run.description,
+      setup: props.run.setup,
+      source: props.run.source,
       movers: { label: first.name, rows, columns: first.columns },
       priceBands: (await priceDistribution(query, config)).buckets,
       accounts: accountColumn
         ? { column: accountColumn, groups: await accountBridge(query, config, accountColumn) }
         : undefined,
+      omitNames,
     });
     download(`bridge-${config.prior}-to-${config.current}.html`, html, "text/html");
   };
@@ -208,6 +215,10 @@ function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<
         <h3>Summary</h3>
         <span className="actions">
           <CopyButton text={() => paragraphs.join("\n\n")} />
+          <label className="check">
+            <input type="checkbox" checked={omitNames} onChange={(e) => setOmitNames(e.target.checked)} />
+            Leave out names
+          </label>
           <button onClick={downloadReport}>Download report</button>
         </span>
       </div>

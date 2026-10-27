@@ -1252,6 +1252,35 @@ async function drive(browser, origin, rows) {
 
     await setDataFile(fixtures.csvPath);
     await addFixtureLevels();
+    await waitReady();
+    await calculate();
+    await browser.evalJs(`T.tab("Bridge")`);
+    await browser.sleep(800);
+    const untickedReport = await downloadReport();
+    if (!untickedReport) fail("omit names: no unticked report was downloaded");
+    const moverValues = ["MD0", "MD1", "MD2", "MD3"];
+    if (!moverValues.some((value) => untickedReport.includes(value))) fail("omit names: the unticked report names no top mover value");
+    if (!untickedReport.includes("smoke.csv")) fail("omit names: the unticked report does not name the file");
+    const customLabel = "MD0 assortment";
+    await browser.evalJs(`T.input(document.querySelectorAll('.levels input[aria-label="Attribute name"]')[0], ${JSON.stringify(customLabel)})`);
+    await browser.waitFor(`document.querySelectorAll('.levels input[aria-label="Attribute name"]')[0].value === ${JSON.stringify(customLabel)}`);
+    await calculate();
+    await browser.evalJs(`T.tab("Bridge")`);
+    await browser.sleep(800);
+    await browser.evalJs(`([...document.querySelectorAll('.summary label.check input')].find((i) => i.closest('label').textContent.includes('Leave out names'))).click()`);
+    await browser.waitFor(`[...document.querySelectorAll('.summary label.check input')].some((i) => i.closest('label').textContent.includes('Leave out names') && i.checked)`);
+    const tickedReport = await downloadReport();
+    if (!tickedReport) fail("omit names: no ticked report was downloaded");
+    for (const absent of [...moverValues, "C0", "C1", "C2", "C3", "C4", "smoke.csv", customLabel]) {
+      if (tickedReport.includes(absent)) fail(`omit names: the ticked report still names ${JSON.stringify(absent)}`);
+    }
+    if (tickedReport.toLowerCase().includes(customLabel.toLowerCase())) fail(`omit names: the ticked report still names ${JSON.stringify(customLabel)}`);
+    if (tickedReport.includes("<img")) fail("omit names: the ticked report still holds the chart image");
+    if (!tickedReport.includes("leaves out the file name, filter values, mover names and chart")) fail("omit names: the ticked report is missing its sentence");
+    console.log("ok  omit names: the ticked report leaves mover values, a custom attribute label, the file name and the chart out");
+
+    await setDataFile(fixtures.csvPath);
+    await addFixtureLevels();
     await browser.evalJs(`T.set(T.sel('Compare by'), 'ytd')`);
     const ytdReady = `(() => { const sel = (name) => [...document.querySelectorAll('label')].find((label) => label.firstChild && label.firstChild.textContent.trim().startsWith(name))?.querySelector('select'); const prior = sel('Prior')?.selectedOptions?.[0]; const current = sel('Current')?.selectedOptions?.[0]; return !!prior && !!current && prior.textContent.includes('YTD') && current.textContent.includes('YTD'); })()`;
     await browser.waitFor(ytdReady);

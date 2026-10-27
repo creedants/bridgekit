@@ -1,5 +1,6 @@
 import { commentary } from "../commentary.ts";
-import { measureName, type AccountGroup, type BridgeConfig, type BridgeResult, type PriceBucket } from "../engine.ts";
+import { coverageLabel, measureName, type AccountGroup, type BridgeConfig, type BridgeResult, type PriceBucket } from "../engine.ts";
+import type { Setup } from "./setup.ts";
 import { percent, signedPercent, signedWhole, whole } from "./format.ts";
 
 const markup = (value: unknown) =>
@@ -58,6 +59,27 @@ const cell = (value: unknown) => {
   return markup(/^[=+\-@\t\r]/.test(text) ? `'${text}` : text);
 };
 
+const safeAttributeName = (level: BridgeConfig["levels"][number], index: number) =>
+  level.columns.join(" + ") || `Attribute ${index + 1}`;
+
+/** Human-readable lines describing the setup, for exports. Moved here from App.tsx so the report builds both states from one place. */
+export function describeSetup(setup: Setup, prior: string | number, current: string | number, source: string): string[] {
+  return [
+    `Source: ${source}`,
+    `Periods: ${prior} to ${current} (${setup.periodColumn}${setup.grain === "value" ? "" : ", by " + setup.grain})`,
+    `Units column: ${setup.unitsColumn}`,
+    `Sales column: ${setup.salesColumn}`,
+    // Cost takes precedence over gross in cellsSql, so Setup lists gross only when cost is not set.
+    ...(setup.grossColumn && !setup.costColumn ? [`Gross sales column: ${setup.grossColumn}`] : []),
+    ...(setup.costColumn ? [`Cost column: ${setup.costColumn} (bridge is on margin)`] : []),
+    ...setup.levels.map((level, i) => `Attribute ${i + 1}: ${level.name} (${level.columns.join(" + ")})`),
+    `New and discontinued: ${setup.newAndDiscontinued === "full" ? "full sales, outside volume and mix" : "price difference only, units in volume"}`,
+    ...setup.filters
+      .filter((f) => f.values.length > 0)
+      .map((f) => `Filter: ${f.column} ${f.mode === "include" ? "is one of" : "is not"} ${f.values.join(", ")}`),
+  ];
+}
+
 /**
  * A single self-contained HTML file with the chart, bridge, coverage, summary
  * and top movers. It holds totals and a written summary, names the file, the
@@ -68,30 +90,90 @@ export function buildReport(input: {
   result: BridgeResult;
   chartUrl?: string;
   description: string[];
+  setup?: Setup;
+  source?: string;
   movers: { label: string; rows: Record<string, unknown>[]; columns: string[] };
   priceBands: PriceBucket[];
   accounts?: { column: string; groups: AccountGroup[] };
+  omitNames?: boolean;
 }): string {
   const { config, result } = input;
+  const omit = input.omitNames === true;
   const t = terms(config);
+  const safeLevels = config.levels.map((level, i) => ({ ...level, name: safeAttributeName(level, i) }));
+  const safeConfig: BridgeConfig = { ...config, levels: safeLevels };
+  const safeEffects = result.effects.map((e) => {
+    if (!e.key.startsWith("mix_")) return e;
+    const index = Number(e.key.slice(4)) - 1;
+    const safe = safeLevels[index]?.name ?? `Attribute ${index + 1}`;
+    return { ...e, label: `Mix: ${safe}` };
+  });
+  const viewEffects = omit ? safeEffects : result.effects;
+  const viewCoverage = omit
+    ? result.coverage.map((c) => ({ ...c, label: coverageLabel(safeConfig, c.level) }))
+    : result.coverage;
+  const paragraphs = omit
+    ? commentary({ ...result, effects: safeEffects }, safeConfig)
+    : commentary(result, config);
+  const safeMoversLabel = safeLevels[0]?.name ?? input.movers.label;
+  const viewMoversLabel = omit ? safeMoversLabel : input.movers.label;
   const row = (cells: string[], tag = "td") =>
     `<tr>${cells.map((c, i) => `<${tag}${i > 0 ? ' class="n"' : ""}>${c}</${tag}>`).join("")}</tr>`;
   const bridge = [
     row([cell(`${measureName(config)} ${config.prior}`), whole(result.priorSales), ""]),
-    ...result.effects.map((e) => row([cell(e.label), signedWhole(e.value), signedPercent(e.value / result.priorSales)])),
+    ...viewEffects.map((e) => row([cell(e.label), signedWhole(e.value), signedPercent(e.value / result.priorSales)])),
     row([cell(`${measureName(config)} ${config.current}`), whole(result.currentSales), ""]),
   ];
   const mixOf = (r: Record<string, unknown>) =>
     config.levels.reduce((sum, _, i) => sum + Number(r[`mix_${i + 1}`] ?? 0), 0);
-  const movers = input.movers.rows.map((r) =>
+  const movers = input.movers.rows.map((r, i) =>
     row([
-      cell(input.movers.columns.map((c) => r[c] ?? "(blank)").join(" / ")),
+      omit ? String(i + 1) : cell(input.movers.columns.map((c) => r[c] ?? "(blank)").join(" / ")),
       signedWhole(Number(r.s1) + Number(r.z1) - Number(r.s0) - Number(r.z0)),
       signedWhole(Number(r.volume)),
       signedWhole(mixOf(r)),
       signedWhole(Number(r.price)),
     ]),
   );
+  const summarySentence = omit
+    ? "It holds totals, a written summary and the setup, leaves out the file name, filter values, mover names and chart, and holds no rows."
+    : "It holds totals and a written summary, names the file, the setup, its filter values and the largest movers, and holds no rows.";
+  const hasStructured = input.setup != null && input.source != null;
+  const setupRows = (() => {
+    if (!omit) {
+      if (hasStructured) {
+        return describeSetup(input.setup!, input.config.prior, input.config.current, input.source!).map((line) =>
+          row(line.split(": ", 2).map(cell)),
+        );
+      }
+      return input.description.map((line) => row(line.split(": ", 2).map(cell)));
+    }
+    if (!hasStructured) return [];
+    const setup = input.setup!;
+    const periodValue = `${input.config.prior} to ${input.config.current} (${setup.periodColumn}${setup.grain === "value" ? "" : ", by " + setup.grain})`;
+    return [
+      row([cell("Source"), cell("left out")]),
+      row([cell("Periods"), cell(periodValue)]),
+      row([cell("Units column"), cell(setup.unitsColumn)]),
+      row([cell("Sales column"), cell(setup.salesColumn)]),
+      ...(setup.grossColumn && !setup.costColumn
+        ? [row([cell("Gross sales column"), cell(setup.grossColumn)])]
+        : []),
+      ...(setup.costColumn ? [row([cell("Cost column"), cell(`${setup.costColumn} (bridge is on margin)`)])] : []),
+      ...safeLevels.map((safe, i) => row([cell(`Attribute ${i + 1}`), cell(safe.name)])),
+      row([
+        cell("New and discontinued"),
+        cell(
+          setup.newAndDiscontinued === "full"
+            ? "full sales, outside volume and mix"
+            : "price difference only, units in volume",
+        ),
+      ]),
+      ...setup.filters
+        .filter((f) => f.values.length > 0)
+        .map(() => row([cell("Filter"), cell("left out")])),
+    ];
+  })();
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${markup(t.bridgeTitle)}: ${markup(config.prior)} to ${markup(config.current)}</title>
@@ -105,17 +187,17 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:#4a5360;bo
 .plain tr td{font-weight:400}img{max-width:100%}
 </style></head><body>
 <h1>${markup(t.bridgeTitle)}: ${markup(config.prior)} to ${markup(config.current)}</h1>
-<p class="muted">Created ${new Date().toISOString().slice(0, 10)} with PVM Bridge. It holds totals and a written summary, names the file, the setup, its filter values and the largest movers, and holds no rows.</p>
-${commentary(result, config).map((p) => `<p>${markup(p)}</p>`).join("\n")}
-${input.chartUrl ? `<img alt="Waterfall chart of the bridge" src="${input.chartUrl}">` : ""}
+<p class="muted">Created ${new Date().toISOString().slice(0, 10)} with PVM Bridge. ${summarySentence}</p>
+${paragraphs.map((p) => `<p>${markup(p)}</p>`).join("\n")}
+${omit ? "" : input.chartUrl ? `<img alt="Waterfall chart of the bridge" src="${input.chartUrl}">` : ""}
 <h2>Bridge</h2>
 <table>${row(["", "Amount", t.ofPrior], "th")}${bridge.join("")}</table>
 <h2>How current sales were matched</h2>
-<table class="plain">${row(["Compared against", "Share", "Configurations"], "th")}${result.coverage
+<table class="plain">${row(["Compared against", "Share", "Configurations"], "th")}${viewCoverage
     .map((c) => row([cell(c.label), percent(c.share), whole(c.cells)]))
     .join("")}</table>
-<h2>Largest movers by ${markup(input.movers.label)}</h2>
-<table class="plain">${row([cell(input.movers.label), "Change", "Volume", "Mix", t.priceEffect], "th")}${movers.join("")}</table>
+<h2>Largest movers by ${markup(viewMoversLabel)}</h2>
+<table class="plain">${row([cell(viewMoversLabel), "Change", "Volume", "Mix", t.priceEffect], "th")}${movers.join("")}</table>
 <h2>How widely price moved</h2>
 <table class="plain">${row(["Change in average price", "Share of matched sales", "Price effect"], "th")}${input.priceBands
     .map((b) => row([cell(b.label), percent(b.share), signedWhole(b.priceEffect)]))
@@ -129,6 +211,6 @@ ${
     : ""
 }
 <h2>Setup</h2>
-<table class="plain">${input.description.map((line) => row(line.split(": ", 2).map(cell))).join("")}</table>
+<table class="plain">${setupRows.join("")}</table>
 </body></html>`;
 }
