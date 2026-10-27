@@ -27,7 +27,7 @@ async function rewriteWorkbook(
     if (!entry) throw new Error(`The workbook has no ${path}.`);
     zip.file(path, edit(await entry.async("text")));
   }
-  return new File([await zip.generateAsync({ type: "nodebuffer" })], "book.xlsx");
+  return new File([await zip.generateAsync({ type: "arraybuffer" })], "book.xlsx");
 }
 
 function replaceOnce(xml: string, from: string, to: string): string {
@@ -45,7 +45,7 @@ function prependStyledBlankRow(xml: string): string {
       (_, head, column, number, tail) => `${head}${column}${Number(number) + 1}${tail}`,
     )
     .replace(/(<dimension\b[^>]*?\bref=")([^"]*)(")/, (_, head, ref, tail) =>
-      `${head}${ref.replace(/([A-Z]+)(\d+)/g, (__, column, number) => `${column}${Number(number) + 1}`)}${tail}`,
+      `${head}${ref.replace(/([A-Z]+)(\d+)/g, (__: string, column: string, number: string) => `${column}${Number(number) + 1}`)}${tail}`,
     );
   return moved.replace(/<sheetData>/, '<sheetData><row r="1"><c r="A1" s="0"/></row>');
 }
