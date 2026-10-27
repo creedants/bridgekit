@@ -6,6 +6,7 @@ import {
   isNumeric,
   isValidSetup,
   loadSavedSetup,
+  netSalesHeldAsText,
   saveSetup,
   type Column,
   type Setup,
@@ -1660,4 +1661,49 @@ test("a loaded setup with an empty attribute or filter column is refused", () =>
   assert.equal(isValidSetup({ ...workedSetup, levels: [{ name: "Product", columns: [""] }] }, salesTable), false);
   assert.equal(isValidSetup({ ...workedSetup, filters: [{ column: "", mode: "include", values: ["A"] }] }, salesTable), false);
   assert.equal(isValidSetup({ ...workedSetup, filters: [{ column: "product", mode: "include", values: ["A"] }] }, salesTable), true);
+});
+
+test("text net_sales withholds sales instead of falling through to gross_sales", () => {
+  const setup = guessSetup([
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "units", type: "INTEGER" },
+    { name: "net_sales", type: "VARCHAR" },
+    { name: "gross_sales", type: "DOUBLE" },
+  ]);
+  assert.equal(setup.salesColumn, "");
+  assert.equal(setup.grossColumn, undefined);
+  assert.equal(netSalesHeldAsText(([
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "units", type: "INTEGER" },
+    { name: "net_sales", type: "VARCHAR" },
+    { name: "gross_sales", type: "DOUBLE" },
+  ]) satisfies Column[]), "net_sales");
+});
+
+test("network-like text columns do not withhold sales", () => {
+  for (const name of ["network", "internet_channel", "cabinet_type"]) {
+    const setup = guessSetup([
+      { name: "period", type: "VARCHAR" },
+      { name: "product", type: "VARCHAR" },
+      { name, type: "VARCHAR" },
+      { name: "sales", type: "DOUBLE" },
+    ]);
+    assert.equal(setup.salesColumn, "sales", name);
+  }
+});
+
+test("net note, unit price and quantity names do not withhold sales", () => {
+  for (const name of ["net_sales_note", "net_unit_price", "NetSalesQty"]) {
+    const setup = guessSetup([
+      { name: "period", type: "VARCHAR" },
+      { name: "product", type: "VARCHAR" },
+      { name: "units", type: "INTEGER" },
+      { name, type: "VARCHAR" },
+      { name: "gross_sales", type: "DOUBLE" },
+    ]);
+    assert.equal(setup.salesColumn, "gross_sales", name);
+    assert.equal(setup.grossColumn, undefined, name);
+  }
 });

@@ -463,3 +463,52 @@ test("a text column named like a value in a non-measure role is left alone", () 
   });
   assert.deepEqual(fileProblem(periodNamedLikeValue), { kind: "none" });
 });
+
+test("withheld text net_sales names that column although gross_sales is numeric", () => {
+  const withheld = input({
+    columns: [number("period"), text("product"), number("units"), text("net_sales"), number("gross_sales")],
+    rows: 4,
+    periodColumn: "period",
+    periods: ["2025", "2026"],
+    unitsColumn: "units",
+    salesColumn: "",
+  });
+  assert.deepEqual(fileProblem(withheld), {
+    kind: "reason",
+    message: 'Sales must be a column of numbers, and "net_sales" holds text.',
+  });
+});
+
+test("network listed before net_sales still names net_sales", () => {
+  const ordered = input({
+    columns: [
+      text("network"),
+      number("period"),
+      text("product"),
+      number("units"),
+      text("net_sales"),
+      number("gross_sales"),
+    ],
+    rows: 4,
+    periodColumn: "period",
+    periods: ["2025", "2026"],
+    unitsColumn: "units",
+    salesColumn: "",
+  });
+  assert.deepEqual(fileProblem(ordered), {
+    kind: "reason",
+    message: 'Sales must be a column of numbers, and "net_sales" holds text.',
+  });
+});
+
+test("a deliberate gross_sales pick stays silent although net_sales holds text", () => {
+  const picked = input({
+    columns: [number("period"), text("product"), number("units"), text("net_sales"), number("gross_sales")],
+    rows: 4,
+    periodColumn: "period",
+    periods: ["2025", "2026"],
+    unitsColumn: "units",
+    salesColumn: "gross_sales",
+  });
+  assert.deepEqual(fileProblem(picked), { kind: "none" });
+});
