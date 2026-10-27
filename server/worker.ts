@@ -438,6 +438,22 @@ async function pageResponse(request: Request, assets: Fetcher): Promise<Response
   return assets.fetch(new Request(url, request));
 }
 
+/**
+ * The not-found page, served at a status that says the address does not exist.
+ * The asset layer answers /404 with the 404.html body and a 200, and moves
+ * /404.html to /404 with a 307, so both names read /404 here and keep the
+ * body, ETag and headers a missing path gets.
+ */
+async function notFoundPage(request: Request, assets: Fetcher): Promise<Response> {
+  const url = new URL(request.url);
+  url.pathname = "/404";
+  const response = await assets.fetch(new Request(url, request));
+  return new Response(response.body, { status: 404, headers: response.headers });
+}
+
+open.get("/404", (c) => notFoundPage(c.req.raw, c.env.ASSETS));
+open.get("/404.html", (c) => notFoundPage(c.req.raw, c.env.ASSETS));
+
 open.get("*", async (c) => {
   const response = await pageResponse(c.req.raw, c.env.ASSETS);
   const view = pageView(c.req.raw, response, HTML_PAGE);
