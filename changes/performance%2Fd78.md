@@ -1,0 +1,1 @@
+- Add `/terms` to `run_worker_first` in `wrangler.jsonc` so a direct visit to `/terms` reaches the Worker and is counted like `/privacy`, export `HTML_PAGE` from `server/worker.ts`, and keep the two lists matched with a test that reads `wrangler.jsonc`. Name `/terms` in the counted-page docs in `README.md` and `perf/README.md`.

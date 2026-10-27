@@ -15,7 +15,7 @@
     // files go through it because they are stored compressed (see server/assets.ts).
     // The extensionless paths are where those .html files redirect. A direct
     // visit has to be listed here or the Worker never sees it.
-    "run_worker_first": ["/api/*", "/", "/*.html", "/guide", "/method", "/privacy", "/price-volume-mix-analysis", "/grouping-level", "/app/*", "/assets/*.wasm"]
+    "run_worker_first": ["/api/*", "/", "/*.html", "/guide", "/method", "/privacy", "/terms", "/price-volume-mix-analysis", "/grouping-level", "/app/*", "/assets/*.wasm"]
   },
   "d1_databases": [
     {
