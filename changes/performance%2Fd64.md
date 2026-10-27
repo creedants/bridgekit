@@ -1,0 +1,1 @@
+- Decimal-comma columns such as 1.234,567, 0,125 and 12,50 now read as 1234.567, 0.125 and 12.5; 0,125 beside 12,5 reads 0.125 and 12.5, while ambiguous-only columns such as 1,234 keep today's thousands reading.

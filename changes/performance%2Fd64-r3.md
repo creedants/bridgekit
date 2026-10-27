@@ -1,0 +1,1 @@
+- The Data check now names columns left as text with 1.234,567 beside 1,260.000, +1,260.00, $1,260.000 or (1,260.000).
