@@ -1,5 +1,5 @@
 import type { Query } from "../engine.ts";
-import { isDate, isNumeric, quote, TABLE, type Column } from "./setup.ts";
+import { isDate, isNumeric, quote, TABLE, type Column, type Filter, type Setup } from "./setup.ts";
 
 const SAMPLE_ROWS = 200_000;
 const MAX_CANDIDATES = 14;
@@ -51,6 +51,30 @@ export async function distinctCounts(query: Query, columns: Column[]): Promise<M
     `SELECT ${columns.map((c, i) => `count(DISTINCT ${quote(c.name)})::DOUBLE AS c${i}`).join(", ")} FROM ${quote(TABLE)}`,
   );
   return new Map(columns.map((c, i) => [c.name, Number(row[`c${i}`])]));
+}
+
+export interface FileProfile {
+  /** The file's columns with their distinct counts. */
+  columns: Column[];
+  /** Roll-up chains, broadest first. */
+  rollups: string[][];
+}
+
+/**
+ * Profiles the loaded file: distinct counts for every column, then the roll-up
+ * chains. `apply` runs only while `isCurrent()` still holds, so a profile that
+ * finishes after a later file has loaded is dropped instead of overwriting it.
+ */
+export async function profileFile(
+  query: Query,
+  columns: Column[],
+  isCurrent: () => boolean,
+  apply: (profile: FileProfile) => void,
+): Promise<void> {
+  const distinct = await distinctCounts(query, columns);
+  const rollups = await findRollups(query, columns, distinct);
+  if (!isCurrent()) return;
+  apply({ columns: columns.map((column) => ({ ...column, distinct: distinct.get(column.name) })), rollups });
 }
 
 // A column name looks like a customer, region, date or id column when any
@@ -197,4 +221,84 @@ export async function findRollups(
     chains.push(chain.reverse());
   }
   return chains;
+}
+
+const TOTAL_ROW_VALUES = ["total", "totals", "grand total", "subtotal", "sub-total", "sub total"];
+
+const stringLiteral = (value: string) => `'${value.replaceAll("'", "''")}'`;
+
+export interface TotalRow {
+  column: string;
+  /** The value exactly as CAST(column AS VARCHAR) returns it, so an exclude filter matches it. */
+  value: string;
+  rows: number;
+}
+
+/**
+ * Finds values in the period column or a level column that name a total, such
+ * as "Grand Total". A spreadsheet export's total row would otherwise count the
+ * same amounts twice. One query covers every candidate column.
+ */
+export async function findTotalRows(query: Query, table: string, setup: Setup): Promise<TotalRow[]> {
+  const columns = [...new Set([setup.periodColumn, ...setup.levels.flatMap((level) => level.columns)])].filter(
+    (column) => column !== "",
+  );
+  if (columns.length === 0) return [];
+  const wanted = TOTAL_ROW_VALUES.map(stringLiteral).join(", ");
+  const arms = columns.map((column) => {
+    const cast = `CAST(${quote(column)} AS VARCHAR)`;
+    return `SELECT ${stringLiteral(column)} AS col, ${cast} AS v
+      FROM ${quote(table)}
+      WHERE trim(regexp_replace(lower(trim(${cast})), ':$', '')) IN (${wanted})`;
+  });
+  let rows: Record<string, unknown>[];
+  try {
+    rows = await query(
+      `SELECT col, v, count(*)::DOUBLE AS n
+       FROM (${arms.join(" UNION ALL ")}) t
+       GROUP BY col, v`,
+    );
+  } catch {
+    return [];
+  }
+  const order = new Map(columns.map((column, i) => [column, i]));
+  return rows
+    .map((row) => ({ column: String(row.col), value: String(row.v), rows: Number(row.n) }))
+    .sort(
+      (a, b) =>
+        order.get(a.column)! - order.get(b.column)! ||
+        b.rows - a.rows ||
+        (a.value < b.value ? -1 : a.value > b.value ? 1 : 0),
+    );
+}
+
+export interface TotalRowOffer {
+  key: string;
+  sentence: string;
+  button: string;
+  /** The whole filter list the button sets. */
+  filters: Filter[];
+}
+
+/** Offers to exclude a detected total row, unless its column is already filtered against it. */
+export function totalRowOffers(found: readonly TotalRow[], filters: readonly Filter[]): TotalRowOffer[] {
+  const includes = new Set(filters.filter((filter) => filter.mode === "include").map((filter) => filter.column));
+  const offers: TotalRowOffer[] = [];
+  for (const row of found) {
+    if (includes.has(row.column)) continue;
+    const excludes = filters.find((filter) => filter.column === row.column && filter.mode === "exclude");
+    if (excludes?.values.includes(row.value)) continue;
+    const plural = row.rows > 1;
+    offers.push({
+      key: `${row.column}|${row.value}`,
+      sentence: plural
+        ? `${row.rows.toLocaleString("en-US")} rows have "${row.value}" in ${row.column}. They look like total rows, which would count the same amounts twice.`
+        : `1 row has "${row.value}" in ${row.column}. It looks like a total row, which would count the same amounts twice.`,
+      button: plural ? "Leave these rows out" : "Leave this row out",
+      filters: excludes
+        ? filters.map((filter) => (filter === excludes ? { ...filter, values: [...filter.values, row.value] } : filter))
+        : [...filters, { column: row.column, mode: "exclude", values: [row.value] }],
+    });
+  }
+  return offers;
 }

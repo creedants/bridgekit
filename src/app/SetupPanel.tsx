@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Level, Query } from "../engine.ts";
 import { sameSuggestedLevels } from "./fileProblems.ts";
-import { suggestAttributes } from "./profile.ts";
+import { suggestAttributes, totalRowOffers, type TotalRow } from "./profile.ts";
 import { isDate, isNumeric, quote, TABLE, type Column, type Filter, type Grain, type Setup } from "./setup.ts";
 
 export function SetupPanel(props: {
@@ -13,6 +13,8 @@ export function SetupPanel(props: {
   query: () => Promise<Query>;
   /** Columns that roll up into one another, broadest first. */
   rollups: string[][];
+  /** Values that name a total row, which would count amounts twice. */
+  totalRows: TotalRow[];
   onChange: (patch: Partial<Setup>) => void;
   onPrior: (value: string) => void;
   onCurrent: (value: string) => void;
@@ -267,6 +269,12 @@ export function SetupPanel(props: {
               </button>
             </div>
           ))}
+        {totalRowOffers(props.totalRows, setup.filters).map((offer) => (
+          <div className="rollup" key={offer.key}>
+            <span className="hint">{offer.sentence}</span>
+            <button className="quiet" onClick={() => setFilters(offer.filters)}>{offer.button}</button>
+          </div>
+        ))}
       </fieldset>
 
       <fieldset>
