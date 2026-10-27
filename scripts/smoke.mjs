@@ -31,6 +31,9 @@ import {
 /** @typedef {{ origin: string, stop: () => Promise<void> }} Server */
 
 const DEBUG_PORT = 9360;
+/** The two-page scenario has no record to keep, so it opens its own browser beside the recorded ones. */
+const SECOND_PAGE_PORT = 9361;
+const SECOND_PAGE_ID = "bridgekit-second-page";
 const CHROMIUM = process.env.CHROMIUM || "chromium";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const bin = (name) => join(root, "node_modules/.bin", name);
@@ -1707,6 +1710,113 @@ async function drive(browser, origin, rows) {
 }
 
 /**
+ * Two pages of one browser context share localStorage, as two tabs do. Page A
+ * turns Remember off, page B saves a setup with Remember on, then page A turns
+ * Remember on. Page B's setup must survive and be restored when page B reloads.
+ * The same walk runs once with a demonstration sample loaded in page A.
+ */
+async function rememberAcrossPages(browser, origin, { sample }) {
+  const secondWindow = `document.getElementById(${JSON.stringify(SECOND_PAGE_ID)})?.contentWindow`;
+  const inB = (expression) => `(() => { const w = ${secondWindow}; return !!w && !!w.document && w.document.body != null && (${expression}); })()`;
+  const bDocument = `(() => { const w = ${secondWindow}; return w && w.document; })()`;
+  const bBox = `(() => { const w = ${secondWindow}; return w && [...w.document.querySelectorAll('.check input')].find((input) => input.closest('label').textContent.includes('Remember')); })()`;
+  const aBox = `[...document.querySelectorAll('.check input')].find((input) => input.closest('label').textContent.includes('Remember'))`;
+  const readStorage = async () => JSON.parse(await browser.evalJs("JSON.stringify(Object.fromEntries(Object.entries(localStorage)))"));
+  const setupKey = (names) => `bridgekit:setup:${[...names].sort().join("|")}`;
+  const aHeader = ["year", "product", "units", "sales"];
+  const bHeader = ["period", "customer", "units", "sales"];
+  const rows = [
+    ["2025", "A1", 100, 1000],
+    ["2026", "A1", 110, 1210],
+    ["2026", "A2", 50, 550],
+  ];
+  const bRows = [
+    ["2025", "C1", 100, 1000],
+    ["2026", "C1", 110, 1210],
+    ["2026", "C2", 50, 550],
+  ];
+  const pasteCells = async (documentExpression, text) => {
+    await browser.evalJs(`(() => {
+      const doc = ${documentExpression};
+      const data = { getData: (type) => (type === "text/plain" ? ${JSON.stringify(text)} : "") };
+      const event = new Event("paste", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "clipboardData", { value: data });
+      doc.body.dispatchEvent(event);
+    })()`);
+  };
+
+  await browser.goto(sample ? `${origin}/app/?sample=${sample}` : `${origin}/app/`);
+  if (sample) {
+    await browser.waitFor("!!document.querySelector('aside') && !!document.querySelector('.check input')", 600);
+  } else {
+    await pasteCells("document", toTsvText(aHeader, rows));
+    await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent", 600);
+  }
+
+  // Page A turns Remember off, which clears storage and leaves the opt-out.
+  await browser.evalJs(`${aBox}.click()`);
+  await browser.waitFor(`!!${aBox} && !${aBox}.checked`, 100);
+  const off = await readStorage();
+  if (Object.keys(off).join() !== "bridgekit:remember" || off["bridgekit:remember"] !== "off") {
+    fail(`page A turning Remember off left ${JSON.stringify(off)}, expected only the opt-out preference`);
+  }
+
+  // Page B is a second page in the same context: its own app, the same storage.
+  await browser.evalJs(`(() => {
+    const frame = document.createElement('iframe');
+    frame.id = ${JSON.stringify(SECOND_PAGE_ID)};
+    frame.title = "Second page";
+    frame.src = ${JSON.stringify(`${origin}/app/`)};
+    document.body.append(frame);
+  })()`);
+  await browser.waitFor(inB("w.document.body.innerText.includes('Load a sales file')"), 600);
+  await pasteCells(bDocument, toTsvText(bHeader, bRows));
+  await browser.waitFor(inB("!!w.document.querySelector('aside') && !w.document.querySelector('.status').textContent"), 600);
+
+  // Page B turns Remember on and keeps the setup it guessed for its columns.
+  await browser.evalJs(`${bBox}?.click()`);
+  await browser.waitFor(inB(`[...w.document.querySelectorAll('.check input')].some((input) => input.closest('label').textContent.includes('Remember') && input.checked)`), 100);
+  const savedByB = (await readStorage())[setupKey(bHeader)];
+  if (!savedByB) fail(`page B turning Remember on saved no setup for its columns (storage holds ${JSON.stringify(Object.keys(await readStorage()))})`);
+  if ((await readStorage())["bridgekit:remember"] !== undefined) fail("page B turning Remember on kept the opt-out preference");
+
+  // Page A still has Remember off on screen. Turning it on must not touch what B saved.
+  await browser.evalJs(`${aBox}.click()`);
+  await browser.waitFor(`${aBox}.checked`, 100);
+  const afterA = await readStorage();
+  if (afterA[setupKey(bHeader)] !== savedByB) {
+    fail(`ticking Remember in page A lost the setup page B saved: storage holds ${JSON.stringify(Object.keys(afterA))}, expected ${JSON.stringify(setupKey(bHeader))} with page B's setup`);
+  }
+
+  await browser.evalJs(`(() => { const w = ${secondWindow}; w.location.reload(); })()`);
+  try {
+    await browser.waitFor(inB("w.document.body.innerText.includes('Restored the setup')"), 600);
+  } catch (error) {
+    fail(`page B did not restore the setup it saved after page A ticked Remember (${error.message})`);
+  }
+}
+
+/** Runs the two-page walk both ways: page A holds a loaded file, then a demonstration sample. */
+async function crossPageRemembering(origin) {
+  const failures = [];
+  for (const [label, options] of [
+    ["remember across pages", {}],
+    ["remember across pages with a demonstration sample", { sample: "sku" }],
+  ]) {
+    const browser = await open(SECOND_PAGE_PORT, { chromium: CHROMIUM });
+    try {
+      await rememberAcrossPages(browser, origin, options);
+      console.log(`ok  ${label}: turning Remember on in one page keeps the setup another page saved${options.sample ? " while a sample is loaded" : ""}`);
+    } catch (error) {
+      failures.push(`${label}: ${error instanceof Failure ? error.message : error.stack}`);
+    } finally {
+      await browser.close();
+    }
+  }
+  if (failures.length) fail(failures.join("\n"));
+}
+
+/**
  * Every rule that decides pass or fail for the application's record, over the whole record.
  * @param {Recording} record
  * @param {string} origin
@@ -1879,6 +1989,7 @@ try {
   const judged = judge(app.record, origin, { devServer: policies === 0 });
   for (const note of judged.notes) console.log(note);
   if (judged.failures.length) fail(judged.failures.join("\n"));
+  await crossPageRemembering(origin);
 } catch (error) {
   failures.push(error);
 } finally {

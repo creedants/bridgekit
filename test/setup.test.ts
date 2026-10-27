@@ -8,6 +8,7 @@ import {
   loadSavedSetup,
   netSalesHeldAsText,
   saveSetup,
+  setRemembering,
   type Column,
   type Setup,
 } from "../src/app/setup.ts";
@@ -1577,20 +1578,30 @@ test("oracle headers match the legacy guess outside excluded words", () => {
 });
 
 // The remembered and loaded paths read localStorage at call time, so a stub
-// replaces it for this file only.
+// replaces it for this file only. Its stored keys enumerate the way a real
+// Storage does, because the opt-out path walks Object.keys(localStorage).
 const stored = new Map<string, string>();
+const storageMethods = {
+  getItem: (key: string) => stored.get(key) ?? null,
+  setItem: (key: string, value: string) => void stored.set(key, value),
+  removeItem: (key: string) => void stored.delete(key),
+  key: (index: number) => [...stored.keys()][index] ?? null,
+  get length() {
+    return stored.size;
+  },
+  clear: () => stored.clear(),
+};
+const localStorageStub = new Proxy(storageMethods, {
+  get: (target, key) => (typeof key === "string" && !(key in target) ? stored.get(key) : Reflect.get(target, key)),
+  ownKeys: (target) => [...new Set([...Reflect.ownKeys(target), ...stored.keys()])],
+  getOwnPropertyDescriptor: (target, key) =>
+    typeof key === "string" && stored.has(key)
+      ? { value: stored.get(key), enumerable: true, configurable: true, writable: true }
+      : Reflect.getOwnPropertyDescriptor(target, key),
+});
 Object.defineProperty(globalThis, "localStorage", {
   configurable: true,
-  value: {
-    getItem: (key: string) => stored.get(key) ?? null,
-    setItem: (key: string, value: string) => void stored.set(key, value),
-    removeItem: (key: string) => void stored.delete(key),
-    key: (index: number) => [...stored.keys()][index] ?? null,
-    get length() {
-      return stored.size;
-    },
-    clear: () => stored.clear(),
-  },
+  value: localStorageStub,
 });
 
 const salesTable: Column[] = [
@@ -1625,6 +1636,25 @@ test("a remembered setup is dropped when its date grain meets a BIGINT period co
   saveSetup(dated, yearly);
   assert.deepEqual(loadSavedSetup(dated), yearly);
   assert.equal(loadSavedSetup(salesTable), null);
+});
+
+test("ticking Remember keeps a setup another tab saved and removes only the opt-out", () => {
+  stored.clear();
+  saveSetup(salesTable, workedSetup);
+  const saved = [...stored];
+  assert.equal(saved.length, 1, "saving wrote more than the one setup");
+  stored.set("bridgekit:remember", "off");
+  setRemembering(true);
+  assert.deepEqual([...stored], saved);
+  assert.equal(stored.has("bridgekit:remember"), false);
+});
+
+test("unticking Remember clears every stored setup and keeps the opt-out", () => {
+  stored.clear();
+  saveSetup(salesTable, workedSetup);
+  setRemembering(false);
+  assert.deepEqual([...stored.keys()], ["bridgekit:remember"]);
+  assert.equal(stored.get("bridgekit:remember"), "off");
 });
 
 test("a loaded setup that names a text column as sales is refused", () => {
