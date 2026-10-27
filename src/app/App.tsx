@@ -14,7 +14,7 @@ import { exportExcel } from "./exportExcel.ts";
 import { download } from "./files.ts";
 import { fileProblem, periodView, periodsFor, type FileProblem, type LoadedPeriods } from "./fileProblems.ts";
 import { whole } from "./format.ts";
-import { distinctCounts, findRollups } from "./profile.ts";
+import { findTotalRows, profileFile, type TotalRow } from "./profile.ts";
 import { loadPeriodList } from "./periods.ts";
 import { describeSetup } from "./report.ts";
 import type { Run } from "./Results.tsx";
@@ -128,10 +128,13 @@ export function App() {
   const [remember, setRemember] = useState(isRemembering);
   const [preview, setPreview] = useState<Record<string, unknown>[]>([]);
   const [rollups, setRollups] = useState<string[][]>([]);
+  const [detected, setDetected] = useState<{ key: string; rows: TotalRow[] } | null>(null);
   const [run, setRun] = useState<(Run & { id: number; signature: string }) | null>(null);
   const [formulaBlanks, setFormulaBlanks] = useState(0);
   // A demonstration sample must not overwrite a setup saved for a file with the same columns.
   const writesSetup = useRef(true);
+  // Labels the newest load, so work started for an earlier file can tell it is stale.
+  const loadRef = useRef(0);
 
   function db(): Promise<BrowserDatabase> {
     return openBrowserDatabase();
@@ -151,30 +154,31 @@ export function App() {
   }
 
   async function afterLoad(name: string, preset?: Sample) {
+    const thisLoad = ++loadRef.current;
     const q = await query();
     const described = await q(`DESCRIBE ${quote(TABLE)}`);
     const found = described.map((row) => ({ name: String(row.column_name), type: String(row.column_type) }));
     const [count] = await q(`SELECT count(*)::DOUBLE AS n FROM ${quote(TABLE)}`);
+    if (loadRef.current !== thisLoad) return;
     const saved = preset ? null : loadSavedSetup(found);
     setColumns(found);
     setRowCount(Number(count.n));
     setSource(name);
     setRun(null);
-    setLoad((n) => n + 1);
+    setLoad(thisLoad);
     setSetup(preset?.setup ?? saved ?? guessSetup(found));
     setSuggestedPeriods(preset?.periods ?? null);
     writesSetup.current = preset?.savesSetup ?? true;
     setNotice(saved ? "Restored the setup you last used with these columns." : "");
-    setPreview(await q(`SELECT * FROM ${quote(TABLE)} LIMIT 8`));
+    const previewRows = await q(`SELECT * FROM ${quote(TABLE)} LIMIT 8`);
+    if (loadRef.current !== thisLoad) return;
+    setPreview(previewRows);
     setRollups([]);
     // Profiling is a convenience; the tool works without it.
-    distinctCounts(q, found)
-      .then((distinct) => {
-        setColumns(found.map((c) => ({ ...c, distinct: distinct.get(c.name) })));
-        return findRollups(q, found, distinct);
-      })
-      .then(setRollups)
-      .catch(() => {});
+    profileFile(q, found, () => loadRef.current === thisLoad, (profile) => {
+      setColumns(profile.columns);
+      setRollups(profile.rollups);
+    }).catch(() => {});
   }
 
   const loadSample = () => {
@@ -233,6 +237,25 @@ export function App() {
 
   const offeredPeriods = loadedPeriods ? [...loadedPeriods.values] : [];
   const problemPeriods = periodsFor(view, loadedPeriods);
+
+  // A total row from a spreadsheet export would count the same amounts twice.
+  const totalKey = setup ? JSON.stringify([load, setup.periodColumn, setup.levels.map((level) => level.columns)]) : "";
+  useEffect(() => {
+    if (!setup) return;
+    const key = totalKey;
+    let stale = false;
+    query()
+      .then((q) => findTotalRows(q, TABLE, setup))
+      .then((rows) => {
+        if (!stale) setDetected({ key, rows });
+      })
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, [totalKey]);
+  // A setup that has moved on must not show the previous columns' offers.
+  const totalRows = detected && detected.key === totalKey ? detected.rows : [];
 
   const signature = JSON.stringify([setup, prior, current, source]);
   const fresh = run && run.signature === signature ? run : null;
@@ -444,6 +467,7 @@ export function App() {
               current={current}
               query={query}
               rollups={rollups}
+              totalRows={totalRows}
               onChange={(patch) => setSetup((s) => (s ? { ...s, ...patch } : s))}
               onPrior={setPrior}
               onCurrent={setCurrent}
