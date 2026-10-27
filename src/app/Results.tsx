@@ -470,6 +470,15 @@ function Trend(props: { run: Run; query: () => Promise<Query> }) {
   );
 }
 
+/**
+ * The Setup check hint. `prices` holds the price effect of the full setup and
+ * of each setup with one attribute left out.
+ */
+export function setupCheckHint(prices: number[], rowCount: number): string {
+  if (rowCount === 1) return "With one attribute there is nothing to leave out.";
+  return `Across these setups the price effect ranges from ${signedWhole(Math.min(...prices))} to ${signedWhole(Math.max(...prices))}. An attribute whose removal moves price a lot is one that carries real mix: keep it. One that barely moves price and lowers the match rate can be dropped.`;
+}
+
 function SetupCheck(props: { run: Run; query: () => Promise<Query> }) {
   const [rows, setRows] = useState<Alternative[] | null>(null);
   useEffect(() => {
@@ -512,11 +521,7 @@ function SetupCheck(props: { run: Run; query: () => Promise<Query> }) {
           ))}
         </tbody>
       </table>
-      <p className="hint">
-        {rows.length === 1
-          ? "With one attribute there is nothing to leave out."
-          : `Across these setups the price effect ranges from ${signedWhole(Math.min(...prices))} to ${signedWhole(Math.max(...prices))}. An attribute whose removal moves price a lot is one that carries real mix: keep it. One that barely moves price and lowers the match rate can be dropped.`}
-      </p>
+      <p className="hint">{setupCheckHint(prices, rows.length)}</p>
     </div>
   );
 }
