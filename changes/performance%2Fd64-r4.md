@@ -1,1 +1,1 @@
-- A column left as text is now named when a US value such as 1,260.00 sits beside +12,50, 1 234,56, $12,50 or (12,50), while a column written in one style with these marks stays text and unnamed.
+- A column left as text is now named only when it holds a value that reads one way as US style beside a value that reads one way as decimal-comma style, such as 1,260.00 beside +12,50, 1 234,56, $12,50 or (12,50). A whole number of any width such as 1500 or 1 500, and a three-decimal value such as 1,234 or 1.234, prove neither style, so 1 500 beside 1 234,56 stays text and unnamed.

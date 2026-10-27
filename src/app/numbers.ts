@@ -13,6 +13,8 @@ const DECIMAL_TAIL = `${COMMA_TAIL}$`;
 const LONG_TAIL = `${COMMA_LONG}$`;
 const DOT_GROUP_COMMA = "^-?\\d{1,3}(\\.\\d{3})+,\\d+$";
 const SIGN = "[+-]?";
+const US_PROOF = `^${SIGN}(\\d{1,3}(,\\d{3})+\\.\\d+|\\d+\\.(\\d{1,2}|\\d{4,}))$`;
+const COMMA_PROOF = `^${SIGN}(\\d{1,3}(\\.\\d{3})+,\\d+|\\d+,(\\d{1,2}|\\d{4,}))$`;
 const US_DECIMAL = `^${SIGN}\\d+(,\\d{3})*(\\.\\d{1,2}|\\.\\d{4,})$`;
 const US_THREE = `^${SIGN}(\\d{1,3}(,\\d{3})+|\\d{4,})\\.\\d{3}$`;
 const US_GROUPED = `^${SIGN}\\d{1,3}(,\\d{3}){2,}$`;
@@ -35,8 +37,6 @@ const european = (column: string) => europeanOn(`trim(${column})`);
 const decorationValue = (column: string) =>
   `regexp_replace(regexp_replace(regexp_replace(trim(${column}), '[\\$\\s]', '', 'g'), '^\\((.*)\\)$', '-\\1'), '^\\+', '')`;
 
-const decorationEuropean = (column: string) => europeanOn(decorationValue(column));
-
 const shapeNumber = (group: string, decimal: string) =>
   `^[+-]?(\\d{1,3}(${group}\\d{3})+|\\d+)(${decimal}\\d+)?([eE][+-]?\\d+)?$`;
 const DECIMAL_COMMA_NUMBER = shapeNumber("\\.", ",");
@@ -53,8 +53,9 @@ interface ColumnCounts {
   usDecimal: number;
   usGrouped: number;
   ambiguous: number;
-  decorationEuropean: number;
   wellFormed: number;
+  usProof: number;
+  commaProof: number;
   present: number;
   parsed: number;
   formatted: number;
@@ -92,12 +93,12 @@ function isDecimalComma(counts: ColumnCounts): boolean {
   );
 }
 
-function acceptsDecoratedDecimalComma(counts: ColumnCounts): boolean {
-  return isDecimalComma({ ...counts, european: counts.decorationEuropean });
-}
-
 function lacksDecimalProof(counts: ColumnCounts): boolean {
   return !hasDecimalProof(counts);
+}
+
+function provesBothStyles(counts: ColumnCounts): boolean {
+  return counts.usProof > 0 && counts.commaProof > 0;
 }
 
 function formattingMeasures(column: string, index: number): string {
@@ -119,7 +120,8 @@ function measures(column: string, index: number): string {
     `count(*) FILTER (WHERE regexp_matches(${stripped(column)}, '${US_DECIMAL}') OR regexp_matches(${stripped(column)}, '${US_THREE}'))::DOUBLE AS ud${index}`,
     `count(*) FILTER (WHERE regexp_matches(${stripped(column)}, '${US_GROUPED}'))::DOUBLE AS ug${index}`,
     `count(*) FILTER (WHERE regexp_matches(${stripped(column)}, '${AMBIGUOUS}'))::DOUBLE AS am${index}`,
-    `count(*) FILTER (WHERE NOT ${blank} AND ${decorationEuropean(column)})::DOUBLE AS de${index}`,
+    `count(*) FILTER (WHERE regexp_matches(${decorationValue(column)}, '${US_PROOF}'))::DOUBLE AS up${index}`,
+    `count(*) FILTER (WHERE regexp_matches(${decorationValue(column)}, '${COMMA_PROOF}'))::DOUBLE AS cp${index}`,
     `count(*) FILTER (WHERE NOT ${blank} AND ${wellFormed(column)})::DOUBLE AS wf${index}`,
     formattingMeasures(column, index),
   ].join(", ");
@@ -152,8 +154,9 @@ async function scan(query: Query, columns: string[], source: string): Promise<Co
     usDecimal: Number(row[`ud${index}`]),
     usGrouped: Number(row[`ug${index}`]),
     ambiguous: Number(row[`am${index}`]),
-    decorationEuropean: Number(row[`de${index}`]),
     wellFormed: Number(row[`wf${index}`]),
+    usProof: Number(row[`up${index}`]),
+    commaProof: Number(row[`cp${index}`]),
     ...formattingFrom(row, index),
   }));
 }
@@ -174,7 +177,7 @@ export async function convertFormattedNumbers(query: Query, table: string): Prom
       await query(`COMMENT ON COLUMN ${tableName}.${column} IS 'decimal comma'`);
     } else if (lacksDecimalProof(counts)) {
       await query(`ALTER TABLE ${tableName} ALTER ${column} TYPE DOUBLE USING ${northAmerican(column)}`);
-    } else if (counts.present > 0 && counts.wellFormed === counts.nonBlank && !acceptsDecoratedDecimalComma(counts)) {
+    } else if (counts.present > 0 && counts.wellFormed === counts.nonBlank && provesBothStyles(counts)) {
       await query(`COMMENT ON COLUMN ${tableName}.${column} IS 'mixed number styles'`);
     }
   }
