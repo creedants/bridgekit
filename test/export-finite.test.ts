@@ -244,45 +244,6 @@ test("level sheets whose names differ only in case get unique names", async () =
   assert.equal(second.getRow(2).getCell(1).value, "region_val");
 });
 
-test("level sheets with long names that collide after the cut get unique names within 31 characters", async () => {
-  const workbook = await exportLevelWorkbook([
-    { name: "Quarterly product attribute grouping variant alpha one", columns: ["a1"] },
-    { name: "QUARTERLY PRODUCT ATTRIBUTE GROUPING VARIANT ALPHA TWO", columns: ["a2"] },
-  ]);
-  const names = workbook.worksheets.map((sheet) => sheet.name);
-  const levels = names.filter((name) => name.startsWith("By "));
-  assert.equal(levels.length, 2);
-  assert.equal(new Set(levels.map((name) => name.toLowerCase())).size, 2);
-  for (const name of levels) assert.ok(name.length <= 31, `${name} is over 31 characters`);
-  assert.equal(levels[0], "By Quarterly product attribu");
-  assert.equal(levels[1], "By QUARTERLY PRODUCT ATTRIBU 2");
-  const first = workbook.getWorksheet("By Quarterly product attribu")!;
-  assert.equal(first.getRow(1).getCell(1).value, "a1");
-  assert.equal(first.getRow(2).getCell(1).value, "a1_val");
-  const second = workbook.getWorksheet("By QUARTERLY PRODUCT ATTRIBU 2")!;
-  assert.equal(second.getRow(1).getCell(1).value, "a2");
-  assert.equal(second.getRow(2).getCell(1).value, "a2_val");
-});
-
-test("the tenth colliding level sheet carries a two-digit suffix within 31 characters", async () => {
-  const levels = Array.from({ length: 10 }, (_, i) => ({
-    name: i % 2 === 0 ? "Attribute" : "ATTRIBUTE",
-    columns: [`c${i + 1}`],
-  }));
-  const workbook = await exportLevelWorkbook(levels);
-  const names = workbook.worksheets.map((sheet) => sheet.name);
-  const sheets = names.filter((name) => name.startsWith("By "));
-  assert.equal(sheets.length, 10);
-  assert.equal(new Set(sheets.map((name) => name.toLowerCase())).size, 10);
-  for (const name of sheets) assert.ok(name.length <= 31, `${name} is over 31 characters`);
-  assert.equal(sheets[9], "By ATTRIBUTE 10");
-  sheets.forEach((sheetName, i) => {
-    const sheet = workbook.getWorksheet(sheetName)!;
-    assert.equal(sheet.getRow(1).getCell(1).value, `c${i + 1}`);
-    assert.equal(sheet.getRow(2).getCell(1).value, `c${i + 1}_val`);
-  });
-});
-
 test("level sheets with ordinary names keep their names", async () => {
   const workbook = await exportLevelWorkbook([
     { name: "Product", columns: ["product"] },
@@ -297,4 +258,347 @@ test("level sheets with ordinary names keep their names", async () => {
   const second = workbook.getWorksheet("By Region")!;
   assert.equal(second.getRow(1).getCell(1).value, "region");
   assert.equal(second.getRow(2).getCell(1).value, "region_val");
+});
+
+function validSheetName(name: string): boolean {
+  if (name.length === 0 || name.length > 31) return false;
+  if (name.startsWith("'") || name.endsWith("'")) return false;
+  if (/[\\/*?:[\]]/.test(name)) return false;
+  return true;
+}
+
+test("By sheets with a cut that ends in an apostrophe export with valid names (T305)", async () => {
+  const cutName = `${"A".repeat(24)}' more`;
+  const workbook = await exportLevelWorkbook([
+    { name: cutName, columns: ["cut_col"] },
+    { name: "Ends with apostrophe'", columns: ["end_col"] },
+    { name: "Customer's", columns: ["ok_col"] },
+  ]);
+  const names = workbook.worksheets.map((sheet) => sheet.name);
+  const levels = names.filter((name) => name.startsWith("By "));
+  assert.equal(levels.length, 3);
+  for (const name of levels) assert.ok(validSheetName(name), `${name} is not a valid sheet name`);
+  assert.equal(new Set(levels.map((name) => name.toLowerCase())).size, 3);
+  assert.ok(levels.includes("By Customer's"), "valid Customer's name stays exactly By Customer's");
+  const cutSheet = levels.find((name) => name !== "By Customer's" && name.includes("A".repeat(10)))!;
+  assert.ok(cutSheet, "the cut name kept its sheet");
+  assert.equal(cutSheet.endsWith("'"), false);
+});
+
+async function exportCappedWorkbook(levels: Level[], available: Record<string, number>) {
+  const { default: ExcelJS } = await import("exceljs");
+  const captured: { blob?: Blob } = {};
+  const fakeDocument = {
+    createElement: () => ({ href: "", download: "", click() {} }),
+  };
+  const realDocument = (globalThis as any).document;
+  const realCreate = URL.createObjectURL;
+  const realRevoke = URL.revokeObjectURL;
+  (globalThis as any).document = fakeDocument;
+  (URL as any).createObjectURL = (blob: Blob) => {
+    captured.blob = blob;
+    return "blob:capped";
+  };
+  (URL as any).revokeObjectURL = () => {};
+  const config: BridgeConfig = {
+    table: "sales",
+    periodColumn: "period",
+    prior: "2025",
+    current: "2026",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels,
+  };
+  const result: BridgeResult = {
+    priorSales: 0,
+    currentSales: 0,
+    effects: [
+      { key: "volume", label: "Volume", value: 0 },
+      ...levels.map((level, i) => ({ key: `mix_${i + 1}`, label: `Mix: ${level.name}`, value: 0 })),
+      { key: "price", label: "Price (like-for-like)", value: 0 },
+      { key: "new_config", label: "New configurations", value: 0 },
+      { key: "discontinued", label: "Discontinued configurations", value: 0 },
+      { key: "no_units", label: "Sales with no units", value: 0 },
+    ],
+    coverage: [],
+    cellsTable: "bridge_cells",
+  };
+  const check: DataCheck = {
+    rows: 0,
+    priorRows: 0,
+    currentRows: 0,
+    otherPeriodRows: 0,
+    blankPeriodRows: 0,
+    blankMeasureRows: 0,
+    negativeUnitRows: 0,
+    negativeSalesRows: 0,
+    zeroUnitSalesRows: 0,
+  };
+  const tieOut: TieOut = {
+    prior: { period: "2025", inFile: 0, afterFilters: 0 },
+    current: { period: "2026", inFile: 0, afterFilters: 0 },
+  };
+  const query: Query = async (sql: string) => {
+    if (sql.startsWith("SELECT count(*)::DOUBLE AS n")) return [{ n: 0 }];
+    if (sql.includes("GROUP BY") && sql.includes("ORDER BY abs(")) {
+      for (const level of levels) {
+        for (const col of level.columns) {
+          if (sql.includes(`"${col}"`)) {
+            const total = available[col] ?? 1;
+            const limitMatch = sql.match(/LIMIT\s+(\d+)/i);
+            const limit = limitMatch ? Number.parseInt(limitMatch[1], 10) : total;
+            const count = Math.min(limit, total);
+            return Array.from({ length: count }, (_, i) => {
+              const row: Record<string, unknown> = {
+                s0: 10,
+                s1: 20 + i,
+                z0: 1,
+                z1: 2,
+                q0: 1,
+                q1: 1,
+                volume: 0,
+                price: 0,
+                new_config: 0,
+                discontinued: 0,
+                no_units: 0,
+              };
+              for (let k = 1; k <= levels.length; k++) row[`mix_${k}`] = 0;
+              row[col] = `${col}_val_${i}`;
+              return row;
+            });
+          }
+        }
+      }
+    }
+    if (sql.includes("GROUP BY")) {
+      for (const level of levels) {
+        for (const col of level.columns) {
+          if (sql.includes(`"${col}"`)) {
+            const row: Record<string, unknown> = {
+              s0: 10,
+              s1: 20,
+              z0: 1,
+              z1: 2,
+              q0: 1,
+              q1: 1,
+              volume: 0,
+              price: 0,
+              new_config: 0,
+              discontinued: 0,
+              no_units: 0,
+            };
+            for (let k = 1; k <= levels.length; k++) row[`mix_${k}`] = 0;
+            row[col] = `${col}_val`;
+            return [row];
+          }
+        }
+      }
+    }
+    return [markerRow];
+  };
+  try {
+    await exportExcel(query, config, result, check, tieOut, ["Source: capped.csv"]);
+  } finally {
+    (globalThis as any).document = realDocument;
+    URL.createObjectURL = realCreate;
+    URL.revokeObjectURL = realRevoke;
+  }
+  assert.ok(captured.blob, "the export downloaded a workbook");
+  const bytes = new Uint8Array(await captured.blob.arrayBuffer());
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(bytes as any);
+  return workbook;
+}
+
+test("a By sheet with more than 5000 drill rows names the cap on the sheet (T260)", async () => {
+  const expectedNote =
+    "This sheet shows the 5,000 rows with the largest change. The Bridge sheet totals include every row.";
+  const workbook = await exportCappedWorkbook(
+    [
+      { name: "Big", columns: ["big"] },
+      { name: "Exact", columns: ["exact"] },
+    ],
+    { big: 6000, exact: 5000 },
+  );
+  const big = workbook.getWorksheet("By Big")!;
+  assert.equal(big.getRow(1).getCell(1).value, "big");
+  assert.equal(big.rowCount, 1 + 5000 + 1);
+  assert.equal(big.getRow(5001).getCell(1).value, "big_val_4999");
+  assert.equal(big.getRow(5002).getCell(1).value, expectedNote);
+  const exact = workbook.getWorksheet("By Exact")!;
+  assert.equal(exact.getRow(1).getCell(1).value, "exact");
+  assert.equal(exact.rowCount, 1 + 5000);
+  assert.equal(exact.getRow(5001).getCell(1).value, "exact_val_4999");
+  let foundNote = false;
+  exact.eachRow((row) => {
+    if (row.getCell(1).value === expectedNote) foundNote = true;
+  });
+  assert.equal(foundNote, false, "a sheet at the cap carries no note");
+});
+
+test("one hundred attributes sharing a 28-character base get unique width-trimmed names (T306)", async () => {
+  const prefix = "A".repeat(25);
+  const levels = Array.from({ length: 100 }, (_, i) => ({
+    name: `${prefix} extra ${i + 1}`,
+    columns: [`c${i + 1}`],
+  }));
+  const workbook = await exportLevelWorkbook(levels);
+  const names = workbook.worksheets.map((sheet) => sheet.name);
+  const sheets = names.filter((name) => name.startsWith("By "));
+  assert.equal(sheets.length, 100);
+  assert.equal(new Set(sheets.map((name) => name.toLowerCase())).size, 100);
+  for (const name of sheets) {
+    assert.ok(name.length <= 31, `${name} is over 31 characters`);
+    assert.ok(validSheetName(name), `${name} is not a valid sheet name`);
+  }
+  const base28 = `By ${prefix}`;
+  assert.equal(base28.length, 28);
+  const expected100 = `${base28.slice(0, 27)} 100`;
+  assert.equal(expected100.length, 31);
+  assert.equal(sheets[99], expected100);
+  sheets.forEach((sheetName, i) => {
+    const sheet = workbook.getWorksheet(sheetName)!;
+    assert.equal(sheet.getRow(1).getCell(1).value, `c${i + 1}`);
+    assert.equal(sheet.getRow(2).getCell(1).value, `c${i + 1}_val`);
+  });
+});
+
+test("truncation-only collision gets a numbered name within 31 characters", async () => {
+  const workbook = await exportLevelWorkbook([
+    { name: "Quarterly product attribute grouping variant alpha one", columns: ["t1"] },
+    { name: "Quarterly product attribute grouping variant alpha two", columns: ["t2"] },
+  ]);
+  const names = workbook.worksheets.map((sheet) => sheet.name);
+  const levels = names.filter((name) => name.startsWith("By "));
+  assert.equal(levels.length, 2);
+  assert.equal(new Set(levels.map((name) => name.toLowerCase())).size, 2);
+  for (const name of levels) {
+    assert.ok(name.length <= 31, `${name} is over 31 characters`);
+    assert.ok(validSheetName(name), `${name} is not a valid sheet name`);
+  }
+  assert.equal(levels[0], "By Quarterly product attribu");
+  assert.equal(levels[1], "By Quarterly product attribu 2");
+  assert.equal(workbook.getWorksheet(levels[0])!.getRow(2).getCell(1).value, "t1_val");
+  assert.equal(workbook.getWorksheet(levels[1])!.getRow(2).getCell(1).value, "t2_val");
+});
+
+test("ten same-name sheets keep the two-digit suffix in range", async () => {
+  const levels = Array.from({ length: 10 }, (_, i) => ({
+    name: "Attribute",
+    columns: [`u${i + 1}`],
+  }));
+  const workbook = await exportLevelWorkbook(levels);
+  const names = workbook.worksheets.map((sheet) => sheet.name);
+  const sheets = names.filter((name) => name.startsWith("By "));
+  assert.equal(sheets.length, 10);
+  assert.equal(new Set(sheets.map((name) => name.toLowerCase())).size, 10);
+  for (const name of sheets) {
+    assert.ok(name.length <= 31, `${name} is over 31 characters`);
+    assert.ok(validSheetName(name), `${name} is not a valid sheet name`);
+  }
+  assert.equal(sheets[9], "By Attribute 10");
+  sheets.forEach((sheetName, i) => {
+    const sheet = workbook.getWorksheet(sheetName)!;
+    assert.equal(sheet.getRow(1).getCell(1).value, `u${i + 1}`);
+    assert.equal(sheet.getRow(2).getCell(1).value, `u${i + 1}_val`);
+  });
+});
+
+test("tied By groups keep the limit-5000 rows and order with a cap note only over the cap (D79-2)", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { runBridge, drill, dataCheck, periodMoney } = await import("../src/engine.ts");
+  const { default: ExcelJS } = await import("exceljs");
+  const expectedNote =
+    "This sheet shows the 5,000 rows with the largest change. The Bridge sheet totals include every row.";
+  for (const total of [4999, 5000, 6000]) {
+    const query = await openDatabase();
+    await query(`SET threads=1`);
+    await query(
+      `CREATE OR REPLACE TABLE sales AS SELECT period, 'P' || i::VARCHAR AS product, 1.0 AS units, CASE WHEN period='2025' THEN 10.0 ELSE 11.0 + (i % 2) END AS sales FROM range(${total}) r(i) CROSS JOIN (VALUES ('2025'),('2026')) p(period)`,
+    );
+    const config = {
+      table: "sales",
+      periodColumn: "period",
+      prior: "2025",
+      current: "2026",
+      unitsColumn: "units",
+      salesColumn: "sales",
+      levels: [{ name: "Product", columns: ["product"] }],
+    };
+    const result = await runBridge(query, config);
+    const canonical = await drill(query, config, { columns: ["product"], limit: 5000 });
+    assert.equal(canonical.length, Math.min(total, 5000), `canonical holds ${Math.min(total, 5000)} rows at ${total}`);
+    const repeat = await drill(query, config, { columns: ["product"], limit: 5000 });
+    assert.deepEqual(
+      repeat.map((row) => String(row.product)),
+      canonical.map((row) => String(row.product)),
+      `the limit-5000 order repeats at ${total}`,
+    );
+    const check = await dataCheck(query, config);
+    const tieOut = await periodMoney(query, config, { table: "sales", periodColumn: "period" });
+    const captured: { blob?: Blob } = {};
+    const fakeDocument = {
+      createElement: () => ({ href: "", download: "", click() {} }),
+    };
+    const realDocument = (globalThis as any).document;
+    const realCreate = URL.createObjectURL;
+    const realRevoke = URL.revokeObjectURL;
+    (globalThis as any).document = fakeDocument;
+    (URL as any).createObjectURL = (blob: Blob) => {
+      captured.blob = blob;
+      return "blob:tied";
+    };
+    (URL as any).revokeObjectURL = () => {};
+    try {
+      await exportExcel(query, config, result, check, tieOut, ["Source: tied.csv"]);
+    } finally {
+      (globalThis as any).document = realDocument;
+      URL.createObjectURL = realCreate;
+      URL.revokeObjectURL = realRevoke;
+    }
+    assert.ok(captured.blob, `the export downloaded a workbook at ${total}`);
+    const bytes = new Uint8Array(await captured.blob.arrayBuffer());
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(bytes as any);
+    const sheet = workbook.getWorksheet("By Product")!;
+    assert.equal(sheet.getRow(1).getCell(1).value, "product");
+    const effectKeys = result.effects.map((effect) => effect.key);
+    if (total <= 5000) {
+      assert.equal(sheet.rowCount, 1 + total, `4999 and 5000 keep every row at ${total}`);
+      let foundNote = false;
+      sheet.eachRow((row) => {
+        if (row.getCell(1).value === expectedNote) foundNote = true;
+      });
+      assert.equal(foundNote, false, `no note at or below the cap at ${total}`);
+      for (let i = 0; i < canonical.length; i++) {
+        const row = sheet.getRow(2 + i);
+        const expected = canonical[i];
+        const prior = Number(expected.s0) + Number(expected.z0);
+        const current = Number(expected.s1) + Number(expected.z1);
+        assert.equal(row.getCell(1).value, String(expected.product), `row ${i} keeps its group at ${total}`);
+        assert.equal(row.getCell(2).value, prior, `row ${i} keeps prior at ${total}`);
+        assert.equal(row.getCell(3).value, current, `row ${i} keeps current at ${total}`);
+        assert.equal(row.getCell(4).value, current - prior, `row ${i} keeps change at ${total}`);
+        effectKeys.forEach((key, j) => {
+          assert.equal(row.getCell(5 + j).value, Number(expected[key]), `row ${i} keeps ${key} at ${total}`);
+        });
+      }
+    } else {
+      assert.equal(sheet.rowCount, 1 + 5000 + 1, `over the cap keeps 5000 rows plus the note at ${total}`);
+      for (let i = 0; i < 5000; i++) {
+        const row = sheet.getRow(2 + i);
+        const expected = canonical[i];
+        const prior = Number(expected.s0) + Number(expected.z0);
+        const current = Number(expected.s1) + Number(expected.z1);
+        assert.equal(row.getCell(1).value, String(expected.product), `row ${i} keeps its group at ${total}`);
+        assert.equal(row.getCell(2).value, prior, `row ${i} keeps prior at ${total}`);
+        assert.equal(row.getCell(3).value, current, `row ${i} keeps current at ${total}`);
+        assert.equal(row.getCell(4).value, current - prior, `row ${i} keeps change at ${total}`);
+        effectKeys.forEach((key, j) => {
+          assert.equal(row.getCell(5 + j).value, Number(expected[key]), `row ${i} keeps ${key} at ${total}`);
+        });
+      }
+      assert.equal(sheet.getRow(5002).getCell(1).value, expectedNote, `the note follows 5000 data rows at ${total}`);
+    }
+  }
 });
