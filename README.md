@@ -3,7 +3,7 @@
 A price-volume-mix (PVM) bridge that works for one attribute or many. It runs
 entirely in the browser: the sales file you load is not uploaded anywhere.
 
-PVM Bridge is a working name.
+The product is named PVM Bridge.
 
 ## Why
 
