@@ -6,9 +6,9 @@ const SITEMAP = new URL("../public/sitemap.xml", import.meta.url);
 const KNOWN_SPREAD = '...(env.VITE_WORKSPACES === "1" ? { pay: resolve(import.meta.dirname, "pay/index.html") } : {})';
 
 /**
- * Pages the build produces but search engines must not index. Every address in
- * the sitemap is exactly one page's canonical, so a page listed here has no
- * address at all rather than a second one.
+ * Build inputs deliberately omitted from this sitemap. The app has no canonical
+ * in this change, and pay belongs to Part 2. Sitemap exclusion does not block
+ * crawling or indexing.
  */
 const EXCLUDED = new Map([
   // app/index.html is a client-rendered shell with no description, and it is
