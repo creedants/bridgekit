@@ -51,10 +51,14 @@ export async function loadPeriodList(
   // is both a three-letter and a full month name, so it leaves `v` at 0 and
   // fits either. `dated` below requires one shape and at most one `v`.
   const rows = await query(
-    `WITH distinct_periods AS (
-       SELECT DISTINCT ${column} AS p, upper(${column}) AS u
+    `WITH distinct_labels AS (
+       SELECT DISTINCT ${column} AS p
        FROM ${view}
        WHERE ${column} IS NOT NULL
+     ),
+     distinct_periods AS (
+       SELECT p, upper(p) AS u
+       FROM distinct_labels
      ),
      labels AS (
        SELECT p,
