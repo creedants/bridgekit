@@ -9,10 +9,20 @@ import { parseSummary, type BridgeSummary } from "../src/summary.ts";
  * summary is refused before it reaches Anthropic. The handler uses only the
  * web-standard Request and Response, so it runs on Cloudflare Workers, Netlify
  * or Vercel functions, Deno, or Node behind the dev server.
+ *
+ * A Pro member may ask 100 times per UTC day. The daily count needs a database
+ * handle with prepare/bind/run and meta.changes. No Cloudflare type is imported.
  */
 
 export const MODEL = "claude-opus-5-5";
 const MAX_BODY_BYTES = 16_000;
+const DAILY_LIMIT = 100;
+const DAILY_LIMIT_SENTENCE = "You have reached today's commentary limit. Try again tomorrow.";
+
+/** The part of a database the daily count needs: one statement that reports the rows it changed. */
+type Ledger = {
+  prepare(sql: string): { bind(...values: unknown[]): { run(): Promise<{ meta: { changes?: number } }> } };
+};
 
 /** User id allowed to spend on commentary. Only commentarySpender in worker.ts produces one. */
 export type CommentarySpender = string & { readonly __commentarySpender: never };
@@ -32,6 +42,8 @@ type Ungated = CommentaryBase & { spender?: undefined; rateLimit?: undefined };
 type Gated = CommentaryBase & {
   spender: (request: Request) => Promise<CommentarySpender | null>;
   rateLimit: RateLimitShape | undefined;
+  ledger: Ledger;
+  now?: () => Date;
 };
 
 export type CommentaryOptions = Ungated | Gated;
@@ -83,6 +95,11 @@ export async function handleCommentary(request: Request, options: CommentaryOpti
     }
   }
 
+  if (spender !== undefined && options.spender !== undefined) {
+    const day = (options.now?.() ?? new Date()).toISOString().slice(0, 10);
+    if (!(await takeSlot(options.ledger, spender, day))) return reply(429, { error: DAILY_LIMIT_SENTENCE });
+  }
+
   const client = options.client ?? new Anthropic({ apiKey: options.apiKey });
   try {
     const message = await client.beta.messages.create({
@@ -110,6 +127,22 @@ export async function handleCommentary(request: Request, options: CommentaryOpti
     if (error instanceof Anthropic.APIError) return reply(502, { error: `The AI service returned an error (${error.status ?? "no status"}).` });
     return reply(502, { error: "Could not reach the AI service." });
   }
+}
+
+/**
+ * Counts one request against this member's day and reports whether it fits
+ * under DAILY_LIMIT. The one statement decides between the last allowed
+ * request and the next, so two requests that arrive together cannot both pass:
+ * the insert changes one row, and the conflict update changes one row only
+ * while the day's count is still below the limit.
+ */
+async function takeSlot(ledger: Ledger, spender: CommentarySpender, day: string): Promise<boolean> {
+  const { meta } = await ledger
+    .prepare(`INSERT INTO commentary_daily (userId, day, requests) VALUES (?, ?, 1)
+ON CONFLICT (userId, day) DO UPDATE SET requests = requests + 1 WHERE requests < ?`)
+    .bind(spender, day, DAILY_LIMIT)
+    .run();
+  return meta.changes === 1;
 }
 
 function prompt(summary: BridgeSummary): string {

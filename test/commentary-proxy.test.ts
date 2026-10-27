@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { handleCommentary, MODEL, type CommentaryOptions } from "../server/commentary.ts";
+import { handleCommentary, MODEL, type CommentaryOptions, type CommentarySpender } from "../server/commentary.ts";
 import type { Fetcher } from "../server/cloudflare.ts";
 import type { Env } from "../server/env.ts";
 import app from "../server/worker.ts";
@@ -73,6 +73,26 @@ function fakeClient(reply: { stop_reason: string; text: string }) {
 const post = (body: unknown) =>
   new Request("http://localhost/api/commentary", { method: "POST", body: typeof body === "string" ? body : JSON.stringify(body) });
 
+const DAY = "2026-10-27";
+const dayNow = () => new Date(`${DAY}T12:00:00Z`);
+const summaryPayload = { summary: summarize(result, config) };
+
+// The stand-in enforces the migration's foreign key, so a handler-level spender needs its user row.
+async function addMember(db: Env["DB"], id: string): Promise<CommentarySpender> {
+  await db
+    .prepare('INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 0, ?, ?)')
+    .bind(id, id, `${id}@example.invalid`, "2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z")
+    .run();
+  return id as CommentarySpender;
+}
+
+async function counts(db: Env["DB"]): Promise<{ userId: string; day: string; requests: number }[]> {
+  const { results } = await db
+    .prepare("SELECT userId, day, requests FROM commentary_daily ORDER BY userId, day")
+    .all<{ userId: string; day: string; requests: number }>();
+  return results;
+}
+
 test("the proxy sends the summary to the model and returns paragraphs", async () => {
   const { client, calls } = fakeClient({ stop_reason: "end_turn", text: "Sales rose.\n\nVolume led." });
   const response = await handleCommentary(post({ summary: summarize(result, config) }), { apiKey: "k", client });
@@ -91,7 +111,12 @@ test("the proxy refuses anything that is not bridge totals, without calling the 
   assert.equal((await handleCommentary(post("not json"), options)).status, 400);
   assert.equal((await handleCommentary(post("x".repeat(20_000)), options)).status, 413);
   assert.equal((await handleCommentary(new Request("http://localhost/api/commentary"), options)).status, 405);
-  const denied = await handleCommentary(post({ summary: summarize(result, config) }), { ...options, spender: async () => null, rateLimit: undefined });
+  const denied = await handleCommentary(post({ summary: summarize(result, config) }), {
+    ...options,
+    spender: async () => null,
+    rateLimit: undefined,
+    ledger: testDatabase(),
+  });
   assert.equal(denied.status, 403);
   assert.equal(calls.length, 0);
 });
@@ -100,6 +125,92 @@ test("a refusal from the model is reported, not shown as commentary", async () =
   const { client } = fakeClient({ stop_reason: "refusal", text: "" });
   const response = await handleCommentary(post({ summary: summarize(result, config) }), { apiKey: "k", client });
   assert.equal(response.status, 502);
+});
+
+const DAILY_SENTENCE = "You have reached today's commentary limit. Try again tomorrow.";
+
+test("the hundredth commentary request passes and the hundred-and-first is refused", async () => {
+  const db = testDatabase();
+  const spender = await addMember(db, "capped-member");
+  const { client, calls } = fakeClient({ stop_reason: "end_turn", text: "Sales rose." });
+  const options = { apiKey: "k", client, spender: async () => spender, rateLimit: undefined, ledger: db, now: dayNow };
+  for (let n = 0; n < 100; n += 1) {
+    const response = await handleCommentary(post(summaryPayload), options);
+    assert.equal(response.status, 200, `request ${n + 1} was refused`);
+  }
+  const refused = await handleCommentary(post(summaryPayload), options);
+  assert.equal(refused.status, 429);
+  assert.deepEqual(await refused.json(), { error: DAILY_SENTENCE });
+  assert.equal(calls.length, 100);
+  assert.deepEqual(await counts(db), [{ userId: spender, day: DAY, requests: 100 }]);
+});
+
+test("a new UTC day starts at zero", async () => {
+  const db = testDatabase();
+  const spender = await addMember(db, "next-day-member");
+  await db.prepare("INSERT INTO commentary_daily (userId, day, requests) VALUES (?, ?, 100)").bind(spender, DAY).run();
+  const { client, calls } = fakeClient({ stop_reason: "end_turn", text: "Sales rose." });
+  const response = await handleCommentary(post(summaryPayload), {
+    apiKey: "k", client, spender: async () => spender, rateLimit: undefined, ledger: db,
+    now: () => new Date("2026-10-28T00:00:00Z"),
+  });
+  assert.equal(response.status, 200);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(await counts(db), [
+    { userId: spender, day: DAY, requests: 100 },
+    { userId: spender, day: "2026-10-28", requests: 1 },
+  ]);
+});
+
+test("one member's day does not use another member's", async () => {
+  const db = testDatabase();
+  const capped = await addMember(db, "first-member");
+  const fresh = await addMember(db, "second-member");
+  await db.prepare("INSERT INTO commentary_daily (userId, day, requests) VALUES (?, ?, 100)").bind(capped, DAY).run();
+  const { client, calls } = fakeClient({ stop_reason: "end_turn", text: "Sales rose." });
+  const response = await handleCommentary(post(summaryPayload), {
+    apiKey: "k", client, spender: async () => fresh, rateLimit: undefined, ledger: db, now: dayNow,
+  });
+  assert.equal(response.status, 200);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(await counts(db), [
+    { userId: capped, day: DAY, requests: 100 },
+    { userId: fresh, day: DAY, requests: 1 },
+  ]);
+});
+
+test("two requests at the hundredth slot give one pass and one refusal", async () => {
+  const db = testDatabase();
+  const spender = await addMember(db, "racing-member");
+  await db.prepare("INSERT INTO commentary_daily (userId, day, requests) VALUES (?, ?, 99)").bind(spender, DAY).run();
+  const { client, calls } = fakeClient({ stop_reason: "end_turn", text: "Sales rose." });
+  const options = { apiKey: "k", client, spender: async () => spender, rateLimit: undefined, ledger: db, now: dayNow };
+  const responses = await Promise.all([handleCommentary(post(summaryPayload), options), handleCommentary(post(summaryPayload), options)]);
+  assert.deepEqual(responses.map((response) => response.status).sort(), [200, 429]);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(await counts(db), [{ userId: spender, day: DAY, requests: 100 }]);
+});
+
+test("a request the per-minute limit refuses is not counted", async () => {
+  const db = testDatabase();
+  const spender = await addMember(db, "quick-member");
+  const { client, calls } = fakeClient({ stop_reason: "end_turn", text: "Sales rose." });
+  const response = await handleCommentary(post(summaryPayload), {
+    apiKey: "k",
+    client,
+    spender: async () => spender,
+    rateLimit: {
+      async limit() {
+        return { success: false };
+      },
+    },
+    ledger: db,
+    now: dayNow,
+  });
+  assert.equal(response.status, 429);
+  assert.deepEqual(await response.json(), { error: "You are sending commentary requests too quickly." });
+  assert.equal(calls.length, 0);
+  assert.deepEqual(await counts(db), []);
 });
 
 const SITE = "http://127.0.0.1:8790";
@@ -418,4 +529,53 @@ test("a workspace write from another origin is still refused as cross-site", asy
   );
   assert.equal(response.status, 403);
   assert.deepEqual(await response.json(), { error: "Requests must come from this site." });
+});
+
+test("a Pro commentary request through the route is counted for today", async () => {
+  const env = workerEnv(database(), PRO_ENV);
+  const fence = fenceAnthropic();
+  try {
+    const { cookie, userId } = await signInMember(env, "pro-counted@example.invalid", "pro-counted", true);
+    const response = await dispatch(env, commentaryRequest(cookie, { origin: SITE }, summaryBody));
+    const body = await response.text();
+    assert.equal(response.status, 200, body);
+    assert.equal(fence.urls.length, 1);
+    assert.deepEqual(await counts(env.DB), [{ userId, day: new Date().toISOString().slice(0, 10), requests: 1 }]);
+  } finally {
+    fence.restore();
+  }
+});
+
+test("a Pro commentary request through the route at the cap is refused with the sentence", async () => {
+  const env = workerEnv(database(), PRO_ENV);
+  const fence = fenceAnthropic();
+  try {
+    const { cookie, userId } = await signInMember(env, "pro-at-cap@example.invalid", "pro-at-cap", true);
+    await env.DB
+      .prepare("INSERT INTO commentary_daily (userId, day, requests) VALUES (?, ?, 100)")
+      .bind(userId, new Date().toISOString().slice(0, 10))
+      .run();
+    const response = await dispatch(env, commentaryRequest(cookie, { origin: SITE }, summaryBody));
+    assert.equal(response.status, 429);
+    assert.deepEqual(await response.json(), { error: DAILY_SENTENCE });
+    assert.equal(fence.urls.length, 0);
+  } finally {
+    fence.restore();
+  }
+});
+
+test("a member without Pro is not counted", async () => {
+  const env = workerEnv(database(), PRO_ENV);
+  const fence = fenceAnthropic();
+  try {
+    const { cookie } = await signInMember(env, "free-uncounted@example.invalid", "free-uncounted", false);
+    const response = await dispatch(env, commentaryRequest(cookie, { origin: SITE }, summaryBody));
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: PRO_SENTENCE });
+    assert.equal(fence.urls.length, 0);
+    const row = await env.DB.prepare("SELECT COUNT(*) AS total FROM commentary_daily").first<{ total: number }>();
+    assert.equal(row?.total, 0);
+  } finally {
+    fence.restore();
+  }
 });
