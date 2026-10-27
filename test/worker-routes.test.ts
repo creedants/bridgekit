@@ -297,7 +297,7 @@ test("the six extensionless addresses answer 301 to their html address with the 
     assert.equal(moved.status, 301, address);
     assert.equal(moved.headers.get("location"), `${address}.html?a=1&a=2&encoded=%2F`, address);
     assert.equal(await moved.text(), "", address);
-    assert.deepEqual(calls, [], `${address} asked ASSETS before redirecting`);
+    assert.equal(calls.length, 0, `${address} asked ASSETS before redirecting`);
     assert.deepEqual(await views(db), [], `${address} counted the redirect`);
     const landed = await open(`${address}.html?a=1&a=2&encoded=%2F`, env);
     assert.equal(landed.status, 200, address);
@@ -323,7 +323,7 @@ test("plain http on a public host answers 301 to https and an extensionless name
     const moved = await visit(`http://pvmbridge.com${address}?a=1`, env);
     assert.equal(moved.status, 301, address);
     assert.equal(moved.headers.get("location"), `https://pvmbridge.com${address}.html?a=1`, address);
-    assert.deepEqual(calls, [], address);
+    assert.equal(calls.length, 0, address);
     assert.deepEqual(await views(db), [], address);
     const landed = await visit(`https://pvmbridge.com${address}.html?a=1`, env);
     assert.equal(landed.status, 200, address);
