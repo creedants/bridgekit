@@ -246,10 +246,8 @@ async function json(c: Context<App>): Promise<unknown> {
   }
 }
 
-/** The most a setup save body may be, in bytes. */
-const SETUP_BODY_LIMIT = 3 * 1024 * 1024;
-/** The most a bridge save body may be, in bytes. */
-const BRIDGE_BODY_LIMIT = 4 * 1024 * 1024;
+/** The most a setup or bridge save body may be, in bytes. */
+const SAVE_BODY_LIMIT = 6 * 1024 * 1024;
 const TOO_LARGE = "This is too large to save.";
 
 class BodyTooLarge extends Error {}
@@ -333,7 +331,7 @@ open.get("/api/workspaces/:id/setups", async (c) => {
 });
 open.post("/api/workspaces/:id/setups", async (c) => {
   const user = await userId(c);
-  return c.json(await saveSetup(c.env.DB, user, c.req.param("id"), await boundedJson(c, SETUP_BODY_LIMIT)), 201);
+  return c.json(await saveSetup(c.env.DB, user, c.req.param("id"), await boundedJson(c, SAVE_BODY_LIMIT)), 201);
 });
 open.delete("/api/workspaces/:id/setups/:item", async (c) => {
   await deleteSaved(c.env.DB, await userId(c), c.req.param("id"), "setup", c.req.param("item"));
@@ -343,7 +341,7 @@ open.delete("/api/workspaces/:id/setups/:item", async (c) => {
 open.get("/api/workspaces/:id/bridges", async (c) => c.json(await listBridges(c.env.DB, await userId(c), c.req.param("id"))));
 open.post("/api/workspaces/:id/bridges", async (c) => {
   const user = await userId(c);
-  return c.json(await saveBridge(c.env.DB, user, c.req.param("id"), await boundedJson(c, BRIDGE_BODY_LIMIT)), 201);
+  return c.json(await saveBridge(c.env.DB, user, c.req.param("id"), await boundedJson(c, SAVE_BODY_LIMIT)), 201);
 });
 open.delete("/api/workspaces/:id/bridges/:item", async (c) => {
   await deleteSaved(c.env.DB, await userId(c), c.req.param("id"), "bridge", c.req.param("item"));

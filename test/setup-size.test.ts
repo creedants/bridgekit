@@ -14,8 +14,7 @@ const MAX_COLUMN_NAME = 300;
 const MAX_LEVEL_NAME = 300;
 const MAX_FILTER_VALUES = 500;
 const MAX_FILTER_VALUE = 300;
-const SETUP_LIMIT = 3 * 1024 * 1024;
-const BRIDGE_LIMIT = 4 * 1024 * 1024;
+const SAVE_LIMIT = 6 * 1024 * 1024;
 const TOO_LARGE = "This is too large to save.";
 
 const ORIGIN = "http://127.0.0.1:8790";
@@ -370,9 +369,9 @@ test("accepts the largest setup the app can build", () => {
   assert.equal(isValidSetup(largestSetupWithFilters(columns), columnsOf(columns)), true);
 });
 
-test("refuses a setup save just over 3 MiB with 413, whatever Content-Length says", async () => {
+test("refuses a setup save just over 6 MiB with 413, whatever Content-Length says", async () => {
   const { env, cookie, workspaceId } = await signedIn();
-  const text = padded(smallSetupBody(), SETUP_LIMIT + 1);
+  const text = padded(smallSetupBody(), SAVE_LIMIT + 1);
   const accurate = await post(env, workspaceId, "setups", cookie, text, {
     "content-length": String(Buffer.byteLength(text)),
   });
@@ -388,9 +387,9 @@ test("refuses a setup save just over 3 MiB with 413, whatever Content-Length say
   }
 });
 
-test("refuses a bridge save just over 4 MiB with 413, whatever Content-Length says", async () => {
+test("refuses a bridge save just over 6 MiB with 413, whatever Content-Length says", async () => {
   const { env, cookie, workspaceId } = await signedIn();
-  const text = padded(smallBridgeBody(), BRIDGE_LIMIT + 1);
+  const text = padded(smallBridgeBody(), SAVE_LIMIT + 1);
   const accurate = await post(env, workspaceId, "bridges", cookie, text, {
     "content-length": String(Buffer.byteLength(text)),
   });
@@ -406,9 +405,9 @@ test("refuses a bridge save just over 4 MiB with 413, whatever Content-Length sa
   }
 });
 
-test("accepts a setup body of exactly 3 MiB", async () => {
+test("accepts a setup body of exactly 6 MiB", async () => {
   const { env, cookie, workspaceId } = await signedIn();
-  const text = padded(smallSetupBody(), SETUP_LIMIT);
+  const text = padded(smallSetupBody(), SAVE_LIMIT);
   const response = await post(env, workspaceId, "setups", cookie, text, {
     "content-length": String(Buffer.byteLength(text)),
   });
@@ -444,7 +443,7 @@ test("refuses an anonymous oversized setup save with 403 and writes no row", asy
     return row?.n ?? -1;
   };
   const before = await count();
-  const response = await post(env, workspaceId, "setups", null, padded(smallSetupBody(), SETUP_LIMIT + 1));
+  const response = await post(env, workspaceId, "setups", null, padded(smallSetupBody(), SAVE_LIMIT + 1));
   assert.equal(response.status, 403);
   assert.deepEqual(await response.json(), { error: "Sign in first." });
   assert.equal(await count(), before);
@@ -452,19 +451,19 @@ test("refuses an anonymous oversized setup save with 403 and writes no row", asy
 
 test("answers 400 for a body at the limit that is not JSON", async () => {
   const { env, cookie, workspaceId } = await signedIn();
-  const response = await post(env, workspaceId, "setups", cookie, "#".repeat(SETUP_LIMIT));
+  const response = await post(env, workspaceId, "setups", cookie, "#".repeat(SAVE_LIMIT));
   assert.equal(response.status, 400);
   assert.deepEqual(await response.json(), { error: "The request was not valid JSON." });
 });
 
-test("the largest setup and bridge bodies sit under their save limits", () => {
-  for (const filler of ["a", "價"]) {
+test("the largest setup and bridge bodies sit under the save limit", () => {
+  for (const filler of ["a", "價", "\u0001"]) {
     const columns = columnNames(MAX_COLUMNS, filler);
     const setup = setupAcross(columns);
     const setupSize = Buffer.byteLength(JSON.stringify(setupBody(columns, setup)));
     const bridgeSize = Buffer.byteLength(JSON.stringify(bridgeBody(columns, setup, largestSummary(filler))));
-    assert.ok(setupSize < SETUP_LIMIT, `${filler} setup ${setupSize} against ${SETUP_LIMIT}`);
-    assert.ok(bridgeSize < BRIDGE_LIMIT, `${filler} bridge ${bridgeSize} against ${BRIDGE_LIMIT}`);
+    assert.ok(setupSize < SAVE_LIMIT, `${filler} setup ${setupSize} against ${SAVE_LIMIT}`);
+    assert.ok(bridgeSize < SAVE_LIMIT, `${filler} bridge ${bridgeSize} against ${SAVE_LIMIT}`);
     assert.ok(parseSummary(largestSummary(filler)), filler);
   }
 });
