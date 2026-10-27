@@ -79,7 +79,6 @@ export function netSalesHeldAsText(columns: readonly Column[]): string {
     if (!parts.includes("net")) return false;
     if (!SALES_WORDS.some((word) => parts.includes(word))) return false;
     if (isTrailingNote(column.name)) return false;
-    if (isUnitPrice(column.name)) return false;
     if (UNITS_PATTERN.test(column.name)) return false;
     return true;
   })?.name ?? "";
