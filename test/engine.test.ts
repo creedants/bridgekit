@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDatabase } from "../src/duckdb.ts";
-import { runBridge, drill, unmatched, dataCheck, priceDistribution, sensitivity, trend, priceRealization, priceGaps, accountBridge, periodMoney, tieOutLines, type BridgeConfig, type BridgeResult, type Level, type Query, type TieOutLine } from "../src/engine.ts";
+import { runBridge, drill, unmatched, dataCheck, priceDistribution, sensitivity, trend, priceRealization, priceGaps, accountBridge, measureSql, periodMoney, tieOutLines, type BridgeConfig, type BridgeResult, type Level, type Query, type TieOutLine } from "../src/engine.ts";
 import { PERIOD, VIEW, quote, viewSql, type Setup } from "../src/app/setup.ts";
 import { whole } from "../src/app/format.ts";
 import { createSyntheticSales } from "../src/synth.ts";
@@ -359,6 +359,40 @@ test("account bridge splits the change into new, lost, growing and shrinking", a
   near(by.shrinking.change, -40);
   assert.equal(by.lost.top[0].name, "gone");
   near(groups.reduce((sum, g) => sum + g.change, 0), 230 - 250);
+});
+
+test("margin account bridge foots to the bridge when one row has blank sales", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t AS SELECT * FROM (VALUES
+    ('p0', 'keep', 'A', 10, 100.0, 60.0), ('p0', 'blanked', 'A', 5, 50.0, 30.0),
+    ('p1', 'keep', 'A', 12, 130.0, 70.0), ('p1', 'blanked', 'A', 5, NULL, 20.0)
+  ) v(period, customer, product, units, sales, cost)`);
+  const marginConfig: BridgeConfig = {
+    table: "t", periodColumn: "period", prior: "p0", current: "p1",
+    unitsColumn: "units", salesColumn: "sales", costColumn: "cost",
+    levels: [{ name: "Product", columns: ["product"] }],
+  };
+  const bridge = await runBridge(query, marginConfig);
+  assert.equal(bridge.priorSales, 60);
+  assert.equal(bridge.currentSales, 40);
+  const groups = await accountBridge(query, marginConfig, "customer");
+  near(groups.reduce((sum, g) => sum + g.prior, 0), bridge.priorSales);
+  near(groups.reduce((sum, g) => sum + g.current, 0), bridge.currentSales);
+  const blanked = groups.flatMap((g) => g.top).find((t) => t.name === "blanked");
+  assert.ok(blanked, "blanked account is reported");
+  const [expectedPrior] = await query(
+    `SELECT ${measureSql(marginConfig)} AS v FROM t WHERE period = 'p0' AND customer = 'blanked'`,
+  );
+  const [expectedCurrent] = await query(
+    `SELECT ${measureSql(marginConfig)} AS v FROM t WHERE period = 'p1' AND customer = 'blanked'`,
+  );
+  near(blanked.prior, Number(expectedPrior.v));
+  near(blanked.current, Number(expectedCurrent.v));
+
+  const salesConfig: BridgeConfig = { ...marginConfig, costColumn: undefined };
+  const salesGroups = await accountBridge(query, salesConfig, "customer");
+  near(salesGroups.reduce((sum, g) => sum + g.prior, 0), 150);
+  near(salesGroups.reduce((sum, g) => sum + g.current, 0), 130);
 });
 
 test("review findings: float units that net to zero, offsetting splits, null sales with cost, reserved names", async () => {
