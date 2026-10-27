@@ -18,18 +18,21 @@ const PLAIN_NUMBER_SOURCE = String.raw`^-?\d+(\.\d+)?$`;
 const MAX_DIGITS = 15;
 
 /**
- * A text label that names a date. One pattern per format, matched against the
- * upper-cased label so case never splits a column. A quarter takes its first
- * month, a fiscal year its first day, and a two-digit fiscal year is 20nn.
+ * A text label that names a date, upper-cased before matching so case never
+ * splits a column. One pattern per format. A quarter takes its first month, a
+ * fiscal year month 0, and a two-digit fiscal year is 20nn.
  */
 const ISO_QUARTER_SOURCE = String.raw`^\d{4}-Q[1-4]$`;
 const YEAR_QUARTER_SOURCE = String.raw`^\d{4} Q[1-4]$`;
 const QUARTER_YEAR_SOURCE = String.raw`^Q[1-4] \d{4}$`;
 const QUARTER_DASH_YEAR_SOURCE = String.raw`^Q[1-4]-\d{4}$`;
-const MONTH_NAME_SOURCE =
-  String.raw`^(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC|JANUARY|FEBRUARY|MARCH|APRIL|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER) \d{4}$`;
+const MONTH_ABBREVIATION_SOURCE =
+  String.raw`^(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC) \d{4}$`;
+const MONTH_FULL_SOURCE =
+  String.raw`^(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER) \d{4}$`;
 const YEAR_MONTH_SOURCE = String.raw`^\d{4}-(0[1-9]|1[0-2])$`;
-const FISCAL_YEAR_SOURCE = String.raw`^FY(\d{2}|\d{4})$`;
+const FISCAL_YEAR_SHORT_SOURCE = String.raw`^FY(\d{2})$`;
+const FISCAL_YEAR_LONG_SOURCE = String.raw`^FY(\d{4})$`;
 
 /**
  * `column` and `view` are already quoted identifiers.
@@ -65,14 +68,18 @@ export async function loadPeriodList(
                 WHEN regexp_matches(u, '${QUARTER_DASH_YEAR_SOURCE}')
                   THEN 4000000 + CAST(substr(u, 4, 4) AS INTEGER) * 100
                        + (CAST(substr(u, 2, 1) AS INTEGER) - 1) * 3 + 1
-                WHEN regexp_matches(u, '${MONTH_NAME_SOURCE}')
+                WHEN regexp_matches(u, '${MONTH_ABBREVIATION_SOURCE}')
                   THEN 5000000 + CAST(substr(u, length(u) - 3, 4) AS INTEGER) * 100
                        + list_position(['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'], substr(u, 1, 3))
+                WHEN regexp_matches(u, '${MONTH_FULL_SOURCE}')
+                  THEN 6000000 + CAST(substr(u, length(u) - 3, 4) AS INTEGER) * 100
+                       + list_position(['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'], substr(u, 1, 3))
                 WHEN regexp_matches(u, '${YEAR_MONTH_SOURCE}')
-                  THEN 6000000 + CAST(substr(u, 1, 4) AS INTEGER) * 100 + CAST(substr(u, 6, 2) AS INTEGER)
-                WHEN regexp_matches(u, '${FISCAL_YEAR_SOURCE}')
-                  THEN 7000000 + (CAST(substr(u, 3, length(u) - 2) AS INTEGER)
-                       + CASE WHEN length(u) = 4 THEN 2000 ELSE 0 END) * 100
+                  THEN 7000000 + CAST(substr(u, 1, 4) AS INTEGER) * 100 + CAST(substr(u, 6, 2) AS INTEGER)
+                WHEN regexp_matches(u, '${FISCAL_YEAR_SHORT_SOURCE}')
+                  THEN 8000000 + (2000 + CAST(substr(u, 3, 2) AS INTEGER)) * 100
+                WHEN regexp_matches(u, '${FISCAL_YEAR_LONG_SOURCE}')
+                  THEN 9000000 + CAST(substr(u, 3, 4) AS INTEGER) * 100
               END AS k
        FROM distinct_periods
      ),

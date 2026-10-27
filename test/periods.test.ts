@@ -140,7 +140,7 @@ test("a quarterly text sample defaults to the last two quarters as prior and cur
   assert.deepEqual(steps.map((s) => [s.prior, s.current]), [["Q3 2024", "Q4 2024"], ["Q4 2024", "Q1 2025"]]);
 });
 
-test("month-name labels in either case and either length order by the month they name", async () => {
+test("three-letter and full month-name labels each order by the month they name", async () => {
   assert.deepEqual(
     (await loadOnly(["Jan 2025", "Mar 2024", "Feb 2025"])).values,
     ["Mar 2024", "Jan 2025", "Feb 2025"],
@@ -149,17 +149,13 @@ test("month-name labels in either case and either length order by the month they
     (await loadOnly(["MARCH 2024", "January 2025", "february 2024"])).values,
     ["february 2024", "MARCH 2024", "January 2025"],
   );
-  assert.deepEqual(
-    (await loadOnly(["January 2024", "Mar 2025", "September 2024"])).values,
-    ["January 2024", "September 2024", "Mar 2025"],
-  );
 });
 
 test("year-month labels order by the month they name", async () => {
   assert.deepEqual((await loadOnly(["2025-10", "2025-03", "2024-12"])).values, ["2024-12", "2025-03", "2025-10"]);
 });
 
-test("fiscal-year labels order by year, and a two-digit year is 20nn", async () => {
+test("fiscal-year labels order by year", async () => {
   assert.deepEqual((await loadOnly(["FY24", "FY25", "FY19"])).values, ["FY19", "FY24", "FY25"]);
   assert.deepEqual((await loadOnly(["FY2024", "FY2025", "FY2019"])).values, ["FY2019", "FY2024", "FY2025"]);
 });
@@ -187,6 +183,14 @@ test("a mix of label shapes, or a value that matches none, stays in text order",
   // Two shapes that differ only in the separator are still two formats.
   const separators = await loadOnly(["2025-Q1", "2025 Q2"]);
   assert.deepEqual(separators.values, ["2025 Q2", "2025-Q1"]);
+
+  // A three-letter month name and a full one are two formats, as are the two
+  // fiscal-year lengths.
+  assert.deepEqual(
+    (await loadOnly(["January 2024", "Mar 2025", "September 2024"])).values,
+    ["January 2024", "Mar 2025", "September 2024"],
+  );
+  assert.deepEqual((await loadOnly(["FY24", "FY2025"])).values, ["FY2025", "FY24"]);
 
   const alien = await loadOnly(["Q1 2025", "Q4 2024", "Q3 24"]);
   assert.deepEqual(alien.values, ["Q1 2025", "Q3 24", "Q4 2024"]);
