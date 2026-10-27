@@ -8,8 +8,16 @@ import * as bounds from "../src/app/setup.ts";
 import { parseSummary, type BridgeSummary } from "../src/summary.ts";
 import { testDatabase } from "./support/d1.ts";
 
-const { MAX_COLUMNS, MAX_COLUMN_NAME, MAX_LEVEL_NAME, MAX_FILTER_VALUES, MAX_FILTER_VALUE } = bounds;
-const { SETUP_BODY_LIMIT, BRIDGE_BODY_LIMIT, TOO_LARGE } = routes;
+// The bounds the product promises. The tests use these numbers, not the
+// exports, so a run at the base commit exercises the behaviour it lacks.
+const MAX_COLUMNS = 1000;
+const MAX_COLUMN_NAME = 300;
+const MAX_LEVEL_NAME = 300;
+const MAX_FILTER_VALUES = 500;
+const MAX_FILTER_VALUE = 300;
+const SETUP_LIMIT = 3 * 1024 * 1024;
+const BRIDGE_LIMIT = 4 * 1024 * 1024;
+const TOO_LARGE = "This is too large to save.";
 
 const ORIGIN = "http://127.0.0.1:8790";
 const AUTH_SECRET = "0123456789abcdef0123456789abcdef";
@@ -285,6 +293,17 @@ function post(
   return call(`${ORIGIN}/api/workspaces/${workspaceId}/${route}`, env, init);
 }
 
+test("exports the documented bounds and the two save limits", () => {
+  assert.equal(bounds.MAX_COLUMNS, MAX_COLUMNS);
+  assert.equal(bounds.MAX_COLUMN_NAME, MAX_COLUMN_NAME);
+  assert.equal(bounds.MAX_LEVEL_NAME, MAX_LEVEL_NAME);
+  assert.equal(bounds.MAX_FILTER_VALUES, MAX_FILTER_VALUES);
+  assert.equal(bounds.MAX_FILTER_VALUE, MAX_FILTER_VALUE);
+  assert.equal(routes.SETUP_BODY_LIMIT, SETUP_LIMIT);
+  assert.equal(routes.BRIDGE_BODY_LIMIT, BRIDGE_LIMIT);
+  assert.equal(routes.TOO_LARGE, TOO_LARGE);
+});
+
 test("refuses a setup with more levels than its columns allow", () => {
   const three = ["a", "b", "c"];
   assert.equal(isValidSetup(setupAcross(three), columnsOf(three)), true);
@@ -357,7 +376,7 @@ test("accepts the largest setup the app can build", () => {
 
 test("refuses a setup save just over 3 MiB with 413, whatever Content-Length says", async () => {
   const { env, cookie, workspaceId } = await signedIn();
-  const text = padded(smallSetupBody(), SETUP_BODY_LIMIT + 1);
+  const text = padded(smallSetupBody(), SETUP_LIMIT + 1);
   const accurate = await post(env, workspaceId, "setups", cookie, text, {
     "content-length": String(Buffer.byteLength(text)),
   });
@@ -375,7 +394,7 @@ test("refuses a setup save just over 3 MiB with 413, whatever Content-Length say
 
 test("refuses a bridge save just over 4 MiB with 413, whatever Content-Length says", async () => {
   const { env, cookie, workspaceId } = await signedIn();
-  const text = padded(smallBridgeBody(), BRIDGE_BODY_LIMIT + 1);
+  const text = padded(smallBridgeBody(), BRIDGE_LIMIT + 1);
   const accurate = await post(env, workspaceId, "bridges", cookie, text, {
     "content-length": String(Buffer.byteLength(text)),
   });
@@ -393,7 +412,7 @@ test("refuses a bridge save just over 4 MiB with 413, whatever Content-Length sa
 
 test("accepts a setup body of exactly 3 MiB", async () => {
   const { env, cookie, workspaceId } = await signedIn();
-  const text = padded(smallSetupBody(), SETUP_BODY_LIMIT);
+  const text = padded(smallSetupBody(), SETUP_LIMIT);
   const response = await post(env, workspaceId, "setups", cookie, text, {
     "content-length": String(Buffer.byteLength(text)),
   });
@@ -429,7 +448,7 @@ test("refuses an anonymous oversized setup save with 403 and writes no row", asy
     return row?.n ?? -1;
   };
   const before = await count();
-  const response = await post(env, workspaceId, "setups", null, padded(smallSetupBody(), SETUP_BODY_LIMIT + 1));
+  const response = await post(env, workspaceId, "setups", null, padded(smallSetupBody(), SETUP_LIMIT + 1));
   assert.equal(response.status, 403);
   assert.deepEqual(await response.json(), { error: "Sign in first." });
   assert.equal(await count(), before);
@@ -437,7 +456,7 @@ test("refuses an anonymous oversized setup save with 403 and writes no row", asy
 
 test("answers 400 for a body at the limit that is not JSON", async () => {
   const { env, cookie, workspaceId } = await signedIn();
-  const response = await post(env, workspaceId, "setups", cookie, "#".repeat(SETUP_BODY_LIMIT));
+  const response = await post(env, workspaceId, "setups", cookie, "#".repeat(SETUP_LIMIT));
   assert.equal(response.status, 400);
   assert.deepEqual(await response.json(), { error: "The request was not valid JSON." });
 });
@@ -448,8 +467,8 @@ test("the largest setup and bridge bodies sit under their save limits", () => {
     const setup = setupAcross(columns);
     const setupSize = Buffer.byteLength(JSON.stringify(setupBody(columns, setup)));
     const bridgeSize = Buffer.byteLength(JSON.stringify(bridgeBody(columns, setup, largestSummary(filler))));
-    assert.ok(setupSize < SETUP_BODY_LIMIT, `${filler} setup ${setupSize} against ${SETUP_BODY_LIMIT}`);
-    assert.ok(bridgeSize < BRIDGE_BODY_LIMIT, `${filler} bridge ${bridgeSize} against ${BRIDGE_BODY_LIMIT}`);
+    assert.ok(setupSize < SETUP_LIMIT, `${filler} setup ${setupSize} against ${SETUP_LIMIT}`);
+    assert.ok(bridgeSize < BRIDGE_LIMIT, `${filler} bridge ${bridgeSize} against ${BRIDGE_LIMIT}`);
     assert.ok(parseSummary(largestSummary(filler)), filler);
   }
 });
