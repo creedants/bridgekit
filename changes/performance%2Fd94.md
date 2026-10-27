@@ -1,0 +1,1 @@
+- The Setup check hint no longer tells users that an attribute whose removal moves price a lot always carries real mix. It says to keep such an attribute when it describes the product itself, and that a label which changed between periods can hide a real price change.
