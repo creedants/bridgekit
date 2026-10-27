@@ -12,6 +12,8 @@ import {
   assertCheckoutOpen,
   deleteSaved,
   invitationHasSeat,
+  invitationSendAllowed,
+  INVITATION_RATE_SENTENCE,
   listBridges,
   listSetups,
   membership,
@@ -129,8 +131,8 @@ function emailRefusal(env: Env, request: Request): Response | null {
   return Response.json({ message: EMAIL_NOT_SET_UP }, { status: 503 });
 }
 
-function refused(sentence: string): Response {
-  return Response.json({ message: sentence }, { status: 403 });
+function refused(sentence: string, status = 403): Response {
+  return Response.json({ message: sentence }, { status });
 }
 
 /**
@@ -151,7 +153,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /**
  * Refuses a workspace creation or an invitation before Better Auth runs, with
- * the same two sentences Better Auth would answer with.
+ * the sentence that request would otherwise owe its caller.
  *
  * The Worker asks, because the invitation email callback runs inside a
  * background helper that catches a refusal and then answers 200: a refusal
@@ -159,9 +161,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * The plugin's before-hooks run before the row is written and answer 403
  * themselves; the route's re-send branch never reaches beforeCreateInvitation,
  * so a re-send with no seat left is refused by the update trigger instead.
- * server/auth.ts still holds the same two checks for callers that reach the
- * plugin directly, and the triggers in migrations/0004_workspace_limits.sql
- * refuse a losing write that both checks have already let through.
+ * server/auth.ts still holds the same two seat checks for callers that reach
+ * the plugin directly, and the triggers in migrations/0004_workspace_limits.sql
+ * refuse a losing seat write that both checks have already let through.
+ *
+ * An invitation also has to fit the workspace's rolling 24-hour send window,
+ * counted in D1 by migrations/0006_invite_limits.sql; that window is checked
+ * after the seat for a new invitation and for a re-send alike, and the same
+ * migration refuses a losing send that reaches the database.
  *
  * The invitation route resolves the workspace from the body's organizationId
  * and, without one, from the session's active workspace. This mirrors that,
@@ -183,20 +190,33 @@ async function limitsRefusal(auth: Auth, env: Env, request: Request): Promise<Re
   const organizationId = typeof parsed.organizationId === "string" && parsed.organizationId ? parsed.organizationId : session.session.activeOrganizationId;
   if (!organizationId) return null;
   if (!(await invitationHasSeat(env.DB, organizationId, parsed))) return refused(SEAT_LIMIT_SENTENCE);
+  // The seat check runs first, so a workspace short of both keeps the seat
+  // sentence. A re-send counts against the window as well as a new invitation.
+  if (!(await invitationSendAllowed(env.DB, organizationId))) return refused(INVITATION_RATE_SENTENCE, 429);
   return null;
 }
 
 /**
- * Translates the refusal a database trigger in
- * migrations/0004_workspace_limits.sql raises into the sentence the request
- * owes its caller. Two invitations for the last seat both pass
- * limitsRefusal, and the database refuses the one that would take a seat
- * already taken. Better Auth surfaces that error rather than answering it,
+ * Translates the refusal a database trigger raises into the sentence the
+ * request owes its caller, with the status that sentence carries. Two
+ * invitations for the last seat both pass limitsRefusal, and the database
+ * refuses the one that would take a seat already taken. Two invitations for
+ * the last send of the rolling 24 hours both pass it as well, and the ledger's
+ * guard in migrations/0006_invite_limits.sql refuses the one that would write
+ * the 21st. Better Auth surfaces either error rather than answering it,
  * because a database error is not one of its own, and the request has written
  * no row and sent no email.
  */
+const TRIGGER_REFUSALS: readonly (readonly [sentence: string, status: number])[] = [
+  [SEAT_LIMIT_SENTENCE, 403],
+  [INVITATION_RATE_SENTENCE, 429],
+];
+
 function translation(error: unknown): Response | null {
-  if (error instanceof Error && error.message.includes(SEAT_LIMIT_SENTENCE)) return refused(SEAT_LIMIT_SENTENCE);
+  if (!(error instanceof Error)) return null;
+  for (const [sentence, status] of TRIGGER_REFUSALS) {
+    if (error.message.includes(sentence)) return refused(sentence, status);
+  }
   return null;
 }
 

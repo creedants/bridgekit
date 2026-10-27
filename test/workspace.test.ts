@@ -63,6 +63,7 @@ const summary = {
   measure: "Sales", prior: "2025", current: "2026", priorTotal: 100, currentTotal: 110,
   effects: [{ label: "Volume", value: 10 }], attributes: ["Design"], exactMatchShare: 0.9, newAndDiscontinued: "difference",
 };
+const BRIDGE_FULL = "This workspace has 100 saved bridges. Delete one to save another.";
 
 const rejects = (promise: Promise<unknown>, status: number, message?: string) =>
   assert.rejects(
@@ -350,6 +351,44 @@ test("only setups without filter values and bridge totals can be saved", async (
   await rejects(saveSetup(db, "u1", "w1", { name: "x", columns: ["other"], setup }), 400);
   await rejects(saveBridge(db, "u1", "w1", { name: "x", columns, setup, summary: { ...summary, rows: [] } }), 400);
   await rejects(saveBridge(db, "u1", "w1", { name: "x", columns, setup, summary, filterColumns: ["customer"] }), 400);
+});
+
+test("100 saved bridges fit and the 101st is refused", async () => {
+  const db = await seeded();
+  await applySubscription(db, subscription());
+  for (let index = 1; index < 100; index += 1) {
+    await saveBridge(db, "u1", "w1", { name: `Bridge ${index}`, columns, setup, summary, filterColumns: [] });
+  }
+  const hundredth = await saveBridge(db, "u1", "w1", { name: "Bridge 100", columns, setup, summary, filterColumns: [] });
+  assert.ok(hundredth.id);
+  const count = async () => (await db.prepare(`SELECT COUNT(*) AS n FROM saved_bridge WHERE organizationId = 'w1'`).first<{ n: number }>())?.n;
+  assert.equal(await count(), 100);
+
+  await rejects(
+    saveBridge(db, "u1", "w1", { name: "Bridge 101", columns, setup, summary, filterColumns: [] }),
+    409,
+    BRIDGE_FULL,
+  );
+  assert.equal(await count(), 100);
+  const listed = await listBridges(db, "u1", "w1");
+  assert.equal(listed.length, 100);
+  assert.equal(listed.some((row) => row.name === "Bridge 101"), false, "the refused bridge was saved");
+});
+
+test("the bridge cap is per workspace", async () => {
+  const db = await seeded();
+  await applySubscription(db, subscription());
+  await db.prepare(`INSERT INTO organization (id, name, slug, createdAt) VALUES ('w2', 'Other', 'other', ?)`).bind(now).run();
+  await db.prepare(`INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES ('m9', 'w2', 'u1', 'owner', ?)`).bind(now).run();
+  await applySubscription(db, subscription({ workspaceId: "w2" }));
+  for (let index = 1; index <= 100; index += 1) {
+    await saveBridge(db, "u1", "w1", { name: `Bridge ${index}`, columns, setup, summary, filterColumns: [] });
+  }
+  await rejects(saveBridge(db, "u1", "w1", { name: "One too many", columns, setup, summary, filterColumns: [] }), 409, BRIDGE_FULL);
+
+  const saved = await saveBridge(db, "u1", "w2", { name: "Elsewhere", columns, setup, summary, filterColumns: [] });
+  assert.ok(saved.id);
+  assert.deepEqual((await listBridges(db, "u1", "w2")).map((row) => row.name), ["Elsewhere"]);
 });
 
 test("the workspace count is of owned workspaces, and memberships elsewhere do not add to it", async () => {

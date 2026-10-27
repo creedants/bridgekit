@@ -574,6 +574,19 @@ const NO_COLUMNS = { error: "This request does not take column names." };
 const SIGN_IN_FIRST = { error: "Sign in first." };
 const NOT_FOUND = { error: "Workspace not found." };
 const SETUP_FULL = { error: "This workspace has 50 saved setups. Delete one to save another." };
+const BRIDGE_FULL = { error: "This workspace has 100 saved bridges. Delete one to save another." };
+
+const BRIDGE_SUMMARY = {
+  measure: "Sales",
+  prior: "2025",
+  current: "2026",
+  priorTotal: 100,
+  currentTotal: 110,
+  effects: [{ label: "Volume", value: 10 }],
+  attributes: ["Design"],
+  exactMatchShare: 0.9,
+  newAndDiscontinued: "difference",
+};
 
 const NEWER_SETUP = {
   periodColumn: "year",
@@ -702,6 +715,62 @@ function postSetup(env: Env, workspaceId: string, cookie: string, name: string):
       setup: OLDER_SETUP,
     }),
   });
+}
+
+async function plantBridges(db: Env["DB"], workspaceId: string, count: number, start = 0): Promise<string[]> {
+  const owner = await db.prepare("SELECT id FROM user WHERE email = ?").bind(OWNER).first<{ id: string }>();
+  assert.ok(owner);
+  const ids: string[] = [];
+  for (let index = start; index < start + count; index++) {
+    const id = `planted-bridge-${workspaceId}-${index}`;
+    const createdAt = new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString();
+    await db
+      .prepare(
+        `INSERT INTO saved_bridge (id, organizationId, name, summary, setup, filterColumns, createdBy, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        id,
+        workspaceId,
+        `Planted bridge ${index}`,
+        JSON.stringify(BRIDGE_SUMMARY),
+        JSON.stringify(OLDER_SETUP),
+        JSON.stringify([]),
+        owner.id,
+        createdAt,
+      )
+      .run();
+    ids.push(id);
+  }
+  return ids;
+}
+
+function postBridge(env: Env, workspaceId: string, cookie: string, name: string): Promise<Response> {
+  return call(`${ORIGIN}/api/workspaces/${workspaceId}/bridges`, env, {
+    method: "POST",
+    headers: { cookie, origin: ORIGIN, "content-type": "application/json" },
+    body: JSON.stringify({
+      name,
+      columns: ["year", "units", "sales", "design"],
+      setup: OLDER_SETUP,
+      summary: BRIDGE_SUMMARY,
+      filterColumns: [],
+    }),
+  });
+}
+
+function deleteBridge(env: Env, workspaceId: string, cookie: string, id: string): Promise<Response> {
+  return call(`${ORIGIN}/api/workspaces/${workspaceId}/bridges/${id}`, env, {
+    method: "DELETE",
+    headers: { cookie, origin: ORIGIN },
+  });
+}
+
+async function readBridges(env: Env, workspaceId: string, cookie: string): Promise<{ id: string; name: string }[]> {
+  const response = await call(`${ORIGIN}/api/workspaces/${workspaceId}/bridges`, env, {
+    headers: { cookie, origin: ORIGIN },
+  });
+  assert.equal(response.status, 200);
+  return listedSetups(await response.json());
 }
 
 function deleteSetup(env: Env, workspaceId: string, cookie: string, id: string): Promise<Response> {
@@ -959,6 +1028,54 @@ test("two saves sent together when 49 setups are stored keep one", async () => {
   savedId(outcomes[0]?.body);
   const rows = await readSetups(env, workspaceId, cookie);
   assert.equal(rows.length, 50);
+  const posted = rows.filter((row) => row.name === "Posted north" || row.name === "Posted south");
+  assert.equal(posted.length, 1);
+});
+
+test("a workspace with 99 saved bridges accepts one more and refuses the next", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, {});
+  await plantBridges(db, workspaceId, 99);
+  const first = await postBridge(env, workspaceId, cookie, "Hundredth");
+  assert.equal(first.status, 201);
+  const firstId = savedId(await first.json());
+  const second = await postBridge(env, workspaceId, cookie, "Hundred-and-first");
+  assert.equal(second.status, 409);
+  assert.deepEqual(await second.json(), BRIDGE_FULL);
+  const filled = await readBridges(env, workspaceId, cookie);
+  assert.equal(filled.length, 100);
+  assert.ok(filled.some((row) => row.id === firstId));
+  const deleted = await deleteBridge(env, workspaceId, cookie, firstId);
+  assert.equal(deleted.status, 204);
+  const third = await postBridge(env, workspaceId, cookie, "Replacement");
+  assert.equal(third.status, 201);
+  const thirdId = savedId(await third.json());
+  const after = await readBridges(env, workspaceId, cookie);
+  assert.equal(after.length, 100);
+  assert.equal(after.some((row) => row.id === firstId), false);
+  assert.ok(after.some((row) => row.id === thirdId));
+});
+
+test("two bridge saves sent together when 99 are stored keep one", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, {});
+  await plantBridges(db, workspaceId, 99);
+  const [north, south] = await Promise.all([
+    postBridge(env, workspaceId, cookie, "Posted north"),
+    postBridge(env, workspaceId, cookie, "Posted south"),
+  ]);
+  const outcomes = [
+    { status: north.status, body: await north.json() },
+    { status: south.status, body: await south.json() },
+  ].toSorted((left, right) => left.status - right.status);
+  assert.deepEqual(
+    outcomes.map((outcome) => outcome.status),
+    [201, 409],
+  );
+  assert.deepEqual(outcomes[1]?.body, BRIDGE_FULL);
+  savedId(outcomes[0]?.body);
+  const rows = await readBridges(env, workspaceId, cookie);
+  assert.equal(rows.length, 100);
   const posted = rows.filter((row) => row.name === "Posted north" || row.name === "Posted south");
   assert.equal(posted.length, 1);
 });

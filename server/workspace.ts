@@ -53,6 +53,29 @@ export const MAX_WORKSPACES_PER_USER = 3;
 export const WORKSPACE_LIMIT_SENTENCE = `You can own up to ${MAX_WORKSPACES_PER_USER} workspaces, so delete one before creating another.`;
 export const SEAT_LIMIT_SENTENCE = "This workspace has no free seat, so cancel a pending invitation or add seats.";
 
+/**
+ * How many invitation emails a workspace may send in a rolling 24 hours. The
+ * count lives in D1's invitation_send ledger, which migrations/0006_invite_limits.sql
+ * writes from the invitation table and guards with the same number.
+ */
+export const INVITATIONS_PER_DAY = 20;
+export const INVITATION_RATE_SENTENCE = `This workspace has sent ${INVITATIONS_PER_DAY} invitations in the last 24 hours. Try again tomorrow.`;
+
+/**
+ * Whether one more invitation email fits the rolling 24 hours. The window and
+ * the clock are D1's, the same expressions the ledger's guard uses, so the
+ * pre-check and the trigger cannot disagree about the boundary.
+ */
+export async function invitationSendAllowed(db: D1Database, workspaceId: string): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM invitation_send WHERE organizationId = ? AND sentAt > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')`,
+    )
+    .bind(workspaceId)
+    .first<{ n: number }>();
+  return (row?.n ?? 0) < INVITATIONS_PER_DAY;
+}
+
 /** The workspaces the account owns. Memberships in other people's workspaces
  * cost nothing here: joining a colleague's workspace must not use up the
  * account's own allowance. Deleting an owned workspace lowers this. */
@@ -173,6 +196,10 @@ export async function listSetups(db: D1Database, userId: string, workspaceId: st
 const SAVED_SETUP_CAP = 50;
 const SAVED_SETUP_FULL = `This workspace has ${SAVED_SETUP_CAP} saved setups. Delete one to save another.`;
 
+/** The most bridges one workspace keeps; the same atomic count-then-insert as setups. */
+const SAVED_BRIDGE_CAP = 100;
+const SAVED_BRIDGE_FULL = `This workspace has ${SAVED_BRIDGE_CAP} saved bridges. Delete one to save another.`;
+
 export async function saveSetup(db: D1Database, userId: string, workspaceId: string, body: unknown, now = new Date()): Promise<{ id: string }> {
   await membership(db, userId, workspaceId);
   await requirePro(db, workspaceId);
@@ -235,12 +262,26 @@ export async function saveBridge(db: D1Database, userId: string, workspaceId: st
     throw new WorkspaceError(400, "Filtered columns must be columns of the file.");
   }
   const id = crypto.randomUUID();
-  await db
+  const { meta } = await db
     .prepare(
-      `INSERT INTO saved_bridge (id, organizationId, name, summary, setup, filterColumns, createdBy, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO saved_bridge (id, organizationId, name, summary, setup, filterColumns, createdBy, createdAt)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?
+       WHERE (SELECT COUNT(*) FROM saved_bridge WHERE organizationId = ?) < ?`,
     )
-    .bind(id, workspaceId, input.name.trim(), JSON.stringify(summary), JSON.stringify(setup), JSON.stringify(filterColumns), userId, now.toISOString())
+    .bind(
+      id,
+      workspaceId,
+      input.name.trim(),
+      JSON.stringify(summary),
+      JSON.stringify(setup),
+      JSON.stringify(filterColumns),
+      userId,
+      now.toISOString(),
+      workspaceId,
+      SAVED_BRIDGE_CAP,
+    )
     .run();
+  if (meta.changes !== 1) throw new WorkspaceError(409, SAVED_BRIDGE_FULL);
   return { id };
 }
 
