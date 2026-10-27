@@ -176,7 +176,7 @@ npm run cf:deploy
 - Source: `migrations/0003_workspaces.sql:4` has `CREATE TABLE subscription`.
 - Source: `migrations/0004_workspace_limits.sql` adds `CREATE VIEW workspace_seats` and two `BEFORE` triggers on `invitation` that refuse a write with `RAISE(ABORT)`. Applying it changes no row, so `wrangler d1 migrations apply` applies it to a database that already holds workspaces and invitations at or over the limits without touching them; the `BEFORE INSERT` and `BEFORE UPDATE` triggers on `invitation` then refuse only a write that leaves a live pending invitation the workspace has no seat for.
 - Not verified: whether a second apply of the same migrations is a no-op.
-- Worked: the command ends without an error, and `npx wrangler deployments list` shows a deployment from this run.
+- Worked: the command exits 0. Because `wrangler.jsonc` sets `"workers_dev": false` and names no routes, it prints `No targets deployed for bridgekit` with this run's time in parentheses. Its last line is `Current Version ID: <id>`, and `npx wrangler deployments list` shows a deployment from this run.
 
 ### 1.11 Put the Worker on the domain
 

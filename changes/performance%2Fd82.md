@@ -1,0 +1,1 @@
+- `wrangler.jsonc` sets `"workers_dev": false` and `"preview_urls": false`, so `npm run cf:deploy` no longer looks up a workers.dev subdomain. It uploads the Worker, leaves the dashboard custom domain for `pvmbridge.com` unchanged, and should exit 0 instead of failing on the missing subdomain.
