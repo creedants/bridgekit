@@ -392,7 +392,7 @@ npx wrangler secret put EMAIL_FROM
 
 ### 2.6a Leave LOCAL_EMAIL_LOG for local work
 
-Do: Copy `.dev.vars.example` to `.dev.vars` (not committed) and set `LOCAL_EMAIL_LOG=on` for local work. The value is exactly `on`. No other value, a missing line, or an empty value means production.
+Do: Copy `.dev.vars.example` to `.dev.vars` (not committed) and set `LOCAL_EMAIL_LOG=on` for local work. The value is exactly `on`. Any other value, a missing line, or an empty value means production.
 
 Edit: `.dev.vars`
 ```text
@@ -946,21 +946,21 @@ npx wrangler d1 execute bridgekit --remote --command "SELECT receivedAt, envelop
 - Source: `server/support.ts:21-31` has `auto-submitted`, `list-id`, `empty envelope sender`, `automatic sender`, `!== "no"`.
 - Source: `server/support.ts:396-398` has `[support] support mail was not handled`, `not stored:`.
 - Worked: the message arrives at the forward address. The query prints a row whose `envelopeTo` is `support@pvmbridge.com`, whose `envelopeFrom` is the outside address, whose `subject` is the message's, and whose `bodyCut` is 0.
-- If this is wrong you will see: no row and no inbox copy, so the rule still sends to an address or points at another Worker, and step 3.7 did not take effect. A row but no inbox copy, so forwarding failed. `SUPPORT_FORWARD_TO` is unset (step 3.2) or is not a verified destination (step 3.1), and the sender got the bounce sentence. No row but an inbox copy, so the message matched one of the skip rules or its body could not be read, and the same `[support]` log line carries the reason.
+- If this is wrong you will see: if neither a row nor an inbox copy appears, check the rule in step 3.7 and the Worker logs for forwarding or storage failures. A row without an inbox copy means forwarding failed; check `SUPPORT_FORWARD_TO` (step 3.2), destination verification (step 3.1), and the forwarding failure in the Worker log. The handler calls `message.setReject` with the bounce sentence when forwarding fails. An inbox copy without a row can mean direct forwarding bypassed the Worker, a skip rule matched, or storage failed. Successful skips do not log a reason. Storage failures log `[support] support mail was not handled (store)`. An unreadable body still leaves a row with an empty body and `bodyCut` set to 1 when storage succeeds.
 
-A message is forwarded and not stored when it carries an `Auto-Submitted` header other than `no`, a `List-Id` header, an empty envelope sender, or a sender whose local part is `mailer-daemon`, `postmaster`, `noreply`, `no-reply` or `donotreply`.
+The handler skips storage if a message has an `Auto-Submitted` header whose value, after trimming whitespace and lowercasing, is not `no`, or if it has a `List-Id` header. It also skips storage for an empty or whitespace-only envelope sender, or when the local part of the envelope sender or `From` header address is `mailer-daemon`, `postmaster`, `noreply`, `no-reply` or `donotreply` (case-insensitive). It still attempts to forward each skipped message.
 
 Use a message a person wrote, not an auto-reply or a mailing-list post, because those are forwarded and not stored.
 
 ### 3.9 Optional. Roll the rule back to the forward action
 
-Do: Run this only after step 3.8 passes. Edit the same rule. Set the action to `Send to an email` and the destination to the verified address from step 3.1.
+Do: To restore direct forwarding if step 3.8 fails, or to stop storing new support mail, edit the same rule. Set the action to `Send to an email` and the destination to the verified address from step 3.1.
 
 Dashboard (not verified): Cloudflare > Compute > Email Service > Email Routing > Routing Rules > the `support@pvmbridge.com` rule > Edit > Action `Send to an email`.
 
 - Source: `migrations/0007_support_mail.sql:1-5` has `Email Routing hands each message to the`, `Worker (server/support.ts)`, `this copy so a reply can be drafted from it`.
 - Not verified: the dashboard path.
-- Worked: the rule lists `support@pvmbridge.com` with `Send to an email` and the address from step 3.1. Mail no longer reaches the Worker, no new `support_mail` row appears, and rows already stored stay until the daily cron deletes them 90 days after they arrived.
+- Worked: the rule lists `support@pvmbridge.com` with `Send to an email` and the address from step 3.1. Mail no longer reaches the Worker, and no new `support_mail` row appears. Rows already stored are deleted by the next successful daily cron run after they become more than 90 days old.
 
 ## Checking this file
 
