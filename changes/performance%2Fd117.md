@@ -1,0 +1,2 @@
+- A saved setup now has bounds: at most 1,000 levels with one column each, level names of at most 300 characters unless the name is one of the level's own columns, and at most one filter per column with 500 values of at most 300 characters each. A setup with 1,000 columns of 300 characters each is still accepted.
+- A setup save over 3 MiB or a bridge save over 4 MiB is refused with `This is too large to save.` before the body is parsed, whether or not the request states its size.

@@ -246,6 +246,50 @@ async function json(c: Context<App>): Promise<unknown> {
   }
 }
 
+/** The most a setup save body may be, in bytes. */
+export const SETUP_BODY_LIMIT = 3 * 1024 * 1024;
+/** The most a bridge save body may be, in bytes. */
+export const BRIDGE_BODY_LIMIT = 4 * 1024 * 1024;
+export const TOO_LARGE = "This is too large to save.";
+
+class BodyTooLarge extends Error {}
+
+/**
+ * Reads a save body and refuses it before parsing when it is over `limit`.
+ * `Content-Length` only short-circuits: a request may omit it or understate
+ * it, so the bytes read are what decide.
+ */
+async function boundedJson(c: Context<App>, limit: number): Promise<unknown> {
+  const declared = c.req.header("content-length");
+  if (declared !== undefined && Number(declared) > limit) throw new BodyTooLarge();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const reader = c.req.raw.body?.getReader();
+  if (reader) {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        await reader.cancel();
+        throw new BodyTooLarge();
+      }
+      chunks.push(value);
+    }
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new WorkspaceError(400, "The request was not valid JSON.");
+  }
+}
+
 function parseWebhookBody(raw: string): unknown {
   try {
     return JSON.parse(raw);
@@ -255,6 +299,7 @@ function parseWebhookBody(raw: string): unknown {
 }
 
 open.onError((error, c) => {
+  if (error instanceof BodyTooLarge) return c.json({ error: TOO_LARGE }, 413);
   const refused = translation(error);
   if (refused) return refused;
   if (error instanceof WorkspaceError) return c.json({ error: error.message }, error.status);
@@ -286,18 +331,20 @@ open.get("/api/workspaces/:id/setups", async (c) => {
   const query = setupListQuery(c.req.url);
   return c.json(await listSetups(c.env.DB, user, c.req.param("id"), query));
 });
-open.post("/api/workspaces/:id/setups", async (c) =>
-  c.json(await saveSetup(c.env.DB, await userId(c), c.req.param("id"), await json(c)), 201),
-);
+open.post("/api/workspaces/:id/setups", async (c) => {
+  const user = await userId(c);
+  return c.json(await saveSetup(c.env.DB, user, c.req.param("id"), await boundedJson(c, SETUP_BODY_LIMIT)), 201);
+});
 open.delete("/api/workspaces/:id/setups/:item", async (c) => {
   await deleteSaved(c.env.DB, await userId(c), c.req.param("id"), "setup", c.req.param("item"));
   return c.body(null, 204);
 });
 
 open.get("/api/workspaces/:id/bridges", async (c) => c.json(await listBridges(c.env.DB, await userId(c), c.req.param("id"))));
-open.post("/api/workspaces/:id/bridges", async (c) =>
-  c.json(await saveBridge(c.env.DB, await userId(c), c.req.param("id"), await json(c)), 201),
-);
+open.post("/api/workspaces/:id/bridges", async (c) => {
+  const user = await userId(c);
+  return c.json(await saveBridge(c.env.DB, user, c.req.param("id"), await boundedJson(c, BRIDGE_BODY_LIMIT)), 201);
+});
 open.delete("/api/workspaces/:id/bridges/:item", async (c) => {
   await deleteSaved(c.env.DB, await userId(c), c.req.param("id"), "bridge", c.req.param("item"));
   return c.body(null, 204);
