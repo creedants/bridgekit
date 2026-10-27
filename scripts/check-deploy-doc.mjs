@@ -118,7 +118,6 @@ function anchored(claim, claims) {
   return claims.some(
     (other) =>
       other.verb === "has" &&
-      other.line === claim.line &&
       other.path === claim.path &&
       other.start === claim.start &&
       other.end === claim.end,
