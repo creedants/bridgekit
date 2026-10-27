@@ -167,6 +167,18 @@ test("fiscal-year labels order by year", async () => {
   assert.deepEqual((await loadOnly(["FY2024", "FY2025", "FY2019"])).values, ["FY2019", "FY2024", "FY2025"]);
 });
 
+test("fiscal-year labels are read in either case and order by year", async () => {
+  const list = await loadOnly(["fy2024", "Fy2025", "FY2023"]);
+  assert.equal(list.sort, "text");
+  assert.deepEqual(list.values, ["FY2023", "fy2024", "Fy2025"]);
+});
+
+test("ISO quarter labels are read in either case and order by the quarter they name", async () => {
+  const list = await loadOnly(["2024-q3", "2024-Q4", "2025-q1"]);
+  assert.equal(list.sort, "text");
+  assert.deepEqual(list.values, ["2024-q3", "2024-Q4", "2025-q1"]);
+});
+
 test("labels that name the same period stay separate and order by their string", async () => {
   assert.deepEqual((await loadOnly(["q1 2025", "Q1 2025", "Q4 2024"])).values, ["Q4 2024", "Q1 2025", "q1 2025"]);
 });
