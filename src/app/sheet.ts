@@ -1,3 +1,4 @@
+import type { Worksheet } from "exceljs";
 import { toCsv } from "./files.ts";
 
 function flattenCell(value: unknown): unknown {
@@ -62,12 +63,10 @@ export function holeRenames(
 }
 
 export async function firstSheetAsCsv(file: File): Promise<{ csv: string; holes: readonly number[]; formulaBlanks: number }> {
-  const { default: ExcelJS } = await import("exceljs");
   const data = await file.arrayBuffer();
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(data);
-  const sheet = workbook.worksheets[0];
-  if (!sheet || sheet.rowCount < 2) throw new Error("The first sheet of that workbook has no data rows.");
+  const loaded = await loadFirstSheet(data);
+  if (!loaded) throw new Error("The first sheet of that workbook has no data rows.");
+  const { sheet, bytes } = loaded;
   const width = sheet.columnCount;
   const rows: unknown[][] = [];
   const rowNumbers: number[] = [];
@@ -84,20 +83,195 @@ export async function firstSheetAsCsv(file: File): Promise<{ csv: string; holes:
   return {
     csv: toCsv(header, dataRows),
     holes,
-    formulaBlanks: await countFormulaBlanks(data, rowNumbers.slice(1), sheet.id),
+    formulaBlanks: await countFormulaBlanks(bytes, rowNumbers.slice(1), sheet.id),
   };
+}
+
+// ExcelJS compares literal element names for SpreadsheetML and package parts.
+// Prefixed worksheet or styles parts can fail to load. Check these four parts
+// before loading; the larger worksheet and shared-string parts are handled by
+// the retry below.
+const PREFIX_CHECKED_PARTS = [
+  "[Content_Types].xml",
+  "xl/workbook.xml",
+  "xl/_rels/workbook.xml.rels",
+  "xl/styles.xml",
+];
+
+// Restrict this repair to these three namespaces. Leave other namespaces,
+// including docProps and themes, unchanged.
+const LITERAL_NAMESPACES = [
+  "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+  "http://schemas.openxmlformats.org/package/2006/relationships",
+  "http://schemas.openxmlformats.org/package/2006/content-types",
+];
+
+async function loadFirstSheet(data: ArrayBuffer): Promise<{ sheet: Worksheet; bytes: ArrayBuffer } | undefined> {
+  const repaired = (await hasPrefixedRoot(data)) ? await repairPackage(data) : undefined;
+  const first = await readSheet(repaired ?? data);
+  if (first.sheet && first.sheet.rowCount >= 2) return { sheet: first.sheet, bytes: repaired ?? data };
+  if (repaired) return undefined;
+  const whole = await repairPackage(data);
+  if (!whole) {
+    if (first.error) throw first.error;
+    return undefined;
+  }
+  const second = await readSheet(whole);
+  return second.sheet && second.sheet.rowCount >= 2 ? { sheet: second.sheet, bytes: whole } : undefined;
+}
+
+async function readSheet(bytes: ArrayBuffer): Promise<{ sheet?: Worksheet; error?: unknown }> {
+  try {
+    const { default: ExcelJS } = await import("exceljs");
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(bytes);
+    return { sheet: workbook.worksheets[0] };
+  } catch (error) {
+    return { error };
+  }
+}
+
+async function hasPrefixedRoot(data: ArrayBuffer): Promise<boolean> {
+  try {
+    const { default: JSZip } = await import("jszip");
+    const zip = await JSZip.loadAsync(data);
+    for (const part of PREFIX_CHECKED_PARTS) {
+      const entry = zip.file(part);
+      if (entry && rootTag(await entry.async("text"))?.prefix) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+// Returns undefined when no part carries a prefix, which is what tells the
+// caller to keep a broken file's own error instead of the empty-sheet one.
+async function repairPackage(data: ArrayBuffer): Promise<ArrayBuffer | undefined> {
+  try {
+    const { default: JSZip } = await import("jszip");
+    const zip = await JSZip.loadAsync(data);
+    let changed = false;
+    for (const [path, entry] of Object.entries(zip.files)) {
+      if (entry.dir || !(path.endsWith(".xml") || path.endsWith(".rels"))) continue;
+      const xml = await entry.async("text");
+      const repaired = unprefixPart(xml);
+      if (repaired === xml) continue;
+      zip.file(path, repaired);
+      changed = true;
+    }
+    return changed ? await zip.generateAsync({ type: "arraybuffer" }) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// A prefixed root states its namespace as xmlns:prefix, so the part means what
+// its unprefixed twin means once that one prefix comes off every element name.
+// Other prefixes and all text and attribute values stay as written.
+export function unprefixPart(xml: string): string {
+  const root = rootTag(xml);
+  if (!root?.prefix) return xml;
+  const declared = new RegExp(`(?:^|\\s)xmlns:${root.prefix}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(root.attributes);
+  const namespace = declared?.[1] ?? declared?.[2];
+  if (!namespace || !LITERAL_NAMESPACES.includes(namespace)) return xml;
+  const stripped = stripElementPrefixes(xml, root.prefix);
+  const plain = rootTag(stripped);
+  if (!plain || /(?:^|\s)xmlns\s*=/.test(plain.attributes)) return stripped;
+  const insertAt = plain.index + 1 + plain.name.length;
+  return `${stripped.slice(0, insertAt)} xmlns="${namespace}"${stripped.slice(insertAt)}`;
+}
+
+const PAYLOADS: readonly (readonly [string, string])[] = [
+  ["<!--", "-->"],
+  ["<![CDATA[", "]]>"],
+  ["<?", "?>"],
+];
+
+// Copies the part one payload or tag at a time. A payload or a tag's tail is
+// copied as one slice, so only the matched element name loses the prefix and a
+// prefix-shaped string inside markup the reader ignores is left alone.
+function stripElementPrefixes(xml: string, prefix: string): string {
+  const lead = `${prefix}:`;
+  let out = "";
+  let index = 0;
+  while (index < xml.length) {
+    const open = xml.indexOf("<", index);
+    if (open < 0) {
+      out += xml.slice(index);
+      break;
+    }
+    out += xml.slice(index, open);
+    const payload = PAYLOADS.find(([start]) => xml.startsWith(start, open));
+    if (payload) {
+      const close = xml.indexOf(payload[1], open + payload[0].length);
+      const stop = close < 0 ? xml.length : close + payload[1].length;
+      out += xml.slice(open, stop);
+      index = stop;
+      continue;
+    }
+    if (xml.startsWith("<!", open)) {
+      const stop = tagEnd(xml, open + 2);
+      out += xml.slice(open, stop);
+      index = stop;
+      continue;
+    }
+    const closing = xml.startsWith("</", open);
+    const nameAt = open + (closing ? 2 : 1);
+    if (!xml.startsWith(lead, nameAt)) {
+      if (!/[A-Za-z_]/.test(xml[nameAt] ?? "")) {
+        out += "<";
+        index = open + 1;
+        continue;
+      }
+      const stop = tagEnd(xml, nameAt);
+      out += xml.slice(open, stop);
+      index = stop;
+      continue;
+    }
+    const stop = tagEnd(xml, nameAt);
+    out += `${closing ? "</" : "<"}${xml.slice(nameAt + lead.length, stop)}`;
+    index = stop;
+  }
+  return out;
+}
+
+// An attribute value may hold `>` or `<`, so the tag ends at the first one
+// outside quotes.
+function tagEnd(xml: string, from: number): number {
+  let quote = "";
+  for (let index = from; index < xml.length; index++) {
+    const char = xml[index];
+    if (quote) {
+      if (char === quote) quote = "";
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === ">") {
+      return index + 1;
+    }
+  }
+  return xml.length;
+}
+
+// The part's root element, skipping the declaration and any comment. A comment
+// is blanked at its own length so its index still points into the original xml.
+function rootTag(xml: string): { index: number; prefix?: string; name: string; attributes: string } | undefined {
+  const blanks = xml.replace(/<!--[\s\S]*?-->/g, (comment) => " ".repeat(comment.length));
+  const root = /<([A-Za-z_][\w.-]*)(?::([A-Za-z_][\w.-]*))?([^>]*)>/.exec(blanks);
+  if (!root) return undefined;
+  return { index: root.index, prefix: root[2] ? root[1] : undefined, name: root[2] ?? root[1], attributes: root[3] };
 }
 
 // A formula cell with no `<v>` in the sheet XML has no cached result, so the
 // reader loads it as blank. A cached empty string still writes `<v></v>`, so
 // the presence of the element, not its text, decides. Only the rows ExcelJS
 // exports as data count, matched by the row number it visits.
-async function countFormulaBlanks(data: ArrayBuffer, dataRowNumbers: readonly number[], sheetId: number): Promise<number> {
+async function countFormulaBlanks(bytes: ArrayBuffer, dataRowNumbers: readonly number[], sheetId: number): Promise<number> {
   const wanted = new Set(dataRowNumbers);
   if (wanted.size === 0) return 0;
   try {
     const { default: JSZip } = await import("jszip");
-    const zip = await JSZip.loadAsync(data);
+    const zip = await JSZip.loadAsync(bytes);
     const workbookXml = await zip.file("xl/workbook.xml")?.async("text");
     if (!workbookXml) return 0;
     const relsXml = await zip.file("xl/_rels/workbook.xml.rels")?.async("text");

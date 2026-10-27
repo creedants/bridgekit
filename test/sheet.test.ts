@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { excelHeaderNames, excelHoleIndexes, firstSheetAsCsv, holeRenames } from "../src/app/sheet.ts";
+import { excelHeaderNames, excelHoleIndexes, firstSheetAsCsv, holeRenames, unprefixPart } from "../src/app/sheet.ts";
 
 async function formulaWorkbook(): Promise<ArrayBuffer> {
   const { default: ExcelJS } = await import("exceljs");
@@ -14,6 +14,24 @@ async function formulaWorkbook(): Promise<ArrayBuffer> {
 
 async function formulaFile(): Promise<File> {
   return new File([await formulaWorkbook()], "book.xlsx");
+}
+
+async function datedFormulaWorkbook(): Promise<ArrayBuffer> {
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("sales");
+  sheet.addRow(["period", "day", "units", { formula: "1+1" }]);
+  sheet.addRow(["2025", new Date(Date.UTC(2025, 0, 15)), 10, { formula: "C2*4" }]);
+  sheet.addRow(["2025", new Date(Date.UTC(2025, 1, 20)), 20, { formula: "C3*4", result: "" }]);
+  return workbook.xlsx.writeBuffer();
+}
+
+async function headerOnlyWorkbook(): Promise<ArrayBuffer> {
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("sales");
+  sheet.addRow(["period", "units"]);
+  return workbook.xlsx.writeBuffer();
 }
 
 async function rewriteWorkbook(
@@ -34,6 +52,22 @@ function replaceOnce(xml: string, from: string, to: string): string {
   const next = xml.replace(from, to);
   if (next === xml) throw new Error(`The workbook XML does not hold ${from}.`);
   return next;
+}
+
+// Some writers save a part with every element name bound to a prefix instead of
+// the default namespace. The prefix is declared on the root against that root's
+// own namespace, so the part means exactly what the unprefixed one means.
+function prefixPart(xml: string, prefix: string): string {
+  const root = /<([A-Za-z_][\w.-]*)([^>]*)>/.exec(xml);
+  if (!root) throw new Error("The part has no root element.");
+  const namespace = /(?:^|\s)xmlns\s*=\s*"([^"]*)"/.exec(root[2]);
+  if (!namespace) throw new Error("The part root declares no default namespace.");
+  const insertAt = root.index + 1 + root[1].length;
+  const opened = `${xml.slice(0, insertAt)} xmlns:${prefix}="${namespace[1]}"${xml.slice(insertAt)}`;
+  return opened.replace(
+    /<(\/?)([A-Za-z_][\w.-]*)(?=[\s/>])/g,
+    (_, slash: string, name: string) => `<${slash}${prefix}:${name}`,
+  );
 }
 
 // A styled but empty row 1, with every real row and cell reference moved down one.
@@ -356,4 +390,166 @@ test("reads a single-quoted worksheet relationship id", async () => {
     }),
   );
   assert.equal(quotedRelationship.formulaBlanks, 1);
+});
+
+test("loads a workbook whose worksheet and shared strings use a namespace prefix", async () => {
+  const book = await formulaWorkbook();
+  const plain = await firstSheetAsCsv(new File([book], "book.xlsx"));
+  const prefixed = await firstSheetAsCsv(
+    await rewriteWorkbook(book, {
+      "xl/worksheets/sheet1.xml": (xml) => prefixPart(xml, "x"),
+      "xl/sharedStrings.xml": (xml) => prefixPart(xml, "sst"),
+    }),
+  );
+  assert.equal(prefixed.csv, plain.csv);
+  assert.equal(prefixed.formulaBlanks, plain.formulaBlanks);
+  assert.equal(prefixed.formulaBlanks, 1);
+});
+
+test("loads a workbook whose every spreadsheet part uses a namespace prefix", async () => {
+  const book = await datedFormulaWorkbook();
+  const plain = await firstSheetAsCsv(new File([book], "book.xlsx"));
+  const prefixed = await firstSheetAsCsv(
+    await rewriteWorkbook(book, {
+      "xl/worksheets/sheet1.xml": (xml) => prefixPart(xml, "x"),
+      "xl/sharedStrings.xml": (xml) => prefixPart(xml, "sst"),
+      "xl/styles.xml": (xml) => prefixPart(xml, "st"),
+      "xl/workbook.xml": (xml) => prefixPart(xml, "w"),
+      "xl/_rels/workbook.xml.rels": (xml) => prefixPart(xml, "rel"),
+    }),
+  );
+  // The date checks that the repaired styles preserve its number format.
+  assert.match(plain.csv, /2025-01-15/);
+  assert.equal(prefixed.csv, plain.csv);
+  assert.equal(prefixed.formulaBlanks, plain.formulaBlanks);
+  assert.equal(prefixed.formulaBlanks, 1);
+});
+
+test("rejects a prefixed workbook with no data rows instead of loading it empty", async () => {
+  const book = await rewriteWorkbook(await headerOnlyWorkbook(), {
+    "xl/worksheets/sheet1.xml": (xml) => prefixPart(xml, "x"),
+  });
+  await assert.rejects(firstSheetAsCsv(book), /The first sheet of that workbook has no data rows\./);
+});
+
+async function payloadWorkbook(): Promise<ArrayBuffer> {
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("sales");
+  sheet.addRow(["period", "units", "check"]);
+  sheet.addRow([2025, 10, { formula: "B2*4" }]);
+  sheet.addRow([2026, 20, { formula: "B3*4", result: 80 }]);
+  return workbook.xlsx.writeBuffer();
+}
+
+type SheetLoad = { csv: string; holes: readonly number[]; formulaBlanks: number };
+
+// The payload spells a prefixed `<v/>` inside markup the repair must not touch,
+// so a plain string rewrite would leave a bare `<v/>` the formula scan reads as
+// a saved result. The prefixed twin prefixes element names while keeping the
+// payload as written.
+async function payloadTwins(
+  formula: (open: string, close: string) => string,
+): Promise<{ plain: SheetLoad; prefixed: SheetLoad }> {
+  const book = await payloadWorkbook();
+  const edit = (xml: string, prefix: string) =>
+    replaceOnce(xml, `<${prefix}f>B2*4</${prefix}f>`, formula(`<${prefix}f>`, `</${prefix}f>`));
+  const plain = await firstSheetAsCsv(
+    await rewriteWorkbook(book, { "xl/worksheets/sheet1.xml": (xml) => edit(xml, "") }),
+  );
+  const prefixed = await firstSheetAsCsv(
+    await rewriteWorkbook(book, {
+      "xl/worksheets/sheet1.xml": (xml) => edit(prefixPart(xml, "x"), "x:"),
+    }),
+  );
+  return { plain, prefixed };
+}
+
+function assertPayloadTwins(plain: SheetLoad, prefixed: SheetLoad): void {
+  assert.equal(plain.csv, "period,units,check\n2025,10,\n2026,20,80");
+  assert.equal(plain.formulaBlanks, 1);
+  assert.equal(prefixed.csv, plain.csv);
+  assert.equal(prefixed.formulaBlanks, plain.formulaBlanks);
+}
+
+test("keeps a comment in a prefixed worksheet out of the formula count", async () => {
+  const { plain, prefixed } = await payloadTwins((open, close) => `${open}B2*4${close}<!-- <x:v/> -->`);
+  assertPayloadTwins(plain, prefixed);
+});
+
+test("keeps a processing instruction in a prefixed worksheet out of the formula count", async () => {
+  const { plain, prefixed } = await payloadTwins((open, close) => `${open}B2*4${close}<?review <x:v/> ?>`);
+  assertPayloadTwins(plain, prefixed);
+});
+
+test("keeps a CDATA payload in a prefixed worksheet formula out of the formula count", async () => {
+  const { plain, prefixed } = await payloadTwins(
+    (open, close) => `${open}IF(B2&gt;0,"<![CDATA[<x:v/>]]>","")${close}`,
+  );
+  assertPayloadTwins(plain, prefixed);
+});
+
+const SHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+
+function prefixedSheet(body: string): string {
+  return `<x:worksheet xmlns="${SHEET_NS}" xmlns:x="${SHEET_NS}">${body}</x:worksheet>`;
+}
+
+test("unprefixes element names in a part without touching a comment payload", () => {
+  const result = unprefixPart(
+    prefixedSheet('<x:row r="1"><x:c r="A1"><x:f>B2*4</x:f><!-- <x:v/> --></x:c></x:row>'),
+  );
+  assert.equal(
+    result,
+    `<worksheet xmlns="${SHEET_NS}" xmlns:x="${SHEET_NS}"><row r="1"><c r="A1"><f>B2*4</f><!-- <x:v/> --></c></row></worksheet>`,
+  );
+});
+
+test("unprefixes element names in a part without touching a processing instruction", () => {
+  const result = unprefixPart(
+    prefixedSheet('<x:row r="1"><x:c r="A1"><x:f>B2*4</x:f><?review <x:v/> ?></x:c></x:row>'),
+  );
+  assert.equal(
+    result,
+    `<worksheet xmlns="${SHEET_NS}" xmlns:x="${SHEET_NS}"><row r="1"><c r="A1"><f>B2*4</f><?review <x:v/> ?></c></row></worksheet>`,
+  );
+});
+
+test("unprefixes element names in a part without touching a CDATA payload", () => {
+  const result = unprefixPart(
+    prefixedSheet('<x:row r="1"><x:c r="A1"><x:f><![CDATA[<x:v/>]]></x:f></x:c></x:row>'),
+  );
+  assert.equal(
+    result,
+    `<worksheet xmlns="${SHEET_NS}" xmlns:x="${SHEET_NS}"><row r="1"><c r="A1"><f><![CDATA[<x:v/>]]></f></c></row></worksheet>`,
+  );
+});
+
+test("leaves a prefixed-looking attribute value as written", () => {
+  const result = unprefixPart(
+    prefixedSheet('<x:row r="1"><x:c r="A1" data-k="x:c" data-j="c>d"><x:v>1</x:v></x:c></x:row>'),
+  );
+  assert.equal(
+    result,
+    `<worksheet xmlns="${SHEET_NS}" xmlns:x="${SHEET_NS}"><row r="1"><c r="A1" data-k="x:c" data-j="c>d"><v>1</v></c></row></worksheet>`,
+  );
+});
+
+test("leaves escaped text that spells an element as written", () => {
+  const result = unprefixPart(
+    prefixedSheet('<x:row r="1"><x:c r="A1" t="str"><x:v>&lt;x:c&gt;</x:v></x:c></x:row>'),
+  );
+  assert.equal(
+    result,
+    `<worksheet xmlns="${SHEET_NS}" xmlns:x="${SHEET_NS}"><row r="1"><c r="A1" t="str"><v>&lt;x:c&gt;</v></c></row></worksheet>`,
+  );
+});
+
+test("unprefixes a self-closing root and leaves an unprefixed part as it is", () => {
+  assert.equal(
+    unprefixPart(`<x:worksheet xmlns:x="${SHEET_NS}" />`),
+    `<worksheet xmlns="${SHEET_NS}" xmlns:x="${SHEET_NS}" />`,
+  );
+  const xml = `<worksheet xmlns="${SHEET_NS}"><sheetData><row r="1"><c r="A1"><v>x:c</v></c></row></sheetData></worksheet>`;
+  assert.equal(unprefixPart(xml), xml);
 });
