@@ -29,8 +29,9 @@ interface ChunkSource<T> {
   /**
    * Another module imports this chunk by its bare address, and Chromium keeps a
    * failed dynamic import failed for that address for the life of the page. With
-   * this set, every attempt proves the address answers before importing it, so an
-   * attempt made offline never leaves the address failed for the sibling import.
+   * this set, an attempt proves the address answers before importing it when the
+   * address can be read, so an attempt made offline does not import the address
+   * the sibling import still needs.
    */
   sharedAddress?: true;
 }
