@@ -35,7 +35,7 @@ import { decimalCommaNote } from "./numbers.ts";
 import { trendPeriods } from "./periods.ts";
 import { TABLE, type Setup } from "./setup.ts";
 import { useCommentaryOffer } from "./useConfig.ts";
-import { buildReport, moverHeader, terms } from "./report.ts";
+import { buildReport, moverHeader, terms, trendHeader } from "./report.ts";
 import { SmallBridges } from "./SmallBridges.tsx";
 import { Waterfall } from "./Waterfall.tsx";
 
@@ -422,20 +422,17 @@ function Trend(props: { run: Run; query: () => Promise<Query> }) {
   }
   if (!steps) return <p className="hint">Calculating a bridge for each pair of periods…</p>;
   const widest = Math.max(...steps.map((s) => Math.abs(shareOfPrior(s.price, s.priorSales))), 0.0001);
+  const header = trendHeader(props.run.config);
   return (
     <div>
       <table className="dense distribution">
         <thead>
           <tr>
-            <th>Periods</th>
-            <th className="num">Change</th>
-            <th className="num">Volume</th>
-            <th className="num">Mix</th>
-            <th className="num">Price</th>
-            <th className="num">Price, % of prior</th>
-            <th>Price effect</th>
-            <th className="num">New and discontinued</th>
-            <th className="num">No units</th>
+            {header.map((column) => (
+              <th key={column.label} className={column.num ? "num" : ""}>
+                {column.label}
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
@@ -446,6 +443,7 @@ function Trend(props: { run: Run; query: () => Promise<Query> }) {
               <td className="num">{signedWhole(s.volume)}</td>
               <td className="num">{signedWhole(s.mix)}</td>
               <td className="num">{signedWhole(s.price)}</td>
+              {s.unitCost === undefined ? null : <td className="num">{signedWhole(s.unitCost)}</td>}
               <td className="num">{signedPercent(shareOfPrior(s.price, s.priorSales))}</td>
               <td className="bar-cell" style={{ width: "18%" }}>
                 <span
