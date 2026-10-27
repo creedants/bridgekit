@@ -170,8 +170,8 @@ function moneyField(index: number, field: "text" | "currency" | "grouped"): stri
   return `(__m${index}).${field}`;
 }
 
-function withMoney(columns: string[], source: string, extended: boolean[]): string {
-  const parsed = columns.map((column, index) => `, ${extended[index] ? money(column) : `struct_pack(currency := CASE WHEN contains(${column}, '$') THEN '$' END, text := trim(${column}), grouped := false)`} AS __m${index}`).join("");
+function withMoney(columns: string[], source: string, extended: boolean[], materialized: string[] = []): string {
+  const parsed = columns.map((column, index) => `, ${extended[index] ? (materialized[index] || money(column)) : `struct_pack(currency := CASE WHEN contains(${column}, '$') THEN '$' END, text := trim(${column}), grouped := false)`} AS __m${index}`).join("");
   return `WITH __money AS MATERIALIZED (SELECT *${parsed} FROM ${source})`;
 }
 
@@ -193,8 +193,8 @@ async function countFormatting(
   return columns.map((_, index) => formattingFrom(row, index));
 }
 
-async function scan(query: Query, columns: string[], source: string, extended: boolean[]): Promise<ColumnCounts[]> {
-  const [row] = await query(`${withMoney(columns, source, extended)} SELECT ${columns.map(measures).join(", ")} FROM __money`);
+async function scan(query: Query, columns: string[], source: string, extended: boolean[], parsed: string[] = []): Promise<ColumnCounts[]> {
+  const [row] = await query(`${withMoney(columns, source, extended, parsed)} SELECT ${columns.map(measures).join(", ")} FROM __money`);
   return columns.map((_, index) => ({
     nonBlank: Number(row[`nb${index}`]),
     european: Number(row[`eu${index}`]),
@@ -224,35 +224,43 @@ export async function convertFormattedNumbers(query: Query, table: string): Prom
   const likely = columns.filter((_, index) => parsesWithFormatting(sampled[index]));
   if (likely.length === 0) return;
   const extended = await extendedColumns(query, likely, tableName);
-  const full = await scan(query, likely, tableName, extended);
-  for (const [index, column] of likely.entries()) {
-    const counts = full[index];
-    if (counts.currencies > 1) {
-      if (counts.present > 0 && counts.wellFormed === counts.nonBlank) {
+  const existing = new Set((await query(`DESCRIBE ${tableName}`)).map((row) => String(row.column_name).toLowerCase()));
+  const temporary: string[] = [];
+  const parsed = likely.map(() => "");
+  try {
+    for (const [index, column] of likely.entries()) {
+      if (!extended[index]) continue;
+      let name = `__money_${index}`;
+      while (existing.has(name.toLowerCase())) name += "_";
+      existing.add(name.toLowerCase());
+      const field = quotedName(name);
+      await query(`ALTER TABLE ${tableName} ADD COLUMN ${field} STRUCT(currency VARCHAR, text VARCHAR, grouped BOOLEAN)`);
+      temporary.push(field);
+      parsed[index] = field;
+      await query(`UPDATE ${tableName} SET ${field} = ${money(column)}`);
+    }
+    const full = await scan(query, likely, tableName, extended, parsed);
+    for (const [index, column] of likely.entries()) {
+      const counts = full[index];
+      if (counts.currencies > 1) {
+        if (counts.present > 0 && counts.wellFormed === counts.nonBlank) {
+          await query(`COMMENT ON COLUMN ${tableName}.${column} IS 'mixed number styles'`);
+        }
+        continue;
+      }
+      if (!parsesWithFormatting(counts)) continue;
+      const canonical = parsed[index] ? `(${parsed[index]}).text` : column;
+      if (isDecimalComma(counts)) {
+        await query(`ALTER TABLE ${tableName} ALTER ${column} TYPE DOUBLE USING ${decimalComma(canonical)}`);
+        await query(`COMMENT ON COLUMN ${tableName}.${column} IS 'decimal comma'`);
+      } else if (lacksDecimalProof(counts)) {
+        await query(`ALTER TABLE ${tableName} ALTER ${column} TYPE DOUBLE USING ${northAmerican(canonical)}`);
+      } else if (counts.present > 0 && counts.wellFormed === counts.nonBlank && provesBothStyles(counts)) {
         await query(`COMMENT ON COLUMN ${tableName}.${column} IS 'mixed number styles'`);
       }
-      continue;
     }
-    if (!parsesWithFormatting(counts)) continue;
-    let canonical = column;
-    let temporary = `__money_${index}`;
-    if (extended[index] && (isDecimalComma(counts) || lacksDecimalProof(counts))) {
-      const existing = new Set((await query(`DESCRIBE ${tableName}`)).map((row) => String(row.column_name).toLowerCase()));
-      while (existing.has(temporary.toLowerCase())) temporary += "_";
-      const parsedColumn = quotedName(temporary);
-      canonical = `(${parsedColumn}).text`;
-      await query(`ALTER TABLE ${tableName} ADD COLUMN ${parsedColumn} STRUCT(currency VARCHAR, text VARCHAR, grouped BOOLEAN)`);
-      await query(`UPDATE ${tableName} SET ${parsedColumn} = ${money(column)}`);
-    }
-    if (isDecimalComma(counts)) {
-      await query(`ALTER TABLE ${tableName} ALTER ${column} TYPE DOUBLE USING ${decimalComma(canonical)}`);
-      await query(`COMMENT ON COLUMN ${tableName}.${column} IS 'decimal comma'`);
-    } else if (lacksDecimalProof(counts)) {
-      await query(`ALTER TABLE ${tableName} ALTER ${column} TYPE DOUBLE USING ${northAmerican(canonical)}`);
-    } else if (counts.present > 0 && counts.wellFormed === counts.nonBlank && provesBothStyles(counts)) {
-      await query(`COMMENT ON COLUMN ${tableName}.${column} IS 'mixed number styles'`);
-    }
-    if (canonical !== column) await query(`ALTER TABLE ${tableName} DROP COLUMN ${quotedName(temporary)}`);
+  } finally {
+    for (const field of temporary) await query(`ALTER TABLE ${tableName} DROP COLUMN ${field}`);
   }
 }
 
