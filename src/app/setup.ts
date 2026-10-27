@@ -65,9 +65,10 @@ const isUnitPrice = (name: string) => {
 const isTrailingNote = (name: string) => noteWords.has(words(name).at(-1) ?? "");
 
 /**
- * A net sales column the file holds as text, in file order. Such a file must
- * not fall through to gross sales: the user sees the existing setup message
- * for the text column instead.
+ * A net sales column the file holds as a type that is neither numeric nor a
+ * date, which is usually text, in file order. Such a file must not fall
+ * through to gross sales: the user sees the existing setup message for the
+ * column instead.
  */
 export function netSalesHeldAsText(columns: readonly Column[]): string {
   return columns.find((column) => {
