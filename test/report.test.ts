@@ -131,3 +131,67 @@ test("sales terms keep today literals", () => {
     "Price change is the change in average price and includes mix inside the row.",
   );
 });
+
+const UNTICKED_SENTENCE =
+  "It holds totals and a written summary, names the file, the setup, its filter values and the largest movers, and holds no rows.";
+const TICKED_SENTENCE =
+  "It holds totals, a written summary and the setup, leaves out the file name, filter values, mover names and chart, and holds no rows.";
+
+const namesFixture = () => ({
+  config,
+  result,
+  description: [
+    "Source: q3-sample.csv",
+    "Periods: 2025 to 2026 (period, by month)",
+    "Units column: units",
+    "Sales column: sales",
+    "Attribute 1: Product (product)",
+    "New and discontinued: full sales, outside volume and mix",
+    "Filter: region is one of ZX-90, ZX-91",
+  ],
+  movers: {
+    label: "Product",
+    columns: ["product"],
+    rows: [moverRow("ZX-41"), moverRow("ZX-42")],
+  },
+  priceBands: [{ label: "Up 0.5% to 2%", cells: 2, sales: 500, share: 0.5, priceEffect: 30 }],
+  accounts: {
+    column: "Customer",
+    groups: [
+      { status: "new", count: 2, prior: 0, current: 100, change: 100, top: [{ name: "ZX-77", prior: 0, current: 60, change: 60 }] },
+      { status: "lost", count: 1, prior: 50, current: 0, change: -50, top: [{ name: "ZX-78", prior: 50, current: 0, change: -50 }] },
+    ],
+  },
+  chartUrl: "data:image/png;base64,AAA",
+});
+
+// The input type does not name omitNames yet, so the flag travels as
+// unknown until the fix lands. This keeps the red test typechecking.
+const reportWith = (input: unknown): string =>
+  buildReport(input as Parameters<typeof buildReport>[0]);
+
+test("a names-out report leaves mover values, filter values and the file name out", () => {
+  const html = reportWith({ ...namesFixture(), omitNames: true });
+  for (const absent of ["ZX-41", "ZX-42", "ZX-90", "ZX-91", "ZX-77", "ZX-78", "q3-sample.csv"]) {
+    assert.equal(html.includes(absent), false, `${absent} is still in the report`);
+  }
+  assert.equal(html.includes("<img"), false, "the chart image is still in the report");
+  assert.equal(html.includes(TICKED_SENTENCE), true, "the ticked sentence is missing");
+  assert.equal(html.includes(UNTICKED_SENTENCE), false, "the unticked sentence is still in the report");
+  assert.equal(html.includes(">Product</th>"), true, "the movers header lost the level name");
+  assert.equal(html.includes("<td>1</td>"), true, "rank 1 is missing");
+  assert.equal(html.includes("<td>2</td>"), true, "rank 2 is missing");
+  assert.equal(html.includes("left out"), true, "the setup stand-in is missing");
+  for (const kept of ["Volume", "-100", "Up 0.5% to 2%", "+30", "2025 to 2026", "Change by Customer"]) {
+    assert.equal(html.includes(kept), true, `${kept} left the report`);
+  }
+});
+
+test("an unticked report keeps today output and names", () => {
+  const base = reportWith(namesFixture());
+  const unticked = reportWith({ ...namesFixture(), omitNames: false });
+  assert.equal(unticked, base, "omitNames false changed today output");
+  for (const present of ["ZX-41", "ZX-42", "q3-sample.csv", "ZX-90", "<img", UNTICKED_SENTENCE]) {
+    assert.equal(unticked.includes(present), true, `${present} is missing from the unticked report`);
+  }
+});
