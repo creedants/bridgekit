@@ -446,7 +446,8 @@ type SheetLoad = { csv: string; holes: readonly number[]; formulaBlanks: number 
 
 // The payload spells a prefixed `<v/>` inside markup the repair must not touch,
 // so a plain string rewrite would leave a bare `<v/>` the formula scan reads as
-// a saved result. The prefixed twin prefixes the formula element only.
+// a saved result. The prefixed twin prefixes element names while keeping the
+// payload as written.
 async function payloadTwins(
   formula: (open: string, close: string) => string,
 ): Promise<{ plain: SheetLoad; prefixed: SheetLoad }> {
