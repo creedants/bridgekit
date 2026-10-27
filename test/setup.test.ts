@@ -1642,7 +1642,7 @@ test("ticking Remember keeps a setup another tab saved and removes only the opt-
   stored.clear();
   saveSetup(salesTable, workedSetup);
   const saved = [...stored];
-  assert.equal(saved.length, 1, "saving wrote more than the one setup");
+  assert.equal(saved.length, 1, "saving did not write exactly one setup");
   stored.set("bridgekit:remember", "off");
   setRemembering(true);
   assert.deepEqual([...stored], saved);
