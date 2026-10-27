@@ -189,7 +189,7 @@ dialog.saved-bridge .total td { font-weight: 600; }
 .bar { display: block; height: 12px; border-radius: 2px; min-width: 1px; }
 
 @media print {
-  .topbar nav, aside, .tabs, .actions, .waterfall button, .notice { display: none !important; }
+  .topbar nav, aside, .tabs, .actions, .waterfall button, .notice, .results-title { display: none !important; }
   .workspace { display: block; }
   .scroll { max-height: none; overflow: visible; border: 0; }
   main { padding: 0; }

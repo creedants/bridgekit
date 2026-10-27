@@ -96,7 +96,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
 
   return (
     <>
-      <h1>Price-volume-mix bridge</h1>
+      <h1 className="results-title">Price-volume-mix bridge</h1>
       <div className="kpis">
         <Kpi label={`${measureName(config)} ${config.prior}`} value={whole(result.priorSales)} />
         <Kpi label={`${measureName(config)} ${config.current}`} value={whole(result.currentSales)} />
