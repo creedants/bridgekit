@@ -8,6 +8,12 @@ const APP_DESCRIPTION =
   "A price-volume-mix bridge that works across several product attributes at once. Runs in your browser, so your sales file is never uploaded. Free and open source.";
 const TERMS_DESCRIPTION =
   "The terms for using PVM Bridge: the free tool, the open-source license, what we provide and what we do not, and how to contact us.";
+const PRO_FEATURES = [
+  "Saved workspaces across devices",
+  "Shared setups for a team",
+  "AI commentary on each bridge",
+  "PowerPoint export",
+];
 
 type Page = { file: string; address: string };
 
@@ -30,6 +36,13 @@ const IMAGE_PAGES = ["index.html", "guide.html"];
 
 function readPage(file: string): string {
   return readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+}
+
+function planCardsOf(html: string): string[] {
+  return html
+    .split('<div class="plan">')
+    .slice(1)
+    .map((card) => `<div class="plan">${card}`);
 }
 
 function headOf(file: string, html: string): string {
@@ -356,6 +369,30 @@ test("the app mount point contains the fallback margin so the page does not shif
   assert.ok(
     /display:\s*flow-root/.test(declarations),
     `app/index.html #root rule says "${declarations.trim()}" without display: flow-root: set it so the fallback margin cannot collapse out of the mount point`,
+  );
+});
+
+test("the Pro plan card lists only the planned features", () => {
+  const cards = planCardsOf(readPage("index.html"));
+  const pro = cards.find((card) =>
+    /<span class="tag muted">Planned<\/span>/.test(card),
+  );
+  assert.ok(
+    pro !== undefined,
+    'index.html has no Pro plan card: keep the <div class="plan"> whose tag says "Planned"',
+  );
+  const list = /<ul>([\s\S]*?)<\/ul>/.exec(pro);
+  assert.ok(
+    list !== null,
+    "the Pro plan card has no <ul>: keep one list of the planned features",
+  );
+  const features = [...list[1].matchAll(/<li>([\s\S]*?)<\/li>/g)].map((match) =>
+    match[1].trim(),
+  );
+  assert.deepEqual(
+    features,
+    PRO_FEATURES,
+    `the Pro plan card lists ${features.join(", ")}: it should list exactly ${PRO_FEATURES.join(", ")}`,
   );
 });
 
