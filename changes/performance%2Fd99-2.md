@@ -1,0 +1,4 @@
+- A file whose amounts use only the existing decimal-comma or plain format loads as fast as it did before the currency work.
+- A product code that looks like a currency code joined to digits, such as `USD0012` or `TRY12`, stays text with its leading zeros, so distinct codes stay distinct.
+- A column that writes euro both ways, such as `€1.234,50` beside `1.250,50 EUR`, now loads as numbers instead of being read as text.
+- Any current ISO currency code is read as a currency, including `SAR` and `TWD`. A three-letter word that is not a code, such as `ABC`, still stays text.
