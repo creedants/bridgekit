@@ -1028,7 +1028,11 @@ function checkWarnings(run: Run): string[] {
 
 /** The Data check's sentences about how the file was read, in the order the tab shows them. */
 export async function dataCheckNotes(query: Query, table: string): Promise<string[]> {
-  const sentences = [await decimalCommaNote(query, table), await dateOrderNote(query, table)];
+  // One note's query failing must not hide the other's sentence.
+  const sentences = [
+    await decimalCommaNote(query, table).catch(() => null),
+    await dateOrderNote(query, table).catch(() => null),
+  ];
   return sentences.filter((sentence): sentence is string => sentence !== null);
 }
 

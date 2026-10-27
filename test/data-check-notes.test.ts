@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { registerHooks } from "node:module";
 import path from "node:path";
 import { test } from "node:test";
@@ -66,6 +66,7 @@ async function loaded(name: string, text: string): Promise<Query> {
   const { readCsvTable } = await import("../src/app/db.ts");
   const query = await openDatabase();
   await readCsvTable(query, name, file);
+  await rm(directory, { recursive: true, force: true });
   await convertFormattedNumbers(query, name);
   return query;
 }
@@ -91,4 +92,13 @@ test("the Data check shows the month-first sentence without the decimal comma on
 test("the Data check shows no sentence for a file read as typed", async () => {
   const query = await loaded("neither", NEITHER_FILE);
   assert.deepEqual(await notes(query, "neither"), []);
+});
+
+test("a failing date order query still shows the decimal comma sentence", async () => {
+  const query = await loaded("onefailed", BOTH_FILE);
+  const picky: Query = (sql) =>
+    sql.includes("duckdb_columns()") && sql.includes("'month first'")
+      ? Promise.reject(new Error("the date order query failed"))
+      : query(sql);
+  assert.deepEqual(await notes(picky, "onefailed"), [DECIMAL]);
 });
