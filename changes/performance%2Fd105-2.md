@@ -1,0 +1,1 @@
+- The Pro plan card test now reads every list item in the card, with or without attributes, compares the whole normalized list in order, and tolerates whitespace inside tags, attribute order and class token order. A table of review probes drives the same extraction on in-memory HTML, where an attributed fifth item fails the comparison.
