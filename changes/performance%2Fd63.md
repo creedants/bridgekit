@@ -1,0 +1,1 @@
+- The file loader reads CSVs with blank padding for short rows so a ragged file keeps its header columns, and a slash-date column where every value could be read either way is now read month-first with a Data check sentence naming the columns that were read that way, while a date that proves its order and ISO dates load as before.
