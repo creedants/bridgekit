@@ -1,0 +1,4 @@
+- A file too big for the browser's memory now shows one sentence instead of DuckDB-WASM's own error: `This file is too big to open in this browser. Try a smaller file, or save it with fewer rows or columns.` A CSV parse, encoding, Parquet, or wrong-file-type failure keeps its current message.
+- `src/app/db.ts` recognises a failed load whose message begins with DuckDB-WASM's out-of-memory prefix and replaces that error with the sentence. `test/load-errors.test.ts` proves the recorded failure text gets the sentence, an ordinary CSV parse error, the encoding sentence, and an error that only quotes the prefix are not matched, and other errors pass through unchanged.
+- A failed load already left the database usable before this change, and it still does: after this error a smaller file loads on the same page without a reload.
+- Only `src/app/db.ts` and `test/load-errors.test.ts` changed in code.
