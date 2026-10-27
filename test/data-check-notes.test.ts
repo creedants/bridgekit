@@ -65,8 +65,11 @@ async function loaded(name: string, text: string): Promise<Query> {
   await writeFile(file, text);
   const { readCsvTable } = await import("../src/app/db.ts");
   const query = await openDatabase();
-  await readCsvTable(query, name, file);
-  await rm(directory, { recursive: true, force: true });
+  try {
+    await readCsvTable(query, name, file);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
   await convertFormattedNumbers(query, name);
   return query;
 }
