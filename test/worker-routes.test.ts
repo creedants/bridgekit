@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import type { Fetcher } from "../server/cloudflare.ts";
 import { EMAIL_NOT_SET_UP } from "../server/email.ts";
 import type { Env } from "../server/env.ts";
 import { SIGNATURE_TOLERANCE_SECONDS } from "../server/paddle.ts";
 import { plan } from "../server/workspace.ts";
-import app from "../server/worker.ts";
+import app, { HTML_PAGE } from "../server/worker.ts";
 import { testDatabase } from "./support/d1.ts";
 
 const GUIDE = "<!doctype html><title>Guide</title>";
@@ -2142,4 +2143,19 @@ test("an invitation still succeeds under the moved route when the local email lo
   assert.equal(mail[0].includes(`to ${INVITED}`), true, mail[0]);
   assert.equal(mail[0].includes("/app/?invitation="), true, mail[0]);
   assert.deepEqual(recorded.sent, []);
+});
+
+test("every HTML page has its extensionless path in run_worker_first", () => {
+  const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+  const parsed: unknown = JSON.parse(text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, ""));
+  assert.ok(parsed !== null && typeof parsed === "object" && !Array.isArray(parsed));
+  const assets = (parsed as { assets?: unknown }).assets;
+  assert.ok(assets !== null && typeof assets === "object" && !Array.isArray(assets));
+  const listed = (assets as { run_worker_first?: unknown }).run_worker_first;
+  assert.ok(Array.isArray(listed));
+  for (const page of HTML_PAGE) {
+    assert.ok(page.endsWith(".html"));
+    const extless = page.slice(0, -".html".length);
+    assert.ok(listed.includes(extless), `${extless} is missing from run_worker_first`);
+  }
 });

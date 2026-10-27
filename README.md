@@ -131,9 +131,9 @@ engine files to about 8 MB each, under Cloudflare's 25 MiB per-file limit. The
 Worker in `server/` serves the site and the API on one address, so the
 security policy stays limited to the site's own origin:
 
-- `server/counts.ts`: a daily count for seven extensionless paths, `/`,
-  `/app/`, `/guide`, `/method`, `/privacy`, `/price-volume-mix-analysis`, and
-  `/grouping-level`. A referrer is a host with no port. A host longer than 200
+- `server/counts.ts`: a daily count for eight extensionless paths, `/`,
+  `/app/`, `/guide`, `/method`, `/privacy`, `/terms`,
+  `/price-volume-mix-analysis`, and `/grouping-level`. A referrer is a host with no port. A host longer than 200
   characters is a direct visit. At most 32 new foreign hosts are stored for
   each page and day, and further new hosts count under `other`. No script,
   cookie or visitor details.

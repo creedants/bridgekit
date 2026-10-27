@@ -385,7 +385,7 @@ open.all("/api/*", (c) => c.json({ error: "Not found." }, 404));
 open.get("/assets/*", async (c) => serveCompressedWasm(c.req.raw, c.env.ASSETS));
 
 /** The asset layer redirects these names to the same file without `.html`. */
-const HTML_PAGE = new Set(["/guide.html", "/method.html", "/privacy.html", "/terms.html", "/price-volume-mix-analysis.html", "/grouping-level.html"]);
+export const HTML_PAGE = new Set(["/guide.html", "/method.html", "/privacy.html", "/terms.html", "/price-volume-mix-analysis.html", "/grouping-level.html"]);
 
 async function pageResponse(request: Request, assets: Fetcher): Promise<Response> {
   const url = new URL(request.url);
