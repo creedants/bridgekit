@@ -8,6 +8,21 @@ import { deleteSoleWorkspaces, freeSeats, MAX_WORKSPACES_PER_USER, SEAT_LIMIT_SE
 
 const AUTH_BASE_PATH = "/api/auth";
 
+/** The invitation email's subject, fixed so it never carries a name of its own. */
+const INVITATION_SUBJECT = "You have been invited to a PVM Bridge workspace";
+
+/** How much of a name an invitation email carries, in code points. */
+const INVITATION_NAME_LIMIT = 80;
+
+/**
+ * Cuts a name to the length an invitation email carries, on code points so a
+ * cut never splits a surrogate pair, and marks a cut with "...".
+ */
+function cutName(name: string): string {
+  const points = Array.from(name);
+  return points.length > INVITATION_NAME_LIMIT ? `${points.slice(0, INVITATION_NAME_LIMIT).join("")}...` : name;
+}
+
 const signInMagicLink = magicLink({
   sendMagicLink() {
     throw new Error("schema lookup");
@@ -99,8 +114,8 @@ export function authOptions(env: Env, seatsFor: (workspaceId: string) => Promise
           return sendEmail(
             env,
             email,
-            `${inviter.user.name || inviter.user.email} invited you to a PVM Bridge workspace`,
-            `You have been invited to the workspace "${workspace.name}".\n\nTo accept, sign in with this email address and open:\n${env.BETTER_AUTH_URL}/app/?invitation=${id}\n\nThe invitation expires in 7 days.`,
+            INVITATION_SUBJECT,
+            `You have been invited to the workspace "${cutName(workspace.name)}" by ${cutName(inviter.user.name || inviter.user.email)}.\n\nTo accept, sign in with this email address and open:\n${env.BETTER_AUTH_URL}/app/?invitation=${id}\n\nThe invitation expires in 7 days.`,
           );
         },
       }),
