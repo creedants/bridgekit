@@ -183,7 +183,9 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
                 </tbody>
               </table>
               {run.amounts && <p className="notice">{run.amounts}</p>}
-              {signNote(result.effects) && <p className="hint">{signNote(result.effects)}</p>}
+              {signNote(result.effects, config.newAndDiscontinued) && (
+                <p className="hint">{signNote(result.effects, config.newAndDiscontinued)}</p>
+              )}
               <h3>{t.matchedHeading}</h3>
               <table>
                 <thead>
@@ -543,9 +545,13 @@ function Trend(props: { run: Run; query: () => Promise<Query> }) {
 
 /**
  * A step whose sign a reader would not expect: discontinued configurations that add sales, or new ones that take
- * sales away. Both come from the difference against the nearest comparable group.
+ * sales away. Both come from the difference against the nearest comparable group, so at full sales there is no note.
  */
-export function signNote(effects: readonly { key: string; value: number }[]): string | null {
+export function signNote(
+  effects: readonly { key: string; value: number }[],
+  newAndDiscontinued: BridgeConfig["newAndDiscontinued"],
+): string | null {
+  if (newAndDiscontinued === "full") return null;
   const sentences: string[] = [];
   if (effects.some((e) => e.key === "discontinued" && e.value > 0)) {
     sentences.push("Discontinued configurations is an increase here. The line is not the sales that were lost.");
@@ -557,9 +563,9 @@ export function signNote(effects: readonly { key: string; value: number }[]): st
   return `${sentences.join(" ")} It is the difference from the nearest comparable group, which can go either way.`;
 }
 
-/** Shown under a Movers search once it has finished and found nothing. */
-export function emptyNote(rows: readonly unknown[], search: string, fetchedFor: string | null): string | null {
-  return rows.length === 0 && fetchedFor === search ? "No rows match." : null;
+/** Shown under a Movers search once the request asked for last has finished and found nothing. */
+export function emptyNote(rows: readonly unknown[], wanted: string, fetchedFor: string | null): string | null {
+  return rows.length === 0 && fetchedFor === wanted ? "No rows match." : null;
 }
 
 /**
@@ -914,10 +920,12 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
   const [search, setSearch] = useState("");
   // Rows are kept with the grouping they were fetched for, so the table never
   // renders one grouping's rows under another grouping's columns.
-  // `search` is the text the rows were found for, so "No rows match." waits for the search typed last.
-  const [data, setData] = useState<{ groupBy: number; search: string | null; rows: Record<string, unknown>[] }>({
+  // `request` names the grouping, filters and search the rows were found for, so "No rows match." waits for the
+  // request made last.
+  const request = JSON.stringify([groupBy, filters, search]);
+  const [data, setData] = useState<{ groupBy: number; request: string | null; rows: Record<string, unknown>[] }>({
     groupBy: 0,
-    search: null,
+    request: null,
     rows: [],
   });
   const [saveError, setSaveError] = useState("");
@@ -930,7 +938,7 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
     props
       .query()
       .then((query) => drill(query, config, { columns: options[groupBy].columns, filters, sortBy: props.sortBy, search, limit: 200 }))
-      .then((result) => !stale && setData({ groupBy, search, rows: result }));
+      .then((result) => !stale && setData({ groupBy, request, rows: result }));
     return () => {
       stale = true;
     };
@@ -939,7 +947,7 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
   const downloadAll = () => {
     setSaveError("");
     saveOnce(
-      "movers.csv",
+      "movers-all-rows.csv",
       async () => {
         const all = await drill(await props.query(), config, {
           columns: group.columns, filters, sortBy: props.sortBy, search, limit: 500_000,
@@ -949,7 +957,7 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
       "text/csv",
     ).catch((e) => setSaveError(`Could not save every row: ${e instanceof Error ? e.message : String(e)}`));
   };
-  const empty = emptyNote(rows, search, data.search);
+  const empty = emptyNote(rows, request, data.request);
 
   const mixOf = (row: Record<string, unknown>) =>
     levels.reduce((sum, _, i) => sum + Number(row[`mix_${i + 1}`] ?? 0), 0);
