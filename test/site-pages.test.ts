@@ -945,9 +945,9 @@ function textOf(html: string): string {
 
 test("the hero picture is a link to the same sample as the hero button", () => {
   const html = readPage("index.html");
-  const links = [...html.matchAll(/<a\b[^>]*>([\s\S]*?)<\/a>/gi)].map((match) => ({
-    attributes: attributesOf(match[0]),
-    inner: match[1],
+  const links = [...html.matchAll(/(<a\b[^>]*>)([\s\S]*?)<\/a>/gi)].map((match) => ({
+    attributes: attributesOf(match[1]),
+    inner: match[2],
   }));
   const cta = links.find((link) => textOf(link.inner).startsWith("Try it with sample data"));
   assert.ok(cta, "index.html has no link reading Try it with sample data: keep the hero button");
