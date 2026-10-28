@@ -793,7 +793,7 @@ test("R7: a UTF-16 file with a byte-order mark proves the row", async () => {
   assert.deepEqual(fileProblem(multilineProblem(columns)), { kind: "reason", message: ROW_4 });
 });
 
-test("R7: a file that does not hold the named record's text names no row", async () => {
+test("R7: a file with one more record than the table loaded names no row", async () => {
   const query = await openDatabase();
   const columns = await stagedCsv(
     query,
