@@ -65,7 +65,7 @@ button.icon { width: 24px; height: 24px; padding: 0; justify-content: center; bo
   border-bottom: 1px solid var(--line);
   position: sticky; top: 0; background: var(--bg); z-index: 2;
 }
-.wordmark { font-weight: 700; font-size: 14px; color: var(--text); text-decoration: none; }
+.wordmark { font-weight: 700; font-size: 14px; color: var(--text); text-decoration: none; white-space: nowrap; }
 .source { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status { color: var(--text-3); flex: 1; white-space: nowrap; }
 .topbar nav { display: flex; gap: 8px; align-items: center; }
@@ -105,15 +105,27 @@ fieldset select, fieldset input:not([type="checkbox"]) { width: 100%; min-width:
 .filter select.quiet { width: auto; flex: none; }
 .values { max-height: 132px; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 6px; }
 .values label { display: flex; gap: 6px; align-items: center; color: var(--text); }
-.run { padding-top: 12px; display: grid; gap: 8px; }
+/* Calculate and its reason stay in reach at the foot of a long setup. */
+.run { position: sticky; bottom: 0; z-index: 1; padding: 12px 0 8px; display: grid; gap: 8px; background: var(--panel); }
+.run .hint { margin: 0; }
+.keep { padding-top: 8px; display: grid; gap: 8px; }
+/* Clears the sticky top bar when a result or an error is scrolled into view. */
+.results-anchor .results-title, .error { scroll-margin-top: 52px; }
+.results-title:focus { outline: none; }
+.toolbar .error { margin: 0; }
+.coarse-pointer { display: none; }
+@media (pointer: coarse) {
+  .fine-pointer { display: none; }
+  .coarse-pointer { display: inline; }
+}
 
 .placeholder { margin-top: 20vh; text-align: center; font-size: 13px; }
 
-.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); border: 1px solid var(--line); border-radius: var(--radius); }
-.kpi { padding: 8px 10px; min-width: 0; border-right: 1px solid var(--line); }
-.kpi:last-child { border-right: 0; }
+/* Each tile draws its right and bottom rule; the container clips the ones on its outer edge, however the tiles wrap. */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.kpi { padding: 8px 10px; min-width: 0; box-shadow: 1px 0 0 var(--line), 0 1px 0 var(--line); }
 .kpi-label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.04em; }
-.kpi-value { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.kpi-value { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 0; overflow-wrap: anywhere; }
 .kpi-note { font-size: 12px; color: var(--text-2); }
 
 .tabs { display: flex; gap: 2px; overflow-x: auto; border-bottom: 1px solid var(--line); margin: 14px 0 12px; }
@@ -201,8 +213,21 @@ table.narrow-wide { max-width: 900px; }
 .example { border: 1px solid var(--line); margin: 6px 0 8px; }
 .example td { color: var(--text-2); }
 .empty h3 { margin-top: 28px; }
+.empty .scroll { max-height: none; margin: 6px 0 8px; }
+.empty .scroll .example { border: 0; margin: 0; }
 .empty p.hint { font-size: 12px; }
 .check { display: inline-flex; gap: 5px; align-items: center; color: var(--text-2); font-size: 12px; }
 .legend { align-items: center; }
 .account-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 8px 24px; }
 .account-grid td:first-child { white-space: normal; }
+
+/* Finger-sized targets on touch screens. */
+@media (pointer: coarse) {
+  button, .button, select, input:not([type="checkbox"]) { min-height: 44px; }
+  button.icon, .chip button { min-width: 44px; min-height: 44px; }
+  .level-head, .chip { gap: 8px; }
+  .chip { height: auto; }
+  .tabs button { min-height: 44px; }
+  .check, .values label { min-height: 44px; }
+  .chips select.quiet { height: 44px; }
+}
