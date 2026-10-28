@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { dataCheck, periodMoney, runBridge, type BridgeConfig, type Query } from "../engine.ts";
+import { amountsNote, dataCheck, periodMoney, runBridge, type BridgeConfig, type Query } from "../engine.ts";
 import { summarize } from "../summary.ts";
 import { resolveSample, type Sample } from "../synth.ts";
 import {
@@ -9,7 +9,7 @@ import {
   type BrowserDatabase,
 } from "./db.ts";
 import { exportExcel, lazyChunk, type ChunkSentences } from "./exportExcel.ts";
-import { download, isPastedTable, makeGuard, shorten } from "./files.ts";
+import { isPastedTable, makeGuard, saveOnce, shorten } from "./files.ts";
 import { fileProblem, periodView, periodsFor, type FileProblem, type LoadedPeriods } from "./fileProblems.ts";
 import { whole } from "./format.ts";
 import { findTotalRows, profileFile, type TotalRow } from "./profile.ts";
@@ -18,6 +18,8 @@ import { describeSetup } from "./report.ts";
 import type { Run } from "./Results.tsx";
 import {
   affectsRemember,
+  calculateGate,
+  carryPeriods,
   guessSetup,
   hasData,
   initialPhase,
@@ -37,6 +39,7 @@ import {
   TABLE,
   VIEW,
   viewSql,
+  withoutSample,
   type Column,
   type EngineState,
   type LoadSource,
@@ -174,13 +177,17 @@ export function App() {
   const [suggestedPeriods, setSuggestedPeriods] = useState<Sample["periods"] | null>(null);
   const [prior, setPrior] = useState("");
   const [current, setCurrent] = useState("");
+  // The period list arrives later; it is checked against the choices standing then, not when it was asked for.
+  const periodsRef = useRef({ prior, current });
+  periodsRef.current = { prior, current };
   const [remember, setRemember] = useState(isRemembering);
   const [preview, setPreview] = useState<Record<string, unknown>[]>([]);
   const [rollups, setRollups] = useState<string[][]>([]);
   const [detected, setDetected] = useState<{ key: string; rows: TotalRow[] } | null>(null);
   const [run, setRun] = useState<(Run & { id: number; signature: string }) | null>(null);
   const [formulaBlanks, setFormulaBlanks] = useState(0);
-  const [saveGuard] = useState(() => makeGuard());
+  const [setupError, setSetupError] = useState("");
+  // exportExcel saves its file itself, so the Excel export keeps a guard of its own.
   const [exportGuard] = useState(() => makeGuard());
   // A demonstration sample must not overwrite a setup saved for a file with the same columns.
   const writesSetup = useRef(true);
@@ -220,9 +227,12 @@ export function App() {
     }
   }
 
-  async function readData(source: LoadSource, label: string, work: (thisLoad: number) => Promise<void>) {
+  async function readData(
+    read: { source: LoadSource; fileName?: string; label: string },
+    work: (thisLoad: number) => Promise<void>,
+  ) {
     const thisLoad = ++loadRef.current;
-    dispatch({ type: "read", load: thisLoad, source, label });
+    dispatch({ type: "read", load: thisLoad, ...read });
     setError("");
     try {
       await work(thisLoad);
@@ -251,6 +261,7 @@ export function App() {
     setSuggestedPeriods(preset?.periods ?? null);
     writesSetup.current = preset?.savesSetup ?? true;
     setNotice(saved ? "Restored the setup you last used with these columns." : "");
+    setSetupError("");
     const previewRows = await q(`SELECT * FROM ${quote(TABLE)} LIMIT 8`);
     if (loadRef.current !== thisLoad) return;
     setPreview(previewRows);
@@ -265,7 +276,7 @@ export function App() {
   const loadSample = () => {
     prefetchResults();
     const { sample, rows } = resolveSample(new URLSearchParams(location.search).get("sample"));
-    return readData("sample", SAMPLE_LABEL, async (thisLoad) => {
+    return readData({ source: "sample", label: SAMPLE_LABEL }, async (thisLoad) => {
       await sample.create(await query(), rows, TABLE);
       setFormulaBlanks(0);
       await afterLoad(thisLoad, sample.label, sample);
@@ -278,7 +289,10 @@ export function App() {
       return;
     }
     prefetchResults();
-    return readData("file", `Reading ${file.name}…`, async (thisLoad) => {
+    // The visitor's own data replaces the sample, so a reload must not bring the sample back.
+    const bare = withoutSample(location.href);
+    if (bare) history.replaceState(history.state, "", bare);
+    return readData({ source: "file", fileName: file.name, label: `Reading ${file.name}…` }, async (thisLoad) => {
       setFormulaBlanks(await (await db()).loadFile(file, TABLE));
       await afterLoad(thisLoad, file.name);
     });
@@ -305,10 +319,9 @@ export function App() {
       const values = [...list.values];
       setLoadedPeriods({ view: requested, values });
       // A sample that compares two named periods says which one is prior.
-      const pick = (kept: string, suggested: string | undefined, fallback: string) =>
-        values.includes(kept) ? kept : suggested !== undefined && values.includes(suggested) ? suggested : fallback;
-      setCurrent((value) => pick(value, suggestedPeriods?.current, values.at(-1) ?? ""));
-      setPrior((value) => pick(value, suggestedPeriods?.prior, values.at(-2) ?? ""));
+      const next = carryPeriods(periodsRef.current, values, suggestedPeriods ?? null);
+      setPrior(next.prior);
+      setCurrent(next.current);
     });
     return () => {
       stale = true;
@@ -339,8 +352,6 @@ export function App() {
 
   const signature = JSON.stringify([setup, prior, current, source]);
   const fresh = run && run.signature === signature ? run : null;
-  const ready =
-    !!setup && !!setup.unitsColumn && !!setup.salesColumn && setup.levels.length > 0 && !!prior && !!current && prior !== current;
   const calculating = tasks.has("calc");
   const busy = tasks.size > 0 || phase.kind === "reading" || phase.kind === "autoRun";
   const problem: FileProblem = setup
@@ -353,6 +364,8 @@ export function App() {
         salesColumn: setup.salesColumn,
       })
     : { kind: "none" };
+  const gate = calculateGate({ setup, prior, current, problem });
+  const ready = gate.ready;
 
   /** `sampleLoad` names the sample load whose first bridge this is. */
   const calculate = (sampleLoad?: number) =>
@@ -375,6 +388,8 @@ export function App() {
         const start = performance.now();
         const result = await runBridge(q, config);
         const ms = performance.now() - start;
+        // Read now: a later calculation on another tab replaces the cells this note looks at.
+        const amounts = await amountsNote(q);
         const check = await dataCheck(q, config);
         const tieOut = await periodMoney(q, config, { table: FILE_VIEW, periodColumn: PERIOD });
         setRun({
@@ -390,6 +405,7 @@ export function App() {
           source,
           sample: fromSample,
           formulaBlanks,
+          amounts,
           id: Date.now(),
           signature,
         });
@@ -496,15 +512,19 @@ export function App() {
       }),
     );
 
+  // The reason also shows beside Load setup, where the visitor is looking.
   const importSetup = (file: File) =>
     task("import", "Reading setup…", async () => {
+      setSetupError("");
       let parsed: unknown;
       try {
         parsed = JSON.parse(await file.text());
       } catch {
+        setSetupError("That file is not a setup file.");
         throw new Error("That file is not a setup file.");
       }
       if (!isValidSetup(parsed, columns)) {
+        setSetupError("That setup file does not match the columns in this data.");
         throw new Error("That setup file does not match the columns in this data.");
       }
       setSetup(restoredSetup(parsed));
@@ -560,6 +580,7 @@ export function App() {
               title="Remove the loaded data from this tab"
               aria-label="Clear data"
               onClick={() => {
+                if (!confirm("Clear the loaded data and the bridge?")) return;
                 leaving.current = true;
                 location.replace(location.pathname);
               }}
@@ -576,7 +597,11 @@ export function App() {
 
       {shown.kind === "loading" ? (
         <main className="empty">
-          <p role="status">{shown.text}</p>
+          <div className="busy-bar" aria-hidden="true" />
+          <div role="status">
+            <p>{shown.text}</p>
+            {shown.fileLine && <p>{shown.fileLine}</p>}
+          </div>
         </main>
       ) : shown.kind === "start" || !setup ? (
         <main className="empty">
@@ -589,17 +614,19 @@ export function App() {
             {filePicker}
             <button onClick={loadSample} disabled={busy}>Use sample data</button>
           </p>
-          <p className="hint">The file is read inside this browser tab. It is not uploaded.</p>
+          <p className="hint">
+            The file is read inside this browser tab. <a href="/privacy.html">It is not uploaded.</a>
+          </p>
           <h3>What the file should look like</h3>
           <div className="scroll">
             <table className="example">
               <thead>
-                <tr><th>period</th><th>customer</th><th>model</th><th>material</th><th>finish</th><th className="num">units</th><th className="num">gross_sales</th><th className="num">net_sales</th></tr>
+                <tr><th>period</th><th className="detail">customer</th><th>model</th><th className="detail">material</th><th className="detail">finish</th><th className="num">units</th><th className="num detail">gross_sales</th><th className="num">net_sales</th></tr>
               </thead>
               <tbody>
-                <tr><td>2025</td><td>C0001</td><td>MD12</td><td>MT2</td><td>FN01</td><td className="num">40</td><td className="num">4400</td><td className="num">3960</td></tr>
-                <tr><td>2026</td><td>C0001</td><td>MD12</td><td>MT2</td><td>FN01</td><td className="num">52</td><td className="num">5980</td><td className="num">5262</td></tr>
-                <tr><td>2026</td><td>C0002</td><td>MD12</td><td>MT5</td><td>FN00</td><td className="num">8</td><td className="num">1120</td><td className="num">1120</td></tr>
+                <tr><td>2025</td><td className="detail">C0001</td><td>MD12</td><td className="detail">MT2</td><td className="detail">FN01</td><td className="num">40</td><td className="num detail">4400</td><td className="num">3960</td></tr>
+                <tr><td>2026</td><td className="detail">C0001</td><td>MD12</td><td className="detail">MT2</td><td className="detail">FN01</td><td className="num">52</td><td className="num detail">5980</td><td className="num">5262</td></tr>
+                <tr><td>2026</td><td className="detail">C0002</td><td>MD12</td><td className="detail">MT5</td><td className="detail">FN00</td><td className="num">8</td><td className="num detail">1120</td><td className="num">1120</td></tr>
               </tbody>
             </table>
           </div>
@@ -635,15 +662,7 @@ export function App() {
                 {calculating ? "Calculating…" : "Calculate bridge"}
               </button>
               {problem.kind === "note" && <p className="hint">{problem.message}</p>}
-              {!ready && (
-                <p className="hint">
-                  {problem.kind === "reason"
-                    ? problem.message
-                    : prior && prior === current
-                      ? "Prior and current must be different periods."
-                      : "Choose periods, units, sales and at least one attribute."}
-                </p>
-              )}
+              {!gate.ready && <p className="hint">{gate.reason}</p>}
             </div>
             <div className="keep">
               <label className="check">
@@ -667,7 +686,7 @@ export function App() {
                 <button
                   className="quiet"
                   onClick={() =>
-                    saveGuard.run(() => download(SETUP_FILE, JSON.stringify(setup, null, 2), "application/json"))
+                    saveOnce(SETUP_FILE, JSON.stringify(setup, null, 2), "application/json")
                   }
                 >
                   Save setup to file
@@ -685,6 +704,7 @@ export function App() {
                   />
                 </label>
               </p>
+              {setupError && <p className="error">{setupError}</p>}
             </div>
             {WorkspacePanel && (
               <Suspense>
@@ -713,7 +733,10 @@ export function App() {
               <div>
                 {!calculating && (
                   <p className="hint">
-                    First rows of the file. Set up the bridge on the left, then choose Calculate bridge (Ctrl+Enter).
+                    <span className="wide-pointer">
+                      First rows of the file. Set up the bridge on the left, then choose Calculate bridge (Ctrl+Enter).
+                    </span>
+                    <span className="narrow-pointer">First rows of the file. Set up the bridge above, then choose Calculate bridge.</span>
                   </p>
                 )}
                 <div className="scroll">
@@ -747,6 +770,11 @@ export function App() {
           </main>
         </div>
       )}
+      <footer className="policy">
+        <a href="/privacy.html" target="_blank" rel="noreferrer">Privacy</a>
+        <a href="/terms.html" target="_blank" rel="noreferrer">Terms</a>
+        <a href="mailto:support@pvmbridge.com">Contact</a>
+      </footer>
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Level, Query } from "../engine.ts";
 import { sameSuggestedLevels } from "./fileProblems.ts";
 import { suggestAttributes, totalRowOffers, type TotalRow } from "./profile.ts";
-import { isDate, isNumeric, MAX_LEVEL_NAME, quote, TABLE, type Column, type Filter, type Grain, type Setup } from "./setup.ts";
+import { isDate, isNumeric, MAX_LEVEL_NAME, measureColumns, quote, TABLE, type Column, type Filter, type Grain, type Setup } from "./setup.ts";
 
 /** Count agreement lives here because this module loads eagerly and the lazily loaded results view can import it. */
 export function agree(count: number, one: string, many = one + "s"): string {
@@ -29,7 +29,7 @@ export function SetupPanel(props: {
   onCurrent: (value: string) => void;
 }) {
   const { columns, setup, onChange } = props;
-  const numeric = columns.filter((c) => isNumeric(c.type));
+  const numeric = measureColumns(columns, setup);
   const periodType = columns.find((c) => c.name === setup.periodColumn)?.type ?? "";
   const used = new Set([
     setup.periodColumn,
@@ -98,7 +98,14 @@ export function SetupPanel(props: {
             value={setup.periodColumn}
             onChange={(e) => {
               const column = columns.find((c) => c.name === e.target.value);
-              onChange({ periodColumn: e.target.value, grain: column && isDate(column.type) ? "year" : "value" });
+              const name = e.target.value;
+              // The period column is never a measure, so a measure it was is chosen again.
+              onChange({
+                periodColumn: name,
+                grain: column && isDate(column.type) ? "year" : "value",
+                ...(setup.unitsColumn === name ? { unitsColumn: "" } : {}),
+                ...(setup.salesColumn === name ? { salesColumn: "" } : {}),
+              });
             }}
           >
             <option value="">Choose…</option>
@@ -183,9 +190,10 @@ export function SetupPanel(props: {
         <legend>Attributes</legend>
         <p className="hint">
           Put the attribute you care about most at the top; each mix step is measured after the ones above it. One
-          attribute gives a classic bridge.
+          attribute gives a classic bridge: volume, one mix step and price.
         </p>
         <button
+          className="action"
           ref={suggestRef}
           disabled={suggested.length === 0}
           onClick={onSuggest}
@@ -256,6 +264,9 @@ export function SetupPanel(props: {
             </li>
           ))}
         </ol>
+        {free.length > 0 && setup.levels.length > 0 && (
+          <p className="hint">+ combine joins another column into the same attribute, so the two count as one.</p>
+        )}
         {free.length > 0 && (
           <select
             value=""
