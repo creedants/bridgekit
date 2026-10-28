@@ -2,7 +2,7 @@
 
 @font-face { font-family: Instrument Sans; src: url(/fonts/instrument-sans.woff2) format("woff2"); font-weight: 400 700; font-style: normal; font-display: swap; }
 
-:root { --sun: #f4bf3a; --plum: #42203d; --plum-2: #6a4b64; --blush: #e7d3e2; --wrong: #b01f2e; --paper: #ffffff; }
+:root { --sun: #f4bf3a; --plum: #42203d; --plum-2: #6a4b64; --plum-3: #7a5a74; --blush: #e7d3e2; --wrong: #b01f2e; --paper: #ffffff; }
 
 *,
 *::before,
@@ -110,11 +110,12 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .track { stroke: var(--blush); stroke-width: 1; }
 
-.bar { fill: var(--plum); opacity: 0.28; transform-box: fill-box; transform-origin: 0 50%; transform: scaleX(0); animation: bar-in 600ms ease-out both; }
+/* --plum-3 is 5.9:1 on white; the bar is data, so it clears the 3:1 graphic minimum without the mute of a low opacity. */
+.bar { fill: var(--plum-3); transform-box: fill-box; transform-origin: 0 50%; transform: scaleX(0); animation: bar-in 600ms ease-out both; }
 
-.bar.total { opacity: 1; }
+.bar.total { fill: var(--plum); }
 
-.bar.wrong { fill: var(--wrong); opacity: 1; }
+.bar.wrong { fill: var(--wrong); }
 
 .row:nth-of-type(1) .bar { animation-delay: 0ms; }
 

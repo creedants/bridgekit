@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
+import { applyFeatureBlocks } from "../scripts/feature-blocks.ts";
 
 const ORIGIN = "https://pvmbridge.com";
 const APP_TITLE = "Price-volume-mix bridge tool | PVM Bridge";
@@ -48,7 +49,7 @@ function collapseSpaces(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-const FEATURE_BLOCK = /<!-- feature:!?[a-z-]+ -->[\s\S]*?<!-- \/feature:[a-z-]+ -->/g;
+const FEATURE_BLOCK = /<!-- feature:(!?[a-z-]+) -->[\s\S]*?<!-- \/feature:\1 -->/g;
 
 function visibleWordsOf(html: string): string[] {
   const withoutHead = html.replace(/<head>[\s\S]*?<\/head>/i, " ");
@@ -434,6 +435,23 @@ test("the home page loads nothing from another host and runs no script", () => {
     "index.html has a script that is not the application/ld+json block: the home page runs no script",
   );
 
+  assert.equal(
+    /\son[a-z]+\s*=/i.test(html),
+    false,
+    "index.html has an inline event handler: the page runs no script, so attach no onload or onclick",
+  );
+  assert.equal(
+    /javascript:/i.test(html),
+    false,
+    "index.html has a javascript: URL: link to a real address instead",
+  );
+  const css = readFileSync(new URL("../src/site/home.css", import.meta.url), "utf8");
+  for (const remote of css.matchAll(/url\(\s*["']?(https?:)?\/\//gi)) {
+    assert.fail(
+      `src/site/home.css loads ${remote[0]}: serve every font and image from this site`,
+    );
+  }
+
   for (const tag of html.matchAll(/<[a-z][^>]*>/gi)) {
     const attributes = attributesOf(tag[0]);
     for (const [name, value] of attributes) {
@@ -486,11 +504,26 @@ test("the home page keeps its own stylesheet", () => {
 });
 
 test("the home page keeps the counts sentence for the counts build", () => {
-  const counts =
-    '<!-- feature:!counts -->No analytics.<!-- /feature:!counts --><!-- feature:counts -->No tracking scripts.<!-- /feature:counts -->';
+  const html = readPage("index.html");
+  const counts = applyFeatureBlocks(html, { counts: true });
   assert.ok(
-    readPage("index.html").includes(counts),
-    "index.html has no counts sentence: keep the two counts feature blocks side by side in the privacy paragraph",
+    counts.includes("No tracking scripts."),
+    "the counts build of index.html does not say No tracking scripts.: keep the feature:counts block in the privacy paragraph",
+  );
+  assert.equal(
+    counts.includes("No analytics."),
+    false,
+    "the counts build of index.html still says No analytics.: keep the two counts blocks paired so the filter drops one",
+  );
+  const free = applyFeatureBlocks(html, { counts: false });
+  assert.ok(
+    free.includes("No analytics."),
+    "the build without page counts does not say No analytics.: keep the feature:!counts block in the privacy paragraph",
+  );
+  assert.equal(
+    free.includes("No tracking scripts."),
+    false,
+    "the build without page counts still says No tracking scripts.: keep the two counts blocks paired so the filter drops one",
   );
 });
 
