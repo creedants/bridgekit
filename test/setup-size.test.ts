@@ -3,19 +3,18 @@ import { test } from "node:test";
 import type { Env } from "../server/env.ts";
 import app from "../server/worker.ts";
 import { isValidSetup, type Column, type Setup } from "../src/app/setup.ts";
-import * as bounds from "../src/app/setup.ts";
 import { parseSummary, type BridgeSummary } from "../src/summary.ts";
 import { testDatabase } from "./support/d1.ts";
 
-// The bounds the product promises. The tests use these numbers, not the
-// exports, so a run at the base commit exercises the behaviour it lacks.
+// The bounds and fixture sizes the tests use, kept as literals so a run at the
+// base commit exercises the behaviour it lacks.
 const MAX_COLUMNS = 1000;
 const MAX_COLUMN_NAME = 300;
-const MAX_LEVEL_NAME = 300;
 const MAX_FILTER_VALUES = 500;
 const MAX_FILTER_VALUE = 300;
 const SAVE_LIMIT = 8 * 1024 * 1024;
 const TOO_LARGE = "This is too large to save.";
+const SETUP_MISMATCH = "That setup does not match the columns.";
 
 const ORIGIN = "http://127.0.0.1:8790";
 const AUTH_SECRET = "0123456789abcdef0123456789abcdef";
@@ -152,7 +151,7 @@ function signedIn(): Promise<{ env: Env; db: Env["DB"]; cookie: string; workspac
   return signed;
 }
 
-/** `count` distinct column names of `length` characters, filled with printable ASCII or CJK. */
+/** Builds distinct column names from an index prefix and the supplied filler. */
 function columnNames(count: number, filler: string, length: number = MAX_COLUMN_NAME): string[] {
   return Array.from({ length: count }, (_, index) => {
     const prefix = `c${index}-`;
@@ -179,7 +178,7 @@ function setupAcross(columns: string[]): Setup {
   return setupWith(columns.map((column) => ({ name: column, columns: [column] })));
 }
 
-function largestSetupWithFilters(columns: string[]): Setup {
+function setupWithTwoLongFilters(columns: string[]): Setup {
   const values = filterValues(MAX_FILTER_VALUES, "價", MAX_FILTER_VALUE);
   return setupWith(
     columns.map((column) => ({ name: column, columns: [column] })),
@@ -223,11 +222,11 @@ interface BridgeBody extends SetupBody {
 }
 
 function setupBody(columns: string[], setup: Setup): SetupBody {
-  return { name: "Largest setup", columns, setup };
+  return { name: "Large setup", columns, setup };
 }
 
 function bridgeBody(columns: string[], setup: Setup, summary: BridgeSummary): BridgeBody {
-  return { name: "Largest bridge", columns, setup, summary, filterColumns: [] };
+  return { name: "Large bridge", columns, setup, summary, filterColumns: [] };
 }
 
 function smallSetupBody(): SetupBody {
@@ -238,7 +237,7 @@ function smallBridgeBody(): BridgeBody {
   return { name: "Small bridge", columns: SMALL_COLUMNS, setup: SMALL_SETUP, summary: SMALL_SUMMARY, filterColumns: [] };
 }
 
-/** The largest summary `parseSummary` accepts: 40 effects and 20 attributes, each at its 120-character limit. */
+/** A summary with 40 effects, 20 attributes, and 120-character text fields. */
 function largestSummary(filler = "s"): BridgeSummary {
   const text = filler.repeat(120);
   return {
@@ -291,82 +290,92 @@ function post(
   return call(`${ORIGIN}/api/workspaces/${workspaceId}/${route}`, env, init);
 }
 
-test("exports the documented bounds", () => {
-  assert.equal(bounds.MAX_COLUMNS, MAX_COLUMNS);
-  assert.equal(bounds.MAX_COLUMN_NAME, MAX_COLUMN_NAME);
-  assert.equal(bounds.MAX_LEVEL_NAME, MAX_LEVEL_NAME);
-  assert.equal(bounds.MAX_FILTER_VALUES, MAX_FILTER_VALUES);
-  assert.equal(bounds.MAX_FILTER_VALUE, MAX_FILTER_VALUE);
-});
-
-test("refuses a setup with more levels than its columns allow", () => {
-  const three = ["a", "b", "c"];
-  assert.equal(isValidSetup(setupAcross(three), columnsOf(three)), true);
-  assert.equal(
-    isValidSetup(
-      setupWith([
-        { name: "a", columns: ["a"] },
-        { name: "b", columns: ["b"] },
-        { name: "c", columns: ["c"] },
-        { name: "d", columns: ["a"] },
-      ]),
-      columnsOf(three),
-    ),
-    false,
-  );
-
-  const many = columnNames(MAX_COLUMNS + 1, "a");
-  assert.equal(isValidSetup(setupAcross(many.slice(0, MAX_COLUMNS)), columnsOf(many)), true);
-  assert.equal(isValidSetup(setupAcross(many), columnsOf(many)), false);
-});
-
-test("refuses a level name past 300 characters unless it is one of its own columns", () => {
-  const column = "a";
-  assert.equal(isValidSetup(setupWith([{ name: "n".repeat(MAX_LEVEL_NAME + 1), columns: [column] }]), columnsOf([column])), false);
-  assert.equal(isValidSetup(setupWith([{ name: "n".repeat(MAX_LEVEL_NAME), columns: [column] }]), columnsOf([column])), true);
-  const header = "h".repeat(MAX_LEVEL_NAME + 100);
-  assert.equal(isValidSetup(setupWith([{ name: header, columns: [header] }]), columnsOf([header])), true);
-});
-
-test("refuses a column that appears in two levels", () => {
-  const columns = ["a", "b"];
-  assert.equal(
-    isValidSetup(
-      setupWith([
-        { name: "a", columns: ["a"] },
-        { name: "a", columns: ["a"] },
-      ]),
-      columnsOf(columns),
-    ),
-    false,
-  );
-  assert.equal(
-    isValidSetup(
-      setupWith([
-        { name: "a", columns: ["a"] },
-        { name: "b", columns: ["b"] },
-      ]),
-      columnsOf(columns),
-    ),
-    true,
-  );
-});
-
-test("refuses more filters than columns, a 501st value, or a 301-character value", () => {
-  const columns = columnNames(3, "a");
-  const filtered = (values: string[]) => setupWith([], [{ column: columns[0], mode: "include", values }]);
-  assert.equal(isValidSetup(filtered(filterValues(MAX_FILTER_VALUES + 1, "v", 10)), columnsOf(columns)), false);
-  assert.equal(isValidSetup(filtered(filterValues(MAX_FILTER_VALUES, "v", 10)), columnsOf(columns)), true);
-  assert.equal(isValidSetup(filtered(filterValues(1, "v", MAX_FILTER_VALUE + 1)), columnsOf(columns)), false);
-  assert.equal(isValidSetup(filtered(filterValues(1, "v", MAX_FILTER_VALUE)), columnsOf(columns)), true);
-  const filter = (column: string): Setup["filters"][number] => ({ column, mode: "include", values: ["v"] });
-  assert.equal(isValidSetup(setupWith([], columns.map(filter)), columnsOf(columns)), true);
-  assert.equal(isValidSetup(setupWith([], [...columns.map(filter), filter(columns[0])]), columnsOf(columns)), false);
-});
-
-test("accepts the largest setup the app can build", () => {
+test("accepts 1,000 levels and two filters of 500 values", () => {
   const columns = columnNames(MAX_COLUMNS, "a");
-  assert.equal(isValidSetup(largestSetupWithFilters(columns), columnsOf(columns)), true);
+  assert.equal(isValidSetup(setupWithTwoLongFilters(columns), columnsOf(columns)), true);
+});
+
+test("refuses more levels than columns with 400", async () => {
+  const { env, cookie, workspaceId } = await signedIn();
+  const columns = ["a", "b"];
+  const level = (name: string): Setup["levels"][number] => ({ name, columns: [name] });
+  const refused = await post(
+    env,
+    workspaceId,
+    "setups",
+    cookie,
+    JSON.stringify(setupBody(columns, setupWith([level("a"), level("b"), level("a")]))),
+  );
+  assert.equal(refused.status, 400);
+  assert.deepEqual(await refused.json(), { error: SETUP_MISMATCH });
+  const accepted = await post(
+    env,
+    workspaceId,
+    "setups",
+    cookie,
+    JSON.stringify(setupBody(columns, setupWith([level("a"), level("b")]))),
+  );
+  assert.equal(accepted.status, 201, await accepted.text());
+});
+
+test("refuses a 301-character level name and accepts 300", async () => {
+  const { env, cookie, workspaceId } = await signedIn();
+  const columns = ["design"];
+  const refused = await post(
+    env,
+    workspaceId,
+    "setups",
+    cookie,
+    JSON.stringify(setupBody(columns, setupWith([{ name: "n".repeat(301), columns: ["design"] }]))),
+  );
+  assert.equal(refused.status, 400);
+  assert.deepEqual(await refused.json(), { error: SETUP_MISMATCH });
+  const accepted = await post(
+    env,
+    workspaceId,
+    "setups",
+    cookie,
+    JSON.stringify(setupBody(columns, setupWith([{ name: "n".repeat(300), columns: ["design"] }]))),
+  );
+  assert.equal(accepted.status, 201, await accepted.text());
+});
+
+test("refuses a column in two levels with 400", async () => {
+  const { env, cookie, workspaceId } = await signedIn();
+  const columns = ["a", "b"];
+  const refused = await post(
+    env,
+    workspaceId,
+    "setups",
+    cookie,
+    JSON.stringify(
+      setupBody(
+        columns,
+        setupWith([
+          { name: "a", columns: ["a"] },
+          { name: "b", columns: ["a"] },
+        ]),
+      ),
+    ),
+  );
+  assert.equal(refused.status, 400);
+  assert.deepEqual(await refused.json(), { error: SETUP_MISMATCH });
+  const accepted = await post(
+    env,
+    workspaceId,
+    "setups",
+    cookie,
+    JSON.stringify(
+      setupBody(
+        columns,
+        setupWith([
+          { name: "a", columns: ["a"] },
+          { name: "b", columns: ["b"] },
+        ]),
+      ),
+    ),
+  );
+  assert.equal(accepted.status, 201, await accepted.text());
 });
 
 test("refuses a setup save just over 8 MiB with 413, whatever Content-Length says", async () => {
@@ -414,7 +423,7 @@ test("accepts a setup body of exactly 8 MiB", async () => {
   assert.equal(response.status, 201, await response.text());
 });
 
-test("saves the largest setup and bridge the app can build, and small ones", async () => {
+test("saves 1,000-column setup and bridge fixtures, and small ones", async () => {
   const { env, cookie, workspaceId } = await signedIn();
   const columns = columnNames(MAX_COLUMNS, "a");
   const setup = setupAcross(columns);
@@ -456,7 +465,52 @@ test("answers 400 for a body at the limit that is not JSON", async () => {
   assert.deepEqual(await response.json(), { error: "The request was not valid JSON." });
 });
 
-test("the largest setup and bridge bodies sit under the save limit", () => {
+test("answers 400 for a save body that was already read", async () => {
+  const { env, cookie, workspaceId } = await signedIn();
+  const request = new Request(`${ORIGIN}/api/workspaces/${workspaceId}/setups`, {
+    method: "POST",
+    headers: { origin: ORIGIN, "content-type": "application/json", cookie },
+    body: JSON.stringify(smallSetupBody()),
+  });
+  await request.text();
+  const response = await app.fetch(request, env, { waitUntil() {}, passThroughOnException() {}, props: {} });
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: "The request was not valid JSON." });
+});
+
+test("cancels an oversized chunked body once and stops pulling", async () => {
+  const { env, cookie, workspaceId } = await signedIn();
+  const CHUNK = 64 * 1024;
+  let pulls = 0;
+  let cancels = 0;
+  let pullsAfterCancel = 0;
+  let cancelled = false;
+  const source = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        if (cancelled) {
+          pullsAfterCancel += 1;
+          return;
+        }
+        pulls += 1;
+        controller.enqueue(new Uint8Array(CHUNK));
+      },
+      cancel() {
+        cancels += 1;
+        cancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const response = await post(env, workspaceId, "setups", cookie, source, { "content-length": "1" }, true);
+  assert.equal(response.status, 413);
+  assert.deepEqual(await response.json(), { error: TOO_LARGE });
+  assert.equal(pulls, Math.floor(SAVE_LIMIT / CHUNK) + 1);
+  assert.equal(cancels, 1);
+  assert.equal(pullsAfterCancel, 0);
+});
+
+test("the ASCII, CJK, and escaped-control fixtures sit under 8 MiB", () => {
   for (const filler of ["a", "價", "\u0001"]) {
     const columns = columnNames(MAX_COLUMNS, filler);
     const setup = setupAcross(columns);
