@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { applyFeatureBlocks } from "../scripts/feature-blocks.ts";
 
 const ORIGIN = "https://pvmbridge.com";
+const GITHUB = "https://github.com/creedants/bridgekit";
 const APP_TITLE = "Price-volume-mix bridge tool | PVM Bridge";
 const APP_DESCRIPTION =
   "A price-volume-mix bridge that works across several product attributes at once. Runs in your browser, so your sales file is never uploaded. Free and open source.";
@@ -335,7 +336,7 @@ test("every root page footer links to the PVM analysis and grouping level pages"
   }
 });
 
-test("the home page carries exactly one WebSite block", () => {
+test("the home page carries one structured-data block with WebSite and Organization", () => {
   const html = readPage("index.html");
   const blocks = [
     ...html.matchAll(
@@ -345,30 +346,79 @@ test("the home page carries exactly one WebSite block", () => {
   assert.equal(
     blocks.length,
     1,
-    `index.html has ${blocks.length} application/ld+json blocks: add exactly one WebSite block after the twitter:card line`,
+    `index.html has ${blocks.length} application/ld+json blocks: keep exactly one block after the twitter:card line`,
   );
-  let site: Record<string, unknown> = {};
+  let data: Record<string, unknown> = {};
   try {
-    site = JSON.parse(blocks[0][1]) as Record<string, unknown>;
+    data = JSON.parse(blocks[0][1]) as Record<string, unknown>;
   } catch {
     assert.fail(
       "index.html has an application/ld+json block that is not valid JSON: write it as one valid object",
     );
   }
   assert.equal(
-    site["@type"],
-    "WebSite",
-    `index.html structured data has @type ${String(site["@type"])}: use "WebSite"`,
+    data["@context"],
+    "https://schema.org",
+    `index.html structured data has @context ${String(data["@context"])}: use "https://schema.org"`,
   );
-  assert.equal(
-    site.name,
-    "PVM Bridge",
-    `index.html structured data has name ${String(site.name)}: use "PVM Bridge"`,
+  const structured = data["@graph"];
+  if (!Array.isArray(structured)) {
+    assert.fail(
+      "index.html structured data has no @graph array: put the WebSite and Organization nodes in one @graph",
+    );
+  }
+  const graph: unknown[] = structured;
+  function nodeOf(type: string): Record<string, unknown> {
+    const nodes = graph.filter(
+      (node): node is Record<string, unknown> =>
+        typeof node === "object" &&
+        node !== null &&
+        "@type" in node &&
+        node["@type"] === type,
+    );
+    assert.equal(
+      nodes.length,
+      1,
+      `index.html @graph has ${nodes.length} ${type} nodes: give it exactly one`,
+    );
+    return nodes[0];
+  }
+  assert.deepEqual(
+    nodeOf("WebSite"),
+    {
+      "@type": "WebSite",
+      name: "PVM Bridge",
+      url: `${ORIGIN}/`,
+      publisher: { "@id": `${ORIGIN}/#organization` },
+    },
+    "index.html WebSite node does not match the site's name, url and publisher: use the plain fields only",
   );
+  const organization = nodeOf("Organization");
+  assert.deepEqual(
+    organization,
+    {
+      "@type": "Organization",
+      "@id": `${ORIGIN}/#organization`,
+      name: "PVM Bridge",
+      url: `${ORIGIN}/`,
+      logo: `${ORIGIN}/img/logo-512.png`,
+      email: "support@pvmbridge.com",
+      sameAs: [GITHUB],
+    },
+    "index.html Organization node does not match the site's details: keep name, url, logo, email and sameAs only",
+  );
+
+  const logo = new URL(String(organization.logo));
   assert.equal(
-    site.url,
-    `${ORIGIN}/`,
-    `index.html structured data has url ${String(site.url)}: use "${ORIGIN}/"`,
+    logo.origin,
+    ORIGIN,
+    `index.html Organization logo is ${logo.origin}: point it at this site`,
+  );
+  const size = pngSizeOf("index.html", logo.pathname);
+  assert.deepEqual(
+    size,
+    { width: 512, height: 512 },
+    `index.html Organization logo is ${size.width}x${size.height}: render public${logo.pathname} at 512x512`,
   );
 });
 
@@ -419,8 +469,6 @@ test("the home page links to the tool, the guide and every reference page", () =
     );
   }
 });
-
-const GITHUB = "https://github.com/creedants/bridgekit";
 
 test("the home page loads nothing from another host and runs no script", () => {
   const html = readPage("index.html");

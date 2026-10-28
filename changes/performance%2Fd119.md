@@ -1,0 +1,3 @@
+- The home page's one JSON-LD block now carries an `@graph` with a WebSite node and an Organization node, so search engines read the site's name, address, logo, contact email and source repository from the page itself.
+- `public/img/logo-512.png` is a new 512x512 PNG rendered from the header wordmark's mark: transparent corners, plum `#42203d` tile, three white bars with the middle one at 75% opacity. It is a plain URL string on the Organization node and loads no request until a crawler asks for it.
+- The page test now parses the block and deep-compares each node against the exact fields, requires exactly one node per `@type`, and reads the logo PNG's own header for its 512x512 size.
