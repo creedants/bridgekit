@@ -1,0 +1,2 @@
+- The home page's lead sentence now follows the order in the product's name, so it reads "Price, volume, and a mix step for every product attribute, in one bridge." No other wording, styling or layout changes.
+- A test in `test/site-pages.test.ts` reads the home page's lead paragraph and pins that sentence, so the old order cannot come back unnoticed.
