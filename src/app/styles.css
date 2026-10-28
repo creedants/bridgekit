@@ -73,7 +73,8 @@ button.icon { width: 24px; height: 24px; padding: 0; justify-content: center; bo
 .error { margin: 8px 12px 0; padding: 6px 10px; border: 1px solid var(--down); border-radius: var(--radius); color: #a1211f; background: #fdf0ef; }
 .notice { padding: 6px 10px; border: 1px solid var(--warn-line); background: var(--warn-bg); border-radius: var(--radius); }
 
-.empty { max-width: 680px; margin: 12vh auto 0; padding: 0 20px; }
+/* Full width up to 680px: as an auto-margined flex item it would otherwise grow to the example table. */
+.empty { width: 100%; max-width: 680px; margin: 12vh auto 0; padding: 0 20px; }
 .empty p { font-size: 14px; color: var(--text-2); }
 
 .workspace { display: grid; grid-template-columns: 290px minmax(0, 1fr); flex: 1; }
