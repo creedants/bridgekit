@@ -36,56 +36,141 @@
 
     <section class="hero">
       <div class="shell hero-grid">
-        <h1><span class="nowrap">Price-volume-mix</span> analysis for products built from options</h1>
-        <p class="problem">Group by model, and a shift toward a higher-priced finish looks like a price rise. Group by full configuration, and new configurations have no prior price to compare.</p>
-        <p class="answer">PVM Bridge compares each configuration with itself, and falls back to the nearest group that existed, in the order you set.</p>
-        <figure class="chart">
-          <p class="chart-lede">Each effect, both groupings</p>
-          <svg viewBox="0 0 640 300" role="img" aria-label="Bar chart of the price effect on the same sales lines, grouped two ways. Volume 14,493,720 in both groupings. Mix from model 3,180,031 in both. Mix from finish 2,433,311, color 6,806,470 and material −115,845, only in the four-attribute grouping. Price 9,724,424 grouped by model only, against 3,189,686 with four attributes.">
-            <text class="axis-head" x="170" y="40">Model only</text>
-            <text class="axis-head" x="400" y="40">Four attributes</text>
-            <line class="track" x1="170" y1="48" x2="170" y2="288" />
-            <line class="track" x1="400" y1="48" x2="400" y2="288" />
-            <g class="row">
-              <text class="row-name" x="0" y="69">Volume</text>
-              <rect class="bar" x="170" y="55" width="196.37" height="18" />
-              <rect class="bar" x="400" y="55" width="196.37" height="18" />
-            </g>
-            <g class="row">
-              <text class="row-name" x="0" y="111">Mix: Model</text>
-              <rect class="bar" x="170" y="97" width="43.08" height="18" />
-              <rect class="bar" x="400" y="97" width="43.08" height="18" />
-            </g>
-            <g class="row">
-              <text class="row-name" x="0" y="153">Mix: Finish</text>
-              <text class="none" x="174" y="153">no line</text>
-              <rect class="bar" x="400" y="139" width="32.97" height="18" />
-            </g>
-            <g class="row">
-              <text class="row-name" x="0" y="195">Mix: Color</text>
-              <text class="none" x="174" y="195">no line</text>
-              <rect class="bar" x="400" y="181" width="92.22" height="18" />
-            </g>
-            <g class="row">
-              <text class="row-name" x="0" y="237">Mix: Material</text>
-              <text class="none" x="174" y="237">no line</text>
-              <rect class="bar" x="398" y="223" width="2" height="18" />
-            </g>
-            <g class="row">
-              <text class="row-name" x="0" y="279">Price</text>
-              <rect class="bar wrong" x="170" y="265" width="131.75" height="18" />
-              <text class="value wrong" x="307.75" y="279.5">+9.72M</text>
-              <rect class="bar total" x="400" y="265" width="43.22" height="18" />
-              <text class="value" x="449.22" y="279.5">+3.19M</text>
-            </g>
-          </svg>
-          <figcaption>The same three million made-up sales lines, grouped two ways. <a href="/grouping-level.html">Why the grouping level changes the price effect</a>.</figcaption>
-        </figure>
-        <div class="cta">
-          <a class="button" href="/app/">Open the tool</a>
-          <a class="button ghost" href="/app/?sample">Try it with sample data</a>
+        <div class="copy">
+          <h1>See why sales moved.</h1>
+          <p class="lead">Volume, price, and a mix step for every product attribute, in one bridge.</p>
+          <a class="button cta" href="/app/?sample">Try it with sample data <span aria-hidden="true">→</span></a>
+          <p class="fine">Free. No account. CSV or Excel.<br />Your file stays in your browser.</p>
         </div>
-        <p class="fine">Free. No account. CSV or Excel.</p>
+
+        <figure>
+          <div class="frame">
+            <div class="chrome">
+              <span class="dots"><i></i><i></i><i></i></span>
+              <span class="app-name"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="6" fill="#1f4b99"/><rect x="6" y="17" width="5" height="9" fill="#fff"/><rect x="13.5" y="12" width="5" height="5" fill="#fff" opacity=".75"/><rect x="21" y="6" width="5" height="20" fill="#fff"/></svg>PVM Bridge</span>
+              <span class="dataset">Sample data (made-up configuration sales) · 1,000,000 rows · 13 columns</span>
+            </div>
+            <div class="body">
+              <div class="kpis">
+                <div class="kpi"><b>Sales 2025</b><strong>57,908,260</strong></div>
+                <div class="kpi"><b>Sales 2026</b><strong>70,449,538</strong></div>
+                <div class="kpi"><b>Change</b><strong>+12,541,279</strong><small>+21.7%</small></div>
+                <div class="kpi"><b>Like-for-like price</b><strong>+1,026,258</strong><small>+1.8%</small></div>
+                <div class="kpi"><b>Matched exactly</b><strong>89.0%</strong><small>of current sales with units</small></div>
+              </div>
+              <div class="tabs"><span class="on">Bridge</span><span>Movers</span><span>Accounts</span><span>Price changes</span><span>Price gaps</span><span>Trend</span><span>Unmatched</span></div>
+              <div class="legend"><span><i style="background:var(--t-up)"></i>Increase</span><span><i style="background:var(--t-down)"></i>Decrease</span><span><i style="background:var(--t-total)"></i>Period total</span></div>
+    <svg class="wf wf-wide" viewBox="0 0 760 330" role="img" aria-label="Waterfall chart of the sample bridge: sales 57.9M in 2025, volume +4.8M, mix model +1.1M, mix finish +823.7K, mix color +2.2M, mix material -93.7K, price +1M, new configurations +3.5M, discontinued configurations -961.6K, sales 70.4M in 2026.">
+    <line x1="40" x2="754" y1="286.0" y2="286.0" stroke="#c4cad3"/>
+    <text class="ax" x="32" y="289.5" text-anchor="end">40M</text>
+    <line x1="40" x2="754" y1="248.3" y2="248.3" stroke="#e6e9ed"/>
+    <text class="ax" x="32" y="251.8" text-anchor="end">45M</text>
+    <line x1="40" x2="754" y1="210.6" y2="210.6" stroke="#e6e9ed"/>
+    <text class="ax" x="32" y="214.1" text-anchor="end">50M</text>
+    <line x1="40" x2="754" y1="172.9" y2="172.9" stroke="#e6e9ed"/>
+    <text class="ax" x="32" y="176.4" text-anchor="end">55M</text>
+    <line x1="40" x2="754" y1="135.1" y2="135.1" stroke="#e6e9ed"/>
+    <text class="ax" x="32" y="138.6" text-anchor="end">60M</text>
+    <line x1="40" x2="754" y1="97.4" y2="97.4" stroke="#e6e9ed"/>
+    <text class="ax" x="32" y="100.9" text-anchor="end">65M</text>
+    <line x1="40" x2="754" y1="59.7" y2="59.7" stroke="#e6e9ed"/>
+    <text class="ax" x="32" y="63.2" text-anchor="end">70M</text>
+    <line x1="40" x2="754" y1="22.0" y2="22.0" stroke="#e6e9ed"/>
+    <text class="ax" x="32" y="25.5" text-anchor="end">75M</text>
+    <rect x="55.7" y="150.9" width="40" height="135.1" rx="2" fill="#6b7480"/>
+    <rect x="55.7" y="284.0" width="40" height="2" fill="#6b7480"/>
+    <text class="val" x="75.7" y="144.9" text-anchor="middle">57.9M</text>
+    <text class="cat" x="75.7" y="303.0" text-anchor="middle">2025</text>
+    <rect x="127.1" y="114.4" width="40" height="36.5" rx="2" fill="#2a78d6"/>
+    <text class="val" x="147.1" y="108.4" text-anchor="middle">+4.8M</text>
+    <text class="cat" x="147.1" y="303.0" text-anchor="middle">Volume</text>
+    <rect x="198.5" y="105.8" width="40" height="8.6" rx="2" fill="#2a78d6"/>
+    <text class="val" x="218.5" y="99.8" text-anchor="middle">+1.1M</text>
+    <text class="cat" x="218.5" y="303.0" text-anchor="middle">Mix:</text>
+    <text class="cat" x="218.5" y="317.0" text-anchor="middle">Model</text>
+    <rect x="269.9" y="99.6" width="40" height="6.2" rx="2" fill="#2a78d6"/>
+    <text class="val" x="289.9" y="93.6" text-anchor="middle">+823.7K</text>
+    <text class="cat" x="289.9" y="303.0" text-anchor="middle">Mix:</text>
+    <text class="cat" x="289.9" y="317.0" text-anchor="middle">Finish</text>
+    <rect x="341.3" y="82.6" width="40" height="16.9" rx="2" fill="#2a78d6"/>
+    <text class="val" x="361.3" y="76.6" text-anchor="middle">+2.2M</text>
+    <text class="cat" x="361.3" y="303.0" text-anchor="middle">Mix:</text>
+    <text class="cat" x="361.3" y="317.0" text-anchor="middle">Color</text>
+    <rect x="412.7" y="82.6" width="40" height="1.5" rx="2" fill="#e34948"/>
+    <text class="val" x="432.7" y="76.6" text-anchor="middle">-93.7K</text>
+    <text class="cat" x="432.7" y="303.0" text-anchor="middle">Mix:</text>
+    <text class="cat" x="432.7" y="317.0" text-anchor="middle">Material</text>
+    <rect x="484.1" y="75.6" width="40" height="7.7" rx="2" fill="#2a78d6"/>
+    <text class="val" x="504.1" y="69.6" text-anchor="middle">+1M</text>
+    <text class="cat" x="504.1" y="303.0" text-anchor="middle">Price</text>
+    <rect x="555.5" y="49.1" width="40" height="26.5" rx="2" fill="#2a78d6"/>
+    <text class="val" x="575.5" y="43.1" text-anchor="middle">+3.5M</text>
+    <text class="cat" x="575.5" y="303.0" text-anchor="middle">New</text>
+    <text class="cat" x="575.5" y="317.0" text-anchor="middle">configs</text>
+    <rect x="626.9" y="49.1" width="40" height="7.3" rx="2" fill="#e34948"/>
+    <text class="val" x="646.9" y="43.1" text-anchor="middle">-961.6K</text>
+    <text class="cat" x="646.9" y="303.0" text-anchor="middle">Discont.</text>
+    <text class="cat" x="646.9" y="317.0" text-anchor="middle">configs</text>
+    <rect x="698.3" y="56.3" width="40" height="229.7" rx="2" fill="#6b7480"/>
+    <rect x="698.3" y="284.0" width="40" height="2" fill="#6b7480"/>
+    <text class="val" x="718.3" y="50.3" text-anchor="middle">70.4M</text>
+    <text class="cat" x="718.3" y="303.0" text-anchor="middle">2026</text>
+    </svg>
+
+    <svg class="wf wf-narrow" viewBox="0 0 340 290" role="img" aria-label="Waterfall chart of the sample bridge: sales 57.9M in 2025, volume +4.8M, mix model +1.1M, mix finish +823.7K, mix color +2.2M, mix material -93.7K, price +1M, new configurations +3.5M, discontinued configurations -961.6K, sales 70.4M in 2026.">
+    <line x1="28" x2="334" y1="228.0" y2="228.0" stroke="#c4cad3"/>
+    <text class="ax" x="20" y="231.5" text-anchor="end">40M</text>
+    <line x1="28" x2="334" y1="198.3" y2="198.3" stroke="#e6e9ed"/>
+    <text class="ax" x="20" y="201.8" text-anchor="end">45M</text>
+    <line x1="28" x2="334" y1="168.6" y2="168.6" stroke="#e6e9ed"/>
+    <text class="ax" x="20" y="172.1" text-anchor="end">50M</text>
+    <line x1="28" x2="334" y1="138.9" y2="138.9" stroke="#e6e9ed"/>
+    <text class="ax" x="20" y="142.4" text-anchor="end">55M</text>
+    <line x1="28" x2="334" y1="109.1" y2="109.1" stroke="#e6e9ed"/>
+    <text class="ax" x="20" y="112.6" text-anchor="end">60M</text>
+    <line x1="28" x2="334" y1="79.4" y2="79.4" stroke="#e6e9ed"/>
+    <text class="ax" x="20" y="82.9" text-anchor="end">65M</text>
+    <line x1="28" x2="334" y1="49.7" y2="49.7" stroke="#e6e9ed"/>
+    <text class="ax" x="20" y="53.2" text-anchor="end">70M</text>
+    <line x1="28" x2="334" y1="20.0" y2="20.0" stroke="#e6e9ed"/>
+    <text class="ax" x="20" y="23.5" text-anchor="end">75M</text>
+    <rect x="33.3" y="121.6" width="20" height="106.4" rx="2" fill="#6b7480"/>
+    <rect x="33.3" y="226.0" width="20" height="2" fill="#6b7480"/>
+    <text class="val" x="43.3" y="115.6" text-anchor="middle">57.9M</text>
+    <text class="cat" transform="translate(46.3,240.0) rotate(-50)" text-anchor="end">2025</text>
+    <rect x="63.9" y="92.8" width="20" height="28.8" rx="2" fill="#2a78d6"/>
+    <text class="val" x="73.9" y="86.8" text-anchor="middle">+4.8M</text>
+    <text class="cat" transform="translate(76.9,240.0) rotate(-50)" text-anchor="end">Volume</text>
+    <rect x="94.5" y="86.0" width="20" height="6.8" rx="2" fill="#2a78d6"/>
+    <text class="val" x="104.5" y="80.0" text-anchor="middle">+1.1M</text>
+    <text class="cat" transform="translate(107.5,240.0) rotate(-50)" text-anchor="end">Mix Model</text>
+    <rect x="125.1" y="81.1" width="20" height="4.9" rx="2" fill="#2a78d6"/>
+    <text class="val" x="135.1" y="75.1" text-anchor="middle">+823.7K</text>
+    <text class="cat" transform="translate(138.1,240.0) rotate(-50)" text-anchor="end">Mix Finish</text>
+    <rect x="155.7" y="67.8" width="20" height="13.3" rx="2" fill="#2a78d6"/>
+    <text class="val" x="165.7" y="61.8" text-anchor="middle">+2.2M</text>
+    <text class="cat" transform="translate(168.7,240.0) rotate(-50)" text-anchor="end">Mix Color</text>
+    <rect x="186.3" y="67.8" width="20" height="1.5" rx="2" fill="#e34948"/>
+    <text class="val" x="196.3" y="61.8" text-anchor="middle">-93.7K</text>
+    <text class="cat" transform="translate(199.3,240.0) rotate(-50)" text-anchor="end">Mix Material</text>
+    <rect x="216.9" y="62.2" width="20" height="6.1" rx="2" fill="#2a78d6"/>
+    <text class="val" x="226.9" y="56.2" text-anchor="middle">+1M</text>
+    <text class="cat" transform="translate(229.9,240.0) rotate(-50)" text-anchor="end">Price</text>
+    <rect x="247.5" y="41.3" width="20" height="20.9" rx="2" fill="#2a78d6"/>
+    <text class="val" x="257.5" y="35.3" text-anchor="middle">+3.5M</text>
+    <text class="cat" transform="translate(260.5,240.0) rotate(-50)" text-anchor="end">New configs</text>
+    <rect x="278.1" y="41.3" width="20" height="5.7" rx="2" fill="#e34948"/>
+    <text class="val" x="288.1" y="35.3" text-anchor="middle">-961.6K</text>
+    <text class="cat" transform="translate(291.1,240.0) rotate(-50)" text-anchor="end">Discont. configs</text>
+    <rect x="308.7" y="47.0" width="20" height="181.0" rx="2" fill="#6b7480"/>
+    <rect x="308.7" y="226.0" width="20" height="2" fill="#6b7480"/>
+    <text class="val" x="318.7" y="41.0" text-anchor="middle">70.4M</text>
+    <text class="cat" transform="translate(321.7,240.0) rotate(-50)" text-anchor="end">2026</text>
+    </svg>
+
+            </div>
+          </div>
+        </figure>
       </div>
     </section>
 

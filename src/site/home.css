@@ -2,7 +2,7 @@
 
 @font-face { font-family: Instrument Sans; src: url(/fonts/instrument-sans.woff2) format("woff2"); font-weight: 400 700; font-style: normal; font-display: swap; }
 
-:root { --sun: #f4bf3a; --plum: #42203d; --plum-2: #6a4b64; --plum-3: #7a5a74; --blush: #e7d3e2; --wrong: #b01f2e; --paper: #ffffff; }
+:root { --sun: #f4bf3a; --plum: #42203d; --plum-2: #6a4b64; --blush: #e7d3e2; --paper: #ffffff; }
 
 *,
 *::before,
@@ -25,8 +25,6 @@ h2,
 h3 { font-weight: 500; }
 
 h1 { font-size: clamp(2.5rem, 4.6vw, 3.75rem); line-height: 1.04; letter-spacing: -0.015em; }
-
-.nowrap { white-space: nowrap; }
 
 h2 { font-size: clamp(1.5rem, 2.4vw, 1.875rem); line-height: 1.15; letter-spacing: -0.01em; }
 
@@ -72,66 +70,152 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 /* Hero */
 
-.hero { background: var(--sun); }
+/* The mockup was drawn on a page with the browser's default body type. */
+.hero { --t-bg: #ffffff; --t-panel: #f5f6f8; --t-line: #dde1e6; --t-line-strong: #c4cad3; --t-text: #14181f; --t-text-2: #4a5360; --t-text-3: #6b7480; --t-up: #2a78d6; --t-down: #e34948; --t-total: #6b7480; --sans: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; --pad: clamp(1.25rem, 5vw, 5rem); --gutter: max(0px, (100vw - 76rem) / 2); font-size: 1rem; line-height: normal; -webkit-font-smoothing: antialiased; }
 
-.hero-grid { display: grid; grid-template-columns: 5fr 7fr; grid-template-areas: "title chart" "problem chart" "answer chart" "cta chart" "fine chart"; gap: 0 clamp(2rem, 4vw, 3.5rem); align-items: center; }
+.hero .button { display: inline-flex; align-items: center; gap: .6rem; padding: .6rem 1rem; background: var(--plum); color: #fff; border: 1px solid var(--plum); font: 600 .875rem/1 var(--sans); text-decoration: none; }
 
-.hero h1 { grid-area: title; margin-bottom: clamp(1.25rem, 2.4vw, 1.75rem); }
+.hero a.button:hover { border-color: var(--plum); background: var(--plum); }
 
-.hero .problem { grid-area: problem; margin-bottom: 1rem; }
+.hero { position: relative; overflow: hidden; padding-block: 4.5rem 4rem; }
 
-.hero .answer { grid-area: answer; margin-bottom: clamp(1.5rem, 2.8vw, 2rem); }
+.hero::before { /* In the side-by-side layout, the sun slab bleeds off the right edge and starts inside the picture, beyond the copy column and gap. */
+  content: ""; position: absolute; top: 2.5rem; bottom: 0; left: calc(var(--gutter) + var(--pad) + 32rem); right: 0; background: var(--sun); border-top-left-radius: 28px;
+}
 
-.hero .cta { grid-area: cta; display: flex; flex-wrap: wrap; gap: 0.75rem; }
+.hero .hero-grid { position: relative; display: grid; grid-template-columns: minmax(0, 23rem) minmax(0, 1fr); gap: 4rem; align-items: center; }
 
-.hero .fine { grid-area: fine; margin-top: 0.875rem; font-size: 1rem; }
+.hero .copy h1 { font-size: 4.25rem; font-weight: 500; line-height: 1; letter-spacing: -.025em; }
 
-/* Chart */
+.hero .copy .lead { margin-top: 1.5rem; font-size: 1.3125rem; line-height: 1.45; color: var(--plum-2); max-width: 21rem; }
 
-.chart { grid-area: chart; padding: clamp(1rem, 2.2vw, 1.5rem); border-radius: 0.5rem; background: var(--paper); }
+.hero .copy .cta { margin-top: 2.25rem; padding: .95rem 1.35rem; font-size: .9375rem; }
 
-.chart-lede { margin-bottom: 0.5rem; font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; font-size: 0.75rem; font-weight: 500; color: var(--plum); }
+.hero .copy .cta span { transition: transform .15s; }
 
-.chart svg { display: block; width: 100%; height: auto; }
+.hero .copy .cta:hover span { transform: translateX(3px); }
 
-.chart figcaption { margin-top: 0.5rem; font-size: 0.9375rem; line-height: 1.45; }
+.hero .copy .fine { margin-top: 1rem; font: 400 .8125rem/1.5 var(--sans); color: var(--plum-2); }
 
-.chart text { font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; }
+/* In the side-by-side layout, the picture runs into the shell's right padding to leave room for all five KPI tiles. */
+.hero figure { margin-right: calc(-1 * var(--pad) - min(0px, var(--gutter) - 2rem)); }
 
-.chart .axis-head { font-size: 12px; font-weight: 500; fill: var(--plum); }
+.hero .frame { background: var(--t-bg); border-radius: 12px; overflow: hidden; font-family: var(--sans); color: var(--t-text);
+  box-shadow: 0 0 0 1px rgba(66, 32, 61, .10), 0 2px 4px rgba(66, 32, 61, .06), 0 24px 60px -12px rgba(66, 32, 61, .35); }
 
-.chart .row-name { font-size: 13px; font-weight: 500; fill: var(--plum); }
+.hero .chrome { display: flex; align-items: center; gap: .9rem; height: 44px; padding: 0 1rem; border-bottom: 1px solid var(--t-line); }
 
-.chart .none { font-size: 12px; fill: var(--plum-2); }
+.hero .dots { display: flex; gap: 6px; }
 
-.chart .value { font-size: 15px; font-weight: 600; fill: var(--plum); }
+.hero .dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--t-line); }
 
-.chart .value.wrong { fill: var(--wrong); }
+.hero .app-name { white-space: nowrap; flex: none; display: inline-flex; align-items: center; gap: .45rem; font-weight: 600; font-size: .8125rem; }
 
-.track { stroke: var(--blush); stroke-width: 1; }
+.hero .app-name svg { width: 18px; height: 18px; }
 
-/* --plum-3 is 5.9:1 on white; the bar is data, so it clears the 3:1 graphic minimum without the mute of a low opacity. */
-.bar { fill: var(--plum-3); transform-box: fill-box; transform-origin: 0 50%; transform: scaleX(0); animation: bar-in 600ms ease-out both; }
+.hero .dataset { font-size: .75rem; color: var(--t-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.bar.total { fill: var(--plum); }
+.hero .body { padding: 1.1rem 1.25rem 1rem; }
 
-.bar.wrong { fill: var(--wrong); }
+.hero .kpis { display: grid; grid-template-columns: repeat(5, auto); border: 1px solid var(--t-line); border-radius: 4px; }
 
-.row:nth-of-type(1) .bar { animation-delay: 0ms; }
+.hero .kpi { padding: .7rem .8rem .75rem; border-left: 1px solid var(--t-line); min-width: 0; }
 
-.row:nth-of-type(2) .bar { animation-delay: 45ms; }
+.hero .kpi:first-child { border-left: 0; }
 
-.row:nth-of-type(3) .bar { animation-delay: 90ms; }
+.hero .kpi b { display: block; font-size: .625rem; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--t-text-3); white-space: nowrap; }
 
-.row:nth-of-type(4) .bar { animation-delay: 135ms; }
+.hero .kpi strong { display: block; margin-top: .4rem; font-size: 1.0625rem; font-weight: 600; letter-spacing: -.01em; }
 
-.row:nth-of-type(5) .bar { animation-delay: 180ms; }
+.hero .kpi small { display: block; margin-top: .15rem; font-size: .6875rem; color: var(--t-text-2); white-space: nowrap; }
 
-.row:nth-of-type(6) .bar { animation-delay: 225ms; }
+.hero .tabs { display: flex; gap: 1.15rem; margin-top: .9rem; border-bottom: 1px solid var(--t-line); font-size: .75rem; color: var(--t-text-2); }
 
-@keyframes bar-in {
-  from { transform: scaleX(0); }
-  to { transform: scaleX(1); }
+.hero .tabs span { padding: .55rem 0 .5rem; }
+
+.hero .tabs .on { color: var(--t-text); font-weight: 600; box-shadow: inset 0 -2px 0 #1f4b99; }
+
+.hero .legend { display: flex; gap: 1rem; margin: .85rem 0 .3rem; font-size: .6875rem; color: var(--t-text-2); }
+
+.hero .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: .35rem; vertical-align: -.02em; }
+
+.hero .wf { display: block; width: 100%; height: auto; font-family: var(--sans); }
+
+.hero .wf .ax { font-size: 10.5px; fill: var(--t-text-3); }
+
+.hero .wf .val { font-size: 11px; font-weight: 500; fill: var(--t-text); }
+
+.hero .wf .cat { font-size: 10.5px; fill: var(--t-text-2); }
+
+.hero .wf-narrow { display: none; }
+
+@media (max-width: 1239px) {
+  .hero { padding-block: 3.5rem 0; }
+
+  .hero::before { display: none; }
+
+  .hero .hero-grid { grid-template-columns: minmax(0, 1fr); gap: 3rem; }
+
+  .hero figure { margin-inline: calc(-1 * (var(--pad) + var(--gutter))); padding: 2.5rem calc(var(--pad) + var(--gutter)); background: var(--sun); }
+
+  .hero .frame { max-width: 48rem; }
+}
+
+@media (max-width: 800px) {
+  .hero .kpis { grid-template-columns: 1fr 1fr; }
+
+  .hero .kpi { border-left: 0; border-top: 1px solid var(--t-line); padding: .55rem .65rem .6rem; }
+
+  .hero .kpi:nth-child(even) { border-left: 1px solid var(--t-line); }
+
+  .hero .kpi:nth-child(-n+2) { border-top: 0; }
+
+  .hero .kpi:last-child { grid-column: span 2; }
+}
+
+@media (max-width: 760px) {
+  .hero { padding-block: 2.5rem 0; }
+
+  .hero figure { padding: 1.75rem .75rem 1.5rem; }
+
+  .hero .hero-grid { gap: 2.25rem; }
+
+  .hero .copy h1 { font-size: 3rem; }
+
+  .hero .copy .lead { font-size: 1.1875rem; margin-top: 1.1rem; }
+
+  .hero .copy .cta { margin-top: 1.6rem; }
+
+  .hero .frame { border-radius: 10px; }
+
+  .hero .chrome { height: 38px; padding: 0 .8rem; }
+
+  .hero .dots { display: none; }
+
+  .hero .dataset { font-size: .6875rem; }
+
+  .hero .body { padding: .8rem .6rem .75rem; }
+
+  .hero .kpi strong { font-size: .9375rem; margin-top: .25rem; }
+
+  .hero .tabs { gap: .9rem; font-size: .6875rem; overflow: hidden; -webkit-mask-image: linear-gradient(90deg, #000 80%, transparent); mask-image: linear-gradient(90deg, #000 80%, transparent); }
+
+  .hero .tabs span { white-space: nowrap; }
+
+  .hero .legend { font-size: .625rem; margin-top: .7rem; }
+
+  .hero .wf-wide { display: none; }
+
+  .hero .wf-narrow { display: block; }
+
+  .hero .wf .ax, .hero .wf .cat { font-size: 9px; }
+
+  .hero .wf .val { font-size: 8px; letter-spacing: -.01em; }
+}
+
+@media (max-width: 389px) {
+  /* the narrow chart draws below its 390 px size here, so its values grow to stay at 8 px or more */
+  .hero .wf .val { font-size: 8.75px; }
 }
 
 /* What you get */
@@ -208,7 +292,7 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
 
 :focus-visible { outline: 3px solid currentColor; outline-offset: 3px; }
 
-/* The solid button's own text is white, which is too close to the marigold band to read as a ring. */
+/* The solid button's own text is white, which would draw a white ring on the white page. */
 .button:focus-visible { outline-color: var(--plum); }
 
 .keeps :focus-visible { outline-color: var(--sun); }
@@ -216,13 +300,6 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
 /* Narrow screens */
 
 @media (max-width: 56rem) {
-  .hero-grid { grid-template-columns: 1fr; grid-template-areas: none; row-gap: 0; }
-
-  /* Beats the hero's own grid-area rules, which are more specific than a child selector. */
-  .hero .hero-grid > * { grid-area: auto; }
-
-  .chart { margin-block: 1.75rem 2rem; }
-
   .get-grid { grid-template-columns: 1fr; gap: 1.25rem; }
 
   .plans { grid-template-columns: 1fr; }
@@ -244,19 +321,4 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
   .get dl { grid-template-columns: 1fr; gap: 0.15rem; }
 
   .get dd { margin-bottom: 1rem; }
-
-  .chart { padding: 0.75rem; }
-
-  /* SVG text scales with the viewBox, so these larger user units keep about 12 px on a 390 px screen. */
-  .chart .axis-head { font-size: 20px; }
-
-  .chart .row-name { font-size: 24px; }
-
-  .chart .none { font-size: 22px; }
-
-  .chart .value { font-size: 24px; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .bar { animation: none; transform: none; }
 }
