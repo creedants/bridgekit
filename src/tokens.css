@@ -1,27 +1,29 @@
-/* Shared by the site and the tool. Light only, neutral grays, one accent. */
+/* The tool's palette. The five brand values repeat home.css :root; test/app-theme.test.ts keeps them equal. */
+@font-face { font-family: "Instrument Sans"; src: url(/fonts/instrument-sans.woff2) format("woff2"); font-weight: 400 700; font-style: normal; font-display: swap; }
 :root {
   color-scheme: light;
-  --bg: #ffffff;
-  --panel: #f5f6f8;
-  --line: #dde1e6;
-  --line-strong: #c4cad3;
-  --text: #14181f;
-  --text-2: #4a5360;
-  --text-3: #6b7480;
-  --accent: #1f4b99;
-  --accent-hover: #183b7a;
-  --accent-soft: #eaf0fa;
+  --sun: #f4bf3a;
+  --plum: #42203d;
+  --plum-2: #6a4b64;
+  --blush: #e7d3e2;
+  --paper: #ffffff;
+  --bg: var(--paper);
+  --panel: #faf6f9;
+  --line: var(--blush);
+  --line-strong: #9c8196;
+  --text: var(--plum);
+  --text-2: var(--plum-2);
+  --text-3: #7a5f73;
+  --accent: var(--plum);
+  --accent-hover: #33182f;
+  --accent-soft: #f6edf4;
   --up: #2a78d6;
   --down: #e34948;
   --total: #6b7480;
-  --grid: #e6e9ed;
+  --grid: #f0e6ee;
   --warn-bg: #fff6e0;
-  --warn-line: #e6c366;
-  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --warn-line: var(--sun);
+  --font: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --radius: 4px;
+  --radius: 0;
 }
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); }
-.wordmark { display: inline-flex; align-items: center; gap: 8px; }
-.mark { width: 20px; height: 20px; flex: none; }

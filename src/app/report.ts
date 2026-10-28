@@ -6,6 +6,9 @@ import { percent, shareOfPrior, signedPercent, signedWhole, whole } from "./form
 const markup = (value: unknown) =>
   String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 
+/** The report is a standalone file, so it carries the tool's colours, keyed by tokens.css role name. */
+export const INK = { text: "#42203d", "text-2": "#6a4b64", "text-3": "#7a5f73", grid: "#f0e6ee", "line-strong": "#9c8196" } as const;
+
 /** Shared measure-specific labels for Movers and the report. */
 const SALES = {
   bridgeTitle: "Sales bridge",
@@ -255,11 +258,11 @@ export function buildReport(input: {
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${markup(t.bridgeTitle)}: ${markup(config.prior)} to ${markup(config.current)}</title>
 <style>
-body{font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;color:#14181f;max-width:900px;margin:32px auto;padding:0 20px}
+body{font:14px/1.5 "Instrument Sans",system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;color:${INK.text};max-width:900px;margin:32px auto;padding:0 20px}
 h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;margin:28px 0 8px}
-p{margin:0 0 10px}.muted{color:#6b7480;font-size:12px}
-table{border-collapse:collapse;width:100%;margin:0 0 8px}td,th{padding:5px 8px;border-bottom:1px solid #e6e9ed;text-align:left}
-th{font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:#4a5360;border-bottom-color:#c4cad3}
+p{margin:0 0 10px}.muted{color:${INK["text-3"]};font-size:12px}
+table{border-collapse:collapse;width:100%;margin:0 0 8px}td,th{padding:5px 8px;border-bottom:1px solid ${INK.grid};text-align:left}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:${INK["text-2"]};border-bottom-color:${INK["line-strong"]}}
 .n{text-align:right;font-variant-numeric:tabular-nums}tr:first-child td,tr:last-child td{font-weight:600}
 .plain tr td{font-weight:400}img{max-width:100%}
 </style></head><body>

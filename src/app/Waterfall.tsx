@@ -174,6 +174,7 @@ export function BridgeChart(props: {
         axisPointer: { type: touch ? "none" : "shadow" },
         backgroundColor: token("--bg"),
         borderColor: token("--line-strong"),
+        borderRadius: 0,
         textStyle: { color: ink, fontSize: 12 },
         formatter: (params: { dataIndex: number }[]) => {
           const bar = bars[params[0].dataIndex];
