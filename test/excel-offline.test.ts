@@ -152,21 +152,39 @@ test("An .xlsx load says the Excel tools sentence when the chunk fails, then rea
   assert.equal(stamps.length, 1, "one fresh copy serves every later action");
 });
 
+const SOURCE_FILE = /\.(?:ts|tsx|mts|cts|js|jsx)$/;
+/** A whole statement the build erases before any code runs. */
+const TYPE_ONLY_LINE = /^\s*(?:import|export)\s+type\b[^;]*;?\s*$/;
+/** The one erased form that names the package without running an import. */
+const TYPE_QUERY_LINE = /^\s*(?:export\s+)?type\s+[\w$]+\s*=\s*typeof\s+import\(\s*(["'])exceljs\1\s*\)\s*;?\s*$/;
+/** The package name, and the tail of an escaped spelling such as "\x65xceljs". */
+const NAMES_PACKAGE = /xceljs/;
+
 test("Only the shared loader in exportExcel.ts imports exceljs, so every other file takes it from excelTools", () => {
   const srcDir = fileURLToPath(new URL("../src/", import.meta.url));
   const files = readdirSync(srcDir, { recursive: true })
     .map(String)
-    .filter((name) => name.endsWith(".ts") || name.endsWith(".tsx"));
+    .filter((name) => SOURCE_FILE.test(name));
   assert.ok(files.length > 0, "the walk found source files");
   const mentions: { file: string; line: string }[] = [];
   for (const file of files) {
-    for (const line of readFileSync(join(srcDir, file), "utf8").split("\n")) {
+    let typeImportOpen = false;
+    for (const raw of readFileSync(join(srcDir, file), "utf8").split("\n")) {
+      // A comment never runs. A block comment that closes on this line is
+      // removed rather than taking the code after it with it.
+      const line = raw.replace(/\/\*[\s\S]*?\*\//g, " ");
       const trimmed = line.trim();
-      // A comment never runs and a type-only statement is erased before a build.
-      if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) continue;
-      if (/^(?:import|export)\s+type\b/.test(trimmed)) continue;
-      const code = line.replace(/typeof\s+import\(\s*(["'])exceljs\1\s*\)/g, "");
-      if (/(?<![\w$])exceljs(?![\w$])/.test(code)) mentions.push({ file, line });
+      if (trimmed === "" || trimmed.startsWith("//") || trimmed.startsWith("*")) continue;
+      if (typeImportOpen) {
+        if (/}\s*;?\s*$/.test(trimmed)) typeImportOpen = false;
+        continue;
+      }
+      if (/^\s*import\s+type\s*\{[^}]*$/.test(trimmed)) {
+        typeImportOpen = true;
+        continue;
+      }
+      if (TYPE_ONLY_LINE.test(trimmed) || TYPE_QUERY_LINE.test(trimmed)) continue;
+      if (NAMES_PACKAGE.test(line)) mentions.push({ file, line: trimmed });
     }
   }
   assert.equal(mentions.length, 1, "exceljs is named on exactly one line of source that runs");
