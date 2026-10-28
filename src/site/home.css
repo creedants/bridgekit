@@ -156,7 +156,7 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
   .hero .hero-grid { grid-template-columns: minmax(0, 1fr); gap: 3rem; }
 
-  .hero figure { margin-inline: calc(-1 * var(--pad)); padding: 2.5rem var(--pad); background: var(--sun); }
+  .hero figure { margin-inline: calc(-1 * (var(--pad) + var(--gutter))); padding: 2.5rem calc(var(--pad) + var(--gutter)); background: var(--sun); }
 
   .hero .frame { max-width: 48rem; }
 }
