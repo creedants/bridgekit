@@ -317,3 +317,30 @@ test("ties keep file order", () => {
 test("an empty profile returns an empty list", () => {
   assert.deepEqual(suggestAttributes([], new Map(), new Set()), []);
 });
+
+test("R8: German customer names are left out and the other attributes are suggested", () => {
+  const columns: Column[] = [
+    { name: "Datum", type: "DATE" },
+    { name: "Produkt", type: "VARCHAR" },
+    { name: "Größe", type: "VARCHAR" },
+    { name: "Farbe", type: "VARCHAR" },
+    { name: "Kunde", type: "VARCHAR" },
+    { name: "Kundennummer", type: "VARCHAR" },
+    { name: "Kundennr", type: "VARCHAR" },
+    { name: "Menge", type: "INTEGER" },
+    { name: "Umsatz", type: "DOUBLE" },
+  ];
+  const distinct = new Map([
+    ["Produkt", 3],
+    ["Größe", 2],
+    ["Farbe", 2],
+    ["Kunde", 5],
+    ["Kundennummer", 5],
+    ["Kundennr", 5],
+  ]);
+  assert.deepEqual(suggestAttributes(columns, distinct, new Set(["Datum", "Menge", "Umsatz"])), [
+    "Größe",
+    "Farbe",
+    "Produkt",
+  ]);
+});
