@@ -3,7 +3,7 @@ import { GridComponent, TooltipComponent } from "echarts/components";
 import * as echarts from "echarts/core";
 import { LegacyGridContainLabel } from "echarts/features";
 import { CanvasRenderer } from "echarts/renderers";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type React from "react";
 import type { BridgeResult } from "../engine.ts";
 import { saveOnce } from "./files.ts";
@@ -137,6 +137,7 @@ export function BridgeChart(props: {
   onReady?: (chart: echarts.ECharts | null) => void;
 }) {
   const element = useRef<HTMLDivElement>(null);
+  const [redrawWidth, setRedrawWidth] = useState(0);
   const onSelect = useRef(props.onSelect);
   onSelect.current = props.onSelect;
   const onReady = useRef(props.onReady);
@@ -152,7 +153,9 @@ export function BridgeChart(props: {
     const stack = chartStack(bars);
     const valueText = (bar: Step) => (bar.kind === "total" ? compact(bar.value) : signedCompact(bar.value));
     const width = element.current.clientWidth;
-    const plan = labelPlan(bars.map((b) => b.label), bars.map(valueText), width, canvasMeasure(token("--font")));
+    const measure = canvasMeasure(token("--font"));
+    const planAt = (w: number) => labelPlan(bars.map((b) => b.label), bars.map(valueText), w, measure);
+    const plan = planAt(width);
     // A finger has no hover: a tap shows the value, and the tooltip's own button opens Movers.
     const box = element.current;
     let touch = matchMedia("(pointer: coarse)").matches;
@@ -276,7 +279,13 @@ export function BridgeChart(props: {
     box.addEventListener("touchend", onTouchEnd);
     document.addEventListener("touchstart", tapElsewhere, { passive: true });
 
-    const observer = new ResizeObserver(() => chart.resize());
+    // A new width can need a new label plan, which this effect draws again; otherwise the chart only resizes.
+    const drawn = JSON.stringify([plan, width < 560]);
+    const observer = new ResizeObserver(() => {
+      const now = box.clientWidth;
+      if (!slim && JSON.stringify([planAt(now), now < 560]) !== drawn) setRedrawWidth(now);
+      else chart.resize();
+    });
     observer.observe(element.current);
     return () => {
       box.removeEventListener("pointerdown", onPointer);
@@ -289,7 +298,7 @@ export function BridgeChart(props: {
       observer.disconnect();
       chart.dispose();
     };
-  }, [bars, priorSales, scale, slim]);
+  }, [bars, priorSales, scale, slim, redrawWidth]);
 
   return <div ref={element} className="chart" role="img" aria-label={props.ariaLabel} />;
 }
