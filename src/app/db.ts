@@ -183,13 +183,17 @@ export async function requireDataRows(query: Query, table: string): Promise<void
   }
 }
 
-/** True when the prefix's first line holds more fields than the reader takes. A header longer than the prefix can only be over the limit. */
+/**
+ * True when the line the reader takes as the header holds more fields than the
+ * reader takes. A line longer than the prefix is judged on the prefix alone: it
+ * still holds every field the file's own header does, so a count over the limit
+ * inside the prefix is over the limit for the line.
+ */
 function headerTooWide(prefix: string, delimiter: string): boolean {
   if (delimiter === "") return false;
   const end = prefix.search(/[\r\n]/);
-  if (end < 0) return prefix.length >= CSV_PREFIX_BYTES;
   let fields = 1;
-  for (const char of prefix.slice(0, end)) if (char === delimiter) fields += 1;
+  for (const char of end < 0 ? prefix : prefix.slice(0, end)) if (char === delimiter) fields += 1;
   return fields > MAX_COLUMNS_READ;
 }
 

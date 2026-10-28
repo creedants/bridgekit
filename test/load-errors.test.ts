@@ -117,3 +117,23 @@ test("R35: a seven-column file loads and an out-of-memory failure still gives th
   assert.equal(Number((await query(`SELECT count(*)::DOUBLE AS n FROM data`))[0].n), 2);
   assert.equal(loadFailure(new Error(OUT_OF_MEMORY)).message, TOO_BIG);
 });
+
+test("R35: a header longer than the read prefix with few fields is not refused as too wide", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const { TOO_MANY_COLUMNS_SENTENCE } = await import("../src/app/numbers.ts");
+  // 200 names of 400 characters are about 80 KB, past the 65,536-byte prefix,
+  // and still far under the 10,000-field limit.
+  const header = Array.from({ length: 200 }, (_, i) => `c${i}`.padEnd(400, "x")).join(",");
+  const row = Array.from({ length: 200 }, () => "1").join(",");
+  const text = `${header}\n${row}\n`;
+  const directory = await mkdtemp("/tmp/bridgekit-load-errors-");
+  const file = path.join(directory, "long-header.csv");
+  await writeFile(file, text);
+  const query = await openDatabase();
+  await stageCsvAndSwap(query, new File([text], "long-header.csv"), "data", file);
+  assert.equal((await query(`DESCRIBE data`)).length, 200);
+  assert.ok(!text.includes(TOO_MANY_COLUMNS_SENTENCE));
+});
