@@ -6,8 +6,10 @@ import { isValidSetup, type Column, type Setup } from "../src/app/setup.ts";
 import { parseSummary, type BridgeSummary } from "../src/summary.ts";
 import { testDatabase } from "./support/d1.ts";
 
-// The bounds and fixture sizes the tests use, kept as literals so a run at the
-// base commit exercises the behaviour it lacks.
+// The numbers the tests use, kept as literals so a run at the base commit
+// exercises the behaviour it lacks. The column numbers are the server's
+// limits. The filter numbers only size a fixture at the editor's 500-value
+// query limit and a 300-character value; no code enforces a filter bound.
 const MAX_COLUMNS = 1000;
 const MAX_COLUMN_NAME = 300;
 const MAX_FILTER_VALUES = 500;
