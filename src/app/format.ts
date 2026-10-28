@@ -17,23 +17,21 @@ export const shareOfPrior = (value: number, prior: number) => value / Math.abs(p
 export const signedShare = (value: number, prior: number) => signedPercent(shareOfPrior(value, prior));
 
 /**
- * Tries increasing compact precision, then ordinary notation with up to ten
- * fractional digits. If the totals still print alike, returns whole figures.
+ * The two totals as the bridge table prints them. Whole figures when they
+ * differ, and increasing decimal precision only when they do not, so two
+ * totals that both round whole still read differently.
  */
 export function distinctPair(prior: number, current: number): [string, string] {
-  for (let digits = 1; digits <= 3; digits += 1) {
-    const format = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: digits });
-    const pair: [string, string] = [format.format(prior), format.format(current)];
-    if (pair[0] !== pair[1]) return pair;
-  }
-  if (!Number.isFinite(prior) || !Number.isFinite(current)) return [whole(prior), whole(current)];
-  if (prior === current) return [whole(prior), whole(current)];
-  for (let digits = 0; digits <= 10; digits += 1) {
+  const pair: [string, string] = [whole(prior), whole(current)];
+  if (pair[0] !== pair[1]) return pair;
+  if (!Number.isFinite(prior) || !Number.isFinite(current)) return pair;
+  if (prior === current) return pair;
+  for (let digits = 1; digits <= 10; digits += 1) {
     const format = new Intl.NumberFormat("en-US", { maximumFractionDigits: digits });
-    const pair: [string, string] = [format.format(prior), format.format(current)];
-    if (pair[0] !== pair[1]) return pair;
+    const finer: [string, string] = [format.format(prior), format.format(current)];
+    if (finer[0] !== finer[1]) return finer;
   }
-  return [whole(prior), whole(current)];
+  return pair;
 }
 
 /** A count with its noun, singular only for exactly one. */

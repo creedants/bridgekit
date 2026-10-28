@@ -406,8 +406,8 @@ test("counts and pairs read correctly for 0, 1 and many", async () => {
   assert.equal(counted(2, "line"), "2 lines");
   assert.equal(counted(0, "row"), "0 rows");
   assert.equal(counted(1, "product value"), "1 product value");
-  assert.deepEqual(distinctPair(2400, 2440), ["2.4K", "2.44K"]);
-  assert.deepEqual(distinctPair(1_000_000, 1_100_000), ["1M", "1.1M"]);
+  assert.deepEqual(distinctPair(2400, 2440), ["2,400", "2,440"]);
+  assert.deepEqual(distinctPair(1_000_000, 1_100_000), ["1,000,000", "1,100,000"]);
   assert.deepEqual(distinctPair(2400.1, 2400.2), ["2,400.1", "2,400.2"]);
   assert.deepEqual(distinctPair(2400, 2400), ["2,400", "2,400"]);
   assert.equal(signedShare(-72, 1000), "-7.2%");
