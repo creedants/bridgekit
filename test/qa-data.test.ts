@@ -127,7 +127,7 @@ test("Q28: an empty table is refused and the loaded data stays loaded", async ()
 });
 
 test("Q30: mixed separators warn where the file notes show", async () => {
-  const { mentionsMixedSeparators, hasMixedSeparators } = await import("../src/app/db.ts");
+  const { mentionsMixedSeparators, hasMixedSeparators, stageCsvAndSwap } = await import("../src/app/db.ts");
   const { markMixedSeparators } = await import("../src/app/numbers.ts");
   assert.equal(mentionsMixedSeparators("a,b,c\n1;2;3\n4;5;6\n"), true);
   assert.equal(mentionsMixedSeparators("a;b;c\n1;2;3\n"), false);
@@ -148,6 +148,31 @@ test("Q30: mixed separators warn where the file notes show", async () => {
     await decimalCommaNote(query, "mixed"),
     "Rows in this file use different separators, so its columns may be split wrongly. Save it again with one separator.",
   );
+  const loaded = async (name: string, text: string): Promise<{ mixed: boolean; note: string | null }> => {
+    const source = path.join(directory, name);
+    await writeFile(source, text);
+    const table = `q30_${name.replace(/\W/g, "_")}`;
+    await stageCsvAndSwap(query, new File([text], name), table, source, mentionsMixedSeparators(text));
+    return { mixed: await hasMixedSeparators(query, table), note: await decimalCommaNote(query, table) };
+  };
+  const decimalComma = await loaded("decimal-comma.csv", "period;Product;units;sales\n2025;A-100;10;100,49\n2026;A-100;10;134,51\n");
+  assert.equal(decimalComma.mixed, false);
+  assert.equal(decimalComma.note, "1 column was read as numbers written with a decimal comma.");
+  assert.doesNotMatch(decimalComma.note ?? "", /Rows in this file use different separators/);
+  const literalSemicolon = await loaded("literal-semicolon.csv", "period,Product,units,sales\n2025,A-100;X,10,100\n2026,A-100;X,10,120\n");
+  assert.equal(literalSemicolon.mixed, false);
+  assert.equal(literalSemicolon.note, null);
+  assert.doesNotMatch(literalSemicolon.note ?? "", /Rows in this file use different separators/);
+  const mixedFiles: readonly (readonly [string, string])[] = [
+    ["semicolon-rows.csv", "period,units,sales\n2025,10,100\n2026;20;200\n2025\t30\t300\n"],
+    ["tab-row.csv", "period,units,sales\n2025,10,100\n2026\t20\t200\n"],
+    ["tab-header.csv", "period\tunits\tsales\n2025\t10\t100\n2026;20;200\n"],
+  ];
+  for (const [name, text] of mixedFiles) {
+    const result = await loaded(name, text);
+    assert.equal(result.mixed, true);
+    assert.match(result.note ?? "", /Rows in this file use different separators/);
+  }
 });
 
 test("Q31: huge amounts warn that the steps may not sum to the change", async () => {
