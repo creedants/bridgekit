@@ -2190,10 +2190,13 @@ async function recorded(steps) {
 }
 
 /**
- * avifenc settings for the guide pictures. Quality, speed and one thread are fixed, so the same avifenc writes the
- * same bytes from the same PNG. The rest restates avifenc's defaults for an sRGB PNG, so a new default cannot change the files.
+ * avifenc settings for the guide pictures. Speed and one thread are fixed, so the same avifenc writes the same bytes
+ * from the same PNG at the same quality. The rest restates avifenc's defaults for an sRGB PNG, so a new default cannot
+ * change the files.
  */
-const AVIFENC = ["--qcolor", "40", "--speed", "6", "--jobs", "1", "--yuv", "444", "--depth", "8", "--range", "full", "--cicp", "1/13/6", "--ignore-icc", "--ignore-exif", "--ignore-xmp"];
+const AVIFENC = ["--speed", "6", "--jobs", "1", "--yuv", "444", "--depth", "8", "--range", "full", "--cicp", "1/13/6", "--ignore-icc", "--ignore-exif", "--ignore-xmp"];
+/** Qualities tried in turn. Each picture keeps the first that fits its budget, so one busy picture does not blur the rest. */
+const AVIF_QUALITIES = [60, 55, 50, 45, 40, 35, 30];
 
 /** The avifenc version line. Fails before the gallery starts a server when avifenc cannot run. @returns {string} */
 function avifencVersion() {
@@ -2331,17 +2334,21 @@ async function stillShot(browser, name) {
   fail(`gallery: ${name} kept changing for 6 s (24 screenshots, no two in a row alike): something on the page still moves. No image was changed.`);
 }
 
-/** Writes `<dir>/<name>.avif` from the PNG next to it. Fails over `budget` bytes. */
+/** Writes `<dir>/<name>.avif` from the PNG next to it at the best quality under `budget` bytes. @returns {number} the quality */
 function encodeAvif(dir, name, budget) {
   const avif = join(dir, `${name}.avif`);
-  const run = spawnSync("avifenc", [...AVIFENC, join(dir, `${name}.png`), avif], { encoding: "utf8" });
-  if (run.status !== 0) fail(`gallery: avifenc could not encode ${name}.png (${run.error?.message ?? `exit ${run.status}`}). No image was changed.\n${`${run.stdout ?? ""}${run.stderr ?? ""}`.slice(-2000)}`);
-  const bytes = statSync(avif).size;
-  if (bytes > budget) fail(`gallery: ${name}.avif is ${bytes.toLocaleString("en-US")} bytes, over its ${budget.toLocaleString("en-US")} budget: lower the --qcolor in AVIFENC in scripts/smoke.mjs. No image was changed.`);
+  let bytes = 0;
+  for (const quality of AVIF_QUALITIES) {
+    const run = spawnSync("avifenc", ["--qcolor", String(quality), ...AVIFENC, join(dir, `${name}.png`), avif], { encoding: "utf8" });
+    if (run.status !== 0) fail(`gallery: avifenc could not encode ${name}.png (${run.error?.message ?? `exit ${run.status}`}). No image was changed.\n${`${run.stdout ?? ""}${run.stderr ?? ""}`.slice(-2000)}`);
+    bytes = statSync(avif).size;
+    if (bytes <= budget) return quality;
+  }
+  fail(`gallery: ${name}.avif is ${bytes.toLocaleString("en-US")} bytes at quality ${AVIF_QUALITIES.at(-1)}, over its ${budget.toLocaleString("en-US")} budget: the picture changed a lot, so check it and raise its avifBytes in PICTURES in scripts/smoke.mjs. No image was changed.`);
 }
 
 /** Copies every staged picture that differs into public/img and prints one row per picture. */
-function publish(staged) {
+function publish(staged, qualities) {
   const dir = join(root, "public", "img");
   const put = (file) => {
     const bytes = readFileSync(join(staged, file));
@@ -2351,7 +2358,7 @@ function publish(staged) {
     return `${bytes.length.toLocaleString("en-US").padStart(7)} ${same ? "unchanged" : "changed  "}`;
   };
   for (const { name, size, avifBytes } of PICTURES) {
-    const avif = avifBytes ? `   avif ${put(`${name}.avif`)}   (budget ${avifBytes.toLocaleString("en-US")})` : "";
+    const avif = avifBytes ? `   avif ${put(`${name}.avif`)}   (quality ${qualities.get(name)}, budget ${avifBytes.toLocaleString("en-US")})` : "";
     console.log(`gallery: ${name.padEnd(9)}  ${size.join("x")}  png ${put(`${name}.png`)}${avif}`);
   }
 }
@@ -2362,6 +2369,7 @@ function publish(staged) {
  */
 async function captureGallery(origin) {
   const staged = mkdtempSync(join(tmpdir(), "bridgekit-gallery-"));
+  const qualities = new Map();
   try {
     const browser = await open(DEBUG_PORT, { chromium: CHROMIUM });
     try {
@@ -2379,12 +2387,12 @@ async function captureGallery(origin) {
         const error = await browser.evalJs("T.err()");
         if (error) fail(`gallery: ${picture.name} shows ${JSON.stringify(error)}. No image was changed.`);
         writeFileSync(join(staged, `${picture.name}.png`), await stillShot(browser, picture.name));
-        if (picture.avifBytes) encodeAvif(staged, picture.name, picture.avifBytes);
+        if (picture.avifBytes) qualities.set(picture.name, encodeAvif(staged, picture.name, picture.avifBytes));
       }
     } finally {
       await browser.close();
     }
-    publish(staged);
+    publish(staged, qualities);
   } finally {
     rmSync(staged, { recursive: true, force: true });
   }
