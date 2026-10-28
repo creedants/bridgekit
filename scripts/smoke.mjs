@@ -717,6 +717,41 @@ async function coldBlocked(browser, origin) {
   console.log("ok  blocked parquet: refused with one plain sentence while database assets are unavailable");
 }
 
+/**
+ * Browser-level download events for the page on `port`, so a click's suggested
+ * file name and how many files it started are read from Chromium itself.
+ */
+async function openDownloadEvents(port, downloadPath) {
+  const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
+  const socket = new WebSocket(version.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    socket.onopen = resolve;
+    socket.onerror = () => reject(new Error(`download events could not reach the browser on port ${port}`));
+  });
+  let id = 0;
+  const pending = new Map();
+  const names = [];
+  socket.onmessage = (message) => {
+    const data = JSON.parse(message.data);
+    if (data.id) {
+      const waiter = pending.get(data.id);
+      if (!waiter) return;
+      pending.delete(data.id);
+      if (data.error) waiter.reject(new Error(`${waiter.method} failed: ${data.error.message}`));
+      else waiter.resolve(data.result);
+      return;
+    }
+    if (data.method === "Browser.downloadWillBegin") names.push(data.params.suggestedFilename);
+  };
+  const send = (method, params = {}) => new Promise((resolve, reject) => {
+    const current = ++id;
+    pending.set(current, { resolve, reject, method });
+    socket.send(JSON.stringify({ id: current, method, params }));
+  });
+  await send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath, eventsEnabled: true });
+  return { names, close: () => socket.close() };
+}
+
 async function drive(browser, origin, rows) {
   console.log(`browser: ${(await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/version`)).json()).Browser}`);
   await browser.size(1360, 1000);
@@ -1204,6 +1239,47 @@ async function drive(browser, origin, rows) {
       if (!salesReport.includes(want)) fail(`sales labels: the report is missing ${JSON.stringify(want)}`);
     }
     if (salesReport.includes("Margin bridge")) fail("sales labels: the report says Margin bridge");
+    // Each download button starts one file on a triple click, with the name the browser suggests.
+    {
+      const downloadDir = join(fixtureDir, "downloads");
+      mkdirSync(downloadDir, { recursive: true });
+      const events = await openDownloadEvents(DEBUG_PORT, downloadDir);
+      try {
+        for (const [text, name] of [
+          ["Download PNG", "bridge-2024-to-2025.png"],
+          ["Download report", "bridge-2024-to-2025.html"],
+          ["Save setup to file", "pvm-bridge-setup.json"],
+          ["Export Excel", "bridge-2024-to-2025.xlsx"],
+        ]) {
+          events.names.length = 0;
+          const box = JSON.parse(await browser.evalJs(`(() => {
+            const button = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === ${JSON.stringify(text)});
+            if (!button) return "null";
+            button.scrollIntoView({ block: "center" });
+            const rect = button.getBoundingClientRect();
+            return JSON.stringify({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+          })()`));
+          if (!box) fail(`downloads: there is no ${text} button`);
+          let at = 0;
+          for (const [index, offset] of [0, 465, 918].entries()) {
+            await browser.sleep(offset - at);
+            at = offset;
+            await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: box.x, y: box.y });
+            for (const [type, buttons] of [["mousePressed", 1], ["mouseReleased", 0]]) {
+              await browser.send("Input.dispatchMouseEvent", { type, x: box.x, y: box.y, button: "left", buttons, clickCount: index + 1 });
+            }
+          }
+          const deadline = Date.now() + 90_000;
+          while (!events.names.length && Date.now() < deadline) await browser.sleep(500);
+          await browser.sleep(2500);
+          if (events.names.length !== 1) fail(`downloads: a triple click on ${text} began ${events.names.length} downloads (${events.names.join(", ") || "none"}), expected one`);
+          if (events.names[0] !== name) fail(`downloads: a triple click on ${text} suggested ${JSON.stringify(events.names[0])}, expected ${JSON.stringify(name)}`);
+          console.log(`ok  downloads: a triple click on ${text} begins one download named ${name}`);
+        }
+      } finally {
+        events.close();
+      }
+    }
     await browser.evalJs(`T.tab("Movers")`);
     await browser.sleep(800);
     const salesHeads = await readHeads();
