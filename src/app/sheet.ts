@@ -15,7 +15,10 @@ function flattenCell(value: unknown): unknown {
 export function excelHeaderNames(values: readonly unknown[], width: number): string[] {
   const names: string[] = [];
   for (let index = 0; index < width; index++) {
-    names.push(String(flattenCell(values[index])));
+    const name = String(flattenCell(values[index]));
+    // Surrounding whitespace in a header cell is not part of the name. A cell
+    // that is only whitespace stays as written, as it did before.
+    names.push(name.trim() === "" ? name : name.trim());
   }
   return names;
 }

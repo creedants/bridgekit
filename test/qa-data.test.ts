@@ -515,3 +515,33 @@ test("R9: MM.YYYY months load as a date and bridge by year", async () => {
   assert.equal(result.priorSales, 220);
   assert.equal(result.currentSales, 280);
 });
+
+test("R18: an Excel header with a trailing carriage return names the same column as its CSV twin", async () => {
+  const { default: ExcelJS } = await import("exceljs");
+  const { firstSheetAsCsv } = await import("../src/app/sheet.ts");
+  const { guessSetup } = await import("../src/app/setup.ts");
+  const { readCsvTable } = await import("../src/app/db.ts");
+  const header = ["Product", "Region", "Size", "Colour", "Year", "Units", "Sales\r"];
+  const rows: (string | number)[][] = [
+    ["A-100", "North", "S", "red", "2025", 10, 120],
+    ["A-100", "North", "S", "red", "2026", 11, 132],
+  ];
+  const directory = await mkdtemp("/tmp/bridgekit-qa-");
+  const csvFile = path.join(directory, "twin.csv");
+  await writeFile(csvFile, `${header.map((name) => name.trim()).join(",")}\n${rows.map((row) => row.join(",")).join("\n")}\n`);
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("sales");
+  sheet.addRow(header);
+  for (const row of rows) sheet.addRow(row);
+  const flat = await firstSheetAsCsv(new File([await workbook.xlsx.writeBuffer()], "twin.xlsx"));
+  const xlsxFile = path.join(directory, "twin-flat.csv");
+  await writeFile(xlsxFile, flat.csv);
+  const query = await openDatabase();
+  await readCsvTable(query, "csvdata", csvFile);
+  await readCsvTable(query, "xlsxdata", xlsxFile);
+  const described = async (table: string) =>
+    (await query(`DESCRIBE "${table}"`)).map((row) => ({ name: String(row.column_name), type: String(row.column_type) }));
+  assert.deepEqual(await described("xlsxdata"), await described("csvdata"));
+  assert.equal((await described("xlsxdata")).at(-1)?.name, "Sales");
+  assert.equal(guessSetup(await described("xlsxdata")).salesColumn, "Sales");
+});
