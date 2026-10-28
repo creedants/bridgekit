@@ -17,9 +17,8 @@ export const shareOfPrior = (value: number, prior: number) => value / Math.abs(p
 export const signedShare = (value: number, prior: number) => signedPercent(shareOfPrior(value, prior));
 
 /**
- * The two totals as short figures that read differently. Raises the compact
- * fraction digits until they differ, then uses ordinary notation with as many
- * fractional digits as needed so different finite totals still read differently.
+ * Tries increasing compact precision, then ordinary notation with up to ten
+ * fractional digits. If the totals still print alike, returns whole figures.
  */
 export function distinctPair(prior: number, current: number): [string, string] {
   for (let digits = 1; digits <= 3; digits += 1) {
