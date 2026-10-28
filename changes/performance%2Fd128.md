@@ -1,0 +1,2 @@
+- The tool now looks like the rest of the site. It uses the home page's plum and blush colours, the Instrument Sans typeface, a taller header with the home page's logo and link style, and square buttons drawn as plum outlines, with Calculate bridge a solid plum button. The waterfall keeps its blue, red and grey bars, and the downloaded report uses the same plum text.
+- The home page's picture of the tool now shows it in the same colours, with the plum logo, tab underline and grid lines of the restyled tool.

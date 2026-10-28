@@ -70,8 +70,8 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 /* Hero */
 
-/* The mockup was drawn on a page with the browser's default body type. */
-.hero { --t-bg: #ffffff; --t-panel: #f5f6f8; --t-line: #dde1e6; --t-line-strong: #c4cad3; --t-text: #14181f; --t-text-2: #4a5360; --t-text-3: #6b7480; --t-up: #2a78d6; --t-down: #e34948; --t-total: #6b7480; --sans: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; --pad: clamp(1.25rem, 5vw, 5rem); --gutter: max(0px, (100vw - 76rem) / 2); font-size: 1rem; line-height: normal; -webkit-font-smoothing: antialiased; }
+/* The mockup was drawn on a page with the browser's default body type. Each --t-X mirrors the tool's --X in src/tokens.css (test/app-theme.test.ts). */
+.hero { --t-bg: var(--paper); --t-panel: #faf6f9; --t-line: var(--blush); --t-line-strong: #9c8196; --t-text: var(--plum); --t-text-2: var(--plum-2); --t-text-3: #7a5f73; --t-accent: var(--plum); --t-grid: #f0e6ee; --t-up: #2a78d6; --t-down: #e34948; --t-total: #6b7480; --sans: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; --pad: clamp(1.25rem, 5vw, 5rem); --gutter: max(0px, (100vw - 76rem) / 2); font-size: 1rem; line-height: normal; -webkit-font-smoothing: antialiased; }
 
 .hero .button { display: inline-flex; align-items: center; gap: .6rem; padding: .6rem 1rem; background: var(--plum); color: #fff; border: 1px solid var(--plum); font: 600 .875rem/1 var(--sans); text-decoration: none; }
 
@@ -122,11 +122,18 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .hero .app-name svg { width: 18px; height: 18px; }
 
+/* index.html's picture still carries the old palette; restate it from the tool's. */
+.hero .app-name rect[fill="#1f4b99"] { fill: var(--plum); }
+
+.hero .wf [stroke="#e6e9ed"] { stroke: var(--t-grid); }
+
+.hero .wf [stroke="#c4cad3"] { stroke: var(--t-line-strong); }
+
 .hero .dataset { font-size: .75rem; color: var(--t-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .hero .body { padding: 1.1rem 1.25rem 1rem; }
 
-.hero .kpis { display: grid; grid-template-columns: repeat(5, auto); border: 1px solid var(--t-line); border-radius: 4px; }
+.hero .kpis { display: grid; grid-template-columns: repeat(5, auto); border: 1px solid var(--t-line); border-radius: 0; }
 
 .hero .kpi { padding: .7rem .8rem .75rem; border-left: 1px solid var(--t-line); min-width: 0; }
 
@@ -142,7 +149,7 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .hero .tabs span { padding: .55rem 0 .5rem; }
 
-.hero .tabs .on { color: var(--t-text); font-weight: 600; box-shadow: inset 0 -2px 0 #1f4b99; }
+.hero .tabs .on { color: var(--t-text); font-weight: 600; box-shadow: inset 0 -2px 0 var(--t-accent); }
 
 .hero .legend { display: flex; gap: 1rem; margin: .85rem 0 .3rem; font-size: .6875rem; color: var(--t-text-2); }
 
