@@ -2,3 +2,4 @@
 - From 1240 px up, the copy sits beside the framed picture as in mockup 1, and the KPI tiles size to their own text so all five fit on one row. Below 1240 px, the copy sits above the picture, and the picture sits on a full-width yellow band as on phones. The KPI tiles go to two columns at 800 px and below.
 - The hero copy now lines up with the header wordmark and the sections below at every width. The header and the sections below do not change.
 - On phones narrower than 390 px, the chart's value labels are slightly larger, so they stay at 8 px or more.
+- On screens from 401 to 760 px wide, the yellow band behind the picture now reaches both screen edges. Before, it stopped up to 18 px short of each edge.
