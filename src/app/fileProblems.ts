@@ -49,6 +49,9 @@ export function periodsFor(view: PeriodView | null, loaded: LoadedPeriods | null
   return { values: loaded.values, [currentPeriods]: true };
 }
 
+export const MIXED_SEPARATORS_SENTENCE =
+  "Rows in this file use different separators, so its columns may be split wrongly. Save it again with one separator.";
+
 export interface FileProblemInput {
   /** Columns of the loaded table, in file order. */
   readonly columns: readonly Column[];
@@ -62,6 +65,8 @@ export interface FileProblemInput {
   readonly unitsColumn: string;
   /** The column picked for sales, empty when none is picked. */
   readonly salesColumn: string;
+  /** True when the loaded file mixes commas, semicolons and tabs outside quoted fields. */
+  readonly mixedSeparators?: boolean;
 }
 
 export type FileProblem =
@@ -170,6 +175,9 @@ export function sameSuggestedLevels(
  * rows never reaches this list: the load refuses it first.
  */
 export function fileProblem(input: FileProblemInput): FileProblem {
+  if (input.mixedSeparators) {
+    return { kind: "reason", message: MIXED_SEPARATORS_SENTENCE };
+  }
   const count = periodCount(input.periods);
   if (input.periodColumn !== "" && count === 1) {
     return {

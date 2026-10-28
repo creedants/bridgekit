@@ -28,14 +28,14 @@ export function commentary(result: BridgeResult, config: BridgeConfig): string[]
   // The change prints like the bridge table: whole dollars, and with enough
   // digits that two totals rounding to the same short figure still differ.
   const [priorText, currentText] = distinctPair(result.priorSales, result.currentSales);
-  const wholeChange = wholeDollars(result.currentSales) - wholeDollars(result.priorSales);
+  const wholeChange = wholeDollars(change);
   const measure = measureName(config).toLowerCase();
   const paragraphs: string[] = [];
 
   paragraphs.push(
     change === 0
       ? `${measureName(config)} was unchanged at ${money(result.currentSales)} between ${config.prior} and ${config.current}.`
-      : `${measureName(config)} ${change > 0 ? "rose" : "fell"}${hasBase ? " " + ofPrior(change) + "," : ""} from ${priorText} in ${config.prior} to ${currentText} in ${config.current} (${signed(wholeChange)}).`,
+      : `${measureName(config)} ${change > 0 ? "rose" : "fell"}${hasBase ? " " + percent(change / result.priorSales) + "," : ""} from ${priorText} in ${config.prior} to ${currentText} in ${config.current} (${signed(wholeChange)}).`,
   );
 
   const drivers = result.effects

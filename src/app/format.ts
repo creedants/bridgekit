@@ -18,12 +18,19 @@ export const signedShare = (value: number, prior: number) => signedPercent(share
 
 /**
  * The two totals as short figures that read differently. Raises the compact
- * fraction digits until they differ, and falls back to whole dollars when
- * they still print the same.
+ * fraction digits until they differ, then uses ordinary notation with as many
+ * fractional digits as needed so different finite totals still read differently.
  */
 export function distinctPair(prior: number, current: number): [string, string] {
   for (let digits = 1; digits <= 3; digits += 1) {
     const format = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: digits });
+    const pair: [string, string] = [format.format(prior), format.format(current)];
+    if (pair[0] !== pair[1]) return pair;
+  }
+  if (!Number.isFinite(prior) || !Number.isFinite(current)) return [whole(prior), whole(current)];
+  if (prior === current) return [whole(prior), whole(current)];
+  for (let digits = 0; digits <= 10; digits += 1) {
+    const format = new Intl.NumberFormat("en-US", { maximumFractionDigits: digits });
     const pair: [string, string] = [format.format(prior), format.format(current)];
     if (pair[0] !== pair[1]) return pair;
   }

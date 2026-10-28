@@ -10,6 +10,7 @@ import {
   convertFormattedNumbers,
   CSV_OPTIONS,
   markMixedSeparators,
+  MIXED_SEPARATORS,
   planDotColumns,
   typesForDotColumns,
 } from "./numbers.ts";
@@ -133,22 +134,38 @@ export async function readLoadedTable(
 }
 
 /**
- * True when the header uses one of comma and semicolon and a data line uses
- * the other. Quoting is not parsed: a separator inside quotes still counts,
- * so this only fires on the plain exports the tool writes and reads.
+ * True when more than one of comma, semicolon and tab appears outside quoted
+ * fields. A doubled quote inside a quoted field is an escaped quote, and a
+ * line break inside quotes does not end the field, so separators and breaks
+ * inside quotes never count.
  */
 export function mentionsMixedSeparators(prefix: string): boolean {
-  const lines = prefix.split(/\r\n|\r|\n/);
-  if (lines.length < 2) return false;
-  const header = lines[0];
-  const headerComma = header.includes(",");
-  const headerSemi = header.includes(";");
-  if (headerComma === headerSemi) return false;
-  return lines.slice(1, 51).some((line) => {
-    if (line.trim() === "") return false;
-    if (headerComma) return line.includes(";") && !line.includes(",");
-    return line.includes(",") && !line.includes(";");
-  });
+  const seen = new Set<string>();
+  let inQuotes = false;
+  for (let i = 0; i < prefix.length; i += 1) {
+    const ch = prefix[i];
+    if (ch === '"') {
+      if (inQuotes && prefix[i + 1] === '"') {
+        i += 1;
+        continue;
+      }
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (!inQuotes && (ch === "," || ch === ";" || ch === "\t")) {
+      seen.add(ch);
+      if (seen.size > 1) return true;
+    }
+  }
+  return false;
+}
+
+/** Whether the loaded table carries the mixed-separator marker from the load path. */
+export async function hasMixedSeparators(query: Query, table: string): Promise<boolean> {
+  const rows = await query(
+    `SELECT comment FROM duckdb_tables() WHERE table_name = '${table.replaceAll("'", "''")}' AND comment = '${MIXED_SEPARATORS}'`,
+  ).catch(() => []);
+  return rows.length > 0;
 }
 
 /** Refuses an empty or header-only table: the file problems list never sees one. */
@@ -158,6 +175,27 @@ export async function requireDataRows(query: Query, table: string): Promise<void
     await query(`DROP TABLE IF EXISTS ${quote(table)}`);
     throw new Error(NO_DATA_ROWS);
   }
+}
+
+/**
+ * Stages a CSV file's readable path and swaps it into place. The file's own
+ * byte length refuses an empty file, and the staged table's row count refuses
+ * a header-only file, so a refused file leaves the loaded table alone.
+ */
+export async function stageCsvAndSwap(
+  query: Query,
+  file: File,
+  table: string,
+  readablePath: string,
+  mixedSeparators: boolean,
+): Promise<void> {
+  if (file.size === 0) throw new Error(NO_DATA_ROWS);
+  const staging = `${table}__staging`;
+  await readLoadedTable(query, staging, readablePath, false);
+  await convertFormattedNumbers(query, staging);
+  if (mixedSeparators) await markMixedSeparators(query, staging);
+  await requireDataRows(query, staging);
+  await swapLoadedTable(query, staging, table);
 }
 
 /**
@@ -556,7 +594,6 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
             formulaBlanks = sheet.formulaBlanks;
             await db.registerFileText(registered, sheet.csv);
           } else {
-            if (file.size === 0) throw new Error(NO_DATA_ROWS);
             const prefix = new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer());
             if (looksBinary(prefix)) throw new Error(NOT_TEXT_FILE);
             mixedSeparators = mentionsMixedSeparators(new TextDecoder().decode(prefix));
@@ -573,20 +610,24 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
           // A refused file must leave the loaded data alone, so the new file
           // converts on a staging table and only swaps into place once it has
           // rows. The empty check, the swap and afterLoad all run after this.
-          const staging = `${table}__staging`;
-          await readLoadedTable(query, staging, registered, isExcel);
-          if (excelHoles.length > 0) {
-            const described = await query(`DESCRIBE ${quote(staging)}`);
-            const names = described.map((row) => String(row.column_name));
-            for (const rename of holeRenames(names, excelHoles)) {
-              if (rename.from === rename.to) continue;
-              await query(`ALTER TABLE ${quote(staging)} RENAME COLUMN ${quote(rename.from)} TO ${quote(rename.to)}`);
+          if (isExcel) {
+            const staging = `${table}__staging`;
+            await readLoadedTable(query, staging, registered, isExcel);
+            if (excelHoles.length > 0) {
+              const described = await query(`DESCRIBE ${quote(staging)}`);
+              const names = described.map((row) => String(row.column_name));
+              for (const rename of holeRenames(names, excelHoles)) {
+                if (rename.from === rename.to) continue;
+                await query(`ALTER TABLE ${quote(staging)} RENAME COLUMN ${quote(rename.from)} TO ${quote(rename.to)}`);
+              }
             }
+            await convertFormattedNumbers(query, staging);
+            if (mixedSeparators) await markMixedSeparators(query, staging);
+            await requireDataRows(query, staging);
+            await swapLoadedTable(query, staging, table);
+          } else {
+            await stageCsvAndSwap(query, file, table, registered, mixedSeparators);
           }
-          await convertFormattedNumbers(query, staging);
-          if (mixedSeparators) await markMixedSeparators(query, staging);
-          await requireDataRows(query, staging);
-          await swapLoadedTable(query, staging, table);
           return formulaBlanks;
         } catch (error) {
           throw loadFailure(error);
