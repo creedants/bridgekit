@@ -115,7 +115,7 @@ function plannedFeaturesOf(html: string, label: string): string[] {
     );
   }
   return [...list[1].matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi)].map((item) =>
-    collapseSpaces(item[1]),
+    collapseSpaces(item[1].replace(/<small\b[^>]*>[\s\S]*?<\/small>/gi, "")),
   );
 }
 
@@ -937,4 +937,89 @@ test("no site page says dearer or fell back to", () => {
       }
     }
   }
+});
+
+function textOf(html: string): string {
+  return collapseSpaces(html.replace(/<!--[\s\S]*?-->/g, "").replace(/<[^>]+>/g, ""));
+}
+
+test("the hero picture is a link to the same sample as the hero button", () => {
+  const html = readPage("index.html");
+  const links = [...html.matchAll(/(<a\b[^>]*>)([\s\S]*?)<\/a>/gi)].map((match) => ({
+    attributes: attributesOf(match[1]),
+    inner: match[2],
+  }));
+  const cta = links.find((link) => textOf(link.inner).startsWith("Try it with sample data"));
+  assert.ok(cta, "index.html has no link reading Try it with sample data: keep the hero button");
+  assert.equal(cta.attributes.get("href"), "/app/?sample", "the hero button no longer opens /app/?sample");
+  const frame = links.find((link) => classTokensOf(link.attributes).includes("frame"));
+  assert.ok(frame, 'index.html has no <a class="frame">: make the hero picture frame a link');
+  assert.equal(
+    frame.attributes.get("href"),
+    cta.attributes.get("href"),
+    `the hero picture links to ${frame.attributes.get("href")}: link it to ${cta.attributes.get("href")}, like the hero button`,
+  );
+  assert.equal(
+    frame.attributes.get("aria-label"),
+    "Try it with sample data",
+    'the hero picture link has no aria-label="Try it with sample data": name the link for screen readers',
+  );
+  assert.ok(
+    frame.inner.includes('class="wf wf-wide"'),
+    "the hero picture link does not hold the bridge drawing: wrap the whole frame",
+  );
+});
+
+const AI_WORKSPACE_BUILDS = [true, false].flatMap((ai) =>
+  [true, false].map((workspaces) => ({ ai, workspaces })),
+);
+
+test("the Pro card says it has no launch date and where AI commentary sends data", () => {
+  for (const flags of AI_WORKSPACE_BUILDS) {
+    const build = JSON.stringify(flags);
+    const index = applyFeatureBlocks(readPage("index.html"), flags);
+    const card = planCardsOf(index).find((candidate) => candidate.inner.includes("<h3>Pro</h3>"));
+    assert.ok(card, `index.html in the ${build} build has no Pro plan card`);
+    const text = textOf(card.inner);
+    const price = text.indexOf("$19 per user per month, expected");
+    const when = text.indexOf("No launch date yet.");
+    assert.ok(price !== -1, `the Pro card in the ${build} build lost its price`);
+    assert.ok(when > price, `the Pro card in the ${build} build does not say No launch date yet. after the price`);
+    assert.ok(
+      text.includes("Sends the bridge totals, never your file, to Anthropic's Claude. See the privacy page."),
+      `the Pro card in the ${build} build reads "${text}": add the AI commentary note under its item`,
+    );
+    const privacyLinks = [...card.inner.matchAll(/<a\b[^>]*\shref="\/privacy\.html#([^"]+)"/gi)];
+    assert.equal(privacyLinks.length, 1, `the Pro card in the ${build} build has ${privacyLinks.length} privacy page links: keep one`);
+    const privacy = applyFeatureBlocks(readPage("privacy.html"), flags);
+    assert.ok(
+      privacy.includes(`id="${privacyLinks[0][1]}"`),
+      `the Pro card in the ${build} build links to /privacy.html#${privacyLinks[0][1]}, which that build of privacy.html does not have`,
+    );
+  }
+});
+
+test("the guide shows the column table right after it says these columns:", () => {
+  const html = readPage("guide.html");
+  const colon = html.indexOf("these columns:</p>");
+  assert.ok(colon !== -1, "guide.html no longer ends a paragraph with these columns:");
+  const next = html.slice(colon + "these columns:</p>".length).trimStart();
+  assert.ok(next.startsWith('<div class="boxed">'), "guide.html puts something between these columns: and the column table");
+  const table = html.indexOf("</table>", colon);
+  const numbers = html.indexOf("<p>Numbers written like 12,50", colon);
+  assert.ok(numbers > table, "guide.html puts the numbers paragraph before the column table: move it after the table");
+});
+
+test("the guide says when to keep an attribute that describes the customer", () => {
+  const guide = visibleWordsOf(readPage("guide.html")).join(" ");
+  for (const sentence of [
+    "Unless it describes the customer, not the product: that one goes last or can be left out.",
+    "leaving it out raises the match rate",
+  ]) {
+    assert.ok(guide.includes(sentence), `guide.html does not say "${sentence}"`);
+  }
+  assert.ok(
+    !guide.includes("If it barely moves price and raises the match rate"),
+    "guide.html still says the attribute itself raises the match rate: say leaving it out raises it",
+  );
 });

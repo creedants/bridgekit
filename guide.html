@@ -37,7 +37,6 @@
 
         <h2>1. Check your file</h2>
         <p>Use one row per sales line, or per group of lines. A summarized export works as well as invoice detail, as long as it has these columns:</p>
-        <p>Numbers written like 12,50 or 1.234,56 are read with the comma as the decimal mark when every value in the column is written that way. Whole numbers written like 9.600 or 1.234.567 are read with the dot between thousands when the file is separated by semicolons or a value has more than one dot. The Data check tab says when either happened.</p>
         <div class="boxed">
           <table>
             <thead><tr><th>Column</th><th>Needed</th><th>Notes</th></tr></thead>
@@ -52,6 +51,7 @@
             </tbody>
           </table>
         </div>
+        <p>Numbers written like 12,50 or 1.234,56 are read with the comma as the decimal mark when every value in the column is written that way. Whole numbers written like 9.600 or 1.234.567 are read with the dot between thousands when the file is separated by semicolons or a value has more than one dot. The Data check tab says when either happened.</p>
         <p>CSV and Excel (.xlsx, first sheet) files are accepted. The file is read in your browser and is not uploaded. To see the layout, <a href="/sample-sales.csv" download>download a small sample file</a> of made-up sales.</p>
 
         <h2>2. Load and set up</h2>
@@ -93,8 +93,8 @@
         <figure class="shot" style="margin-top: 16px"><picture><source type="image/avif" srcset="/img/g-setup.avif" /><img src="/img/g-setup.png" alt="The setup check tab: the bridge recalculated with each attribute left out" width="1280" height="860" loading="lazy" decoding="async" style="width: 100%; display: block; height: auto" /></picture></figure>
         <p style="margin-top: 16px"><b>Setup check</b> reruns the bridge with each attribute left out.</p>
         <ul>
-          <li>If leaving an attribute out moves price a lot, that attribute carries real mix. Keep it.</li>
-          <li>If it barely moves price and raises the match rate, the attribute is adding noise. Consider dropping it.</li>
+          <li>If leaving an attribute out moves price a lot, that attribute carries real mix. Keep it. Unless it describes the customer, not the product: that one goes last or can be left out.</li>
+          <li>If it barely moves price and leaving it out raises the match rate, the attribute is adding noise. Consider dropping it.</li>
         </ul>
 
         <h2>8. Look across more than two periods</h2>
