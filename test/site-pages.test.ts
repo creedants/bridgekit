@@ -403,7 +403,7 @@ test("the home page carries one structured-data block with WebSite and Organizat
       url: `${ORIGIN}/`,
       logo: `${ORIGIN}/img/logo-512.png`,
       email: "support@pvmbridge.com",
-      sameAs: [GITHUB],
+      sameAs: GITHUB,
     },
     "index.html Organization node does not match the site's details: keep name, url, logo, email and sameAs only",
   );
