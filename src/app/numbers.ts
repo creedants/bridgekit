@@ -409,9 +409,16 @@ export async function wholeRowNote(query: Query, table: string): Promise<string 
       ];
       return `(${checks.join(" AND ")})`;
     });
+    // Only a value that holds one of the separators can be a whole row, and a
+    // whole row is at least as long as the table's width. The filter keeps the
+    // split and the number parse off every other row, so a large file's period
+    // column costs one cheap pass instead of three splits per row.
+    const carriesSeparator = WHOLE_ROW_SEPARATORS.map((separator) => `contains(p, ${sqlSeparator(separator)})`);
     const [row] = await query(
-      `WITH candidate AS (
+      `WITH base AS (
          SELECT CAST(${period} AS VARCHAR) AS p FROM ${quotedName(VIEW)} WHERE ${period} IS NOT NULL
+       ), candidate AS (
+         SELECT p FROM base WHERE (${carriesSeparator.join(" OR ")}) AND length(p) >= ${width - 1}
        ), judged AS (
          SELECT p, (${arms.join(" OR ")}) AS whole FROM candidate
        )
