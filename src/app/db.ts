@@ -14,7 +14,7 @@ import {
   TOO_MANY_COLUMNS_SENTENCE,
   typesForDotColumns,
 } from "./numbers.ts";
-import { rememberSourceRows, type CsvDialect } from "./profile.ts";
+import { swapWithSourceRows, type CsvDialect } from "./profile.ts";
 import { firstSheetAsCsv, holeRenames, NO_DATA_ROWS } from "./sheet.ts";
 
 const IDLE_CAP_MS = 2000;
@@ -236,10 +236,12 @@ export async function stageCsvAndSwap(
   await convertFormattedNumbers(query, staging);
   // No mixed-separator check: a record split by another separator can match a valid sparse record byte for byte.
   await requireDataRows(query, staging);
-  await swapLoadedTable(query, staging, table);
-  // Remembered after the swap, so a refused file keeps the last load's rows
-  // beside the last load's table. Nothing is read and nothing is counted here.
-  rememberSourceRows(query, table, { kind: "csv", file, dialect });
+  // The source is recorded with the swap, so a refused file keeps the last
+  // load's rows beside the last load's table. Nothing is read and nothing is
+  // counted here.
+  await swapWithSourceRows(query, table, { kind: "csv", file, dialect }, () =>
+    swapLoadedTable(query, staging, table),
+  );
 }
 
 /**
@@ -266,8 +268,9 @@ export async function stageExcelAndSwap(
   }
   await convertFormattedNumbers(query, staging);
   await requireDataRows(query, staging);
-  await swapLoadedTable(query, staging, table);
-  rememberSourceRows(query, table, { kind: "sheet", rows: dataRows });
+  await swapWithSourceRows(query, table, { kind: "sheet", rows: dataRows }, () =>
+    swapLoadedTable(query, staging, table),
+  );
 }
 
 /**

@@ -1,0 +1,2 @@
+- The Data check names an uploaded file's own spreadsheet row even when the app asks through its queued wrapper of the database query. The source is keyed on the database connection, not on the query function, so the wrapper cannot hide it. An uploaded file whose source is gone names no row, and a table built only through SQL keeps the counted row.
+- A blank record before the bad cell, in a CSV or an Excel sheet, names row 5 through a forwarding query wrapper. Sales must be a column of numbers, and "NET_SALES" holds text, such as "n/a" in row 5.

@@ -871,7 +871,7 @@ test("R7: a table replaced without a load names no row", async () => {
   );
 });
 
-test("R7: a clean numeric file reads no bytes and asks no source question", async () => {
+test("R7: a clean numeric file does no source-row read or query", async () => {
   const { stageCsvAndSwap } = await import("../src/app/db.ts");
   const query = await openDatabase();
   const statements: string[] = [];

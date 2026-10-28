@@ -88,19 +88,52 @@ export type SourceRows =
   | { readonly kind: "sheet"; readonly rows: readonly number[] }
   | { readonly kind: "csv"; readonly file: Blob; readonly dialect: CsvDialect | undefined };
 
-// One entry per database and table. The loader is the only writer, and it
-// writes after its swap succeeds, so a refused file leaves the last load's
-// entry beside the last load's table. A table built in SQL has no entry.
-const sourceRowsByDatabase = new WeakMap<Query, Map<string, SourceRows>>();
+/** A load's private stamp, written on the connection for its table. */
+const STAMP_PAGE = Math.random().toString(36).slice(2, 10);
+let stampsIssued = 0;
 
-/** Records where `table`'s rows came from. Reads nothing and costs no query. */
-export function rememberSourceRows(query: Query, table: string, rows: SourceRows): void {
-  let tables = sourceRowsByDatabase.get(query);
-  if (tables === undefined) {
-    tables = new Map();
-    sourceRowsByDatabase.set(query, tables);
+/**
+ * The last upload into each table name: its stamp and where its rows came from.
+ * The loader is the only writer, and it writes only after the staged table has
+ * been accepted, so a refused file keeps the last load's entry. The key is the
+ * connection's own stamp for the table, never the query callable: the app
+ * profiles through a forwarding wrapper of the loader's query, and a wrapper
+ * keeps no link back, so a callable key named a good cell. A table created only
+ * through SQL has no entry; replacing a loaded table through SQL keeps its
+ * existing entry.
+ */
+const uploadsByTable = new Map<string, { readonly stamp: string; readonly rows: SourceRows }>();
+
+/** The connection variable that names `table`'s current upload stamp. */
+function stampVariable(table: string): string {
+  return `bridgekit_upload_${table.replaceAll(/[^A-Za-z0-9_]/g, "_")}`;
+}
+
+/**
+ * Swaps a staged upload into place and records where its rows came from. Sets
+ * the table's slot and its connection stamp before the swap, and restores both
+ * when the swap refuses the file, so a refused file keeps the last load's source
+ * and its diagnostic. Reads no source row and no table row.
+ */
+export async function swapWithSourceRows(
+  query: Query,
+  table: string,
+  rows: SourceRows,
+  swap: () => Promise<void>,
+): Promise<void> {
+  const previous = uploadsByTable.get(table);
+  const stamp = `bridgekit-source-${STAMP_PAGE}-${(stampsIssued += 1)}`;
+  uploadsByTable.set(table, { stamp, rows });
+  try {
+    await query(`SET VARIABLE ${stampVariable(table)} = '${stamp}'`);
+    await swap();
+  } catch (error) {
+    if (previous === undefined) uploadsByTable.delete(table);
+    else uploadsByTable.set(table, previous);
+    const restore = previous === undefined ? "NULL" : `'${previous.stamp}'`;
+    await query(`SET VARIABLE ${stampVariable(table)} = ${restore}`).catch(() => {});
+    throw error;
   }
-  tables.set(table, rows);
 }
 
 /** A first unread cell before the file's own row is known. */
@@ -310,6 +343,28 @@ async function scanCsvRecords(
   return { dataRecords: loaded - headerOffset, found };
 }
 
+/** Where the loaded table's row numbers may come from. */
+type RowOrigin =
+  | { readonly kind: "counted" }
+  | { readonly kind: "unavailable" }
+  | { readonly kind: "file"; readonly rows: SourceRows };
+
+/**
+ * The table's origin, read only when a sentence is about to name a row. A
+ * missing stamp means this connection never loaded a file into the table, so
+ * the loaded ordinals are the only numbering there is. A stamp with no matching
+ * entry means an upload whose source is gone, which names no row.
+ */
+async function rowOrigin(query: Query, table: string): Promise<RowOrigin> {
+  const [row] = await query(`SELECT getvariable('${stampVariable(table)}') AS stamp`);
+  const stamp = row?.stamp;
+  if (stamp == null) return { kind: "counted" };
+  const entry = uploadsByTable.get(table);
+  return entry !== undefined && typeof stamp === "string" && entry.stamp === stamp
+    ? { kind: "file", rows: entry.rows }
+    : { kind: "unavailable" };
+}
+
 /**
  * The spreadsheet row of each candidate, or undefined where the file cannot
  * prove one. A sheet already knows its rows. A CSV is read once, and only a
@@ -317,10 +372,12 @@ async function scanCsvRecords(
  * text, proves a row.
  */
 async function locateRows(
-  source: SourceRows | undefined,
+  origin: RowOrigin,
   cells: readonly UnreadCandidate[],
 ): Promise<readonly (number | undefined)[]> {
-  if (source === undefined) return cells.map((cell) => cell.ordinal + 2);
+  if (origin.kind === "counted") return cells.map((cell) => cell.ordinal + 2);
+  if (origin.kind === "unavailable") return cells.map(() => undefined);
+  const source = origin.rows;
   if (source.kind === "sheet") {
     return cells.map((cell) =>
       source.rows.length === cell.records && cell.ordinal < source.rows.length ? source.rows[cell.ordinal] : undefined,
@@ -350,7 +407,6 @@ export async function profileFile(
   isCurrent: () => boolean,
   apply: (profile: FileProfile) => void,
 ): Promise<void> {
-  const source = sourceRowsByDatabase.get(query)?.get(TABLE);
   const distinct = await distinctCounts(query, columns);
   const measures = new Set(measureColumns(columns));
   const candidates: UnreadCandidate[] = [];
@@ -363,7 +419,9 @@ export async function profileFile(
   const located =
     candidates.length === 0
       ? []
-      : await locateRows(source, candidates).catch(() => candidates.map(() => undefined));
+      : await rowOrigin(query, TABLE)
+          .then((origin) => locateRows(origin, candidates))
+          .catch(() => candidates.map(() => undefined));
   const unread = new Map<string, UnreadCell>();
   candidates.forEach((cell, index) => {
     const row = located[index];
