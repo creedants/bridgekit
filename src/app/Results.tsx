@@ -27,7 +27,7 @@ import {
 } from "../engine.ts";
 import { commentary } from "../commentary.ts";
 import { summarize, type BridgeSummary } from "../summary.ts";
-import { download, makeGuard, parsePlannedIncrease, shorten, toExportCsv, toExportTsv } from "./files.ts";
+import { parsePlannedIncrease, saveOnce, shorten, toExportCsv, toExportTsv } from "./files.ts";
 import { finiteOrBlank } from "./exportExcel.ts";
 import { percent, price, shareOfPrior, signedPercent, signedWhole, whole } from "./format.ts";
 import { dateOrderNote } from "./db.ts";
@@ -54,6 +54,8 @@ export interface Run {
   sample: boolean;
   /** Data-row Excel formulas with no saved result, read as blank. Zero for a CSV, a paste, or a sample. */
   formulaBlanks: number;
+  /** The engine's sentence when the amounts are too large to add up exactly, read when the bridge was calculated. */
+  amounts: string | null;
   config: BridgeConfig;
   result: BridgeResult;
   check: DataCheck;
@@ -180,6 +182,10 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
                   <tr className="total"><td>{measureName(config)} {config.current}</td><td className="num">{whole(result.currentSales)}</td><td /></tr>
                 </tbody>
               </table>
+              {run.amounts && <p className="notice">{run.amounts}</p>}
+              {signNote(result.effects, config.newAndDiscontinued) && (
+                <p className="hint">{signNote(result.effects, config.newAndDiscontinued)}</p>
+              )}
               <h3>{t.matchedHeading}</h3>
               <table>
                 <thead>
@@ -225,7 +231,6 @@ function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<
   const [omitNames, setOmitNames] = useState(false);
   const [movers, setMovers] = useState<MoverRows | null>(null);
   const [building, setBuilding] = useState(false);
-  const [reportGuard] = useState(() => makeGuard());
   const paragraphs = commentary(props.result, props.run.config);
   const { config, setup } = props.run;
   const first = config.levels[0];
@@ -246,12 +251,12 @@ function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<
     setup.filters.some((filter) => filter.values.length > 0) ||
     (movers?.length ?? 0) > 0 ||
     config.levels.some((level) => level.name !== level.columns.join(" + "));
-  const downloadReport = async () => {
+  const buildHtml = async () => {
     const query = await props.query();
     const rows = movers ?? (await drill(query, config, { columns: first.columns, limit: 15 }));
     const accountColumn = props.run.textColumns.find((c) => /customer|account|client|parent|sold.?to|buyer/i.test(c));
     const canvas = document.querySelector<HTMLCanvasElement>(".waterfall canvas");
-    const html = buildReport({
+    return buildReport({
       config,
       result: props.result,
       chartUrl: canvas?.toDataURL("image/png"),
@@ -265,17 +270,20 @@ function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<
         : undefined,
       omitNames: hasNames && omitNames,
     });
-    download(`bridge-${config.prior}-to-${config.current}.html`, html, "text/html");
   };
   const saveReport = () =>
-    reportGuard.run(async () => {
-      setBuilding(true);
-      try {
-        await downloadReport();
-      } finally {
-        setBuilding(false);
-      }
-    });
+    saveOnce(
+      `bridge-${config.prior}-to-${config.current}.html`,
+      async () => {
+        setBuilding(true);
+        try {
+          return await buildHtml();
+        } finally {
+          setBuilding(false);
+        }
+      },
+      "text/html",
+    );
   return (
     <div className="summary">
       <div className="toolbar">
@@ -536,12 +544,37 @@ function Trend(props: { run: Run; query: () => Promise<Query> }) {
 }
 
 /**
+ * A step whose sign a reader would not expect: discontinued configurations that add sales, or new ones that take
+ * sales away. Both come from the difference against the nearest comparable group, so at full sales there is no note.
+ */
+export function signNote(
+  effects: readonly { key: string; value: number }[],
+  newAndDiscontinued: BridgeConfig["newAndDiscontinued"],
+): string | null {
+  if (newAndDiscontinued === "full") return null;
+  const sentences: string[] = [];
+  if (effects.some((e) => e.key === "discontinued" && e.value > 0)) {
+    sentences.push("Discontinued configurations is an increase here. The line is not the sales that were lost.");
+  }
+  if (effects.some((e) => e.key === "new_config" && e.value < 0)) {
+    sentences.push("New configurations is a decrease here. The line is not the new sales.");
+  }
+  if (sentences.length === 0) return null;
+  return `${sentences.join(" ")} It is the difference from the nearest comparable group, which can go either way.`;
+}
+
+/** Shown under a Movers search once the request asked for last has finished and found nothing. */
+export function emptyNote(rows: readonly unknown[], wanted: string, fetchedFor: string | null): string | null {
+  return rows.length === 0 && fetchedFor === wanted ? "No rows match." : null;
+}
+
+/**
  * The Setup check hint. `prices` holds the price effect of the full setup and
  * of each setup with one attribute left out.
  */
 export function setupCheckHint(prices: number[], rowCount: number): string {
   if (rowCount === 1) return "With one attribute there is nothing to leave out.";
-  return `Across these setups the price effect ranges from ${signedWhole(Math.min(...prices))} to ${signedWhole(Math.max(...prices))}. When leaving out an attribute moves price a lot, the bridge depends on that attribute. Keep it if it describes the product itself; a label that changed between periods can hide a real price change. One that barely moves price and lowers the match rate can be dropped.`;
+  return `Across these setups the price effect ranges from ${signedWhole(Math.min(...prices))} to ${signedWhole(Math.max(...prices))}. When leaving out an attribute moves price a lot, the bridge depends on that attribute. Keep it if it describes the product itself; a label that changed between periods can hide a real price change. An attribute that describes the customer, such as region or channel, can also move price a lot. It belongs last in the order, or it can be left out. One that barely moves price and lowers the match rate can be dropped.`;
 }
 
 function SetupCheck(props: { run: Run; query: () => Promise<Query> }) {
@@ -847,7 +880,7 @@ function TableActions(props: { name: string; header: string[]; rows: () => unkno
   return (
     <span className="actions">
       <CopyButton text={() => toExportTsv(props.header, rows())} />
-      <button onClick={() => download(props.name, toExportCsv(props.header, rows()), "text/csv")}>CSV</button>
+      <button onClick={() => saveOnce(props.name, () => toExportCsv(props.header, rows()), "text/csv")}>CSV</button>
     </span>
   );
 }
@@ -871,6 +904,9 @@ function CopyButton(props: { text: () => string }) {
   );
 }
 
+/** The export keeps its short column names; the table has room to spell these out. */
+const FULL_HEAD: Record<string, string> = { "New config.": "New configurations", Discontinued: "Discontinued configurations" };
+
 function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; onSortBy: (key: string) => void }) {
   const { config } = props.run;
   const t = terms(config);
@@ -884,7 +920,15 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
   const [search, setSearch] = useState("");
   // Rows are kept with the grouping they were fetched for, so the table never
   // renders one grouping's rows under another grouping's columns.
-  const [data, setData] = useState<{ groupBy: number; rows: Record<string, unknown>[] }>({ groupBy: 0, rows: [] });
+  // `request` names the grouping, filters and search the rows were found for, so "No rows match." waits for the
+  // request made last.
+  const request = JSON.stringify([groupBy, filters, search]);
+  const [data, setData] = useState<{ groupBy: number; request: string | null; rows: Record<string, unknown>[] }>({
+    groupBy: 0,
+    request: null,
+    rows: [],
+  });
+  const [saveError, setSaveError] = useState("");
   const rows = data.rows;
   const group = options[data.groupBy] ?? options[0];
   const canDrill = data.groupBy < levels.length - 1;
@@ -894,18 +938,26 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
     props
       .query()
       .then((query) => drill(query, config, { columns: options[groupBy].columns, filters, sortBy: props.sortBy, search, limit: 200 }))
-      .then((result) => !stale && setData({ groupBy, rows: result }));
+      .then((result) => !stale && setData({ groupBy, request, rows: result }));
     return () => {
       stale = true;
     };
   }, [props.run, groupBy, filters, props.sortBy, search]);
 
-  const downloadAll = async () => {
-    const all = await drill(await props.query(), config, {
-      columns: group.columns, filters, sortBy: props.sortBy, search, limit: 500_000,
-    });
-    download("movers.csv", toExportCsv(header, all.map(exportRow).map((row) => row.map(finiteOrBlank))), "text/csv");
+  const downloadAll = () => {
+    setSaveError("");
+    saveOnce(
+      "movers-all-rows.csv",
+      async () => {
+        const all = await drill(await props.query(), config, {
+          columns: group.columns, filters, sortBy: props.sortBy, search, limit: 500_000,
+        });
+        return toExportCsv(header, all.map(exportRow).map((row) => row.map(finiteOrBlank)));
+      },
+      "text/csv",
+    ).catch((e) => setSaveError(`Could not save every row: ${e instanceof Error ? e.message : String(e)}`));
   };
+  const empty = emptyNote(rows, request, data.request);
 
   const mixOf = (row: Record<string, unknown>) =>
     levels.reduce((sum, _, i) => sum + Number(row[`mix_${i + 1}`] ?? 0), 0);
@@ -977,12 +1029,15 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
         />
         <TableActions name="movers.csv" header={header} rows={() => rows.map(exportRow)} />
         <button onClick={downloadAll} title="Every row that matches, not only the 200 shown">All rows</button>
+        {saveError && <p className="error" role="alert">{saveError}</p>}
       </div>
       <div className="scroll">
         <table className="dense">
           <thead>
             <tr>
-              {header.map((h, i) => <th key={h} className={i >= group.columns.length ? "num" : ""}>{h}</th>)}
+              {header.map((h, i) => (
+                <th key={h} className={i >= group.columns.length ? "num" : ""}>{FULL_HEAD[h] ?? h}</th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -1023,6 +1078,11 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
                 </tr>
               );
             })}
+            {empty && (
+              <tr>
+                <td colSpan={header.length} className="hint">{empty}</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

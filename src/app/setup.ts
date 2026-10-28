@@ -1,4 +1,5 @@
 import type { Level } from "../engine.ts";
+import type { FileProblem } from "./fileProblems.ts";
 
 export const TABLE = "data";
 export const VIEW = "data_in_scope";
@@ -286,13 +287,14 @@ export type LoadSource = "file" | "sample";
  */
 export type Phase =
   | { kind: "start" }
-  | { kind: "reading"; load: number; source: LoadSource; label: string; back: "start" | "workspace" }
+  | { kind: "reading"; load: number; source: LoadSource; fileName?: string; label: string; back: "start" | "workspace" }
   /** A sample is loaded and its first bridge is being calculated. */
   | { kind: "autoRun"; load: number }
   | { kind: "workspace"; load: number };
 
 export type PhaseEvent =
-  | { type: "read"; load: number; source: LoadSource; label: string }
+  /** `fileName` names the visitor's own file, so the wait can say it arrived. */
+  | { type: "read"; load: number; source: LoadSource; fileName?: string; label: string }
   | { type: "loaded"; load: number }
   | { type: "failed"; load: number }
   | { type: "ran"; load: number };
@@ -313,7 +315,7 @@ export function nextPhase(phase: Phase, event: PhaseEvent): Phase {
   if (event.type === "read") {
     if (event.load <= load) return phase;
     const back = phase.kind === "start" ? "start" : phase.kind === "reading" ? phase.back : "workspace";
-    return { kind: "reading", load: event.load, source: event.source, label: event.label, back };
+    return { kind: "reading", load: event.load, source: event.source, fileName: event.fileName, label: event.label, back };
   }
   if (event.load !== load) return phase;
   switch (event.type) {
@@ -328,7 +330,7 @@ export function nextPhase(phase: Phase, event: PhaseEvent): Phase {
   }
 }
 
-export type MainView = { kind: "start" } | { kind: "loading"; text: string } | { kind: "workspace" };
+export type MainView = { kind: "start" } | { kind: "loading"; text: string; fileLine?: string } | { kind: "workspace" };
 
 export function mainView(phase: Phase, engine: EngineState): MainView {
   switch (phase.kind) {
@@ -336,7 +338,10 @@ export function mainView(phase: Phase, engine: EngineState): MainView {
     case "workspace":
       return { kind: phase.kind };
     case "reading":
-      return { kind: "loading", text: engine === "ready" ? phase.label : ENGINE_LOADING_TEXT };
+      if (engine === "ready") return { kind: "loading", text: phase.label };
+      return phase.fileName === undefined
+        ? { kind: "loading", text: ENGINE_LOADING_TEXT }
+        : { kind: "loading", text: ENGINE_LOADING_TEXT, fileLine: `Got ${phase.fileName}. It opens as soon as the calculation engine has loaded.` };
     case "autoRun":
       return { kind: "loading", text: engine === "ready" ? SAMPLE_RUN_LABEL : ENGINE_LOADING_TEXT };
   }
@@ -354,4 +359,75 @@ export function hasData(phase: Phase): boolean {
 /** Leaving would lose loaded data, unless the visitor chose Clear data. */
 export function shouldWarn(phase: Phase, leaving: boolean): boolean {
   return hasData(phase) && !leaving;
+}
+
+export type Missing = "periods" | "units" | "sales" | "attribute";
+
+export type CalculateGate = { ready: true } | { ready: false; reason: string };
+
+const MISSING_WORDS: Record<Missing, string> = {
+  periods: "periods",
+  units: "units",
+  sales: "sales",
+  attribute: "at least one attribute",
+};
+
+export function missingParts(setup: Setup | null, prior: string, current: string): Missing[] {
+  const missing: Missing[] = [];
+  if (!prior || !current) missing.push("periods");
+  if (!setup?.unitsColumn) missing.push("units");
+  if (!setup?.salesColumn) missing.push("sales");
+  if (!setup || setup.levels.length === 0) missing.push("attribute");
+  return missing;
+}
+
+/** "Choose units and sales." from the parts still missing, in the order the panel asks for them. */
+export function missingSentence(missing: readonly Missing[]): string {
+  const words = missing.map((part) => MISSING_WORDS[part]);
+  const list = words.length < 2 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
+  return `Choose ${list}.`;
+}
+
+/** Whether Calculate may run and, when it may not, the one sentence that says why. */
+export function calculateGate(input: {
+  setup: Setup | null;
+  prior: string;
+  current: string;
+  problem: FileProblem;
+}): CalculateGate {
+  const { setup, prior, current, problem } = input;
+  const missing = missingParts(setup, prior, current);
+  if (missing.length === 0 && prior !== current) return { ready: true };
+  if (problem.kind === "reason") return { ready: false, reason: problem.message };
+  if (prior && prior === current) return { ready: false, reason: "Prior and current must be different periods." };
+  return { ready: false, reason: missingSentence(missing) };
+}
+
+/**
+ * Prior and current stay only when both are still offered and differ. Otherwise both reset together, to the
+ * sample's suggestion when it is offered, else to the last two periods.
+ */
+export function carryPeriods(
+  old: { prior: string; current: string },
+  values: readonly string[],
+  suggested: { prior: string; current: string } | null,
+): { prior: string; current: string } {
+  const usable = (pair: { prior: string; current: string }) =>
+    values.includes(pair.prior) && values.includes(pair.current) && pair.prior !== pair.current;
+  if (usable(old)) return old;
+  if (suggested && usable(suggested)) return { prior: suggested.prior, current: suggested.current };
+  return { prior: values.at(-2) ?? "", current: values.at(-1) ?? "" };
+}
+
+/** The columns offered as Units or Sales: numbers, but never the period column. */
+export function measureColumns(columns: readonly Column[], setup: Setup): Column[] {
+  return columns.filter((c) => isNumeric(c.type) && c.name !== setup.periodColumn);
+}
+
+/** The address without `sample`, or null when it has none. */
+export function withoutSample(href: string): string | null {
+  const url = new URL(href);
+  if (!url.searchParams.has("sample")) return null;
+  url.searchParams.delete("sample");
+  return url.toString();
 }

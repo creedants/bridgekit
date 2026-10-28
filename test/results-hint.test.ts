@@ -77,3 +77,32 @@ test("a partial match says which attributes it matched on", async () => {
   assert.equal(matchLabel(config, 0), "No comparable group (overall average)");
   assert.equal(matchLabel({ ...config, newAndDiscontinued: "full" }, 1), "New configuration (shown at full sales)");
 });
+
+const CUSTOMER =
+  "An attribute that describes the customer, such as region or channel, can also move price a lot. It belongs last in the order, or it can be left out.";
+
+test("the Setup check hint says where an attribute about the customer belongs", async () => {
+  const text = await hint([-1234, 5678], 2);
+  assert.ok(text.includes(`${RENAMED_LABEL} ${CUSTOMER} ${LAST}`), `the hint does not place the customer advice: ${text}`);
+});
+
+test("Movers says no rows match once a search finds nothing", async () => {
+  const { emptyNote } = await import("../src/app/Results.tsx");
+  assert.equal(emptyNote([], "Z-999", "Z-999"), "No rows match.");
+  assert.equal(emptyNote([], "Z-999", "Z-99"), null, "the note shows before the search has finished");
+  assert.equal(emptyNote([{ size: "A-100" }], "A-100", "A-100"), null);
+  const sizeRequest = JSON.stringify([0, [], "Z-999"]);
+  const colourRequest = JSON.stringify([1, [], "Z-999"]);
+  assert.equal(emptyNote([], colourRequest, sizeRequest), null, "a new grouping's rows are still on their way");
+});
+
+test("the Bridge table explains an unexpected Discontinued sign only when the line is a price difference", async () => {
+  const { signNote } = await import("../src/app/Results.tsx");
+  const effects = [{ key: "volume", value: 120 }, { key: "discontinued", value: 40 }];
+  assert.equal(
+    signNote(effects, "difference"),
+    "Discontinued configurations is an increase here. The line is not the sales that were lost. It is the difference from the nearest comparable group, which can go either way.",
+  );
+  assert.equal(signNote(effects, "full"), null, "at full sales the line is the sales themselves");
+  assert.equal(signNote([{ key: "discontinued", value: -40 }], "difference"), null);
+});

@@ -752,6 +752,36 @@ async function openDownloadEvents(port, downloadPath) {
   return { names, close: () => socket.close() };
 }
 
+/**
+ * Answers the page's next confirm on a second connection, because the page's own evaluation waits while a dialog
+ * is open. Resolves with the dialog's message.
+ */
+async function answerDialog(port, accept, click) {
+  const target = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t) => t.type === "page");
+  const socket = new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    socket.onopen = resolve;
+    socket.onerror = () => reject(new Error(`dialog events could not reach the page on port ${port}`));
+  });
+  try {
+    const message = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("no dialog opened within 5 s")), 5000);
+      socket.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.method !== "Page.javascriptDialogOpening") return;
+        clearTimeout(timer);
+        socket.send(JSON.stringify({ id: 2, method: "Page.handleJavaScriptDialog", params: { accept } }));
+        resolve(data.params.message);
+      };
+    });
+    socket.send(JSON.stringify({ id: 1, method: "Page.enable" }));
+    await click();
+    return await message;
+  } finally {
+    socket.close();
+  }
+}
+
 async function drive(browser, origin, rows) {
   console.log(`browser: ${(await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/version`)).json()).Browser}`);
   await browser.size(1360, 1000);
@@ -929,12 +959,20 @@ async function drive(browser, origin, rows) {
   if (exported.error || exported.bytes < 10_000) fail(`Excel export: ${exported.error ?? "no file"}`);
   console.log(`ok  Excel export (${exported.bytes} bytes in ${exported.ms} ms)`);
 
-  await browser.goto(`${origin}/app/`);
+  // The visitor's own file replaces the sample in the address too, so a reload does not bring the sample back.
+  await browser.goto(`${origin}/app/?sample`);
+  await browser.waitFor("!!document.querySelector('.kpis')", 600);
   await browser.send("DOM.enable");
   const { root } = await browser.send("DOM.getDocument");
   const { nodeId } = await browser.send("DOM.querySelector", { nodeId: root.nodeId, selector: "input[type=file][accept*=csv]" });
   await browser.send("DOM.setFileInputFiles", { nodeId, files: [new URL("../public/sample-sales.csv", import.meta.url).pathname] });
-  await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent");
+  await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent && !document.querySelector('.kpis')");
+  const addressAfterFile = await browser.evalJs("location.search");
+  if (addressAfterFile.includes("sample")) fail(`a file load left the address at ${JSON.stringify(addressAfterFile)}`);
+  console.log("ok  a file load drops ?sample from the address");
+  const calculateReason = await browser.evalJs("[...document.querySelectorAll('.run .hint')].map((p) => p.textContent.trim()).find((t) => t.startsWith('Choose')) ?? ''");
+  if (calculateReason !== "Choose at least one attribute.") fail(`Calculate reason with no attribute is ${JSON.stringify(calculateReason)}`);
+  console.log("ok  Calculate names the one missing part");
   await browser.evalJs(`T.set(document.querySelector('select[aria-label="Add attribute"]'), 'model')`);
   await browser.sleep(300);
   await browser.evalJs(`T.set(document.querySelector('select[aria-label="Add filter"]'), 'customer')`);
@@ -1010,7 +1048,13 @@ async function drive(browser, origin, rows) {
     await browser.send("DOM.setFileInputFiles", { nodeId, files: [new URL("../public/sample-sales.csv", import.meta.url).pathname] });
     await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent");
   };
-  await browser.evalJs("T.btn('Clear data').click()");
+  const clearClick = () => browser.evalJs("setTimeout(() => T.btn('Clear data').click(), 0)");
+  const asked = await answerDialog(DEBUG_PORT, false, clearClick);
+  if (asked !== "Clear the loaded data and the bridge?") fail(`Clear data asked ${JSON.stringify(asked)}`);
+  await browser.sleep(300);
+  if (!(await browser.evalJs("!!document.querySelector('aside')"))) fail("Clear data: Cancel still cleared the data");
+  console.log("ok  clear data asks first, and Cancel keeps the data");
+  await answerDialog(DEBUG_PORT, true, clearClick);
   try {
     await browser.waitFor("!document.querySelector('aside') && document.body.innerText.includes('Load a sales file')");
   } catch (error) {
@@ -1245,12 +1289,18 @@ async function drive(browser, origin, rows) {
       mkdirSync(downloadDir, { recursive: true });
       const events = await openDownloadEvents(DEBUG_PORT, downloadDir);
       try {
-        for (const [text, name] of [
+        for (const [text, name, tab] of [
           ["Download PNG", "bridge-2024-to-2025.png"],
           ["Download report", "bridge-2024-to-2025.html"],
           ["Save setup to file", "pvm-bridge-setup.json"],
           ["Export Excel", "bridge-2024-to-2025.xlsx"],
+          ["CSV", "movers.csv", "Movers"],
+          ["All rows", "movers-all-rows.csv", "Movers"],
         ]) {
+          if (tab) {
+            await browser.evalJs(`T.tab(${JSON.stringify(tab)})`);
+            await browser.waitFor("document.querySelectorAll('.dense tbody tr').length > 0");
+          }
           events.names.length = 0;
           let at = 0;
           for (const offset of [0, 465, 918]) {
@@ -1275,7 +1325,7 @@ async function drive(browser, origin, rows) {
     await browser.evalJs(`T.tab("Movers")`);
     await browser.sleep(800);
     const salesHeads = await readHeads();
-    const salesTail = ["Prior sales", "Current sales", "Change", "Volume", "Mix", "Price", "New config.", "Discontinued", "No units", "Prior price", "Current price", "Price change"];
+    const salesTail = ["Prior sales", "Current sales", "Change", "Volume", "Mix", "Price", "New configurations", "Discontinued configurations", "No units", "Prior price", "Current price", "Price change"];
     if (salesHeads.slice(-salesTail.length).join("|") !== salesTail.join("|")) {
       fail(`sales labels: Movers headers are ${salesHeads.join(", ")}`);
     }
@@ -1422,7 +1472,7 @@ async function drive(browser, origin, rows) {
     if (!Array.isArray(saved.levels) || saved.levels.map((level) => level.name).join(",") !== "customer,model") fail("load setup: saved attributes are not customer then model");
     const savedSetupPath = join(fixtureDir, "pvm-bridge-setup.json");
     writeFileSync(savedSetupPath, setupJson);
-    await browser.evalJs("T.btn('Clear data').click()");
+    await answerDialog(DEBUG_PORT, true, () => browser.evalJs("setTimeout(() => T.btn('Clear data').click(), 0)"));
     await browser.waitFor("!document.querySelector('aside') && document.body.innerText.includes('Load a sales file')");
     await setDataFile(fixtures.csvPath);
     try {
