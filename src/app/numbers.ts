@@ -1,6 +1,13 @@
 import { amountsNote, DEFAULT_CELLS_TABLE, HUGE_AMOUNTS, type Query } from "../engine.ts";
 import { isNumeric, PERIOD, VIEW } from "./setup.ts";
 
+/** The most fields a header may hold before the file is refused as too wide. */
+export const MAX_COLUMNS_READ = 10_000;
+
+/** A file refused because of its width, not its size. */
+export const TOO_MANY_COLUMNS_SENTENCE =
+  "This file has too many columns to open in this browser. Save it with fewer columns.";
+
 // read_csv options that keep well-formed files identical while letting short
 // rows load with blanks. null_padding pads short rows, parallel=false keeps
 // the single-threaded sniff the plain reader used for quoted line breaks.

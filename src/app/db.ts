@@ -9,7 +9,9 @@ import {
   applyDotColumns,
   convertFormattedNumbers,
   CSV_OPTIONS,
+  MAX_COLUMNS_READ,
   planDotColumns,
+  TOO_MANY_COLUMNS_SENTENCE,
   typesForDotColumns,
 } from "./numbers.ts";
 import { firstSheetAsCsv, holeRenames, NO_DATA_ROWS } from "./sheet.ts";
@@ -181,10 +183,21 @@ export async function requireDataRows(query: Query, table: string): Promise<void
   }
 }
 
+/** True when the prefix's first line holds more fields than the reader takes. A header longer than the prefix can only be over the limit. */
+function headerTooWide(prefix: string, delimiter: string): boolean {
+  if (delimiter === "") return false;
+  const end = prefix.search(/[\r\n]/);
+  if (end < 0) return prefix.length >= CSV_PREFIX_BYTES;
+  let fields = 1;
+  for (const char of prefix.slice(0, end)) if (char === delimiter) fields += 1;
+  return fields > MAX_COLUMNS_READ;
+}
+
 /**
  * Stages a CSV file's readable path and swaps it into place. The file's own
- * byte length refuses an empty file, and the staged table's row count refuses
- * a header-only file, so a refused file leaves the loaded table alone.
+ * byte length refuses an empty file, its header width refuses a file with too
+ * many columns, and the staged table's row count refuses a header-only file,
+ * so a refused file leaves the loaded table alone.
  */
 export async function stageCsvAndSwap(
   query: Query,
@@ -193,6 +206,10 @@ export async function stageCsvAndSwap(
   readablePath: string,
 ): Promise<void> {
   if (file.size === 0) throw new Error(NO_DATA_ROWS);
+  const prefix = new TextDecoder().decode(new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer()));
+  if (headerTooWide(prefix, await sniffDelimiter(query, readablePath))) {
+    throw new Error(TOO_MANY_COLUMNS_SENTENCE);
+  }
   const staging = `${table}__staging`;
   await readLoadedTable(query, staging, readablePath, false);
   await convertFormattedNumbers(query, staging);

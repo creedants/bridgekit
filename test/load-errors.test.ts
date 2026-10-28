@@ -77,3 +77,43 @@ test("R16: a first load into an empty database raises no error and keeps the sta
   const [replaced] = await recording(`SELECT count(*)::DOUBLE AS n FROM data`);
   assert.equal(Number(replaced.n), 1);
 });
+
+test("R35: a header with twelve thousand fields is refused as too many columns", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const { TOO_MANY_COLUMNS_SENTENCE } = await import("../src/app/numbers.ts");
+  const header = Array.from({ length: 12_000 }, () => "a").join(",");
+  const row = Array.from({ length: 12_000 }, () => "1").join(",");
+  const text = `${header}\n${row}\n`;
+  const directory = await mkdtemp("/tmp/bridgekit-load-errors-");
+  const file = path.join(directory, "wide.csv");
+  await writeFile(file, text);
+  const query = await openDatabase();
+  await assert.rejects(
+    stageCsvAndSwap(query, new File([text], "wide.csv"), "data", file),
+    (error: unknown) => (error as Error).message === TOO_MANY_COLUMNS_SENTENCE,
+    TOO_MANY_COLUMNS_SENTENCE,
+  );
+  assert.equal(
+    TOO_MANY_COLUMNS_SENTENCE,
+    "This file has too many columns to open in this browser. Save it with fewer columns.",
+  );
+});
+
+test("R35: a seven-column file loads and an out-of-memory failure still gives the size sentence", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const text = "product,region,size,colour,year,units,sales\nA-100,North,S,red,2025,10,120\nA-100,North,S,red,2026,11,132\n";
+  const directory = await mkdtemp("/tmp/bridgekit-load-errors-");
+  const file = path.join(directory, "seven.csv");
+  await writeFile(file, text);
+  const query = await openDatabase();
+  await stageCsvAndSwap(query, new File([text], "seven.csv"), "data", file);
+  assert.equal((await query(`DESCRIBE data`)).length, 7);
+  assert.equal(Number((await query(`SELECT count(*)::DOUBLE AS n FROM data`))[0].n), 2);
+  assert.equal(loadFailure(new Error(OUT_OF_MEMORY)).message, TOO_BIG);
+});

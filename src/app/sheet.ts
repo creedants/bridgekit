@@ -1,6 +1,7 @@
 import type { Worksheet } from "exceljs";
 import { excelTools, type ExcelModule, type ExcelTools } from "./exportExcel.ts";
 import { toCsv } from "./files.ts";
+import { MAX_COLUMNS_READ, TOO_MANY_COLUMNS_SENTENCE } from "./numbers.ts";
 
 function flattenCell(value: unknown): unknown {
   if (value instanceof Date) return value.toISOString().slice(0, 10);
@@ -93,6 +94,7 @@ export async function firstSheetAsCsv(
   if (!loaded) throw new Error(NO_DATA_ROWS);
   const { sheet, bytes } = loaded;
   const width = sheet.columnCount;
+  if (width > MAX_COLUMNS_READ) throw new Error(TOO_MANY_COLUMNS_SENTENCE);
   const rows: unknown[][] = [];
   const rowNumbers: number[] = [];
   sheet.eachRow((row, rowNumber) => {
