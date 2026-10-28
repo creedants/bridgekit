@@ -36,6 +36,7 @@ import { trendPeriods } from "./periods.ts";
 import { TABLE, type Setup } from "./setup.ts";
 import { useCommentaryOffer } from "./useConfig.ts";
 import { buildReport, moverHeader, terms, trendHeader } from "./report.ts";
+import { agree } from "./SetupPanel.tsx";
 import { SmallBridges } from "./SmallBridges.tsx";
 import { Waterfall } from "./Waterfall.tsx";
 
@@ -418,7 +419,7 @@ function Accounts(props: { run: Run; query: () => Promise<Query> }) {
       </div>
       <div className="kpis" style={{ marginBottom: 12 }}>
         {groups.map((g) => (
-          <Kpi key={g.status} label={ACCOUNT_LABELS[g.status]} value={signedWhole(g.change)} note={`${whole(g.count)} ${column} values`} />
+          <Kpi key={g.status} label={ACCOUNT_LABELS[g.status]} value={signedWhole(g.change)} note={accountNote(g.count, column)} />
         ))}
         <Kpi
           label="Net retention"
@@ -1097,22 +1098,30 @@ function Unmatched(props: { run: Run; query: () => Promise<Query> }) {
   );
 }
 
-function checkWarnings(run: Run): string[] {
+export function accountNote(count: number, column: string): string {
+  return `${whole(count)} ${column} ${agree(count, "value")}`;
+}
+
+export function checkWarnings(run: Run): string[] {
   const { check, config, result } = run;
   const t = terms(config);
   const exact = result.coverage.find((c) => c.level === config.levels.length)?.share ?? 0;
   const warnings: string[] = [];
   if (check.blankMeasureRows > 0) {
-    warnings.push(`${whole(check.blankMeasureRows)} rows have blank units or sales and count as zero.`);
+    const n = check.blankMeasureRows;
+    warnings.push(`${whole(n)} ${agree(n, "row")} ${agree(n, "has", "have")} blank units or sales and ${agree(n, "counts", "count")} as zero.`);
   }
   if (check.negativeUnitRows > 0) {
-    warnings.push(`${whole(check.negativeUnitRows)} rows have negative units (returns or credits). They are netted against sales of the same configuration.`);
+    const n = check.negativeUnitRows;
+    warnings.push(`${whole(n)} ${agree(n, "row")} ${agree(n, "has", "have")} negative units (returns or credits). They are netted against sales of the same configuration.`);
   }
   if (check.zeroUnitSalesRows > 0) {
-    warnings.push(`${whole(check.zeroUnitSalesRows)} rows have sales but zero units (rebates, credits or fees). They are bridged on their own line, “Sales with no units”, and kept out of price.`);
+    const n = check.zeroUnitSalesRows;
+    warnings.push(`${whole(n)} ${agree(n, "row")} ${agree(n, "has", "have")} sales but zero units (rebates, credits or fees). ${agree(n, "It is", "They are")} bridged on ${agree(n, "its", "their")} own line, “Sales with no units”, and kept out of price.`);
   }
   if (check.blankPeriodRows > 0) {
-    warnings.push(`${whole(check.blankPeriodRows)} rows have a blank period and are ignored.`);
+    const n = check.blankPeriodRows;
+    warnings.push(`${whole(n)} ${agree(n, "row")} ${agree(n, "has", "have")} a blank period and ${agree(n, "is", "are")} ignored.`);
   }
   if (exact < 0.7) {
     warnings.push(t.lowMatch(exact));

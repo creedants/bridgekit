@@ -60,7 +60,7 @@
             <thead><tr><th>Effect</th><th>Formula per configuration</th><th>Meaning</th></tr></thead>
             <tbody>
               <tr><td>Volume</td><td><code>(q1 − q0) × R0</code></td><td>Change in units at the overall prior average price.</td></tr>
-              <tr><td>Mix, one per attribute</td><td><code>(q1 − q0) × (Rj − Rj−1)</code></td><td>Change in units valued at how much dearer or cheaper the group is than the group above it.</td></tr>
+              <tr><td>Mix, one per attribute</td><td><code>(q1 − q0) × (Rj − Rj−1)</code></td><td>Change in units valued at how much more expensive or cheaper the group is than the group above it.</td></tr>
               <tr><td>Price (like-for-like)</td><td><code>s1 − Rk × q1</code></td><td>Only where the exact configuration sold in the prior period.</td></tr>
               <tr><td>New configurations</td><td><code>s1 − Rk × q1</code></td><td>The same difference where there was no exact match, so <code>Rk</code> is a fallback price.</td></tr>
               <tr><td>Discontinued configurations</td><td><code>(q1 − q0) × (Rk − Rm)</code></td><td>For a configuration that stopped selling, its price premium over the nearest group that still sells, level <code>m</code>. Its mix is counted only down to level <code>m</code>.</td></tr>
@@ -107,7 +107,7 @@
           <li>MD2 with the premium finish has no exact prior match, so its reference price falls back to the MD2 average of 20.</li>
           <li>Its 4 units add 4 × 20 = 80 to volume.</li>
           <li>The remaining 200 − 80 = 120 is reported as new configurations, not as price.</li>
-          <li>The match coverage table shows this revenue as “fell back to Model”.</li>
+          <li>The match coverage table lists this revenue under “Where the full configuration did not match, matched on Model.”</li>
         </ul>
 
         <h2>List price and discounts</h2>
@@ -135,7 +135,7 @@
         </p>
 
         <h2>New and discontinued</h2>
-        <p>The two lines mirror each other. In both cases the units count in volume, and the line shows only how much dearer or cheaper the configuration was than its nearest comparable group.</p>
+        <p>The two lines mirror each other. In both cases the units count in volume, and the line shows only how much more expensive or cheaper the configuration was than its nearest comparable group.</p>
         <ul>
           <li><b>New:</b> a configuration that sells now and did not before. It is compared with the nearest group that existed in the prior period.</li>
           <li><b>Discontinued:</b> a configuration that sold before and does not now. If its model still sells, the loss down to the model level is mix, and the rest is discontinued. If the whole model is gone, everything beyond volume is discontinued.</li>

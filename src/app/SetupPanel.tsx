@@ -4,6 +4,15 @@ import { sameSuggestedLevels } from "./fileProblems.ts";
 import { suggestAttributes, totalRowOffers, type TotalRow } from "./profile.ts";
 import { isDate, isNumeric, MAX_LEVEL_NAME, quote, TABLE, type Column, type Filter, type Grain, type Setup } from "./setup.ts";
 
+/** Count agreement lives here because this module loads eagerly and the lazily loaded results view can import it. */
+export function agree(count: number, one: string, many = one + "s"): string {
+  return count === 1 ? one : many;
+}
+
+export function distinctLabel(distinct: number | undefined): string {
+  return distinct === undefined ? "" : ` (${distinct.toLocaleString("en-US")} ${agree(distinct, "value")})`;
+}
+
 export function SetupPanel(props: {
   columns: Column[];
   setup: Setup;
@@ -257,7 +266,7 @@ export function SetupPanel(props: {
             {free.map((c) => (
                 <option key={c.name} value={c.name}>
                   {c.name}
-                  {c.distinct === undefined ? "" : ` (${c.distinct.toLocaleString("en-US")} values)`}
+                  {distinctLabel(c.distinct)}
                 </option>
               ))}
           </select>
