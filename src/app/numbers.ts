@@ -1,4 +1,9 @@
-import type { Query } from "../engine.ts";
+import { amountsNote, DEFAULT_CELLS_TABLE, HUGE_AMOUNTS, type Query } from "../engine.ts";
+
+// read_csv options that keep well-formed files identical while letting short
+// rows load with blanks. null_padding pads short rows, parallel=false keeps
+// the single-threaded sniff the plain reader used for quoted line breaks.
+export const CSV_OPTIONS = "null_padding=true, parallel=false";
 
 const COMMA_TAIL = ",\\d{1,2}";
 const COMMA_THREE = ",\\d{3}";
@@ -288,9 +293,14 @@ export async function convertFormattedNumbers(query: Query, table: string): Prom
   if (failure) throw failure.error;
 }
 
+// Marks for the data-check sentences below. The dots marks carry the column's
+// first dotted value after a colon, because the sentence quotes it.
+const THOUSANDS_DOTS = "thousands dots";
+const DECIMAL_DOTS = "decimal dots";
+
 export async function decimalCommaNote(query: Query, table: string): Promise<string | null> {
   const rows = await query(
-    `SELECT column_name, comment FROM duckdb_columns() WHERE schema_name = current_schema() AND table_name = '${table.replaceAll("'", "''")}' AND comment IN ('decimal comma', 'mixed number styles') ORDER BY column_index`,
+    `SELECT column_name, comment FROM duckdb_columns() WHERE schema_name = current_schema() AND table_name = '${table.replaceAll("'", "''")}' AND comment IS NOT NULL ORDER BY column_index`,
   );
   const decimal = rows.filter((row) => row.comment === "decimal comma").map((row) => String(row.column_name));
   const mixed = rows.filter((row) => row.comment === "mixed number styles").map((row) => String(row.column_name));
@@ -301,5 +311,109 @@ export async function decimalCommaNote(query: Query, table: string): Promise<str
   if (mixed.length > 1) {
     sentences.push(`${mixed.slice(0, -1).join(", ")} and ${mixed[mixed.length - 1]} mix number styles, so they were read as text.`);
   }
+  for (const row of rows) {
+    const comment = String(row.comment ?? "");
+    const column = String(row.column_name);
+    if (comment.startsWith(`${THOUSANDS_DOTS}:`)) {
+      const example = comment.slice(THOUSANDS_DOTS.length + 1);
+      sentences.push(
+        `Numbers in ${column} such as ${example} were read with a dot between thousands, as ${example.replaceAll(".", "")}.`,
+      );
+    } else if (comment.startsWith(`${DECIMAL_DOTS}:`)) {
+      const example = comment.slice(DECIMAL_DOTS.length + 1);
+      sentences.push(
+        `Numbers in ${column} such as ${example} were read as decimals, as ${dotExampleValue(example)}. If they are whole numbers with dots between thousands, save the file with plain numbers.`,
+      );
+    }
+  }
+  const huge = await amountsNote(query, DEFAULT_CELLS_TABLE).catch(() => null);
+  if (huge !== null) sentences.push(huge);
   return sentences.length === 0 ? null : sentences.join(" ");
+}
+
+/** A dotted example as the decimal number it was read as. */
+function dotExampleValue(example: string): string {
+  return String(Number(example));
+}
+
+const DOTTED = "^-?\\d{1,3}(\\.\\d{3})+$";
+const PLAIN_WHOLE = "^-?\\d+$";
+
+export interface DotReading {
+  column: string;
+  /** The column's first dotted value in file order, for the data-check sentence. */
+  example: string;
+  /** True when the dots separate thousands and the column converts to whole numbers. */
+  thousands: boolean;
+}
+
+/**
+ * Reads one column of raw CSV text as the loader saw it, before the database
+ * typed it. A column whose every non-blank value is a plain whole number or a
+ * dot-grouped thousands figure, with at least one dotted, is a dot column.
+ * The database would otherwise read 9.600 as 9.6.
+ */
+async function readDotColumn(
+  query: Query,
+  raw: string,
+  column: string,
+  semicolons: boolean,
+): Promise<DotReading | null> {
+  const field = quotedName(column);
+  const [counts] = await query(
+    `SELECT count(*)::DOUBLE AS n, count(*) FILTER (WHERE ${field} IS NULL OR regexp_matches(${field}, '^\\s*$'))::DOUBLE AS blank, count(*) FILTER (WHERE contains(${field}, ','))::DOUBLE AS comma, count(*) FILTER (WHERE regexp_matches(${field}, '${PLAIN_WHOLE}'))::DOUBLE AS plain, count(*) FILTER (WHERE regexp_matches(${field}, '${DOTTED}'))::DOUBLE AS dotted, count(*) FILTER (WHERE length(${field}) - length(replace(${field}, '.', '')) > 1)::DOUBLE AS multi FROM ${raw}`,
+  );
+  const total = Number(counts.n) - Number(counts.blank);
+  if (total <= 0 || Number(counts.comma) > 0) return null;
+  if (Number(counts.plain) + Number(counts.dotted) !== total || Number(counts.dotted) < 1) return null;
+  const [first] = await query(`SELECT ${field} AS v FROM ${raw} WHERE regexp_matches(${field}, '${DOTTED}') LIMIT 1`);
+  if (!first) return null;
+  return { column, example: String(first.v), thousands: semicolons || Number(counts.multi) > 0 };
+}
+
+/**
+ * Decides for every loaded column whether its dots separate thousands. Raw
+ * text via all_varchar decides, because the database may already have typed an
+ * all-dotted column as DOUBLE. A semicolon file, or any value with more than
+ * one dot, reads dots as thousands. Otherwise the values stay as read, with a
+ * data-check sentence saying they were read as decimals.
+ */
+export async function planDotColumns(query: Query, path: string, delimiter: string): Promise<DotReading[]> {
+  const escaped = path.replaceAll("'", "''");
+  const raw = `(SELECT * FROM read_csv('${escaped}', all_varchar=true, ${CSV_OPTIONS}))`;
+  const names = (await query(`DESCRIBE SELECT * FROM ${raw}`)).map((row) => String(row.column_name));
+  const readings: DotReading[] = [];
+  for (const column of names) {
+    const reading = await readDotColumn(query, raw, column, delimiter === ";").catch(() => null);
+    if (reading) readings.push(reading);
+  }
+  return readings;
+}
+
+/**
+ * Converts thousands-dotted columns to whole numbers and marks every dot
+ * column for its data-check sentence. Thousands columns convert here rather
+ * than in convertFormattedNumbers because that pass only touches VARCHAR, and
+ * the loader reads them as VARCHAR on purpose (see typesForDotColumns).
+ */
+export async function applyDotColumns(query: Query, table: string, readings: DotReading[]): Promise<void> {
+  const name = quotedName(table);
+  for (const reading of readings) {
+    const column = quotedName(reading.column);
+    if (reading.thousands) {
+      await query(
+        `ALTER TABLE ${name} ALTER ${column} TYPE DOUBLE USING CAST(nullif(trim(replace(${column}, '.', '')), '') AS DOUBLE)`,
+      );
+      await query(`COMMENT ON COLUMN ${name}.${column} IS '${THOUSANDS_DOTS}:${reading.example}'`);
+    } else {
+      await query(`COMMENT ON COLUMN ${name}.${column} IS '${DECIMAL_DOTS}:${reading.example}'`);
+    }
+  }
+}
+
+/** read_csv type overrides that keep thousands-dotted columns as text, so applyDotColumns can convert them from the raw figures. */
+export function typesForDotColumns(readings: DotReading[]): string | null {
+  const thousands = readings.filter((reading) => reading.thousands);
+  if (thousands.length === 0) return null;
+  return `, types={${thousands.map((reading) => `'${reading.column.replaceAll("'", "''")}': 'VARCHAR'`).join(", ")}}`;
 }

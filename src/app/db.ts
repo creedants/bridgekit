@@ -3,10 +3,16 @@ import mvpWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url
 import ehWasm from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
 import mvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import type { Query } from "../engine.ts";
-import { decodeCsvBuffer, ENCODING_SENTENCE, isUtf8Prefix } from "./encoding.ts";
+import { decodeCsvBuffer, ENCODING_SENTENCE, isUtf8Prefix, looksBinary, NOT_TEXT_FILE } from "./encoding.ts";
 import { ChunkUnavailable, lazyChunk, type ChunkSentences } from "./exportExcel.ts";
-import { convertFormattedNumbers } from "./numbers.ts";
-import { firstSheetAsCsv, holeRenames } from "./sheet.ts";
+import {
+  applyDotColumns,
+  convertFormattedNumbers,
+  CSV_OPTIONS,
+  planDotColumns,
+  typesForDotColumns,
+} from "./numbers.ts";
+import { firstSheetAsCsv, holeRenames, NO_DATA_ROWS } from "./sheet.ts";
 
 const IDLE_CAP_MS = 2000;
 
@@ -64,10 +70,19 @@ export interface BrowserDatabase {
 // encoding from its whole text.
 const CSV_PREFIX_BYTES = 65536;
 
-// read_csv options that keep well-formed files identical while letting short
-// rows load with blanks. null_padding pads short rows, parallel=false keeps
-// the single-threaded sniff the plain reader used for quoted line breaks.
-const CSV_OPTIONS = "null_padding=true, parallel=false";
+// Detects the file's separator for the thousands-dots decision: a semicolon
+// file reads dots as thousands. A sniff failure reads as a comma file, which
+// only skips the semicolon rule; a value with more than one dot still reads
+// as thousands.
+async function sniffDelimiter(query: Query, path: string): Promise<string> {
+  try {
+    const [row] = await query(`SELECT Delimiter AS d FROM sniff_csv('${path.replaceAll("'", "''")}')`);
+    const delimiter = row === undefined ? "" : String(row.d);
+    return delimiter === "" ? "," : delimiter;
+  } catch {
+    return ",";
+  }
+}
 
 // Marks a DATE column whose slash dates were reinterpreted month-first.
 const MONTH_FIRST_MARK = "month first";
@@ -76,9 +91,21 @@ const MONTH_FIRST_MARK = "month first";
 // reader had to decide, and the year.
 const SLASH_DATE = "^\\s*(\\d{1,2})/(\\d{1,2})/(\\d{4})\\s*$";
 
-export async function readCsvTable(query: Query, table: string, path: string): Promise<void> {
+export async function readCsvTable(
+  query: Query,
+  table: string,
+  path: string,
+  skipMonthFirst = false,
+): Promise<void> {
   const escaped = path.replaceAll("'", "''");
-  await query(`CREATE OR REPLACE TABLE ${quote(table)} AS SELECT * FROM read_csv('${escaped}', ${CSV_OPTIONS})`);
+  const delimiter = await sniffDelimiter(query, path);
+  // Raw text decides the dots before the database types them: an all-dotted
+  // column would otherwise load as decimals (9.600 as 9.6).
+  const dots = await planDotColumns(query, path, delimiter).catch(() => []);
+  const types = typesForDotColumns(dots);
+  await query(`CREATE OR REPLACE TABLE ${quote(table)} AS SELECT * FROM read_csv('${escaped}', ${CSV_OPTIONS}${types ?? ""})`);
+  await applyDotColumns(query, table, dots);
+  if (skipMonthFirst) return;
   const { ambiguous, monthFirst } = await ambiguousDateColumns(query, table, path);
   for (const column of ambiguous) {
     const name = quote(table);
@@ -92,8 +119,10 @@ export async function readCsvTable(query: Query, table: string, path: string): P
   }
 }
 
-// An Excel load keeps the plain reader it had before slash dates were
-// reinterpreted, because the change is for CSV text exports only.
+// Excel workbooks flatten to comma CSV before DuckDB sees them, so they load
+// through the same options, thousands dots and number conversion as a CSV
+// with the same columns and values. Slash dates keep the plain reader's
+// order, as before, because that change is for CSV text exports only.
 export async function readLoadedTable(
   query: Query,
   table: string,
@@ -101,14 +130,62 @@ export async function readLoadedTable(
   isExcel: boolean,
 ): Promise<void> {
   try {
-    if (isExcel) {
-      await query(`CREATE OR REPLACE TABLE ${quote(table)} AS SELECT * FROM read_csv('${path.replaceAll("'", "''")}')`);
-      return;
-    }
-    await readCsvTable(query, table, path);
+    await readCsvTable(query, table, path, isExcel);
   } catch (error) {
     throw csvEncodingFailure(error);
   }
+}
+
+/** Refuses an empty or header-only table: the file problems list never sees one. */
+export async function requireDataRows(query: Query, table: string): Promise<void> {
+  const [row] = await query(`SELECT count(*)::DOUBLE AS n FROM ${quote(table)}`);
+  if (!(Number(row?.n) > 0)) {
+    await query(`DROP TABLE IF EXISTS ${quote(table)}`);
+    throw new Error(NO_DATA_ROWS);
+  }
+}
+
+/**
+ * Stages a CSV file's readable path and swaps it into place. The file's own
+ * byte length refuses an empty file, and the staged table's row count refuses
+ * a header-only file, so a refused file leaves the loaded table alone.
+ */
+export async function stageCsvAndSwap(
+  query: Query,
+  file: File,
+  table: string,
+  readablePath: string,
+): Promise<void> {
+  if (file.size === 0) throw new Error(NO_DATA_ROWS);
+  const staging = `${table}__staging`;
+  await readLoadedTable(query, staging, readablePath, false);
+  await convertFormattedNumbers(query, staging);
+  // No mixed-separator check: a record split by another separator can match a valid sparse record byte for byte.
+  await requireDataRows(query, staging);
+  await swapLoadedTable(query, staging, table);
+}
+
+/**
+ * Swaps a staged load into place: the old table stays until the staged one is
+ * fully converted and checked, so a refused file leaves the loaded data alone.
+ */
+export async function swapLoadedTable(query: Query, staging: string, table: string): Promise<void> {
+  const previous = `${table}__previous`;
+  await query(`DROP TABLE IF EXISTS ${quote(previous)}`);
+  let renamed = false;
+  try {
+    await query(`ALTER TABLE ${quote(table)} RENAME TO ${quote(previous)}`);
+    renamed = true;
+  } catch {
+    // A first load has no table to keep.
+  }
+  try {
+    await query(`ALTER TABLE ${quote(staging)} RENAME TO ${quote(table)}`);
+  } catch (error) {
+    if (renamed) await query(`ALTER TABLE ${quote(previous)} RENAME TO ${quote(table)}`).catch(() => {});
+    throw error;
+  }
+  await query(`DROP TABLE IF EXISTS ${quote(previous)}`);
 }
 
 async function ambiguousDateColumns(
@@ -484,6 +561,7 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
             await db.registerFileText(registered, sheet.csv);
           } else {
             const prefix = new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer());
+            if (looksBinary(prefix)) throw new Error(NOT_TEXT_FILE);
             const continues = prefix.byteLength < file.size;
             if (continues && isUtf8Prefix(prefix)) {
               await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
@@ -494,16 +572,26 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
             }
           }
           uploadRegistered = true;
-          await readLoadedTable(query, table, registered, isExcel);
-          if (excelHoles.length > 0) {
-            const described = await query(`DESCRIBE ${quote(table)}`);
-            const names = described.map((row) => String(row.column_name));
-            for (const rename of holeRenames(names, excelHoles)) {
-              if (rename.from === rename.to) continue;
-              await query(`ALTER TABLE ${quote(table)} RENAME COLUMN ${quote(rename.from)} TO ${quote(rename.to)}`);
+          // A refused file must leave the loaded data alone, so the new file
+          // converts on a staging table and only swaps into place once it has
+          // rows. The empty check, the swap and afterLoad all run after this.
+          if (isExcel) {
+            const staging = `${table}__staging`;
+            await readLoadedTable(query, staging, registered, isExcel);
+            if (excelHoles.length > 0) {
+              const described = await query(`DESCRIBE ${quote(staging)}`);
+              const names = described.map((row) => String(row.column_name));
+              for (const rename of holeRenames(names, excelHoles)) {
+                if (rename.from === rename.to) continue;
+                await query(`ALTER TABLE ${quote(staging)} RENAME COLUMN ${quote(rename.from)} TO ${quote(rename.to)}`);
+              }
             }
+            await convertFormattedNumbers(query, staging);
+            await requireDataRows(query, staging);
+            await swapLoadedTable(query, staging, table);
+          } else {
+            await stageCsvAndSwap(query, file, table, registered);
           }
-          await convertFormattedNumbers(query, table);
           return formulaBlanks;
         } catch (error) {
           throw loadFailure(error);

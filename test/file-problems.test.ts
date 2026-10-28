@@ -67,28 +67,6 @@ test("a real date column compared by year stays under the period label limit", (
   assert.deepEqual(fileProblem(dates), { kind: "none" });
 });
 
-test("a 0-byte CSV and a header-only file say the file has no data rows", () => {
-  const empty = input({ columns: [text("column0")], rows: 0, periodColumn: "", periods: [] });
-  assert.deepEqual(fileProblem(empty), {
-    kind: "reason",
-    message: "This file has no data rows, so there is nothing to bridge.",
-  });
-
-  // A header-only file has its columns but every one is text and no period.
-  const headerOnly = input({
-    columns: [text("period"), text("design"), text("units"), text("sales")],
-    rows: 0,
-    periodColumn: "period",
-    periods: [],
-    unitsColumn: "",
-    salesColumn: "",
-  });
-  assert.deepEqual(fileProblem(headerOnly), {
-    kind: "reason",
-    message: "This file has no data rows, so there is nothing to bridge.",
-  });
-});
-
 test("one period available says a bridge compares two periods", () => {
   const onePeriod = input({ ...HEALTHY, periods: ["2025"] });
   assert.deepEqual(fileProblem(onePeriod), {
@@ -202,14 +180,15 @@ test("the period label limit fires one value above it and not at it", () => {
 
 test("unknown periods add no period sentence", () => {
   assert.deepEqual(fileProblem({ ...HEALTHY, periods: "unknown" }), { kind: "none" });
+  // A file whose only column is text names the missing measures instead.
   assert.deepEqual(
     fileProblem({
-      ...input({ columns: [text("column0")], rows: 0, periodColumn: "period" }),
+      ...input({ columns: [text("column0")], rows: 2, periodColumn: "period" }),
       periods: "unknown",
     }),
     {
       kind: "reason",
-      message: "This file has no data rows, so there is nothing to bridge.",
+      message: "Sales and Units must be columns of numbers, and this file has none.",
     },
   );
   assert.deepEqual(

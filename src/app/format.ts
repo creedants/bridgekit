@@ -12,3 +12,29 @@ export const signedPercent = (n: number) => (Number.isFinite(n) ? (n > 0 ? "+" :
 
 /** A value as a share of the prior total. Dividing by the absolute prior keeps the value's sign when the prior total is negative, and a zero prior gives a number the formatters print as blank. */
 export const shareOfPrior = (value: number, prior: number) => value / Math.abs(prior);
+
+/** A share of the prior total with its sign kept, for sentences where a fall must read as a fall. */
+export const signedShare = (value: number, prior: number) => signedPercent(shareOfPrior(value, prior));
+
+/**
+ * Tries increasing compact precision, then ordinary notation with up to ten
+ * fractional digits. If the totals still print alike, returns whole figures.
+ */
+export function distinctPair(prior: number, current: number): [string, string] {
+  for (let digits = 1; digits <= 3; digits += 1) {
+    const format = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: digits });
+    const pair: [string, string] = [format.format(prior), format.format(current)];
+    if (pair[0] !== pair[1]) return pair;
+  }
+  if (!Number.isFinite(prior) || !Number.isFinite(current)) return [whole(prior), whole(current)];
+  if (prior === current) return [whole(prior), whole(current)];
+  for (let digits = 0; digits <= 10; digits += 1) {
+    const format = new Intl.NumberFormat("en-US", { maximumFractionDigits: digits });
+    const pair: [string, string] = [format.format(prior), format.format(current)];
+    if (pair[0] !== pair[1]) return pair;
+  }
+  return [whole(prior), whole(current)];
+}
+
+/** A count with its noun, singular only for exactly one. */
+export const counted = (n: number, noun: string) => `${n.toLocaleString("en-US")} ${noun}${n === 1 ? "" : "s"}`;

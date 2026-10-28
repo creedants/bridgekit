@@ -200,3 +200,15 @@ test("isUtf8Prefix keeps no decoder state between files", () => {
   assert.equal(isUtf8Prefix(Uint8Array.from([0x69, 0xe2, 0x82])), true);
   assert.equal(isUtf8Prefix(Uint8Array.from([0x41])), true);
 });
+
+test("looksBinary refuses NUL and C0 controls but keeps text and UTF-16", async () => {
+  const { looksBinary, NOT_TEXT_FILE } = await import("../src/app/encoding.ts");
+  assert.equal(NOT_TEXT_FILE, "This file is not a text file. Save it as CSV UTF-8 or Excel (.xlsx).");
+  assert.equal(looksBinary(new Uint8Array([])), false);
+  assert.equal(looksBinary(utf8("period,units\n2025,10\n")), false);
+  assert.equal(looksBinary(utf8("a\tb\rc\nd")), false);
+  assert.equal(looksBinary(Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), true);
+  assert.equal(looksBinary(Uint8Array.from([0x61, 0x00, 0x62])), true);
+  assert.equal(looksBinary(Uint8Array.from([0x61, 0x07, 0x62])), true);
+  assert.equal(looksBinary(joined(Uint8Array.from(BOM_UTF16_LE), utf16("a,b\n", true))), false);
+});
