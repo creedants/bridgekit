@@ -477,3 +477,41 @@ test("counts and pairs read correctly for 0, 1 and many", async () => {
   assert.equal(signedShare(-72, 1000), "-7.2%");
   assert.equal(signedShare(100, 1000), "+10.0%");
 });
+
+test("R9: MM.YYYY months load as a date and bridge by year", async () => {
+  const { readCsvTable } = await import("../src/app/db.ts");
+  const { guessSetup, viewSql, PERIOD, VIEW, quote } = await import("../src/app/setup.ts");
+  const { loadPeriodList } = await import("../src/app/periods.ts");
+  const { runBridge } = await import("../src/engine.ts");
+  const directory = await mkdtemp("/tmp/bridgekit-qa-");
+  const source = path.join(directory, "monat-de.csv");
+  await writeFile(
+    source,
+    "Monat;Produkt;Menge;Umsatz\n01.2025;A-100;10;100\n02.2025;A-100;10;120\n01.2026;A-100;10;130\n02.2026;A-100;10;150\n",
+  );
+  const query = await openDatabase();
+  await readCsvTable(query, "data", source);
+  await convertFormattedNumbers(query, "data");
+  const columns = (await query(`DESCRIBE data`)).map((row) => ({
+    name: String(row.column_name),
+    type: String(row.column_type),
+  }));
+  assert.equal(columns.find((column) => column.name === "Monat")?.type, "DATE");
+  const setup = guessSetup(columns);
+  assert.equal(setup.periodColumn, "Monat");
+  assert.equal(setup.grain, "year");
+  await query(viewSql(setup));
+  const list = await loadPeriodList(query, quote(PERIOD), quote(VIEW));
+  assert.deepEqual(list.values, ["2025", "2026"]);
+  const result = await runBridge(query, {
+    table: VIEW,
+    periodColumn: PERIOD,
+    prior: "2025",
+    current: "2026",
+    unitsColumn: "Menge",
+    salesColumn: "Umsatz",
+    levels: [{ name: "Produkt", columns: ["Produkt"] }],
+  });
+  assert.equal(result.priorSales, 220);
+  assert.equal(result.currentSales, 280);
+});

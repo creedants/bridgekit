@@ -279,3 +279,8 @@ test("a capped window keeps the text decision made over the values it dropped", 
   assert.deepEqual(list.values, expected);
   assert.equal(list.sort, "text");
 });
+
+test("R9: month-first month labels order by the month they name", async () => {
+  assert.deepEqual((await loadOnly(["12.2024", "01.2025", "03.2024"])).values, ["03.2024", "12.2024", "01.2025"]);
+  assert.deepEqual((await loadOnly(["12/2024", "01/2025", "03/2024"])).values, ["03/2024", "12/2024", "01/2025"]);
+});

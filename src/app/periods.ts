@@ -37,6 +37,8 @@ const MONTH_ABBREVIATION_SOURCE =
 const MONTH_FULL_SOURCE =
   String.raw`^(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER) \d{4}$`;
 const YEAR_MONTH_SOURCE = String.raw`^\d{4}-(0[1-9]|1[0-2])$`;
+const MONTH_DOT_YEAR_SOURCE = String.raw`^(0[1-9]|1[0-2])\.\d{4}$`;
+const MONTH_SLASH_YEAR_SOURCE = String.raw`^(0[1-9]|1[0-2])/\d{4}$`;
 const FISCAL_YEAR_SHORT_SOURCE = String.raw`^FY(\d{2})$`;
 const FISCAL_YEAR_LONG_SOURCE = String.raw`^FY(\d{4})$`;
 
@@ -87,6 +89,10 @@ export async function loadPeriodList(
                        + list_position(['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'], substr(u, 1, 3))
                 WHEN regexp_matches(u, '${YEAR_MONTH_SOURCE}')
                   THEN 6000000 + CAST(substr(u, 1, 4) AS INTEGER) * 100 + CAST(substr(u, 6, 2) AS INTEGER)
+                WHEN regexp_matches(u, '${MONTH_DOT_YEAR_SOURCE}')
+                  THEN 8000000 + CAST(substr(u, 4, 4) AS INTEGER) * 100 + CAST(substr(u, 1, 2) AS INTEGER)
+                WHEN regexp_matches(u, '${MONTH_SLASH_YEAR_SOURCE}')
+                  THEN 9000000 + CAST(substr(u, 4, 4) AS INTEGER) * 100 + CAST(substr(u, 1, 2) AS INTEGER)
                 WHEN regexp_matches(u, '${FISCAL_YEAR_SHORT_SOURCE}')
                   THEN 7000000 + (2000 + CAST(substr(u, 3, 2) AS INTEGER)) * 100
                 WHEN regexp_matches(u, '${FISCAL_YEAR_LONG_SOURCE}')
@@ -107,6 +113,8 @@ export async function loadPeriodList(
        SELECT bool_and(
                 regexp_matches(p, '${PLAIN_NUMBER_SOURCE}')
                 AND length(regexp_replace(p, '[^0-9]', '', 'g')) <= ${MAX_DIGITS}
+                -- A dotted month is a plain number too, and its date order wins.
+                AND NOT regexp_matches(p, '${MONTH_DOT_YEAR_SOURCE}')
               ) AS numeric,
               count(*) = count(k)
                 AND count(DISTINCT k // 1000000) = 1

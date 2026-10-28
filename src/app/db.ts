@@ -105,17 +105,56 @@ export async function readCsvTable(
   const types = typesForDotColumns(dots);
   await query(`CREATE OR REPLACE TABLE ${quote(table)} AS SELECT * FROM read_csv('${escaped}', ${CSV_OPTIONS}${types ?? ""})`);
   await applyDotColumns(query, table, dots);
-  if (skipMonthFirst) return;
-  const { ambiguous, monthFirst } = await ambiguousDateColumns(query, table, path);
-  for (const column of ambiguous) {
-    const name = quote(table);
-    const field = quote(column);
-    if (!monthFirst) {
-      await query(
-        `UPDATE ${name} SET ${field} = make_date(year(${field})::INTEGER, day(${field})::INTEGER, month(${field})::INTEGER) WHERE ${field} IS NOT NULL`,
-      );
+  if (!skipMonthFirst) {
+    const { ambiguous, monthFirst } = await ambiguousDateColumns(query, table, path);
+    for (const column of ambiguous) {
+      const name = quote(table);
+      const field = quote(column);
+      if (!monthFirst) {
+        await query(
+          `UPDATE ${name} SET ${field} = make_date(year(${field})::INTEGER, day(${field})::INTEGER, month(${field})::INTEGER) WHERE ${field} IS NOT NULL`,
+        );
+      }
+      await query(`COMMENT ON COLUMN ${name}.${field} IS '${MONTH_FIRST_MARK}'`);
     }
-    await query(`COMMENT ON COLUMN ${name}.${field} IS '${MONTH_FIRST_MARK}'`);
+  }
+  // After the slash-date pass, so a column whose every value is a month
+  // becomes a date without changing which slash dates were reinterpreted.
+  await convertMonthColumns(query, table, path).catch(() => {});
+}
+
+// A month with no day, in the three shapes the tool reads as the first of that
+// month. Every non-blank value must be one of them.
+const MONTH_TEXT = [
+  "^(0[1-9]|1[0-2])\\.(19|20)\\d{2}$",
+  "^(0[1-9]|1[0-2])/(19|20)\\d{2}$",
+  "^(19|20)\\d{2}-(0[1-9]|1[0-2])$",
+].join("|");
+const ISO_MONTH = "^(19|20)\\d{2}-";
+
+async function convertMonthColumns(query: Query, table: string, path: string): Promise<void> {
+  const described = await query(`DESCRIBE ${quote(table)}`);
+  const text = described.filter((row) => String(row.column_type) === "VARCHAR").map((row) => String(row.column_name));
+  if (text.length === 0) return;
+  const escaped = path.replaceAll("'", "''");
+  const raw = `read_csv('${escaped}', all_varchar=true, ${CSV_OPTIONS})`;
+  const names = new Set((await query(`DESCRIBE SELECT * FROM ${raw}`)).map((row) => String(row.column_name)));
+  for (const column of text) {
+    if (!names.has(column)) continue;
+    const field = quote(column);
+    const value = `trim(${field})`;
+    const blank = `(${field} IS NULL OR ${value} = '')`;
+    const [counts] = await query(
+      `SELECT count(*) FILTER (WHERE NOT ${blank})::DOUBLE AS n,
+              count(*) FILTER (WHERE NOT ${blank} AND NOT regexp_matches(${value}, '${MONTH_TEXT}'))::DOUBLE AS bad
+       FROM ${raw}`,
+    );
+    if (!(Number(counts?.n) > 0) || Number(counts?.bad) > 0) continue;
+    const year = `CASE WHEN regexp_matches(${value}, '${ISO_MONTH}') THEN CAST(substr(${value}, 1, 4) AS INTEGER) ELSE CAST(substr(${value}, length(${value}) - 3, 4) AS INTEGER) END`;
+    const month = `CASE WHEN regexp_matches(${value}, '${ISO_MONTH}') THEN CAST(substr(${value}, 6, 2) AS INTEGER) ELSE CAST(substr(${value}, 1, 2) AS INTEGER) END`;
+    await query(
+      `ALTER TABLE ${quote(table)} ALTER ${field} TYPE DATE USING CASE WHEN ${blank} THEN NULL ELSE make_date(${year}, ${month}, 1) END`,
+    );
   }
 }
 
