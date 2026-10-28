@@ -93,6 +93,8 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .hero .copy .lead { margin-top: 1.5rem; font-size: 1.3125rem; line-height: 1.45; color: var(--plum-2); max-width: 21rem; }
 
+.hero .copy .define { margin-top: .75rem; max-width: 21rem; font: 400 .9375rem/1.5 var(--sans); color: var(--plum-2); }
+
 .hero .copy .cta { margin-top: 2.25rem; padding: .95rem 1.35rem; font-size: .9375rem; }
 
 .hero .copy .cta span { transition: transform .15s; }
@@ -104,11 +106,11 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 /* In the side-by-side layout, the picture runs into the shell's right padding to leave room for all five KPI tiles. */
 .hero figure { margin-right: calc(-1 * var(--pad) - min(0px, var(--gutter) - 2rem)); }
 
-/* The framed picture is a drawing of the tool, so nothing in it answers a pointer, a tap or a long press. */
-.hero figure { pointer-events: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+/* The picture links to the sample but still reads as a drawing: no link colour or underline, and no text selection. */
+.hero .frame { display: block; background: var(--t-bg); border-radius: 12px; overflow: hidden; font-family: var(--sans); color: var(--t-text); text-decoration: none; user-select: none; -webkit-user-select: none;
+  box-shadow: 0 0 0 1px rgba(66, 32, 61, .10), 0 2px 4px rgba(66, 32, 61, .06), 0 24px 60px -12px rgba(66, 32, 61, .35); transition: transform .2s ease, box-shadow .2s ease; }
 
-.hero .frame { background: var(--t-bg); border-radius: 12px; overflow: hidden; font-family: var(--sans); color: var(--t-text);
-  box-shadow: 0 0 0 1px rgba(66, 32, 61, .10), 0 2px 4px rgba(66, 32, 61, .06), 0 24px 60px -12px rgba(66, 32, 61, .35); }
+.hero a.frame:focus-visible { outline: 3px solid var(--plum); outline-offset: 4px; }
 
 .hero .chrome { display: flex; align-items: center; gap: .9rem; height: 44px; padding: 0 1rem; border-bottom: 1px solid var(--t-line); }
 
@@ -166,6 +168,20 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
   .hero figure { margin-inline: calc(-1 * (var(--pad) + var(--gutter))); padding: 2.5rem calc(var(--pad) + var(--gutter)); background: var(--sun); }
 
   .hero .frame { max-width: 48rem; transform: rotate(-1.5deg); }
+}
+
+@media (hover: hover) {
+  .hero a.frame:hover { transform: translateY(-4px); box-shadow: 0 0 0 1px rgba(66, 32, 61, .16), 0 4px 8px rgba(66, 32, 61, .08), 0 32px 72px -12px rgba(66, 32, 61, .45); }
+
+  .hero-grid:has(a.frame:hover) .cta span { transform: translateX(3px); }
+}
+
+@media (max-width: 1239px) and (hover: hover) {
+  .hero a.frame:hover { transform: rotate(-1.5deg) translateY(-4px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero .frame, .hero .copy .cta span { transition: none; }
 }
 
 @media (max-width: 800px) {
@@ -279,9 +295,13 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .plan p { margin-top: 0.5rem; }
 
+.plan .when { margin-top: 0.25rem; font: 400 0.8125rem/1.5 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
+
 .plan ul { margin: 1.25rem 0 1.75rem; padding-left: 1.1rem; display: grid; gap: 0.4rem; }
 
 .plan li { font-size: 1.0625rem; line-height: 1.45; }
+
+.plan li small { display: block; margin-top: 0.15rem; font: 400 0.8125rem/1.5 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
 
 /* Footer */
 
@@ -322,6 +342,14 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
   .nav-inner { flex-wrap: wrap; height: auto; gap: 0.75rem; padding-block: 0.75rem; }
 
   .nav nav { width: 100%; justify-content: space-between; gap: 0.5rem; }
+}
+
+@media (pointer: coarse), (max-width: 480px) {
+  .wordmark, .nav nav a, .footer-inner a { min-height: 44px; }
+
+  .nav nav a:not(.button), .footer-inner a { display: inline-flex; align-items: center; }
+
+  .footer-inner { row-gap: 0; }
 }
 
 @media (max-width: 34rem) {

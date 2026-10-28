@@ -60,7 +60,7 @@
         </ul>
 
         <!-- feature:ai -->
-        <h2>Optional AI commentary</h2>
+        <h2 id="ai-commentary">Optional AI commentary</h2>
         <ul>
           <li>Below the summary there is a button to have Anthropic’s Claude write a longer commentary. Nothing is sent unless you press it, each time.</li>
           <li>What is sent: the bridge totals, the names of the measure, attributes and bridge lines, the two period labels and the match coverage. You can see the exact text under <b>Show exactly what is sent</b> before you press the button.</li>
@@ -100,7 +100,7 @@
         <h2>Checking this yourself</h2>
         <p>Open your browser’s developer tools, go to the network panel, and load a file. No request carries your data. The pages also carry a content security policy that allows connections only to this site, so the browser itself blocks anything else.<!-- feature:workspaces --> The checkout page allows connections to Paddle, which takes the payment.<!-- /feature:workspaces --> The source code is published so anyone can confirm what the page does, and its automated test checks that none of your data is stored or sent.</p>
 
-        <h2>If this changes</h2>
+        <h2 id="if-this-changes">If this changes</h2>
         <!-- feature:!workspaces -->
         <p>Planned Pro features would use a server: saved workspaces would store your setup there, and AI commentary would send the bridge totals, never your file or its rows, to Anthropic’s Claude to write the text. This page will be updated before either is released, and uploading data will never be required to use the free tool.</p>
         <!-- /feature:!workspaces -->
