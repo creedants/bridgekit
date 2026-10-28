@@ -24,7 +24,9 @@ h1,
 h2,
 h3 { font-weight: 500; }
 
-h1 { font-size: clamp(2.5rem, 5.2vw, 4.25rem); line-height: 1.03; letter-spacing: -0.015em; }
+h1 { font-size: clamp(2.5rem, 4.6vw, 3.75rem); line-height: 1.04; letter-spacing: -0.015em; }
+
+.nowrap { white-space: nowrap; }
 
 h2 { font-size: clamp(1.5rem, 2.4vw, 1.875rem); line-height: 1.15; letter-spacing: -0.01em; }
 
@@ -237,13 +239,16 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
 
   .get dd { margin-bottom: 1rem; }
 
-  .chart .axis-head { font-size: 15px; }
+  .chart { padding: 0.75rem; }
 
-  .chart .row-name { font-size: 17px; }
+  /* SVG text scales with the viewBox, so these larger user units keep about 12 px on a 390 px screen. */
+  .chart .axis-head { font-size: 20px; }
 
-  .chart .none { font-size: 15px; }
+  .chart .row-name { font-size: 24px; }
 
-  .chart .value { font-size: 20px; }
+  .chart .none { font-size: 22px; }
+
+  .chart .value { font-size: 24px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
