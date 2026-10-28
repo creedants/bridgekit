@@ -17,13 +17,13 @@ export const price = (n: number) => (Number.isFinite(n) ? priceFormat.format(n) 
 export const percent = (n: number) => {
   if (!Number.isFinite(n)) return "";
   const value = n * 100;
-  if (Math.abs(value) >= PERCENT_CAP) return value < 0 ? "<-1,000,000%" : ">1,000,000%";
+  if (Math.abs(value) > PERCENT_CAP) return value < 0 ? "<-1,000,000%" : ">1,000,000%";
   return value.toFixed(1) + "%";
 };
 export const signedPercent = (n: number) => {
   if (!Number.isFinite(n)) return "";
   const value = n * 100;
-  if (Math.abs(value) >= PERCENT_CAP) return value < 0 ? "<-1,000,000%" : ">1,000,000%";
+  if (Math.abs(value) > PERCENT_CAP) return value < 0 ? "<-1,000,000%" : ">1,000,000%";
   return (n > 0 ? "+" : "") + value.toFixed(1) + "%";
 };
 
