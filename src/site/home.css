@@ -79,7 +79,7 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .hero { position: relative; overflow: hidden; padding-block: 4.5rem 4rem; }
 
-.hero::before { /* the sun slab the product sits on, bleeding off the right edge; it starts 5rem into the picture, past the 23rem copy column and the 4rem gap */
+.hero::before { /* In the side-by-side layout, the sun slab bleeds off the right edge and starts inside the picture, beyond the copy column and gap. */
   content: ""; position: absolute; top: 2.5rem; bottom: 0; left: calc(var(--gutter) + var(--pad) + 32rem); right: 0; background: var(--sun); border-top-left-radius: 28px;
 }
 
@@ -97,7 +97,7 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .hero .copy .fine { margin-top: 1rem; font: 400 .8125rem/1.5 var(--sans); color: var(--plum-2); }
 
-/* The picture runs on into the shell's right padding and stops 2rem or the page gutter short of the edge, whichever is wider, so the five KPI tiles fit beside the copy. */
+/* In the side-by-side layout, the picture runs into the shell's right padding to leave room for all five KPI tiles. */
 .hero figure { margin-right: calc(-1 * var(--pad) - min(0px, var(--gutter) - 2rem)); }
 
 .hero .frame { background: var(--t-bg); border-radius: 12px; overflow: hidden; font-family: var(--sans); color: var(--t-text);
