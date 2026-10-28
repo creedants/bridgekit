@@ -549,3 +549,13 @@ test("R33: no formatter prints a huge number in exponent notation", () => {
     assert.equal(/[eE]/.test(text), false, text);
   }
 });
+
+test("R33: the percentage cap says greater than only past the boundary", () => {
+  const { percent, signedPercent } = format;
+  assert.equal(percent(10000), "1000000.0%");
+  assert.equal(signedPercent(10000), "+1000000.0%");
+  assert.equal(percent(-10000), "-1000000.0%");
+  assert.equal(percent(10000.1), ">1,000,000%");
+  assert.equal(signedPercent(-10000.1), "<-1,000,000%");
+  assert.equal(percent(9999.9), "999990.0%");
+});
