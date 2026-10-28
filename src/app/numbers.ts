@@ -396,7 +396,9 @@ export async function wholeRowNote(query: Query, table: string): Promise<string 
   try {
     const described = await query(`DESCRIBE ${quotedName(table)}`);
     const width = described.length;
-    if (width < 2) return null;
+    // A two-column table cannot tell a whole record from one cell holding a
+    // decimal comma, so it is never judged a mixed file.
+    if (width < 3) return null;
     const numeric = described.map((row) => isNumeric(String(row.column_type)));
     if (!numeric.some(Boolean)) return null;
     const period = quotedName(PERIOD);
