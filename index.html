@@ -17,273 +17,124 @@
     <meta name="twitter:card" content="summary_large_image" />
     <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"PVM Bridge","url":"https://pvmbridge.com/"}</script>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/src/site/site.css" />
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/newsreader.woff2" />
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/instrument-sans.woff2" />
+    <link rel="stylesheet" href="/src/site/home.css" />
   </head>
   <body>
-    <div class="nav">
-      <div class="wrap">
-        <a class="wordmark" href="/"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="6" fill="var(--accent)"/><rect x="6" y="17" width="5" height="9" fill="#fff"/><rect x="13.5" y="12" width="5" height="5" fill="#fff" opacity=".75"/><rect x="21" y="6" width="5" height="20" fill="#fff"/></svg>PVM Bridge</a>
+    <header class="nav">
+      <div class="shell nav-inner">
+        <a class="wordmark" href="/"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="6" fill="var(--plum)"/><rect x="6" y="17" width="5" height="9" fill="#fff"/><rect x="13.5" y="12" width="5" height="5" fill="#fff" opacity=".75"/><rect x="21" y="6" width="5" height="20" fill="#fff"/></svg>PVM Bridge</a>
         <nav>
-          <a class="optional" href="#how">How it works</a>
-          <a class="optional" href="/guide.html">Guide</a>
-          <a class="optional" href="/price-volume-mix-analysis.html">What is PVM?</a>
-          <a class="optional" href="/method.html">Method</a>
-          <a class="optional" href="#pricing">Pricing</a>
-          <a class="optional" href="https://github.com/creedants/bridgekit">GitHub</a>
+          <a class="wide" href="/guide.html">Guide</a>
+          <a class="wide" href="/method.html">Method</a>
+          <a href="#pricing">Pricing</a>
           <a class="button" href="/app/">Open the tool</a>
         </nav>
       </div>
-    </div>
-
-    <header class="hero">
-      <div class="wrap">
-        <h1>Price-volume-mix analysis for products that don’t fit a SKU list</h1>
-        <p class="lede">
-          PVM Bridge splits a change in sales into volume, mix and price across as many product attributes as you
-          need. It runs in your browser, so your sales file never leaves your computer.
-        </p>
-        <div class="cta">
-          <a class="button" href="/app/">Open the tool</a>
-          <a class="button secondary" href="/app/?sample">Try it with sample data</a>
-        </div>
-        <p class="fine">Free and open source. No account. Works with CSV and Excel files.</p>
-
-        <figure class="shot">
-          <div class="shot-bar"><b>Sales bridge</b><span>2025 to 2026</span><span>Model › Finish › Color › Material</span></div>
-          <div class="shot-body">
-            <svg viewBox="0 34 680 228" role="img" aria-label="Waterfall chart: sales rise from 57.9 million to 70.4 million through volume, four mix effects, price, new configurations and discontinued configurations. The numbers are in the table beside it.">
-              <g stroke="var(--grid)">
-                <line x1="30" y1="220" x2="670" y2="220" stroke="var(--line-strong)" />
-                <line x1="30" y1="140" x2="670" y2="140" />
-                <line x1="30" y1="60" x2="670" y2="60" />
-              </g>
-              <g fill="var(--total)">
-                <rect x="40" y="156.7" width="40" height="63.3" />
-                <rect x="607" y="56.4" width="40" height="163.6" />
-              </g>
-              <g fill="var(--up)">
-                <rect x="103" y="118.0" width="40" height="38.7" />
-                <rect x="166" y="108.9" width="40" height="9.1" />
-                <rect x="229" y="102.3" width="40" height="6.6" />
-                <rect x="292" y="84.3" width="40" height="18.0" />
-                <rect x="418" y="76.8" width="40" height="8.3" />
-                <rect x="481" y="48.7" width="40" height="28.1" />
-              </g>
-              <g fill="var(--down)">
-                <rect x="355" y="84.3" width="40" height="2" />
-                <rect x="544" y="48.7" width="40" height="7.7" />
-              </g>
-              <g text-anchor="middle">
-                <text class="value" x="60" y="150.7">57.9M</text>
-                <text class="value" x="123" y="112.0">+4.8M</text>
-                <text class="value" x="186" y="102.9">+1.1M</text>
-                <text class="value" x="249" y="96.3">+0.8M</text>
-                <text class="value" x="312" y="78.3">+2.2M</text>
-                <text class="value" x="375" y="78.3">−0.1M</text>
-                <text class="value" x="438" y="70.8">+1.0M</text>
-                <text class="value" x="501" y="42.7">+3.5M</text>
-                <text class="value" x="564" y="42.7">−1.0M</text>
-                <text class="value" x="627" y="50.4">70.4M</text>
-              </g>
-              <g text-anchor="middle">
-                <text x="60" y="236">2025</text>
-                <text x="123" y="236">Volume</text>
-                <text x="186" y="236">Mix:</text><text x="186" y="249">Model</text>
-                <text x="249" y="236">Mix:</text><text x="249" y="249">Finish</text>
-                <text x="312" y="236">Mix:</text><text x="312" y="249">Color</text>
-                <text x="375" y="236">Mix:</text><text x="375" y="249">Material</text>
-                <text x="438" y="236">Price</text>
-                <text x="501" y="236">New</text><text x="501" y="249">configs</text>
-                <text x="564" y="236">Discont.</text><text x="564" y="249">configs</text>
-                <text x="627" y="236">2026</text>
-              </g>
-              <text x="30" y="224" text-anchor="end">50M</text>
-              <text x="30" y="144" text-anchor="end">60M</text>
-              <text x="30" y="64" text-anchor="end">70M</text>
-            </svg>
-            <table>
-              <tbody>
-                <tr class="total"><td>Sales 2025</td><td class="num">57,908,260</td></tr>
-                <tr><td>Volume</td><td class="num">+4,843,531</td></tr>
-                <tr><td>Mix: Model</td><td class="num">+1,141,258</td></tr>
-                <tr><td>Mix: Finish</td><td class="num">+823,665</td></tr>
-                <tr><td>Mix: Color</td><td class="num">+2,244,655</td></tr>
-                <tr><td>Mix: Material</td><td class="num">−93,715</td></tr>
-                <tr><td>Price (like-for-like)</td><td class="num">+1,026,258</td></tr>
-                <tr><td>New configurations</td><td class="num">+3,517,202</td></tr>
-                <tr><td>Discontinued configurations</td><td class="num">−961,576</td></tr>
-                <tr class="total"><td>Sales 2026</td><td class="num">70,449,538</td></tr>
-              </tbody>
-            </table>
-          </div>
-          <figcaption>Output from the tool’s built-in sample: one million made-up sales lines of a made-to-order product. The chart axis starts at 50M.</figcaption>
-        </figure>
-      </div>
     </header>
 
-    <section class="tinted">
-      <div class="wrap">
-        <h2>Any single grouping level gives the wrong price number</h2>
-        <p class="sub">
-          A standard bridge needs one product key. When a product is a combination of choices, such as a model, a
-          finish, a color and a material, no single key works.
-        </p>
-        <div class="cols" style="margin-bottom: 32px">
-          <div>
-            <h3>Group too finely</h3>
-            <p>Most full combinations sold in only one of the two periods. They have no prior price to compare with, so real price changes disappear into “new products”.</p>
-          </div>
-          <div>
-            <h3>Group too coarsely</h3>
-            <p>A customer moving to a premium finish raises the average price of the model. The bridge reports it as a price increase, and it is not one.</p>
-          </div>
-          <div>
-            <h3>What PVM Bridge does</h3>
-            <p>It compares each configuration with the same configuration last period. Where there is no match, it falls back to the nearest group that did exist, in the attribute order you set.</p>
-          </div>
+    <section class="hero">
+      <div class="shell hero-grid">
+        <h1><span class="nowrap">Price-volume-mix</span> analysis for products built from options</h1>
+        <p class="problem">Group by model, and a shift toward a higher-priced finish looks like a price rise. Group by full configuration, and new configurations have no prior price to compare.</p>
+        <p class="answer">PVM Bridge compares each configuration with itself, and falls back to the nearest group that existed, in the order you set.</p>
+        <figure class="chart">
+          <p class="chart-lede">Each effect, both groupings</p>
+          <svg viewBox="0 0 640 300" role="img" aria-label="Bar chart of the price effect on the same sales lines, grouped two ways. Volume 14,493,720 in both groupings. Mix from model 3,180,031 in both. Mix from finish 2,433,311, color 6,806,470 and material −115,845, only in the four-attribute grouping. Price 9,724,424 grouped by model only, against 3,189,686 with four attributes.">
+            <text class="axis-head" x="170" y="40">Model only</text>
+            <text class="axis-head" x="400" y="40">Four attributes</text>
+            <line class="track" x1="170" y1="48" x2="170" y2="288" />
+            <line class="track" x1="400" y1="48" x2="400" y2="288" />
+            <g class="row">
+              <text class="row-name" x="0" y="69">Volume</text>
+              <rect class="bar" x="170" y="55" width="196.37" height="18" />
+              <rect class="bar" x="400" y="55" width="196.37" height="18" />
+            </g>
+            <g class="row">
+              <text class="row-name" x="0" y="111">Mix: Model</text>
+              <rect class="bar" x="170" y="97" width="43.08" height="18" />
+              <rect class="bar" x="400" y="97" width="43.08" height="18" />
+            </g>
+            <g class="row">
+              <text class="row-name" x="0" y="153">Mix: Finish</text>
+              <text class="none" x="174" y="153">no line</text>
+              <rect class="bar" x="400" y="139" width="32.97" height="18" />
+            </g>
+            <g class="row">
+              <text class="row-name" x="0" y="195">Mix: Color</text>
+              <text class="none" x="174" y="195">no line</text>
+              <rect class="bar" x="400" y="181" width="92.22" height="18" />
+            </g>
+            <g class="row">
+              <text class="row-name" x="0" y="237">Mix: Material</text>
+              <text class="none" x="174" y="237">no line</text>
+              <rect class="bar" x="398" y="223" width="2" height="18" />
+            </g>
+            <g class="row">
+              <text class="row-name" x="0" y="279">Price</text>
+              <rect class="bar wrong" x="170" y="265" width="131.75" height="18" />
+              <text class="value wrong" x="307.75" y="279.5">+9.72M</text>
+              <rect class="bar total" x="400" y="265" width="43.22" height="18" />
+              <text class="value" x="449.22" y="279.5">+3.19M</text>
+            </g>
+          </svg>
+          <figcaption>The same three million made-up sales lines, grouped two ways. <a href="/grouping-level.html">Why the grouping level changes the price effect</a>.</figcaption>
+        </figure>
+        <div class="cta">
+          <a class="button" href="/app/">Open the tool</a>
+          <a class="button ghost" href="/app/?sample">Try it with sample data</a>
         </div>
-        <div class="boxed">
-          <table>
-            <thead>
-              <tr><th>Same data, two bridges</th><th class="num">Price effect reported</th><th class="num">Against the true +3.21M</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>Grouped by model only</td><td class="num flag">+9.72M</td><td class="num flag">3 times too high</td></tr>
-              <tr><td>PVM Bridge, four attributes</td><td class="num">+3.19M</td><td class="num">Within 1%</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <p class="sub" style="margin: 12px 0 0; font-size: 14px">
-          Test on three million made-up sales lines with a 4% price increase planted on part of the range, so the true
-          answer is known. In the model-only bridge, a shift toward higher-priced color options is counted as price.
-          <a href="/grouping-level.html">Why the grouping level changes the price effect</a>.
-        </p>
+        <p class="fine">Free. No account. CSV or Excel.</p>
       </div>
     </section>
 
-    <section>
-      <div class="wrap">
-        <h2>Built to be worked in</h2>
-        <p class="sub">Setup stays on the left, results on the right. Every table can be copied, and every number can be traced.</p>
-        <div class="gallery">
-          <figure><picture><source type="image/avif" srcset="/img/g-bridge.avif" /><img src="/img/g-bridge.png" alt="Bridge tab with waterfall chart, bridge table and written summary" width="1280" height="860" loading="lazy" decoding="async" /></picture><figcaption>The bridge, match coverage and a written summary.</figcaption></figure>
-          <figure><picture><source type="image/avif" srcset="/img/g-movers.avif" /><img src="/img/g-movers.png" alt="Movers tab drilled into one model, broken down by finish" width="1280" height="860" loading="lazy" decoding="async" /></picture><figcaption>Movers, drilled into one model.</figcaption></figure>
-          <figure><picture><source type="image/avif" srcset="/img/g-price.avif" /><img src="/img/g-price.png" alt="Price changes tab showing share of sales by band of price change" width="1280" height="860" loading="lazy" decoding="async" /></picture><figcaption>How widely a price change landed.</figcaption></figure>
-          <figure><picture><source type="image/avif" srcset="/img/g-setup.avif" /><img src="/img/g-setup.png" alt="Setup check tab with the bridge rerun leaving out each attribute" width="1280" height="860" loading="lazy" decoding="async" /></picture><figcaption>The bridge rerun with each attribute left out.</figcaption></figure>
-        </div>
-      </div>
-    </section>
-
-    <section id="how">
-      <div class="wrap">
-        <h2>How it works</h2>
-        <p class="sub">Three steps, and the second one can be saved for next time.</p>
-        <div class="cols">
-          <div>
-            <div class="step">1. Load</div>
-            <h3>Drop in a sales export</h3>
-            <p>A CSV or Excel file with one row per sales line: a date or period, units, sales and your product attributes.</p>
-          </div>
-          <div>
-            <div class="step">2. Set up</div>
-            <h3>Rank your attributes</h3>
-            <p>Pick the two periods and put the attributes in order of importance. Use one attribute for a classic bridge, or several. Two columns can be combined into one attribute.</p>
-          </div>
-          <div>
-            <div class="step">3. Read</div>
-            <h3>Get the bridge</h3>
-            <p>A waterfall, the largest movers behind each bar, the configurations that had no match, and an Excel file with the formulas in it.</p>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="tinted">
-      <div class="wrap">
-        <h2>What is in the tool</h2>
-        <p class="sub">Built for the person who has to defend the numbers in a review.</p>
-        <div class="features">
-          <div><h3>Mix split by attribute</h3><p>A separate mix line for each attribute, so you can say how much came from finish and how much from material.</p></div>
-          <div><h3>List price and discounts</h3><p>Add a gross sales column and the price effect splits into list price changes and discount changes.</p></div>
-          <div><h3>Margin bridge</h3><p>Add a cost column and the bridge moves to margin, with the rate effect split into selling price and unit cost.</p></div>
-          <div><h3>Rebates and credits kept apart</h3><p>Rows with sales and no units get their own line, so a rebate accrual never shows up as a price cut.</p></div>
-          <div><h3>New and discontinued, your way</h3><p>Show them as a price difference with units in volume, or at full sales outside volume and mix.</p></div>
-          <div><h3>Price changes across the book</h3><p>How much of matched sales went up 2% to 5%, stayed flat or went down, with the effect of each band.</p></div>
-          <div><h3>New, lost, growing, shrinking</h3><p>The change split by account, with net and gross retention. Works on customer, region or any other column.</p></div>
-          <div><h3>Did the increase stick?</h3><p>Enter the planned increase and see realized price against plan for each product group or customer.</p></div>
-          <div><h3>Price gaps against peers</h3><p>Put customer last and see who pays less than others for the same product, with the sales at stake.</p></div>
-          <div><h3>Movers and drill-down</h3><p>Click a bar to see what is behind it. Click a row to break it down by the next attribute. Every row adds up to its own sales change.</p></div>
-          <div><h3>Setup check</h3><p>The bridge is rerun with each attribute left out, so you can see how far the price number depends on your choices.</p></div>
-          <div><h3>Match coverage and unmatched list</h3><p>The share of sales compared against an exact prior configuration, and every new configuration with the reference price used.</p></div>
-          <div><h3>Trend across periods</h3><p>With dates in the file, one bridge per quarter or month shows when a price change took hold.</p></div>
-          <div><h3>Roll-ups found for you</h3><p>If product rolls up to family and category, the tool spots it and offers to add the levels in order.</p></div>
-          <div><h3>One-file report</h3><p>A single HTML page with the chart, bridge, summary and top movers. It holds totals and a written summary, names the file, the setup, its filter values and the top movers, and holds no rows, so it can be emailed.</p></div>
-          <div><h3>Written summary</h3><p>A plain-language paragraph of the bridge to paste into commentary. It is built from fixed patterns, so it never changes between runs.</p></div>
-          <div><h3>Excel export with formulas</h3><p>The bridge, coverage, movers and a detail sheet where every effect is a live formula, with a check row that should read zero.</p></div>
-          <div><h3>Filters and data checks</h3><p>Include or exclude values before calculating. A check tab counts returns, blank values and rows that were ignored.</p></div>
-          <div><h3>Setup you can keep</h3><p>The browser remembers your column mapping for the next file with the same columns, never the data or filter selections. Untick one box to turn it off, or save the setup to a file to share it.</p></div>
+    <section class="get" id="how">
+      <div class="shell get-grid">
+        <h2>What you get</h2>
+        <div class="get-body">
+          <p class="lead">For the analyst who has to explain a change in sales or margin. Load a CSV or Excel export, rank your attributes, and read the bridge.</p>
+          <dl>
+            <dt>Bridge</dt>
+            <dd>The waterfall, a mix line for each attribute, a written summary, and an Excel export.</dd>
+            <dt>Movers</dt>
+            <dd>What sits behind each bar, drilled down by attribute.</dd>
+            <dt>Accounts</dt>
+            <dd>New, lost, growing and shrinking customers.</dd>
+            <dt>Price changes</dt>
+            <dd>How widely a price change landed.</dd>
+            <dt>Setup check</dt>
+            <dd>With multiple attributes, the bridge rerun with each one left out.</dd>
+          </dl>
+          <p class="more"><a href="/guide.html">Read the guide</a> <a href="/method.html">Read the method</a></p>
         </div>
       </div>
     </section>
 
-    <section>
-      <div class="wrap">
-        <h2>Your data stays on your computer</h2>
-        <p class="sub">
-          Invoice-level sales by customer is not something to upload to a website. PVM Bridge loads a database engine
-          into the browser tab and does the calculation there.
-        </p>
-        <div class="cols">
-          <div><h3>The data is not kept</h3><p>The data lives in the tab’s memory. Close the tab or choose Clear data and it is gone. Only the column mapping is remembered, and you can turn that off. <!-- feature:!workspaces -->No cookies, no accounts.<!-- /feature:!workspaces --><!-- feature:workspaces -->Cookies are used for sign-in.<!-- /feature:workspaces --> <!-- feature:!counts -->No analytics.<!-- /feature:!counts --><!-- feature:counts -->No tracking scripts.<!-- /feature:counts --></p></div>
-          <div><h3>Nothing is uploaded</h3><p>The file is read by the page itself. You can confirm this in your browser’s network panel: loading a file sends no requests.</p></div>
-          <div><h3>Open source</h3><p>The calculation and the app are public under the MIT license, so your IT or audit team can read exactly what runs.</p></div>
-          <div><h3>The same answer every time</h3><p>The method is fixed arithmetic, not a language model. The same file and setup always give the same bridge.</p></div>
+    <section class="keeps">
+      <div class="shell">
+        <div class="keeps-inner">
+          <h2>Your sales file never leaves your computer</h2>
+          <p>The bridge is calculated inside the browser tab. The file itself is never uploaded. <!-- feature:!workspaces -->No cookies, no accounts.<!-- /feature:!workspaces --><!-- feature:workspaces -->Cookies are used for sign-in.<!-- /feature:workspaces --> <!-- feature:!counts -->No analytics.<!-- /feature:!counts --><!-- feature:counts -->No tracking scripts.<!-- /feature:counts --> The code is open source under the MIT license.</p>
+          <p><a href="/privacy.html">Read the privacy page</a></p>
         </div>
       </div>
     </section>
 
-    <section class="tinted">
-      <div class="wrap">
-        <h2>Where it fits</h2>
-        <p class="sub">Most teams choose between a spreadsheet they rebuild every month and a pricing suite they cannot justify. PVM Bridge sits between the two.</p>
-        <div class="boxed">
-          <table>
-            <thead><tr><th></th><th>Spreadsheet template</th><th>PVM Bridge</th><th>Enterprise pricing suite</th></tr></thead>
-            <tbody>
-              <tr><td>Time to a first bridge</td><td>Hours, then again each period</td><td>Minutes; the setup is remembered</td><td>An implementation project</td></tr>
-              <tr><td>Products built from several attributes</td><td>One grouping level at a time</td><td>Any number of attributes, with fallback matching</td><td>Usually yes, after configuration</td></tr>
-              <tr><td>Hundreds of thousands of rows</td><td>Slow or over the row limit</td><td>Yes, in the browser</td><td>Yes</td></tr>
-              <tr><td>Where the sales data goes</td><td>Stays on your computer</td><td>Stays on your computer</td><td>Usually the vendor’s servers</td></tr>
-              <tr><td>Can a reviewer check the numbers?</td><td>If the formulas are readable</td><td>Excel export with live formulas; open source</td><td>Depends on the product</td></tr>
-              <tr><td>Cost</td><td>Your time</td><td>Free</td><td>Quoted by a sales team</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-
-    <section id="pricing">
-      <div class="wrap">
+    <section class="price" id="pricing">
+      <div class="shell">
         <h2>Pricing</h2>
-        <p class="sub">The analysis is free. A paid plan for repeat use and teams is planned and not available yet.</p>
         <div class="plans">
           <div class="plan">
             <span class="tag">Available now</span>
-            <h3 style="margin-top: 10px">Free</h3>
+            <h3>Free</h3>
             <div class="price">$0</div>
-            <ul>
-              <li>The full bridge, any number of attributes</li>
-              <li>Movers, drill-down and unmatched list</li>
-              <li>Excel and CSV export</li>
-              <li>List price and discount split, price-change bands</li>
-              <li>Filters, data checks, setup files</li>
-              <li>No account and no row limit</li>
-            </ul>
+            <p>The whole tool. No row limit.</p>
             <a class="button" href="/app/">Open the tool</a>
           </div>
           <div class="plan">
             <span class="tag muted">Planned</span>
-            <h3 style="margin-top: 10px">Pro</h3>
+            <h3>Pro</h3>
             <div class="price">$19 <span>per user per month, expected</span></div>
             <ul>
               <li>Saved workspaces across devices</li>
@@ -291,36 +142,14 @@
               <li>AI commentary on each bridge</li>
               <li>PowerPoint export</li>
             </ul>
-            <a class="button secondary" href="https://github.com/creedants/bridgekit">Follow on GitHub</a>
+            <a class="button ghost" href="https://github.com/creedants/bridgekit">Follow on GitHub</a>
           </div>
         </div>
       </div>
     </section>
 
-    <section>
-      <div class="wrap narrow">
-        <h2>Questions</h2>
-        <dl>
-          <dt>Does it work for an ordinary product list?</dt>
-          <dd>Yes. Use a single attribute, such as product or SKU, and you get the standard volume, mix and price bridge. <a href="/app/?sample=sku">See a made-up product list</a>.</dd>
-          <dt>Which calculation method does it use?</dt>
-          <dd>Volume at the prior average price, mix as the change in units valued against the group average, and price on exact matches only. The <a href="/method.html">method page</a> has the formulas and a worked example.</dd>
-          <dt>Does the attribute order change the result?</dt>
-          <dd>Volume and like-for-like price do not change. The way mix is split between attributes does, so put the attribute that defines the product first.</dd>
-          <dt>How are returns and credits handled?</dt>
-          <dd>Negative rows are netted against sales of the same configuration. The data check tab counts them so you can decide whether to filter them out.</dd>
-          <dt>What about Excel files?</dt>
-          <dd>An .xlsx file works: the first sheet is read, with the header in the first row. You can also copy a range of cells and paste it straight into the tool. For more than a few hundred thousand rows, CSV is faster.</dd>
-          <dt>Can I bridge budget to actual?</dt>
-          <dd>Yes. Put both in one file with a column that says which is which, and choose that column as the period. Budget becomes the prior period and actual the current one. The same works for forecast against actual, or one region against another. <a href="/app/?sample=budget">See a made-up budget and actual file</a>.</dd>
-          <dt>Is it a margin bridge?</dt>
-          <dd>It can be. Add a cost column and the bridge is on margin, with the rate effect split into price and unit cost.</dd>
-        </dl>
-      </div>
-    </section>
-
     <footer>
-      <div class="wrap">
+      <div class="shell footer-inner">
         <span>PVM Bridge. MIT license.</span>
         <a href="/app/">Tool</a>
         <a href="/guide.html">Guide</a>

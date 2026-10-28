@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
+import { applyFeatureBlocks } from "../scripts/feature-blocks.ts";
 
 const ORIGIN = "https://pvmbridge.com";
 const APP_TITLE = "Price-volume-mix bridge tool | PVM Bridge";
@@ -32,7 +33,7 @@ const PAGES: Page[] = [
 ];
 
 const ROOT_PAGES = PAGES.filter((page) => !page.file.includes("/"));
-const IMAGE_PAGES = ["index.html", "guide.html"];
+const IMAGE_PAGES = ["guide.html"];
 
 function readPage(file: string): string {
   return readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
@@ -46,6 +47,22 @@ function classTokensOf(attributes: Map<string, string>): string[] {
 
 function collapseSpaces(text: string): string {
   return text.replace(/\s+/g, " ").trim();
+}
+
+const FEATURE_BLOCK = /<!-- feature:(!?[a-z-]+) -->[\s\S]*?<!-- \/feature:\1 -->/g;
+
+function visibleWordsOf(html: string): string[] {
+  const withoutHead = html.replace(/<head>[\s\S]*?<\/head>/i, " ");
+  const withoutFeatures = withoutHead.replace(FEATURE_BLOCK, " ");
+  const withoutComments = withoutFeatures.replace(/<!--[\s\S]*?-->/g, " ");
+  const withoutTags = withoutComments.replace(/<[^>]+>/g, " ");
+  const decoded = withoutTags
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+  return collapseSpaces(decoded).split(" ").filter(Boolean);
 }
 
 function planCardsOf(html: string): PlanCard[] {
@@ -352,6 +369,161 @@ test("the home page carries exactly one WebSite block", () => {
     site.url,
     `${ORIGIN}/`,
     `index.html structured data has url ${String(site.url)}: use "${ORIGIN}/"`,
+  );
+});
+
+test("the home page carries fewer than 400 visible words", () => {
+  const words = visibleWordsOf(readPage("index.html"));
+  assert.ok(
+    words.length < 400,
+    `index.html has ${words.length} visible words: cut the page to fewer than 400 and keep the short landing copy`,
+  );
+});
+
+test("the home page has exactly one h1 and it names price-volume-mix", () => {
+  const headings = [
+    ...readPage("index.html").matchAll(/<h1\b[^>]*>([\s\S]*?)<\/h1>/gi),
+  ];
+  assert.equal(
+    headings.length,
+    1,
+    `index.html has ${headings.length} <h1> elements: give the page exactly one heading`,
+  );
+  const text = collapseSpaces(headings[0][1]).toLowerCase();
+  assert.ok(
+    text.includes("price-volume-mix"),
+    `index.html h1 is "${collapseSpaces(headings[0][1])}": write a heading that names price-volume-mix`,
+  );
+});
+
+const HOME_LINKS = [
+  "/app/",
+  "/guide.html",
+  "/method.html",
+  "/price-volume-mix-analysis.html",
+  "/grouping-level.html",
+  "/privacy.html",
+  "/terms.html",
+];
+
+test("the home page links to the tool, the guide and every reference page", () => {
+  const hrefs = new Set(
+    [...readPage("index.html").matchAll(/<a\b[^>]*\shref="([^"]*)"/gi)].map(
+      (match) => match[1],
+    ),
+  );
+  for (const link of HOME_LINKS) {
+    assert.ok(
+      hrefs.has(link),
+      `index.html has no <a href="${link}">: add the link so the page still points at every page it describes`,
+    );
+  }
+});
+
+const GITHUB = "https://github.com/creedants/bridgekit";
+
+test("the home page loads nothing from another host and runs no script", () => {
+  const html = readPage("index.html");
+  const scripts = [...html.matchAll(/<script\b[^>]*>/gi)].map((match) => match[0]);
+  assert.equal(
+    scripts.length,
+    1,
+    `index.html has ${scripts.length} <script> elements: keep only the one application/ld+json block`,
+  );
+  assert.ok(
+    /type="application\/ld\+json"/.test(scripts[0]),
+    "index.html has a script that is not the application/ld+json block: the home page runs no script",
+  );
+
+  assert.equal(
+    /\son[a-z]+\s*=/i.test(html),
+    false,
+    "index.html has an inline event handler: the page runs no script, so attach no onload or onclick",
+  );
+  assert.equal(
+    /javascript:/i.test(html),
+    false,
+    "index.html has a javascript: URL: link to a real address instead",
+  );
+  const css = readFileSync(new URL("../src/site/home.css", import.meta.url), "utf8");
+  for (const remote of css.matchAll(/url\(\s*["']?(https?:)?\/\//gi)) {
+    assert.fail(
+      `src/site/home.css loads ${remote[0]}: serve every font and image from this site`,
+    );
+  }
+
+  for (const tag of html.matchAll(/<[a-z][^>]*>/gi)) {
+    const attributes = attributesOf(tag[0]);
+    for (const [name, value] of attributes) {
+      if (!/^(https?:)?\/\//.test(value)) continue;
+      if (
+        name === "href" &&
+        tag[0].startsWith("<link") &&
+        attributes.get("rel") === "canonical"
+      ) {
+        continue;
+      }
+      if (
+        name === "content" &&
+        tag[0].startsWith("<meta") &&
+        (attributes.get("property") ?? "").startsWith("og:")
+      ) {
+        continue;
+      }
+      if (name === "href" && tag[0].startsWith("<a") && value === GITHUB) continue;
+      assert.fail(
+        `index.html has ${name}="${value}": load nothing from another host, apart from the canonical address, the og: values and the GitHub link`,
+      );
+    }
+  }
+});
+
+test("the home page keeps its own stylesheet", () => {
+  const html = readPage("index.html");
+  assert.ok(
+    /<link\b[^>]*\shref="\/src\/site\/home\.css"/.test(html),
+    "index.html does not link /src/site/home.css: keep the home page stylesheet separate from src/site/site.css",
+  );
+  for (const page of ROOT_PAGES) {
+    if (page.file === "index.html") continue;
+    assert.ok(
+      !readPage(page.file).includes("/src/site/home.css"),
+      `${page.file} links /src/site/home.css: only the home page uses it`,
+    );
+  }
+  const path = new URL("../src/site/home.css", import.meta.url);
+  assert.ok(
+    existsSync(path),
+    "src/site/home.css is missing: add the home page stylesheet it links",
+  );
+  assert.equal(
+    /@import/.test(readFileSync(path, "utf8")),
+    false,
+    "src/site/home.css imports another stylesheet: keep the home page stylesheet self-contained",
+  );
+});
+
+test("the home page keeps the counts sentence for the counts build", () => {
+  const html = readPage("index.html");
+  const counts = applyFeatureBlocks(html, { counts: true });
+  assert.ok(
+    counts.includes("No tracking scripts."),
+    "the counts build of index.html does not say No tracking scripts.: keep the feature:counts block in the privacy paragraph",
+  );
+  assert.equal(
+    counts.includes("No analytics."),
+    false,
+    "the counts build of index.html still says No analytics.: keep the two counts blocks paired so the filter drops one",
+  );
+  const free = applyFeatureBlocks(html, { counts: false });
+  assert.ok(
+    free.includes("No analytics."),
+    "the build without page counts does not say No analytics.: keep the feature:!counts block in the privacy paragraph",
+  );
+  assert.equal(
+    free.includes("No tracking scripts."),
+    false,
+    "the build without page counts still says No tracking scripts.: keep the two counts blocks paired so the filter drops one",
   );
 });
 
