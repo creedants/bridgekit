@@ -723,7 +723,8 @@ async function drive(browser, origin, rows) {
   const started = Date.now();
 
   // A demonstration sample must not write to storage or replace a setup saved for
-  // a file with the same columns. Remembering is at its default in this browser.
+  // a file with the same columns. A saved setup with no remember choice beside it
+  // counts as on, as it does for a visitor from before the choice was stored.
   const setupKey = (names) => `bridgekit:setup:${[...names].sort().join("|")}`;
   const seeded = [
     [
@@ -945,18 +946,27 @@ async function drive(browser, origin, rows) {
   if (kept.length) fail(`data left in the browser: ${JSON.stringify(Object.fromEntries(kept))}`);
   console.log("ok  storage: nothing in sessionStorage, cookies, IndexedDB, caches, private file system or service workers");
 
-  // Remembering is on by default: localStorage holds one setup per set of
-  // columns used (the sample data and this file) and nothing else, with no
-  // filter selection or other value from the data.
-  const entries = Object.entries(stored.localStorage);
-  if (entries.length !== 2 || !entries.every(([key]) => key.startsWith("bridgekit:setup:"))) {
-    fail(`unexpected localStorage: ${JSON.stringify(Object.keys(stored.localStorage))}`);
+  // Remembering is off for a fresh visitor, so the sample and this file stored nothing.
+  if (Object.keys(stored.localStorage).length) fail(`a fresh visitor's localStorage holds ${JSON.stringify(Object.keys(stored.localStorage))}`);
+  console.log("ok  remember setup (default off): stores nothing");
+
+  const rememberBox = "[...document.querySelectorAll('.check input')].find(i => i.closest('label').textContent.includes('Remember'))";
+
+  // Ticking stores the choice and this file's column mapping, with no filter
+  // selection or other value from the data.
+  if (await browser.evalJs(`${rememberBox}.checked`)) fail("the remember box starts ticked for a fresh visitor");
+  await browser.evalJs(`${rememberBox}.click()`);
+  await browser.sleep(300);
+  const remembered = JSON.parse(await browser.evalJs("JSON.stringify(Object.fromEntries(Object.entries(localStorage)))"));
+  const entries = Object.entries(remembered).filter(([key]) => key !== "bridgekit:remember");
+  if (remembered["bridgekit:remember"] !== "on" || entries.length !== 1 || !entries[0][0].startsWith("bridgekit:setup:")) {
+    fail(`unexpected localStorage after ticking: ${JSON.stringify(Object.keys(remembered))}`);
   }
   for (const [, value] of entries) {
     if (JSON.parse(value).filters.length) fail("a filter selection was stored");
     if (value.includes(`"${selected}"`)) fail("a data value was stored");
   }
-  console.log("ok  remember setup (default): stores the column mapping only");
+  console.log("ok  remember setup: ticking stores the column mapping only");
 
   const loadCsv = async () => {
     await browser.goto(`${origin}/app/`);
@@ -965,8 +975,6 @@ async function drive(browser, origin, rows) {
     await browser.send("DOM.setFileInputFiles", { nodeId, files: [new URL("../public/sample-sales.csv", import.meta.url).pathname] });
     await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent");
   };
-  const rememberBox = "[...document.querySelectorAll('.check input')].find(i => i.closest('label').textContent.includes('Remember'))";
-
   await browser.evalJs("T.btn('Clear data').click()");
   try {
     await browser.waitFor("!document.querySelector('aside') && document.body.innerText.includes('Load a sales file')");
@@ -984,15 +992,15 @@ async function drive(browser, origin, rows) {
   }
   console.log("ok  remember setup: restored on the next load, without filter selections");
 
-  // Unticking deletes the setup and keeps only the "off" choice, which survives a reload.
+  // Unticking deletes everything stored, and staying off survives a reload.
   await browser.evalJs(`${rememberBox}.click()`);
   await browser.sleep(300);
   const afterOff = await browser.evalJs("JSON.stringify(Object.fromEntries(Object.entries(localStorage)))");
-  if (afterOff !== JSON.stringify({ "bridgekit:remember": "off" })) fail(`opting out left data in localStorage: ${afterOff}`);
+  if (afterOff !== JSON.stringify({})) fail(`opting out left data in localStorage: ${afterOff}`);
   console.log("ok  remember setup: unticking deletes what was stored");
 
   await loadCsv();
-  if (!(await browser.evalJs(`!${rememberBox}.checked && localStorage.length === 1`))) fail("remembering turned itself back on after a reload");
+  if (!(await browser.evalJs(`!${rememberBox}.checked && localStorage.length === 0`))) fail("remembering turned itself back on after a reload");
   console.log("ok  remember setup: staying off survives a reload");
 
   // Each built-in sample has to reach a calculated bridge of its own. Remembering
@@ -1019,7 +1027,7 @@ async function drive(browser, origin, rows) {
     if (!shown.startsWith(check.label)) fail(`${name} sample: source label is ${JSON.stringify(shown)}, expected to start with ${JSON.stringify(check.label)}`);
     console.log(`ok  ${name} sample: ${check.label}, ${totals.rows.length} bridge lines, ${totals.prior} to ${totals.current}`);
   }
-  if ((await browser.evalJs("localStorage.length")) !== 1) fail("a sample stored something while remembering is off");
+  if ((await browser.evalJs("localStorage.length")) !== 0) fail("a sample stored something while remembering is off");
   console.log("ok  samples: sku and budget store nothing while remembering is off");
 
   const fixtureDir = mkdtempSync(join(tmpdir(), "bridgekit-fixtures-"));
@@ -1285,8 +1293,8 @@ async function drive(browser, origin, rows) {
     await calculate();
     await browser.evalJs(`T.tab("Bridge")`);
     await browser.sleep(800);
-    await browser.evalJs(`([...document.querySelectorAll('.summary label.check input')].find((i) => i.closest('label').textContent.includes('Leave out names'))).click()`);
-    await browser.waitFor(`[...document.querySelectorAll('.summary label.check input')].some((i) => i.closest('label').textContent.includes('Leave out names') && i.checked)`);
+    await browser.evalJs(`([...document.querySelectorAll('.summary label.check input')].find((i) => i.closest('label').textContent.includes('Leave the file name'))).click()`);
+    await browser.waitFor(`[...document.querySelectorAll('.summary label.check input')].some((i) => i.closest('label').textContent.includes('Leave the file name') && i.checked)`);
     const tickedReport = await downloadReport();
     if (!tickedReport) fail("omit names: no ticked report was downloaded");
     for (const absent of [...moverValues, "C0", "C1", "C2", "C3", "C4", "smoke.csv", customLabel]) {
@@ -1344,7 +1352,7 @@ async function drive(browser, origin, rows) {
     const saved = JSON.parse(setupJson);
     if (saved.unitsColumn !== "net_sales" || saved.salesColumn !== "units") fail(`load setup: saved mapping is ${saved.unitsColumn}/${saved.salesColumn}`);
     if (!Array.isArray(saved.levels) || saved.levels.map((level) => level.name).join(",") !== "customer,model") fail("load setup: saved attributes are not customer then model");
-    const savedSetupPath = join(fixtureDir, "bridgekit-setup.json");
+    const savedSetupPath = join(fixtureDir, "pvm-bridge-setup.json");
     writeFileSync(savedSetupPath, setupJson);
     await browser.evalJs("T.btn('Clear data').click()");
     await browser.waitFor("!document.querySelector('aside') && document.body.innerText.includes('Load a sales file')");
@@ -1664,7 +1672,7 @@ async function drive(browser, origin, rows) {
         accept: i.accept,
         name: (i.labels && i.labels[0] ? i.labels[0].textContent : "").trim().replace(/\\s+/g, " "),
         inNav: !!i.closest('header nav'),
-        inRun: !!i.closest('.run'),
+        inKeep: !!i.closest('.keep'),
       })))`),
     );
     if (fileControls.length < 2) fail(`keyboard: ${fileControls.length} visible file controls`);
@@ -1672,7 +1680,7 @@ async function drive(browser, origin, rows) {
       await browser.evalJs("if (document.activeElement) document.activeElement.blur()");
       for (let i = 0; i < 40; i++) {
         const active = await browser.evalJs(
-          `(() => { const el = document.activeElement; if (!el || el.tagName !== 'INPUT' || el.type !== 'file') return ''; const label = el.labels && el.labels[0] ? el.labels[0].textContent.trim().replace(/\\s+/g, ' ') : ''; return (el.closest('header nav') ? 'nav:' : el.closest('.run') ? 'run:' : 'other:') + label; })()`,
+          `(() => { const el = document.activeElement; if (!el || el.tagName !== 'INPUT' || el.type !== 'file') return ''; const label = el.labels && el.labels[0] ? el.labels[0].textContent.trim().replace(/\\s+/g, ' ') : ''; return (el.closest('header nav') ? 'nav:' : el.closest('.keep') ? 'keep:' : 'other:') + label; })()`,
         );
         if (predicate(active)) return;
         await browser.key("Tab");
@@ -1691,7 +1699,7 @@ async function drive(browser, origin, rows) {
       }
       return JSON.stringify({ missing: false, outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth, outlineColor: style.outlineColor, boxShadow: style.boxShadow, backgrounds });
     })()`;
-    for (const [kind, match, label, labelSel] of [["nav", (s) => s.startsWith("nav:"), "Choose file", "header nav label.button"], ["run", (s) => s.startsWith("run:"), "Load setup", ".run label.button"]]) {
+    for (const [kind, match, label, labelSel] of [["nav", (s) => s.startsWith("nav:"), "Choose file", "header nav label.button"], ["keep", (s) => s.startsWith("keep:"), "Load setup", ".keep label.button"]]) {
       await browser.evalJs("if (document.activeElement) document.activeElement.blur()");
       await browser.waitFor("!document.activeElement || document.activeElement === document.body || document.activeElement.type !== 'file'");
       const blurred = JSON.parse(await browser.evalJs(ringJs(`document.querySelector(${JSON.stringify(labelSel)})`)));
@@ -1715,7 +1723,12 @@ async function drive(browser, origin, rows) {
     await browser.send("Page.setInterceptFileChooserDialog", { enabled: false });
     console.log("ok  keyboard: Choose file and Load setup are tabbed to, named from the accessibility tree, show a visible focus ring and open on Enter and Space");
 
-    await browser.goto(`${origin}/grouping-level.html`);
+    // The key presses above gave the page user activation, so leaving a page
+    // that holds data opens the leave-page question. Answer it if it shows.
+    const leaving = browser.goto(`${origin}/grouping-level.html`);
+    await browser.sleep(1000);
+    await browser.send("Page.handleJavaScriptDialog", { accept: true }).catch(() => {});
+    await leaving;
     const groupingTitle = await browser.evalJs("document.querySelector('article h1')?.textContent ?? ''");
     if (!groupingTitle.includes("grouping level")) fail(`grouping-level page: ${groupingTitle}`);
     console.log("ok  grouping-level");
@@ -1891,10 +1904,11 @@ async function openSecondTab(port) {
 }
 
 /**
- * Two tabs of one browser share localStorage. Page A turns Remember off, page B
- * saves a setup with Remember on, then page A turns Remember on. Page B's setup
- * must survive and be restored when page B loads the same columns again. The
- * same walk runs once with a demonstration sample loaded in page A.
+ * Two tabs of one browser share localStorage, and each tab's Remember box
+ * follows the other's. Page A opens unticked with nothing stored, page B ticks
+ * and saves a setup, page A unticks and storage empties, page B ticks again,
+ * and page B restores its setup when it loads the same columns after a reload.
+ * The same walk runs once with a demonstration sample loaded in page A.
  */
 async function rememberAcrossPages(browser, origin, { sample }) {
   const rememberBox = `[...document.querySelectorAll('.check input')].find((input) => input.closest('label').textContent.includes('Remember'))`;
@@ -1921,6 +1935,9 @@ async function rememberAcrossPages(browser, origin, { sample }) {
     })()`);
   };
 
+  const ticked = `!!${rememberBox} && ${rememberBox}.checked`;
+  const unticked = `!!${rememberBox} && !${rememberBox}.checked`;
+
   await browser.goto(sample ? `${origin}/app/?sample=${sample}` : `${origin}/app/`);
   if (sample) {
     await browser.waitFor("!!document.querySelector('aside') && !!document.querySelector('.check input')", 600);
@@ -1929,13 +1946,10 @@ async function rememberAcrossPages(browser, origin, { sample }) {
     await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent", 600);
   }
 
-  // Page A turns Remember off, which clears storage and leaves the opt-out.
-  await browser.evalJs(`${rememberBox}.click()`);
-  await browser.waitFor(`!!${rememberBox} && !${rememberBox}.checked`, 100);
-  const off = await readStorage();
-  if (Object.keys(off).join() !== "bridgekit:remember" || off["bridgekit:remember"] !== "off") {
-    fail(`page A turning Remember off left ${JSON.stringify(off)}, expected only the opt-out preference`);
-  }
+  // A fresh visitor's page A starts unticked and has stored nothing.
+  if (!(await browser.evalJs(unticked))) fail("page A opened with Remember ticked for a fresh visitor");
+  const fresh = await readStorage();
+  if (Object.keys(fresh).length) fail(`page A stored ${JSON.stringify(Object.keys(fresh))} before Remember was ticked`);
 
   const tab = await openSecondTab(SECOND_TAB_PORT);
   try {
@@ -1945,20 +1959,40 @@ async function rememberAcrossPages(browser, origin, { sample }) {
     await pasteCells(tab.evaluate, toTsvText(bHeader, bRows));
     await tab.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent");
 
-    // Page B turns Remember on and keeps the setup it guessed for its columns.
+    // Page B ticks Remember, which stores the choice and the setup it guessed for its columns.
     await tab.evaluate(`${rememberBox}.click()`);
-    await tab.waitFor(`[...document.querySelectorAll('.check input')].some((input) => input.closest('label').textContent.includes('Remember') && input.checked)`, 100);
-    const savedByB = (await readStorage())[setupKey(bHeader)];
-    if (!savedByB) fail(`page B turning Remember on saved no setup for its columns (storage holds ${JSON.stringify(Object.keys(await readStorage()))})`);
-    if ((await readStorage())["bridgekit:remember"] !== undefined) fail("page B turning Remember on kept the opt-out preference");
-
-    // Page A still has Remember off on screen. Turning it on must not touch what B saved.
-    await browser.evalJs(`${rememberBox}.click()`);
-    await browser.waitFor(`${rememberBox}.checked`, 100);
-    const afterA = await readStorage();
-    if (afterA[setupKey(bHeader)] !== savedByB) {
-      fail(`ticking Remember in page A lost the setup page B saved: storage holds ${JSON.stringify(Object.keys(afterA))}, expected ${JSON.stringify(setupKey(bHeader))} with page B's setup`);
+    await tab.waitFor(ticked, 100);
+    const onByB = await readStorage();
+    if (onByB["bridgekit:remember"] !== "on" || !onByB[setupKey(bHeader)]) {
+      fail(`page B ticking Remember left ${JSON.stringify(Object.keys(onByB))}, expected the choice and page B's setup`);
     }
+
+    try {
+      await browser.waitFor(ticked, 100);
+    } catch (error) {
+      fail(`page A did not follow page B to ticked (${error.message})`);
+    }
+
+    // Page A unticks, which deletes everything stored, and page B follows.
+    await browser.evalJs(`${rememberBox}.click()`);
+    await browser.waitFor(unticked, 100);
+    const offByA = await readStorage();
+    if (Object.keys(offByA).length) fail(`page A unticking Remember left ${JSON.stringify(Object.keys(offByA))}, expected nothing`);
+    try {
+      await tab.waitFor(unticked, 100);
+    } catch (error) {
+      fail(`page B did not follow page A to unticked (${error.message})`);
+    }
+
+    // Page B ticks again, and page A follows.
+    await tab.evaluate(`${rememberBox}.click()`);
+    await tab.waitFor(ticked, 100);
+    try {
+      await browser.waitFor(ticked, 100);
+    } catch (error) {
+      fail(`page A did not follow page B to ticked the second time (${error.message})`);
+    }
+    if (!(await readStorage())[setupKey(bHeader)]) fail("page B ticking Remember again saved no setup for its columns");
 
     // A reloaded tab shows what it restored only after the same file is loaded again.
     await tab.evaluate("location.reload()").catch((error) => {
@@ -1972,7 +2006,7 @@ async function rememberAcrossPages(browser, origin, { sample }) {
     try {
       await tab.waitFor("document.body.innerText.includes('Restored the setup')");
     } catch (error) {
-      fail(`page B did not restore the setup it saved after page A ticked Remember (${error.message})`);
+      fail(`page B did not restore the setup it saved after reloading (${error.message})`);
     }
   } finally {
     await tab.close();
@@ -1989,7 +2023,7 @@ async function crossPageRemembering(origin) {
     const browser = await open(SECOND_TAB_PORT, { chromium: CHROMIUM });
     try {
       await rememberAcrossPages(browser, origin, options);
-      console.log(`ok  ${label}: turning Remember on in one tab keeps the setup another tab saved${options.sample ? " while a sample is loaded" : ""}`);
+      console.log(`ok  ${label}: Remember starts off, each tab follows the other, and unticking deletes everything${options.sample ? " while a sample is loaded" : ""}`);
     } catch (error) {
       failures.push(`${label}: ${error instanceof Failure ? error.message : error.stack}`);
     } finally {
