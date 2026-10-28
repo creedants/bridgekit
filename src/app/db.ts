@@ -208,12 +208,19 @@ export async function stageCsvAndSwap(
 export async function swapLoadedTable(query: Query, staging: string, table: string): Promise<void> {
   const previous = `${table}__previous`;
   await query(`DROP TABLE IF EXISTS ${quote(previous)}`);
+  // Asking first keeps a first load from running a rename that must fail, which
+  // the database worker logs as a console error.
+  const [existing] = await query(
+    `SELECT count(*)::DOUBLE AS n FROM duckdb_tables() WHERE schema_name = current_schema() AND table_name = '${table.replaceAll("'", "''")}'`,
+  );
   let renamed = false;
-  try {
-    await query(`ALTER TABLE ${quote(table)} RENAME TO ${quote(previous)}`);
-    renamed = true;
-  } catch {
-    // A first load has no table to keep.
+  if (Number(existing?.n) > 0) {
+    try {
+      await query(`ALTER TABLE ${quote(table)} RENAME TO ${quote(previous)}`);
+      renamed = true;
+    } catch {
+      // A table the catalog names but the rename cannot move stays as it is.
+    }
   }
   try {
     await query(`ALTER TABLE ${quote(staging)} RENAME TO ${quote(table)}`);
