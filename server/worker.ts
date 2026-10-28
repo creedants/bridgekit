@@ -238,11 +238,70 @@ async function userId(c: Context<App>): Promise<string> {
   return session.user.id;
 }
 
+/** The message used when reading or parsing JSON fails. */
+const NOT_JSON = "The request was not valid JSON.";
+
 async function json(c: Context<App>): Promise<unknown> {
   try {
     return await c.req.json();
   } catch {
-    throw new WorkspaceError(400, "The request was not valid JSON.");
+    throw new WorkspaceError(400, NOT_JSON);
+  }
+}
+
+/** The most a setup or bridge save body may be, in bytes. */
+const SAVE_BODY_LIMIT = 8 * 1024 * 1024;
+const TOO_LARGE = "This is too large to save.";
+
+class BodyTooLarge extends Error {}
+
+/**
+ * Reads a save body and refuses it before parsing when it is over `limit`.
+ * `Content-Length` only short-circuits: a request may omit it or understate
+ * it, so the bytes read are what decide.
+ */
+async function boundedJson(c: Context<App>, limit: number): Promise<unknown> {
+  const declared = c.req.header("content-length");
+  if (declared !== undefined && Number(declared) > limit) throw new BodyTooLarge();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    reader = c.req.raw.body?.getReader();
+  } catch {
+    throw new WorkspaceError(400, NOT_JSON);
+  }
+  if (reader) {
+    for (;;) {
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } catch {
+        throw new WorkspaceError(400, NOT_JSON);
+      }
+      if (chunk.done) break;
+      size += chunk.value.byteLength;
+      if (size > limit) {
+        try {
+          await reader.cancel();
+        } catch {
+          // A source can reject cancel; the over-limit refusal is already decided.
+        }
+        throw new BodyTooLarge();
+      }
+      chunks.push(chunk.value);
+    }
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new WorkspaceError(400, NOT_JSON);
   }
 }
 
@@ -250,11 +309,12 @@ function parseWebhookBody(raw: string): unknown {
   try {
     return JSON.parse(raw);
   } catch {
-    throw new WorkspaceError(400, "The request was not valid JSON.");
+    throw new WorkspaceError(400, NOT_JSON);
   }
 }
 
 open.onError((error, c) => {
+  if (error instanceof BodyTooLarge) return c.json({ error: TOO_LARGE }, 413);
   const refused = translation(error);
   if (refused) return refused;
   if (error instanceof WorkspaceError) return c.json({ error: error.message }, error.status);
@@ -286,18 +346,20 @@ open.get("/api/workspaces/:id/setups", async (c) => {
   const query = setupListQuery(c.req.url);
   return c.json(await listSetups(c.env.DB, user, c.req.param("id"), query));
 });
-open.post("/api/workspaces/:id/setups", async (c) =>
-  c.json(await saveSetup(c.env.DB, await userId(c), c.req.param("id"), await json(c)), 201),
-);
+open.post("/api/workspaces/:id/setups", async (c) => {
+  const user = await userId(c);
+  return c.json(await saveSetup(c.env.DB, user, c.req.param("id"), await boundedJson(c, SAVE_BODY_LIMIT)), 201);
+});
 open.delete("/api/workspaces/:id/setups/:item", async (c) => {
   await deleteSaved(c.env.DB, await userId(c), c.req.param("id"), "setup", c.req.param("item"));
   return c.body(null, 204);
 });
 
 open.get("/api/workspaces/:id/bridges", async (c) => c.json(await listBridges(c.env.DB, await userId(c), c.req.param("id"))));
-open.post("/api/workspaces/:id/bridges", async (c) =>
-  c.json(await saveBridge(c.env.DB, await userId(c), c.req.param("id"), await json(c)), 201),
-);
+open.post("/api/workspaces/:id/bridges", async (c) => {
+  const user = await userId(c);
+  return c.json(await saveBridge(c.env.DB, user, c.req.param("id"), await boundedJson(c, SAVE_BODY_LIMIT)), 201);
+});
 open.delete("/api/workspaces/:id/bridges/:item", async (c) => {
   await deleteSaved(c.env.DB, await userId(c), c.req.param("id"), "bridge", c.req.param("item"));
   return c.body(null, 204);

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Level, Query } from "../engine.ts";
 import { sameSuggestedLevels } from "./fileProblems.ts";
 import { suggestAttributes, totalRowOffers, type TotalRow } from "./profile.ts";
-import { isDate, isNumeric, quote, TABLE, type Column, type Filter, type Grain, type Setup } from "./setup.ts";
+import { isDate, isNumeric, MAX_COLUMN_NAME, quote, TABLE, type Column, type Filter, type Grain, type Setup } from "./setup.ts";
 
 export function SetupPanel(props: {
   columns: Column[];
@@ -195,6 +195,7 @@ export function SetupPanel(props: {
                 <input
                   aria-label="Attribute name"
                   value={level.name}
+                  maxLength={MAX_COLUMN_NAME}
                   onChange={(e) => setLevels(setup.levels.with(i, { ...level, name: e.target.value }))}
                 />
                 <button className="icon" aria-label="Move up" title="Move up" disabled={i === 0} onClick={() => move(i, i - 1)}>↑</button>

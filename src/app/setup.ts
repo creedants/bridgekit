@@ -34,6 +34,11 @@ export interface Setup {
   newAndDiscontinued?: "difference" | "full";
 }
 
+/** The most columns a save may carry. */
+export const MAX_COLUMNS = 1000;
+/** The longest column or level name a save may carry. */
+export const MAX_COLUMN_NAME = 300;
+
 export const isDate = (type: string) => /DATE|TIMESTAMP/i.test(type);
 export const isNumeric = (type: string) => /INT|DOUBLE|DECIMAL|FLOAT|REAL/i.test(type);
 export const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;

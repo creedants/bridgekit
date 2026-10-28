@@ -1,0 +1,3 @@
+- The browser accepts every setup it accepted before: remembered mappings, setup files and saved setups with long attribute names, long header names, long filter values and 501-value total-row filters all validate and restore.
+- A workspace save refuses more levels than the file has columns, a column in two levels and a level name over 300 characters with `That setup does not match the columns.`, and the attribute-name input stops at 300 characters.
+- Every save body over 8 MiB is refused with `This is too large to save.` before parsing, and a body that cannot be read answers 400 rather than 500.
