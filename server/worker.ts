@@ -238,7 +238,7 @@ async function userId(c: Context<App>): Promise<string> {
   return session.user.id;
 }
 
-/** What every unreadable or invalid request body answers with. */
+/** The message used when reading or parsing JSON fails. */
 const NOT_JSON = "The request was not valid JSON.";
 
 async function json(c: Context<App>): Promise<unknown> {
