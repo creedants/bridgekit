@@ -235,7 +235,9 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
 }
 
 @media (max-width: 40rem) {
-  .nav nav a.wide { display: none; }
+  .nav-inner { flex-wrap: wrap; height: auto; gap: 0.75rem; padding-block: 0.75rem; }
+
+  .nav nav { width: 100%; justify-content: space-between; gap: 0.5rem; }
 }
 
 @media (max-width: 34rem) {
