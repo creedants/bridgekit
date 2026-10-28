@@ -52,13 +52,21 @@ export interface Guard {
   run(work: () => boolean | void | Promise<boolean | void>): Promise<void>;
 }
 
-/** Drops a trigger while its work runs and for a short while after it saves, so a double click saves one file. */
+/**
+ * Drops a trigger while its work runs and while a multi-click sequence is under way, so a double or triple click
+ * saves one file. A suppressed click restarts the wait, so the sequence's later clicks stay dropped. Work that
+ * fails or saves nothing frees the trigger at once.
+ */
 export function makeGuard(now: () => number = () => performance.now(), coolMs = 800): Guard {
   let running = false;
   let until = -Infinity;
   return {
     async run(work) {
-      if (running || now() < until) return;
+      const at = now();
+      if (running || at < until) {
+        if (!running) until = at + coolMs;
+        return;
+      }
       running = true;
       try {
         if ((await work()) !== false) until = now() + coolMs;

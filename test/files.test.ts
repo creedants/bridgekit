@@ -163,7 +163,7 @@ test("a guard drops a second trigger while the first runs and just after", async
   clock = 5799;
   await guard.run(() => void runs++);
   assert.equal(runs, 1);
-  clock = 5800;
+  clock = 6599;
   await guard.run(() => void runs++);
   assert.equal(runs, 2);
 });
@@ -180,7 +180,7 @@ test("a guard drops every click of a slow triple click and frees the trigger aft
   clock = 1717;
   await guard.run(() => void saved++);
   assert.equal(saved, 1, "the trigger stays held for 800 ms after the last suppressed click");
-  clock = 1718;
+  clock = 2517;
   await guard.run(() => void saved++);
   assert.equal(saved, 2, "a separate deliberate click after the sequence saves again");
 });
