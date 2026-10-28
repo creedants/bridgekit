@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { toCsv, toExportCsv, toExportTsv, toTsv } from "../src/app/files.ts";
+import { isPastedTable, makeGuard, parsePlannedIncrease, shorten, toCsv, toExportCsv, toExportTsv, toTsv } from "../src/app/files.ts";
 
 test("toCsv leaves the Excel upload rows unchanged", () => {
   const header = ["date", "@product", "units", "sales", "net_sales", "negative_numeric", "negative_text"];
@@ -133,4 +133,92 @@ test("the data preview shows dates as dates, not epoch milliseconds", () => {
   const app = readRoot(join("src", "app", "App.tsx"));
   assert.equal(app.includes("toISOString().slice(0, 10)"), true, "preview has no DATE to YYYY-MM-DD formatting");
   assert.equal(app.includes("previewCell"), true, "preview helper is missing");
+});
+
+test("only pasted cells with a header row and a tab count as a table", () => {
+  assert.equal(isPastedTable("product\tunits\nA-100\t4"), true);
+  assert.equal(isPastedTable("\r\nproduct\tunits\r\n\r\nA-100\t4\r\n"), true);
+  assert.equal(isPastedTable("The North region sold more A-100 this year."), false);
+  assert.equal(isPastedTable("4400"), false);
+  assert.equal(isPastedTable("   \n\t \n  "), false);
+  assert.equal(isPastedTable("x".repeat(100_000)), false);
+  assert.equal(isPastedTable("product\tunits"), false);
+  assert.equal(isPastedTable("product,units\nA-100\t4"), false);
+});
+
+test("a guard drops a second trigger while the first runs and just after", async () => {
+  let clock = 0;
+  const guard = makeGuard(() => clock, 800);
+  let runs = 0;
+  let finish = () => {};
+  const first = guard.run(() => new Promise<void>((resolve) => {
+    runs++;
+    finish = resolve;
+  }));
+  await guard.run(() => void runs++);
+  assert.equal(runs, 1);
+  clock = 5000;
+  finish();
+  await first;
+  clock = 5799;
+  await guard.run(() => void runs++);
+  assert.equal(runs, 1);
+  clock = 6599;
+  await guard.run(() => void runs++);
+  assert.equal(runs, 2);
+});
+
+test("a guard drops every click of a slow triple click and frees the trigger after it", async () => {
+  let clock = 0;
+  const guard = makeGuard(() => clock, 800);
+  let saved = 0;
+  for (const at of [0, 465, 918]) {
+    clock = at;
+    await guard.run(() => void saved++);
+  }
+  assert.equal(saved, 1, "the 465 ms and 918 ms clicks must not save again");
+  clock = 1717;
+  await guard.run(() => void saved++);
+  assert.equal(saved, 1, "the trigger stays held for 800 ms after the last suppressed click");
+  clock = 2517;
+  await guard.run(() => void saved++);
+  assert.equal(saved, 2, "a separate deliberate click after the sequence saves again");
+});
+
+test("a guard frees its trigger at once when the work fails or saves nothing", async () => {
+  const guard = makeGuard(() => 0, 800);
+  await assert.rejects(guard.run(() => {
+    throw new Error("no canvas");
+  }), /no canvas/);
+  let runs = 0;
+  await guard.run(() => {
+    runs++;
+    return false;
+  });
+  await guard.run(() => void runs++);
+  assert.equal(runs, 2);
+  await guard.run(() => void runs++);
+  assert.equal(runs, 2);
+});
+
+test("a long cell is cut to 39 characters and an ellipsis", () => {
+  assert.equal(shorten("A-100"), "A-100");
+  assert.equal(shorten("N".repeat(40)), "N".repeat(40));
+  assert.equal(shorten("N".repeat(41)), "N".repeat(39) + "…");
+  assert.equal(shorten("N".repeat(5000)), "N".repeat(39) + "…");
+  assert.equal(shorten("價".repeat(5000)).length, 40);
+  assert.equal(shorten("😀".repeat(50)), "😀".repeat(39) + "…");
+});
+
+test("a planned increase is a percentage from -100 to 1000", () => {
+  assert.deepEqual(parsePlannedIncrease(""), "empty");
+  assert.deepEqual(parsePlannedIncrease("   "), "empty");
+  assert.deepEqual(parsePlannedIncrease("0"), { value: 0 });
+  assert.deepEqual(parsePlannedIncrease("4%"), { value: 4 });
+  assert.deepEqual(parsePlannedIncrease(" 2.5 "), { value: 2.5 });
+  assert.deepEqual(parsePlannedIncrease("-100"), { value: -100 });
+  assert.deepEqual(parsePlannedIncrease("1000"), { value: 1000 });
+  for (const text of ["-100.01", "1000.01", "-999", "1e308", "abc", "4%%", "%", "1,5", "Infinity", "0x10"]) {
+    assert.equal(parsePlannedIncrease(text), "invalid", text);
+  }
 });

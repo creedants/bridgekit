@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Level, Query } from "../engine.ts";
 import { sameSuggestedLevels } from "./fileProblems.ts";
 import { suggestAttributes, totalRowOffers, type TotalRow } from "./profile.ts";
-import { isDate, isNumeric, MAX_COLUMN_NAME, quote, TABLE, type Column, type Filter, type Grain, type Setup } from "./setup.ts";
+import { isDate, isNumeric, MAX_LEVEL_NAME, quote, TABLE, type Column, type Filter, type Grain, type Setup } from "./setup.ts";
 
 export function SetupPanel(props: {
   columns: Column[];
@@ -38,7 +38,8 @@ export function SetupPanel(props: {
   );
   const distinctByName = new Map(columns.map((column) => [column.name, column.distinct ?? 0]));
   const suggested = suggestAttributes(columns, distinctByName, usedNames);
-  const setLevels = (levels: Level[]) => onChange({ levels });
+  // Names made from column headers are capped here, like typed ones.
+  const setLevels = (levels: Level[]) => onChange({ levels: levels.map((level) => ({ ...level, name: level.name.slice(0, MAX_LEVEL_NAME) })) });
   const setFilters = (filters: Filter[]) => onChange({ filters });
   const suggestRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
@@ -106,6 +107,12 @@ export function SetupPanel(props: {
             </select>
           </label>
         )}
+        {isDate(periodType) && setup.grain === "ytd" && (
+          <p className="hint">
+            Year to date: each year is cut at the month and day of the latest date in the file, so every year covers the
+            same stretch.
+          </p>
+        )}
         <div className="pair">
           <label>
             Prior
@@ -131,6 +138,7 @@ export function SetupPanel(props: {
               <option value="">Choose…</option>
               {numeric.map((c) => <option key={c.name}>{c.name}</option>)}
             </select>
+            <span className="hint">Quantity sold, such as pieces or cases.</span>
           </label>
           <label>
             Sales
@@ -164,16 +172,20 @@ export function SetupPanel(props: {
 
       <fieldset>
         <legend>Attributes</legend>
-        <p className="hint">Most important first. One attribute gives a classic bridge.</p>
+        <p className="hint">
+          Put the attribute you care about most at the top; each mix step is measured after the ones above it. One
+          attribute gives a classic bridge.
+        </p>
         <button
-          className="quiet"
           ref={suggestRef}
           disabled={suggested.length === 0}
           onClick={onSuggest}
         >
           Suggest attributes
         </button>
-        <p className="hint">Fills the list with the columns that look like product attributes, fewest values first.</p>
+        <p className="hint">
+          Adds the columns that look like product attributes, fewest values first. Reorder them with the arrows.
+        </p>
         {asking && (
           <div className="row">
             <span className="hint" id="suggest-confirm">
@@ -195,7 +207,7 @@ export function SetupPanel(props: {
                 <input
                   aria-label="Attribute name"
                   value={level.name}
-                  maxLength={MAX_COLUMN_NAME}
+                  maxLength={MAX_LEVEL_NAME}
                   onChange={(e) => setLevels(setup.levels.with(i, { ...level, name: e.target.value }))}
                 />
                 <button className="icon" aria-label="Move up" title="Move up" disabled={i === 0} onClick={() => move(i, i - 1)}>↑</button>

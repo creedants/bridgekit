@@ -1,15 +1,27 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  affectsRemember,
+  ENGINE_LOADING_TEXT,
   guessSetup,
+  initialPhase,
   isDate,
   isNumeric,
+  isRemembering,
   isValidSetup,
   loadSavedSetup,
+  mainView,
+  MAX_LEVEL_NAME,
   netSalesHeldAsText,
+  nextPhase,
+  rememberFrom,
   saveSetup,
   setRemembering,
+  shouldAutoRun,
+  shouldWarn,
   type Column,
+  type EngineState,
+  type Phase,
   type Setup,
 } from "../src/app/setup.ts";
 
@@ -1624,6 +1636,7 @@ const workedSetup: Setup = {
 
 test("a remembered setup is dropped when a same-named table's sales column is text", () => {
   stored.clear();
+  setRemembering(true);
   saveSetup(salesTable, workedSetup);
   assert.deepEqual(loadSavedSetup(salesTable), workedSetup);
   assert.equal(loadSavedSetup(withType(salesTable, "sales", "VARCHAR")), null);
@@ -1631,6 +1644,7 @@ test("a remembered setup is dropped when a same-named table's sales column is te
 
 test("a remembered setup is dropped when its date grain meets a BIGINT period column", () => {
   stored.clear();
+  setRemembering(true);
   const dated: Column[] = withType(salesTable, "year", "DATE");
   const yearly: Setup = { ...workedSetup, grain: "year" };
   saveSetup(dated, yearly);
@@ -1638,23 +1652,74 @@ test("a remembered setup is dropped when its date grain meets a BIGINT period co
   assert.equal(loadSavedSetup(salesTable), null);
 });
 
-test("ticking Remember keeps a setup another tab saved and removes only the opt-out", () => {
+test("a fresh visitor stores nothing until Remember is ticked", () => {
   stored.clear();
+  assert.equal(isRemembering(), false);
   saveSetup(salesTable, workedSetup);
-  const saved = [...stored];
-  assert.equal(saved.length, 1, "saving did not write exactly one setup");
-  stored.set("bridgekit:remember", "off");
-  setRemembering(true);
-  assert.deepEqual([...stored], saved);
-  assert.equal(stored.has("bridgekit:remember"), false);
+  assert.equal(stored.size, 0);
 });
 
-test("unticking Remember clears every stored setup and keeps the opt-out", () => {
+test("ticking Remember writes on and keeps a setup another tab saved", () => {
   stored.clear();
+  stored.set("bridgekit:remember", "on");
   saveSetup(salesTable, workedSetup);
+  stored.set("bridgekit:remember", "off");
+  setRemembering(true);
+  assert.equal(stored.get("bridgekit:remember"), "on");
+  assert.equal(stored.size, 2);
+  assert.equal(isRemembering(), true);
+});
+
+test("unticking Remember leaves no stored key at all", () => {
+  stored.clear();
+  setRemembering(true);
+  saveSetup(salesTable, workedSetup);
+  stored.set("other-site-key", "kept");
   setRemembering(false);
-  assert.deepEqual([...stored.keys()], ["bridgekit:remember"]);
-  assert.equal(stored.get("bridgekit:remember"), "off");
+  assert.deepEqual([...stored.keys()], ["other-site-key"]);
+  assert.equal(isRemembering(), false);
+});
+
+test("a visitor with setups saved before the opt-in still remembers", () => {
+  stored.clear();
+  stored.set(`bridgekit:setup:${["product", "sales", "units", "year"].join("|")}`, JSON.stringify(workedSetup));
+  assert.equal(isRemembering(), true);
+  assert.deepEqual(loadSavedSetup(salesTable), workedSetup);
+});
+
+test("the remember choice reads on, off, and legacy storage", () => {
+  const setupKey = "bridgekit:setup:a|b";
+  const cases: [string | null, string[], boolean][] = [
+    ["on", [], true],
+    ["on", ["bridgekit:remember"], true],
+    ["off", [], false],
+    ["off", [setupKey], false],
+    [null, [], false],
+    [null, ["other"], false],
+    [null, [setupKey], true],
+    ["yes", [setupKey], false],
+    ["", [], false],
+  ];
+  for (const [value, keys, expected] of cases) {
+    assert.equal(rememberFrom(value, keys), expected, `${value} with ${keys.join(",")}`);
+  }
+});
+
+test("only a clear, the remember key or a setup key changes the remember choice", () => {
+  assert.equal(affectsRemember(null), true);
+  assert.equal(affectsRemember("bridgekit:remember"), true);
+  assert.equal(affectsRemember("bridgekit:setup:a|b"), true);
+  assert.equal(affectsRemember("bridgekit:other"), false);
+  assert.equal(affectsRemember("other"), false);
+});
+
+test("a remembered attribute name is cut to the editor limit", () => {
+  stored.clear();
+  setRemembering(true);
+  const long: Setup = { ...workedSetup, levels: [{ name: "N".repeat(5000), columns: ["product"] }] };
+  saveSetup(salesTable, long);
+  assert.equal(loadSavedSetup(salesTable)?.levels[0].name, "N".repeat(MAX_LEVEL_NAME));
+  assert.equal(MAX_LEVEL_NAME, 60);
 });
 
 test("a loaded setup that names a text column as sales is refused", () => {
@@ -1819,4 +1884,83 @@ test("net note, unit price and quantity names do not withhold sales", () => {
     assert.equal(setup.salesColumn, "gross_sales", name);
     assert.equal(setup.grossColumn, undefined, name);
   }
+});
+
+const engines: EngineState[] = ["idle", "loading", "ready", "failed"];
+
+test("the sample link starts reading before the first render", () => {
+  assert.equal(initialPhase("?sample").kind, "reading");
+  assert.equal(initialPhase("?sample=sku").kind, "reading");
+  assert.equal(initialPhase("").kind, "start");
+  assert.equal(initialPhase("?other=1").kind, "start");
+});
+
+test("a sample load ends on its first bridge and a file load on the workspace", () => {
+  let phase = nextPhase(initialPhase(""), { type: "read", load: 1, source: "sample", label: "Making the sample data…" });
+  phase = nextPhase(phase, { type: "loaded", load: 1 });
+  assert.deepEqual(phase, { kind: "autoRun", load: 1 });
+  phase = nextPhase(phase, { type: "ran", load: 1 });
+  assert.deepEqual(phase, { kind: "workspace", load: 1 });
+  phase = nextPhase(phase, { type: "read", load: 2, source: "file", label: "Reading A-100.csv…" });
+  phase = nextPhase(phase, { type: "loaded", load: 2 });
+  assert.deepEqual(phase, { kind: "workspace", load: 2 });
+});
+
+test("events from an earlier load do not move the phase", () => {
+  let phase = nextPhase(initialPhase(""), { type: "read", load: 1, source: "file", label: "Reading first.csv…" });
+  phase = nextPhase(phase, { type: "read", load: 2, source: "sample", label: "Making the sample data…" });
+  const reading = phase;
+  assert.equal(nextPhase(reading, { type: "loaded", load: 1 }), reading);
+  assert.equal(nextPhase(reading, { type: "failed", load: 1 }), reading);
+  assert.equal(nextPhase(reading, { type: "read", load: 1, source: "file", label: "Reading first.csv…" }), reading);
+  phase = nextPhase(reading, { type: "loaded", load: 2 });
+  assert.deepEqual(phase, { kind: "autoRun", load: 2 });
+  assert.equal(nextPhase(phase, { type: "ran", load: 1 }), phase);
+  assert.deepEqual(nextPhase(phase, { type: "ran", load: 2 }), { kind: "workspace", load: 2 });
+});
+
+test("a failed load goes back to where the visitor was", () => {
+  const first = nextPhase(initialPhase(""), { type: "read", load: 1, source: "file", label: "Reading A-100.csv…" });
+  assert.deepEqual(nextPhase(first, { type: "failed", load: 1 }), { kind: "start" });
+  const sample = nextPhase(initialPhase("?sample"), { type: "read", load: 1, source: "sample", label: "Making the sample data…" });
+  assert.deepEqual(nextPhase(sample, { type: "failed", load: 1 }), { kind: "start" });
+  const over = nextPhase({ kind: "workspace", load: 3 }, { type: "read", load: 4, source: "file", label: "Reading North.csv…" });
+  assert.deepEqual(nextPhase(over, { type: "failed", load: 4 }), { kind: "workspace", load: 4 });
+  const again = nextPhase(over, { type: "read", load: 5, source: "sample", label: "Making the sample data…" });
+  assert.deepEqual(nextPhase(again, { type: "failed", load: 5 }), { kind: "workspace", load: 5 });
+  assert.deepEqual(nextPhase({ kind: "autoRun", load: 6 }, { type: "failed", load: 6 }), { kind: "workspace", load: 6 });
+});
+
+test("main shows the engine sentence until the engine is ready, then what is being read", () => {
+  const file: Phase = { kind: "reading", load: 1, source: "file", label: "Reading A-100.csv…", back: "start" };
+  const autoRun: Phase = { kind: "autoRun", load: 1 };
+  for (const engine of engines) {
+    assert.deepEqual(mainView({ kind: "start" }, engine), { kind: "start" });
+    assert.deepEqual(mainView({ kind: "workspace", load: 1 }, engine), { kind: "workspace" });
+    const ready = engine === "ready";
+    assert.deepEqual(mainView(file, engine), { kind: "loading", text: ready ? "Reading A-100.csv…" : ENGINE_LOADING_TEXT });
+    assert.deepEqual(mainView(autoRun, engine), { kind: "loading", text: ready ? "Calculating the sample bridge…" : ENGINE_LOADING_TEXT });
+  }
+  assert.deepEqual(mainView(initialPhase("?sample"), "ready"), { kind: "loading", text: "Making the sample data…" });
+  assert.equal(
+    ENGINE_LOADING_TEXT,
+    "Loading the calculation engine (about 5 MB). On a slow connection this can take a minute or two. Your file is not uploaded.",
+  );
+});
+
+test("the sample calculates once its own periods are read", () => {
+  const autoRun: Phase = { kind: "autoRun", load: 2 };
+  assert.equal(shouldAutoRun(autoRun, true, true), true);
+  assert.equal(shouldAutoRun(autoRun, true, false), false);
+  assert.equal(shouldAutoRun(autoRun, false, true), false);
+  assert.equal(shouldAutoRun({ kind: "workspace", load: 2 }, true, true), false);
+  assert.equal(shouldAutoRun(initialPhase("?sample"), true, true), false);
+});
+
+test("leaving the page warns only while data is loaded or loading", () => {
+  assert.equal(shouldWarn({ kind: "start" }, false), false);
+  assert.equal(shouldWarn(initialPhase("?sample"), false), true);
+  assert.equal(shouldWarn({ kind: "autoRun", load: 1 }, false), true);
+  assert.equal(shouldWarn({ kind: "workspace", load: 1 }, false), true);
+  assert.equal(shouldWarn({ kind: "workspace", load: 1 }, true), false);
 });

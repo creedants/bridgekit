@@ -552,17 +552,20 @@ Object.defineProperty(globalThis, "localStorage", {
   value: rememberedLocalStorage,
 });
 
-beforeEach(() => rememberedStore.clear());
+beforeEach(() => {
+  rememberedStore.clear();
+  rememberedStore.set("bridgekit:remember", "on");
+});
 
-test("restores a 301-character attribute name saved before the editor cap", () => {
+test("restores a setup whose 301-character attribute name was saved before the editor cap, cut to the cap", () => {
   const setup: Setup = { ...SMALL_SETUP, levels: [{ ...SMALL_SETUP.levels[0], name: "N".repeat(301) }] };
   assert.equal(isValidSetup(setup, columnsOf(SMALL_COLUMNS)), true);
   saveSetup(columnsOf(SMALL_COLUMNS), setup);
   const restored = loadSavedSetup(columnsOf(SMALL_COLUMNS));
-  assert.equal(restored?.levels[0]?.name, "N".repeat(301));
+  assert.equal(restored?.levels[0]?.name, "N".repeat(60));
 });
 
-test("restores a 400-character header name after its chip is removed", () => {
+test("restores a setup named after a 400-character header after its chip is removed, cut to the cap", () => {
   const header = "h".repeat(400);
   const columns: Column[] = [...columnsOf(SMALL_COLUMNS), { name: header, type: "VARCHAR" }];
   const level = { name: header, columns: [header, "design"] };
@@ -570,7 +573,7 @@ test("restores a 400-character header name after its chip is removed", () => {
   assert.equal(isValidSetup(setup, columns), true);
   saveSetup(columns, setup);
   const restored = loadSavedSetup(columns);
-  assert.equal(restored?.levels[0]?.name, header);
+  assert.equal(restored?.levels[0]?.name, header.slice(0, 60));
 });
 
 test("accepts a 301-character filter value after a file round trip", () => {

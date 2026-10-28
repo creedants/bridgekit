@@ -3,9 +3,10 @@ import { GridComponent, TooltipComponent } from "echarts/components";
 import * as echarts from "echarts/core";
 import { LegacyGridContainLabel } from "echarts/features";
 import { CanvasRenderer } from "echarts/renderers";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type React from "react";
 import type { BridgeResult } from "../engine.ts";
+import { makeGuard } from "./files.ts";
 import { compact, signedCompact } from "./format.ts";
 import { axisCaption, axisFloor, chartStack, steps, type Step, type ValueScale } from "./small-bridges.ts";
 
@@ -15,10 +16,10 @@ echarts.use([BarChart, GridComponent, TooltipComponent, LegacyGridContainLabel, 
 export function Legend(props: { controls?: React.ReactNode; actions?: React.ReactNode }) {
   return (
     <div className="legend">
-      <span><i style={{ background: "var(--up)" }} /> Increase</span>
-      <span><i style={{ background: "var(--down)" }} /> Decrease</span>
-      <span><i style={{ background: "var(--total)" }} /> Period total</span>
-      <span style={{ marginLeft: "auto" }}>{props.controls}</span>
+      <span className="key"><i style={{ background: "var(--up)" }} /> Increase</span>
+      <span className="key"><i style={{ background: "var(--down)" }} /> Decrease</span>
+      <span className="key"><i style={{ background: "var(--total)" }} /> Period total</span>
+      <span className="legend-controls">{props.controls}</span>
       {props.actions}
     </div>
   );
@@ -60,6 +61,8 @@ export function BridgeChart(props: {
     const stack = chartStack(bars);
     // On a narrow chart the category labels are angled and value labels that would collide are dropped.
     const narrow = element.current.clientWidth < 560;
+    // "Discontinued configurations" needs about 84px a bar on two lines.
+    const roomy = !narrow && element.current.clientWidth / bars.length >= 84;
 
     chart.setOption({
       animation: false,
@@ -76,13 +79,19 @@ export function BridgeChart(props: {
           const amount = bar.value.toLocaleString("en-US", { maximumFractionDigits: 0 });
           if (bar.kind === "total") return `<b>${bar.label}</b><br/>${amount}`;
           const share = ((bar.value / priorSales) * 100).toFixed(1);
-          const hint = onSelect.current ? "<br/><i>Click for movers</i>" : "";
+          const hint = onSelect.current ? "<br/><i>Select for movers</i>" : "";
           return `<b>${bar.label}</b><br/>${bar.value > 0 ? "+" : ""}${amount}<br/>${share}% of prior sales${hint}`;
         },
       },
       xAxis: {
         type: "category",
-        data: bars.map((b) => (narrow ? b.label.replace(": ", " ") : b.label).replace(" (like-for-like)", "").replace("New configurations", "New\nconfigs").replace("Discontinued configurations", "Discont.\nconfigs").replace("Sales with no units", "No\nunits").replace(": ", ":\n")),
+        data: bars.map((b) => {
+          const label = (narrow ? b.label.replace(": ", " ") : b.label).replace(" (like-for-like)", "");
+          const wrapped = roomy
+            ? label.replace("New configurations", "New\nconfigurations").replace("Discontinued configurations", "Discontinued\nconfigurations")
+            : label.replace("New configurations", "New\nconfigs").replace("Discontinued configurations", "Discont.\nconfigs");
+          return wrapped.replace("Sales with no units", "No\nunits").replace(": ", ":\n");
+        }),
         axisTick: { show: false },
         axisLine: { lineStyle: { color: token("--line-strong") } },
         axisLabel: slim
@@ -137,9 +146,20 @@ export function BridgeChart(props: {
       });
     }
 
+    // A tooltip opened by touch has no mouse leaving to close it.
+    const box = element.current;
+    const hideTip = () => chart.dispatchAction({ type: "hideTip" });
+    const tapElsewhere = (event: TouchEvent) => {
+      if (!box.contains(event.target as Node)) hideTip();
+    };
+    box.addEventListener("touchend", hideTip);
+    document.addEventListener("touchstart", tapElsewhere, { passive: true });
+
     const observer = new ResizeObserver(() => chart.resize());
     observer.observe(element.current);
     return () => {
+      box.removeEventListener("touchend", hideTip);
+      document.removeEventListener("touchstart", tapElsewhere);
       onReady.current?.(null);
       observer.disconnect();
       chart.dispose();
@@ -162,6 +182,7 @@ export function Waterfall(props: {
   ariaLabel?: string;
 }) {
   const chartRef = useRef<echarts.ECharts>(null);
+  const [pngGuard] = useState(() => makeGuard());
   const bars = steps(props.result, props.priorLabel, props.currentLabel);
   const caption = axisCaption(bars);
 
@@ -172,14 +193,16 @@ export function Waterfall(props: {
         actions={
           <button
             className="quiet"
-            onClick={() => {
-              const url = chartRef.current?.getDataURL({ type: "png", pixelRatio: 2, backgroundColor: "#ffffff" });
-              if (!url) return;
-              const link = document.createElement("a");
-              link.href = url;
-              link.download = `bridge-${props.priorLabel}-to-${props.currentLabel}.png`;
-              link.click();
-            }}
+            onClick={() =>
+              pngGuard.run(() => {
+                const url = chartRef.current?.getDataURL({ type: "png", pixelRatio: 2, backgroundColor: "#ffffff" });
+                if (!url) return false;
+                const link = document.createElement("a");
+                link.href = url;
+                link.download = `bridge-${props.priorLabel}-to-${props.currentLabel}.png`;
+                link.click();
+              })
+            }
           >
             Download PNG
           </button>
