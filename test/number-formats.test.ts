@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { convertFormattedNumbers, decimalCommaNote } from "../src/app/numbers.ts";
 import { openDatabase } from "../src/duckdb.ts";
 import type { Query } from "../src/engine.ts";
+import * as format from "../src/app/format.ts";
 
 const DECIMAL_COMMA = "1 column was read as numbers written with a decimal comma.";
 const MIXED = "amount mixes number styles, so it was read as text.";
@@ -520,4 +521,31 @@ test("R7: a quoted thousands comma in a comma file reads as 1000.5", async () =>
   assert.equal(await columnType(query, "data", "sales"), "DOUBLE");
   expectNumbers(await columnValues(query, "data", "sales"), [1000.5, 1200.5]);
   assert.equal(await decimalCommaNote(query, "data"), GROUPED("sales", "1,000.50", "1000.5"));
+});
+
+test("R33: no formatter prints a huge number in exponent notation", () => {
+  const { compact, percent, price, signedCompact, signedPercent, signedWhole, whole } = format;
+  assert.equal(percent(2e29 / 100), ">1,000,000%");
+  assert.equal(signedPercent(-2e29 / 100), "<-1,000,000%");
+  assert.equal(compact(1e30), "1,000,000T+");
+  assert.equal(signedCompact(-1e30), "-1,000,000T+");
+  assert.equal(signedCompact(1e30), "+1,000,000T+");
+  assert.equal(price(2e29), "200,000,000,000,000,000,000,000,000,000.00");
+  // The ordinary cases the app formats today keep their text.
+  assert.equal(price(1234.5), "1,234.50");
+  assert.equal(whole(-284), "-284");
+  assert.equal(signedWhole(-284), "-284");
+  assert.equal(percent(0.5), "50.0%");
+  assert.equal(signedPercent(0.5), "+50.0%");
+  for (const text of [
+    compact(1e30),
+    signedCompact(-1e30),
+    price(2e29),
+    percent(2e29 / 100),
+    signedPercent(-2e29 / 100),
+    whole(1e30),
+    signedWhole(-1e30),
+  ]) {
+    assert.equal(/[eE]/.test(text), false, text);
+  }
 });
