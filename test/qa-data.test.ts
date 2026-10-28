@@ -321,6 +321,70 @@ test("Q30: no file gets a mixed-separator warning", async () => {
   }
 });
 
+test("R6: the mixed file's whole-row period is named", async () => {
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { viewSql } = await import("../src/app/setup.ts");
+  const query = await openDatabase();
+  const directory = await mkdtemp("/tmp/bridgekit-qa-");
+  const rows = Array.from({ length: 36 }, (_, index) =>
+    index % 2 === 0 ? "2025;North;A-100;S;10;897" : "2025,North,A-100,S,10,897",
+  );
+  const text = `PERIOD;REGION;MODEL;SIZE;UNITS;NET_SALES\n${rows.join("\n")}\n`;
+  const source = path.join(directory, "mixed.csv");
+  await writeFile(source, text);
+  await stageCsvAndSwap(query, new File([text], "mixed.csv"), "data", source);
+  assert.equal((await query(`DESCRIBE data`)).length, 6);
+  assert.equal(Number((await query(`SELECT count(*)::DOUBLE AS n FROM data`))[0].n), 37);
+  // The user picks the only column that holds a period value, as the app does.
+  await query(
+    viewSql({ periodColumn: "column0", grain: "value", unitsColumn: "column4", salesColumn: "column5", levels: [], filters: [] }),
+  );
+  assert.equal(
+    await decimalCommaNote(query, "data"),
+    '18 rows have a period such as "2025;North;A-100;S;10;897" that looks like a whole row. The file may mix separators. Save it again with one separator.',
+  );
+});
+
+test("R6: one whole-row period reads as one row", async () => {
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { viewSql } = await import("../src/app/setup.ts");
+  const query = await openDatabase();
+  const directory = await mkdtemp("/tmp/bridgekit-qa-");
+  const text = "PERIOD;REGION;MODEL;SIZE;UNITS;NET_SALES\n2025;North;A-100;S;10;897\n2025,North,A-100,S,10,897\n";
+  const source = path.join(directory, "one.csv");
+  await writeFile(source, text);
+  await stageCsvAndSwap(query, new File([text], "one.csv"), "data", source);
+  await query(
+    viewSql({ periodColumn: "column0", grain: "value", unitsColumn: "column4", salesColumn: "column5", levels: [], filters: [] }),
+  );
+  assert.equal(
+    await decimalCommaNote(query, "data"),
+    '1 row has a period such as "2025;North;A-100;S;10;897" that looks like a whole row. The file may mix separators. Save it again with one separator.',
+  );
+});
+
+test("R6: the four footer files say nothing about whole rows", async () => {
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { viewSql } = await import("../src/app/setup.ts");
+  const shapes: readonly (readonly [name: string, text: string])[] = [
+    ["footer-total-semicolons.csv", '"period","Product","units","sales"\n2025,A-100,10,100\n2026,A-100,10,120\nTotal;;;\n'],
+    ["footer-total-quoted-comma-product.csv", 'period,Product,units,sales\n2025,"A,100",10,100\n2026,"A,100",10,120\nTotal;;;\n'],
+    ["footer-total-fully-quoted.csv", '"period","Product","units","sales"\n"2025","A-100","10","100"\n"2026","A-100","10","120"\nTotal;;;\n'],
+    ["footer-note-fully-quoted.csv", '"period","Product","units","sales"\n"2025","A-100","10","100"\n"2026","A-100","10","120"\nsee;notes;here;please\n'],
+  ];
+  for (const [name, text] of shapes) {
+    const query = await openDatabase();
+    const directory = await mkdtemp("/tmp/bridgekit-qa-");
+    const source = path.join(directory, name);
+    await writeFile(source, text);
+    await stageCsvAndSwap(query, new File([text], name), "data", source);
+    await query(
+      viewSql({ periodColumn: "period", grain: "value", unitsColumn: "units", salesColumn: "sales", levels: [], filters: [] }),
+    );
+    assert.equal(await decimalCommaNote(query, "data"), null, name);
+  }
+});
+
 test("Q31: huge amounts warn that the steps may not sum to the change", async () => {
   const { runBridge, amountsNote, sensitivity } = await import("../src/engine.ts");
   const query = await openDatabase();

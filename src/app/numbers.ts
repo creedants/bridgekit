@@ -1,4 +1,5 @@
 import { amountsNote, DEFAULT_CELLS_TABLE, HUGE_AMOUNTS, type Query } from "../engine.ts";
+import { isNumeric, PERIOD, VIEW } from "./setup.ts";
 
 // read_csv options that keep well-formed files identical while letting short
 // rows load with blanks. null_padding pads short rows, parallel=false keeps
@@ -37,6 +38,9 @@ const FIRST_ROWS = 2000;
 
 const northAmerican = (value: string) =>
   `try_cast(regexp_replace(regexp_replace(trim(${value}), '[,$\\s]', '', 'g'), '^\\((.*)\\)$', '-\\1') AS DOUBLE)`;
+
+/** True when a cell's text is a number under the loader's own reading, so a currency sign or brackets do not make it text. */
+export const readsAsNumber = (value: string) => `(${northAmerican(`(${money(value)}).text`)} IS NOT NULL)`;
 
 const decimalComma = (value: string) =>
   `try_cast(replace(replace(trim(${value}), '.', ''), ',', '.') AS DOUBLE)`;
@@ -298,6 +302,66 @@ export async function convertFormattedNumbers(query: Query, table: string): Prom
 const THOUSANDS_DOTS = "thousands dots";
 const DECIMAL_DOTS = "decimal dots";
 
+// A period text may be a whole record written with another separator. The
+// check reads the text in one cell, never the row's shape: a valid file with a
+// sparse footer row has the same shape as a mixed file.
+const WHOLE_ROW_SEPARATORS = [",", ";", "\t"];
+const SHORT_PERIOD = 40;
+
+function sqlSeparator(separator: string): string {
+  return separator === "\t" ? "chr(9)" : `'${separator}'`;
+}
+
+/** Cuts a quoted value the way the file problems list does: 39 characters and an ellipsis. */
+function shortened(value: string): string {
+  const characters = Array.from(value);
+  return characters.length <= SHORT_PERIOD ? value : characters.slice(0, SHORT_PERIOD - 1).join("") + "…";
+}
+
+/**
+ * The period values that look like a whole record in another separator. The
+ * split must give the loaded table's own width, every part must be filled, and
+ * the parts in the table's numeric columns must parse as numbers, so a sparse
+ * footer row such as `Total;;;` and a note such as `see;notes;here;please`
+ * stay silent. A missing view or a failed query returns null, so one note
+ * never hides the others.
+ */
+export async function wholeRowNote(query: Query, table: string): Promise<string | null> {
+  try {
+    const described = await query(`DESCRIBE ${quotedName(table)}`);
+    const width = described.length;
+    if (width < 2) return null;
+    const numeric = described.map((row) => isNumeric(String(row.column_type)));
+    if (!numeric.some(Boolean)) return null;
+    const period = quotedName(PERIOD);
+    const arms = WHOLE_ROW_SEPARATORS.map((separator) => {
+      const parts = `string_split(p, ${sqlSeparator(separator)})`;
+      const checks = [
+        `length(${parts}) = ${width}`,
+        `NOT list_contains(${parts}, '')`,
+        ...numeric.flatMap((isNumber, index) => (isNumber ? [readsAsNumber(`${parts}[${index + 1}]`)] : [])),
+      ];
+      return `(${checks.join(" AND ")})`;
+    });
+    const [row] = await query(
+      `WITH candidate AS (
+         SELECT CAST(${period} AS VARCHAR) AS p FROM ${quotedName(VIEW)} WHERE ${period} IS NOT NULL
+       ), judged AS (
+         SELECT p, (${arms.join(" OR ")}) AS whole FROM candidate
+       )
+       SELECT count(*) FILTER (WHERE whole)::DOUBLE AS n, min(p) FILTER (WHERE whole) AS example FROM judged`,
+    );
+    const n = Number(row?.n);
+    if (!(n > 0)) return null;
+    const example = shortened(String(row?.example));
+    const tail = `that looks like a whole row. The file may mix separators. Save it again with one separator.`;
+    if (n === 1) return `1 row has a period such as "${example}" ${tail}`;
+    return `${n.toLocaleString("en-US")} rows have a period such as "${example}" ${tail}`;
+  } catch {
+    return null;
+  }
+}
+
 export async function decimalCommaNote(query: Query, table: string): Promise<string | null> {
   const rows = await query(
     `SELECT column_name, comment FROM duckdb_columns() WHERE schema_name = current_schema() AND table_name = '${table.replaceAll("'", "''")}' AND comment IS NOT NULL ORDER BY column_index`,
@@ -326,6 +390,8 @@ export async function decimalCommaNote(query: Query, table: string): Promise<str
       );
     }
   }
+  const whole = await wholeRowNote(query, table);
+  if (whole !== null) sentences.push(whole);
   const huge = await amountsNote(query, DEFAULT_CELLS_TABLE).catch(() => null);
   if (huge !== null) sentences.push(huge);
   return sentences.length === 0 ? null : sentences.join(" ");
