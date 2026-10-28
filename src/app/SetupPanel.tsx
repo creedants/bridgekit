@@ -99,7 +99,6 @@ export function SetupPanel(props: {
             onChange={(e) => {
               const column = columns.find((c) => c.name === e.target.value);
               const name = e.target.value;
-              // The period column is never a measure, so a measure it was is chosen again.
               onChange({
                 periodColumn: name,
                 grain: column && isDate(column.type) ? "year" : "value",

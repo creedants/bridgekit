@@ -177,7 +177,6 @@ export function App() {
   const [suggestedPeriods, setSuggestedPeriods] = useState<Sample["periods"] | null>(null);
   const [prior, setPrior] = useState("");
   const [current, setCurrent] = useState("");
-  // The period list arrives later; it is checked against the choices standing then, not when it was asked for.
   const periodsRef = useRef({ prior, current });
   periodsRef.current = { prior, current };
   const [remember, setRemember] = useState(isRemembering);
@@ -289,7 +288,6 @@ export function App() {
       return;
     }
     prefetchResults();
-    // The visitor's own data replaces the sample, so a reload must not bring the sample back.
     const bare = withoutSample(location.href);
     if (bare) history.replaceState(history.state, "", bare);
     return readData({ source: "file", fileName: file.name, label: `Reading ${file.name}…` }, async (thisLoad) => {
@@ -512,7 +510,6 @@ export function App() {
       }),
     );
 
-  // The reason also shows beside Load setup, where the visitor is looking.
   const importSetup = (file: File) =>
     task("import", "Reading setup…", async () => {
       setSetupError("");

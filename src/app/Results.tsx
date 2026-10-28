@@ -542,10 +542,6 @@ function Trend(props: { run: Run; query: () => Promise<Query> }) {
 }
 
 /**
- * The Setup check hint. `prices` holds the price effect of the full setup and
- * of each setup with one attribute left out.
- */
-/**
  * A step whose sign a reader would not expect: discontinued configurations that add sales, or new ones that take
  * sales away. Both come from the difference against the nearest comparable group.
  */
@@ -566,6 +562,10 @@ export function emptyNote(rows: readonly unknown[], search: string, fetchedFor: 
   return rows.length === 0 && fetchedFor === search ? "No rows match." : null;
 }
 
+/**
+ * The Setup check hint. `prices` holds the price effect of the full setup and
+ * of each setup with one attribute left out.
+ */
 export function setupCheckHint(prices: number[], rowCount: number): string {
   if (rowCount === 1) return "With one attribute there is nothing to leave out.";
   return `Across these setups the price effect ranges from ${signedWhole(Math.min(...prices))} to ${signedWhole(Math.max(...prices))}. When leaving out an attribute moves price a lot, the bridge depends on that attribute. Keep it if it describes the product itself; a label that changed between periods can hide a real price change. An attribute that describes the customer, such as region or channel, can also move price a lot. It belongs last in the order, or it can be left out. One that barely moves price and lowers the match rate can be dropped.`;

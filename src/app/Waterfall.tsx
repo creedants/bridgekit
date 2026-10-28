@@ -168,7 +168,6 @@ export function BridgeChart(props: {
       tooltip: {
         trigger: "axis",
         enterable: true,
-        // A shaded column left behind after a swipe reads as a selection.
         axisPointer: { type: touch ? "none" : "shadow" },
         backgroundColor: token("--bg"),
         borderColor: token("--line-strong"),
