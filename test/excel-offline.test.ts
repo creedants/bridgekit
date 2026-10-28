@@ -160,7 +160,7 @@ const TYPE_QUERY_LINE = /^\s*(?:export\s+)?type\s+[\w$]+\s*=\s*typeof\s+import\(
 /** The package name, and the tail of an escaped spelling such as "\x65xceljs". */
 const NAMES_PACKAGE = /xceljs/;
 
-test("Only the shared loader in exportExcel.ts imports exceljs, so every other file takes it from excelTools", () => {
+test("The lexical source scan finds one checked exceljs mention, in exportExcel.ts", () => {
   const srcDir = fileURLToPath(new URL("../src/", import.meta.url));
   const files = readdirSync(srcDir, { recursive: true })
     .map(String)
@@ -187,11 +187,11 @@ test("Only the shared loader in exportExcel.ts imports exceljs, so every other f
       if (NAMES_PACKAGE.test(line)) mentions.push({ file, line: trimmed });
     }
   }
-  assert.equal(mentions.length, 1, "exceljs is named on exactly one line of source that runs");
-  assert.equal(mentions[0].file, "app/exportExcel.ts", "the shared loader is the one file that names exceljs");
+  assert.equal(mentions.length, 1, "the lexical scan finds exactly one checked source line containing xceljs");
+  assert.equal(mentions[0].file, "app/exportExcel.ts", "the checked mention is in the shared loader file");
   assert.match(
     mentions[0].line,
     /\bimport\(\s*["']exceljs["']\s*\)/,
-    "the loader imports exceljs dynamically so the chunk stays out of the main bundle",
+    "the checked loader line contains a literal dynamic exceljs import",
   );
 });
