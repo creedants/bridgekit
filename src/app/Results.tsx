@@ -574,7 +574,7 @@ function SetupCheck(props: { run: Run; query: () => Promise<Query> }) {
         <tbody>
           {rows.map((row, i) => (
             <tr key={row.label} className={i === 0 ? "total" : ""}>
-              <td title={row.levels.map((l) => l.name).join(" › ")}>{shorten(row.label)}</td>
+              <td title={[row.label, row.levels.map((l) => l.name).join(" › ")].filter(Boolean).join(" · ")}>{shorten(row.label)}</td>
               <td className="num">{signedWhole(row.price)}</td>
               <td className="num">{i === 0 ? "" : signedWhole(row.price - rows[0].price)}</td>
               <td className="num">{signedWhole(row.mix)}</td>
