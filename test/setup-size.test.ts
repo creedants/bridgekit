@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { beforeEach, test } from "node:test";
 import type { Env } from "../server/env.ts";
 import app from "../server/worker.ts";
-import { isValidSetup, type Column, type Setup } from "../src/app/setup.ts";
+import { totalRowOffers } from "../src/app/profile.ts";
+import { columnsKey, isValidSetup, loadSavedSetup, saveSetup, type Column, type Filter, type Setup } from "../src/app/setup.ts";
 import { parseSummary, type BridgeSummary } from "../src/summary.ts";
 import { testDatabase } from "./support/d1.ts";
 
@@ -522,4 +523,95 @@ test("the ASCII, CJK, and escaped-control fixtures sit under 8 MiB", () => {
     assert.ok(bridgeSize < SAVE_LIMIT, `${filler} bridge ${bridgeSize} against ${SAVE_LIMIT}`);
     assert.ok(parseSummary(largestSummary(filler)), filler);
   }
+});
+
+// The remembered and loaded paths read localStorage at call time, so a stub
+// replaces it for this file. Its stored keys enumerate the way a real Storage
+// does, because the opt-out path walks Object.keys(localStorage).
+const rememberedStore = new Map<string, string>();
+const rememberedMethods = {
+  getItem: (key: string) => rememberedStore.get(key) ?? null,
+  setItem: (key: string, value: string) => void rememberedStore.set(key, value),
+  removeItem: (key: string) => void rememberedStore.delete(key),
+  key: (index: number) => [...rememberedStore.keys()][index] ?? null,
+  get length() {
+    return rememberedStore.size;
+  },
+  clear: () => rememberedStore.clear(),
+};
+const rememberedLocalStorage = new Proxy(rememberedMethods, {
+  get: (target, key) => (typeof key === "string" && !(key in target) ? rememberedStore.get(key) : Reflect.get(target, key)),
+  ownKeys: (target) => [...new Set([...Reflect.ownKeys(target), ...rememberedStore.keys()])],
+  getOwnPropertyDescriptor: (target, key) =>
+    typeof key === "string" && rememberedStore.has(key)
+      ? { value: rememberedStore.get(key), enumerable: true, configurable: true, writable: true }
+      : Reflect.getOwnPropertyDescriptor(target, key),
+});
+Object.defineProperty(globalThis, "localStorage", {
+  configurable: true,
+  value: rememberedLocalStorage,
+});
+
+beforeEach(() => rememberedStore.clear());
+
+test("restores a 301-character attribute name saved before the editor cap", () => {
+  const setup: Setup = { ...SMALL_SETUP, levels: [{ ...SMALL_SETUP.levels[0], name: "N".repeat(301) }] };
+  assert.equal(isValidSetup(setup, columnsOf(SMALL_COLUMNS)), true);
+  saveSetup(columnsOf(SMALL_COLUMNS), setup);
+  const restored = loadSavedSetup(columnsOf(SMALL_COLUMNS));
+  assert.equal(restored?.levels[0]?.name, "N".repeat(301));
+});
+
+test("restores a 400-character header name after its chip is removed", () => {
+  const header = "h".repeat(400);
+  const columns: Column[] = [...columnsOf(SMALL_COLUMNS), { name: header, type: "VARCHAR" }];
+  const level = { name: header, columns: [header, "design"] };
+  const setup: Setup = { ...SMALL_SETUP, levels: [{ ...level, columns: level.columns.filter((column) => column !== header) }] };
+  assert.equal(isValidSetup(setup, columns), true);
+  saveSetup(columns, setup);
+  const restored = loadSavedSetup(columns);
+  assert.equal(restored?.levels[0]?.name, header);
+});
+
+test("accepts a 301-character filter value after a file round trip", () => {
+  const setup: Setup = {
+    ...SMALL_SETUP,
+    filters: [{ column: "design", mode: "include", values: ["P".repeat(301)] }],
+  };
+  assert.equal(isValidSetup(JSON.parse(JSON.stringify(setup)), columnsOf(SMALL_COLUMNS)), true);
+});
+
+test("accepts the 501st total-row value offered for a 500-value filter", () => {
+  const filters: Filter[] = [
+    { column: "design", mode: "exclude", values: Array.from({ length: 500 }, (_, index) => `value-${index}`) },
+  ];
+  const offers = totalRowOffers([{ column: "design", value: "total", rows: 1 }], filters);
+  assert.equal(offers.length, 1);
+  const offered = offers[0].filters.find((filter) => filter.column === "design");
+  assert.equal(offered?.values.length, 501);
+  const setup: Setup = { ...SMALL_SETUP, filters: offers[0].filters };
+  assert.equal(isValidSetup(setup, columnsOf(SMALL_COLUMNS)), true);
+});
+
+test("drops filters from a remembered mapping that holds a 301-character value", () => {
+  const key = `bridgekit:setup:${columnsKey(SMALL_COLUMNS)}`;
+  rememberedStore.set(
+    key,
+    JSON.stringify({ ...SMALL_SETUP, filters: [{ column: "design", mode: "include", values: ["V".repeat(301)] }] }),
+  );
+  const restored = loadSavedSetup(columnsOf(SMALL_COLUMNS));
+  assert.notEqual(restored, null);
+  assert.deepEqual(restored?.filters, []);
+});
+
+test("accepts 1,001 levels over 1,001 columns", () => {
+  const names = Array.from({ length: 1001 }, (_, index) => `column-${index}`);
+  const setup: Setup = {
+    ...SMALL_SETUP,
+    periodColumn: "",
+    unitsColumn: "",
+    salesColumn: "",
+    levels: names.map((name) => ({ name, columns: [name] })),
+  };
+  assert.equal(isValidSetup(setup, names.map((name) => ({ name, type: "" }))), true);
 });
