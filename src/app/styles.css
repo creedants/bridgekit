@@ -152,7 +152,7 @@ button.action:hover:not(:disabled) { background: var(--accent); color: #fff; }
   to { transform: translateX(340%); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .busy-bar::before { animation: none; width: 100%; opacity: 0.4; }
+  .busy-bar::before { animation: none; width: 100%; background: var(--text-3); }
 }
 
 .policy { margin-top: auto; display: flex; justify-content: center; gap: 16px; padding: 10px 12px; border-top: 1px solid var(--line); font-size: 12px; }
