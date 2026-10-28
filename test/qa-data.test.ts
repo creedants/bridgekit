@@ -210,7 +210,7 @@ test("Q30: no file gets a mixed-separator warning", async () => {
       "period\tProduct\tunits\tsales\n2025\tA-100\t10\t1,234.50\n2026\tA-100\t10\t1,234.60\n",
       ["period", "Product", "units", "sales"],
       2,
-      null,
+      "Numbers in sales such as 1,234.50 were read with the comma between thousands, as 1234.5.",
     ],
     [
       "blank-lines.csv",

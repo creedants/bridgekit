@@ -9,6 +9,12 @@ import type { Query } from "../src/engine.ts";
 const DECIMAL_COMMA = "1 column was read as numbers written with a decimal comma.";
 const MIXED = "amount mixes number styles, so it was read as text.";
 
+const CURRENCY = (column: string, example: string, read: string) =>
+  `Numbers in ${column} such as ${example} were read with the currency sign or brackets removed, as ${read}.`;
+const GROUPED = (column: string, example: string, read: string) =>
+  `Numbers in ${column} such as ${example} were read with the comma between thousands, as ${read}.`;
+
+
 function ident(name: string): string {
   return `"${name.replaceAll('"', '""')}"`;
 }
@@ -65,77 +71,77 @@ const cases: FormatCase[] = [
     values: ["€1.234,50"],
     type: "DOUBLE",
     numbers: [1234.5],
-    note: DECIMAL_COMMA,
+    note: DECIMAL_COMMA + " " + CURRENCY("amount", "€1.234,50", "1234.5"),
   },
   {
     name: "a euro sign after the number reads as a decimal comma",
     values: ["1.234,50€"],
     type: "DOUBLE",
     numbers: [1234.5],
-    note: DECIMAL_COMMA,
+    note: DECIMAL_COMMA + " " + CURRENCY("amount", "1.234,50€", "1234.5"),
   },
   {
     name: "a euro code before the number reads as a decimal comma",
     values: ["EUR1.234,50"],
     type: "DOUBLE",
     numbers: [1234.5],
-    note: DECIMAL_COMMA,
+    note: DECIMAL_COMMA + " " + CURRENCY("amount", "EUR1.234,50", "1234.5"),
   },
   {
     name: "a euro code after one space reads as a decimal comma",
     values: ["1 234,50 EUR"],
     type: "DOUBLE",
     numbers: [1234.5],
-    note: DECIMAL_COMMA,
+    note: DECIMAL_COMMA + " " + CURRENCY("amount", "1 234,50 EUR", "1234.5"),
   },
   {
     name: "a swiss code with an apostrophe group reads as a north american number",
     values: ["CHF 1'234.50"],
     type: "DOUBLE",
     numbers: [1234.5],
-    note: null,
+    note: CURRENCY("amount", "CHF 1'234.50", "1234.5"),
   },
   {
     name: "a euro sign on a plain decimal comma reads as a decimal comma",
     values: ["€12,50"],
     type: "DOUBLE",
     numbers: [12.5],
-    note: DECIMAL_COMMA,
+    note: DECIMAL_COMMA + " " + CURRENCY("amount", "€12,50", "12.5"),
   },
   {
     name: "a dollar value keeps its north american reading",
     values: ["$1,234.50"],
     type: "DOUBLE",
     numbers: [1234.5],
-    note: null,
+    note: CURRENCY("amount", "$1,234.50", "1234.5"),
   },
   {
     name: "a euro sign before a north american number keeps the north american reading",
     values: ["€1,234.50"],
     type: "DOUBLE",
     numbers: [1234.5],
-    note: null,
+    note: CURRENCY("amount", "€1,234.50", "1234.5"),
   },
   {
     name: "an ascii space groups thousands inside a symbol value",
     values: ["€1 234,50"],
     type: "DOUBLE",
     numbers: [1234.5],
-    note: DECIMAL_COMMA,
+    note: DECIMAL_COMMA + " " + CURRENCY("amount", "€1 234,50", "1234.5"),
   },
   {
     name: "a no-break space groups thousands",
     values: ["1\u00a0234,50 EUR"],
     type: "DOUBLE",
     numbers: [1234.5],
-    note: DECIMAL_COMMA,
+    note: DECIMAL_COMMA + " " + CURRENCY("amount", "1\u00a0234,50 EUR", "1234.5"),
   },
   {
     name: "a narrow no-break space groups thousands",
     values: ["1\u202f234,50 EUR"],
     type: "DOUBLE",
     numbers: [1234.5],
-    note: DECIMAL_COMMA,
+    note: DECIMAL_COMMA + " " + CURRENCY("amount", "1\u202f234,50 EUR", "1234.5"),
   },
   {
     name: "an apostrophe groups thousands without a currency",
@@ -149,14 +155,14 @@ const cases: FormatCase[] = [
     values: ["1\u2019234,50 EUR"],
     type: "DOUBLE",
     numbers: [1234.5],
-    note: DECIMAL_COMMA,
+    note: DECIMAL_COMMA + " " + CURRENCY("amount", "1\u2019234,50 EUR", "1234.5"),
   },
   {
     name: "a trailing minus on a north american number keeps the sign",
     values: ["1,234.50-"],
     type: "DOUBLE",
     numbers: [-1234.5],
-    note: null,
+    note: GROUPED("amount", "1,234.50-", "-1234.5"),
   },
   {
     name: "a trailing minus on a decimal comma number keeps the sign",
@@ -170,14 +176,14 @@ const cases: FormatCase[] = [
     values: ["(€1.234,50)"],
     type: "DOUBLE",
     numbers: [-1234.5],
-    note: DECIMAL_COMMA,
+    note: DECIMAL_COMMA + " " + CURRENCY("amount", "(€1.234,50)", "-1234.5"),
   },
   {
     name: "parentheses around a symbol value beside a plain decimal comma convert both",
     values: ["(€1.234,50)", "12,50"],
     type: "DOUBLE",
     numbers: [-1234.5, 12.5],
-    note: DECIMAL_COMMA,
+    note: DECIMAL_COMMA + " " + CURRENCY("amount", "(€1.234,50)", "-1234.5"),
   },
   {
     name: "two currency codes in one column stay text and are named",
@@ -202,28 +208,28 @@ const cases: FormatCase[] = [
     values: ["€1,234"],
     type: "DOUBLE",
     numbers: [1234],
-    note: null,
+    note: CURRENCY("amount", "€1,234", "1234"),
   },
   {
     name: "a decorated decimal comma beside a four digit comma decimal converts both",
     values: ["€1.234,50", "12,3456"],
     type: "DOUBLE",
     numbers: [1234.5, 12.3456],
-    note: DECIMAL_COMMA,
+    note: DECIMAL_COMMA + " " + CURRENCY("amount", "€1.234,50", "1234.5"),
   },
   {
     name: "one currency beside an unmarked value converts both",
     values: ["€1.234,50", "12,50"],
     type: "DOUBLE",
     numbers: [1234.5, 12.5],
-    note: DECIMAL_COMMA,
+    note: DECIMAL_COMMA + " " + CURRENCY("amount", "€1.234,50", "1234.5"),
   },
   {
     name: "a currency code before a whole number converts it",
     values: ["EUR 1234"],
     type: "DOUBLE",
     numbers: [1234],
-    note: null,
+    note: CURRENCY("amount", "EUR 1234", "1234"),
   },
   {
     name: "a symbol with a space after it stays text",
@@ -268,7 +274,10 @@ test("a semicolon file of euro prices loads as decimals", async () => {
   assert.equal(await columnType(query, "data", "net_sales"), "DOUBLE");
   expectNumbers(await columnValues(query, "data", "units"), [10, 4]);
   expectNumbers(await columnValues(query, "data", "net_sales"), [1234.5, 12.5]);
-  assert.equal(await decimalCommaNote(query, "data"), "2 columns were read as numbers written with a decimal comma.");
+  assert.equal(
+    await decimalCommaNote(query, "data"),
+    "2 columns were read as numbers written with a decimal comma. " + CURRENCY("net_sales", "€1.234,50", "1234.5"),
+  );
 });
 
 test("a second conversion keeps the currency values and the sentence", async () => {
@@ -280,7 +289,7 @@ test("a second conversion keeps the currency values and the sentence", async () 
   await convertFormattedNumbers(query, "data");
   assert.equal(await columnType(query, "data", "amount"), "DOUBLE");
   expectNumbers(await columnValues(query, "data", "amount"), [1234.5, -12.5]);
-  assert.equal(await decimalCommaNote(query, "data"), DECIMAL_COMMA);
+  assert.equal(await decimalCommaNote(query, "data"), DECIMAL_COMMA + " " + CURRENCY("amount", "€1.234,50", "1234.5"));
 });
 
 test("a semicolon file keeps currency-like product codes as distinct text", async () => {
@@ -317,7 +326,7 @@ test("a euro sign and a euro code in one column convert together", async () => {
   await convertFormattedNumbers(query, "data");
   assert.equal(await columnType(query, "data", "amount"), "DOUBLE");
   expectNumbers(await columnValues(query, "data", "amount"), [1234.5, 1250.5]);
-  assert.equal(await decimalCommaNote(query, "data"), DECIMAL_COMMA);
+  assert.equal(await decimalCommaNote(query, "data"), DECIMAL_COMMA + " " + CURRENCY("amount", "€1.234,50", "1234.5"));
 });
 
 test("currencies outside the old short list convert beside a three letter word control", async () => {
@@ -330,7 +339,10 @@ test("currencies outside the old short list convert beside a three letter word c
   expectNumbers(await columnValues(query, "data", "twd"), [1234.5]);
   assert.equal(await columnType(query, "data", "word"), "VARCHAR");
   assert.deepEqual(await columnValues(query, "data", "word"), ["ABC 12"]);
-  assert.equal(await decimalCommaNote(query, "data"), null);
+  assert.equal(
+    await decimalCommaNote(query, "data"),
+    CURRENCY("sar", "SAR 1234.50", "1234.5") + " " + CURRENCY("twd", "TWD 1234.50", "1234.5"),
+  );
 });
 
 test("a currency marker after row two thousand still reaches the money path", async () => {
@@ -343,7 +355,7 @@ test("a currency marker after row two thousand still reaches the money path", as
     await columnValues(query, "data", "amount"),
     Array.from({ length: 2001 }, () => 1234.5),
   );
-  assert.equal(await decimalCommaNote(query, "data"), DECIMAL_COMMA);
+  assert.equal(await decimalCommaNote(query, "data"), DECIMAL_COMMA + " " + CURRENCY("amount", "SAR 1.234,50", "1234.5"));
 });
 
 test("a bare no-break space groups thousands without a currency", async () => {
@@ -443,7 +455,7 @@ test("a unique money column stays text beside a peer that converts", async () =>
   );
   assert.deepEqual(await columnValues(query, "data", "amount"), ["€1.234,50"]);
   expectNumbers(await columnValues(query, "data", "net"), [1250.5]);
-  assert.equal(await decimalCommaNote(query, "data"), DECIMAL_COMMA);
+  assert.equal(await decimalCommaNote(query, "data"), DECIMAL_COMMA + " " + CURRENCY("net", "€1.250,50", "1250.5"));
 });
 
 test("a not null money column still converts", async () => {
@@ -453,7 +465,7 @@ test("a not null money column still converts", async () => {
   await convertFormattedNumbers(query, "data");
   assert.deepEqual((await query("DESCRIBE data")).map((row) => [row.column_name, row.column_type]), [["amount", "DOUBLE"]]);
   expectNumbers(await columnValues(query, "data", "amount"), [1234.5]);
-  assert.equal(await decimalCommaNote(query, "data"), DECIMAL_COMMA);
+  assert.equal(await decimalCommaNote(query, "data"), DECIMAL_COMMA + " " + CURRENCY("amount", "€1.234,50", "1234.5"));
 });
 
 test("a failed conversion drops the internal column and rethrows its own error", async () => {
@@ -476,4 +488,36 @@ test("a refused drop after a failed step still rethrows the step's error", async
     convertFormattedNumbers(refusing(query, [[/^ALTER TABLE \S+ ALTER /, refused], [/ DROP COLUMN /, dropRefused]]), "data"),
     (error) => error === refused,
   );
+});
+
+test("R7: a currency sign, brackets and a thousands comma are each named", async () => {
+  const query = await openDatabase();
+  await createText(query, "data", { euro: ["€600"], dollar: ["$600"], bracket: ["(520)"], grouped: ["1,000.50"] });
+  await convertFormattedNumbers(query, "data");
+  expectNumbers(await columnValues(query, "data", "euro"), [600]);
+  expectNumbers(await columnValues(query, "data", "dollar"), [600]);
+  expectNumbers(await columnValues(query, "data", "bracket"), [-520]);
+  expectNumbers(await columnValues(query, "data", "grouped"), [1000.5]);
+  assert.equal(
+    await decimalCommaNote(query, "data"),
+    CURRENCY("euro", "€600", "600") +
+      " " +
+      CURRENCY("dollar", "$600", "600") +
+      " " +
+      CURRENCY("bracket", "(520)", "-520") +
+      " " +
+      GROUPED("grouped", "1,000.50", "1000.5"),
+  );
+});
+
+test("R7: a quoted thousands comma in a comma file reads as 1000.5", async () => {
+  const directory = await mkdtemp("/tmp/bridgekit-formats-");
+  const file = path.join(directory, "quoted.csv");
+  await writeFile(file, 'period,units,sales\n2025,2,"1,000.50"\n2026,3,"1,200.50"\n');
+  const query = await openDatabase();
+  await query(`CREATE TABLE data AS SELECT * FROM read_csv(${sqlText(file)}, header=true)`);
+  await convertFormattedNumbers(query, "data");
+  assert.equal(await columnType(query, "data", "sales"), "DOUBLE");
+  expectNumbers(await columnValues(query, "data", "sales"), [1000.5, 1200.5]);
+  assert.equal(await decimalCommaNote(query, "data"), GROUPED("sales", "1,000.50", "1000.5"));
 });

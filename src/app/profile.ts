@@ -1,5 +1,7 @@
 import type { Query } from "../engine.ts";
 import { isDate, isNumeric, quote, TABLE, type Column, type Filter, type Setup } from "./setup.ts";
+import { measureColumns, type UnreadCell } from "./fileProblems.ts";
+import { readsAsNumber } from "./numbers.ts";
 
 const SAMPLE_ROWS = 200_000;
 const MAX_CANDIDATES = 14;
@@ -61,6 +63,30 @@ export interface FileProfile {
 }
 
 /**
+ * The first cell of a measure column that does not read as a number, when more
+ * than half of the column's filled cells do. The row counts spreadsheet rows
+ * with the header as row 1, so the first data row is row 2.
+ */
+async function firstUnreadIn(query: Query, column: string): Promise<UnreadCell | undefined> {
+  const field = quote(column);
+  const text = `CAST(${field} AS VARCHAR)`;
+  const blank = `(${field} IS NULL OR trim(${text}) = '')`;
+  const unread = `NOT ${blank} AND NOT ${readsAsNumber(field)}`;
+  const [row] = await query(
+    `SELECT count(*) FILTER (WHERE NOT ${blank})::DOUBLE AS present,
+            count(*) FILTER (WHERE NOT ${blank} AND ${readsAsNumber(field)})::DOUBLE AS parsed,
+            arg_min(${text}, rowid) FILTER (WHERE ${unread}) AS value,
+            min(rowid) FILTER (WHERE ${unread}) AS at
+     FROM ${quote(TABLE)}`,
+  );
+  const present = Number(row?.present);
+  const parsed = Number(row?.parsed);
+  if (!(present > 0) || parsed * 2 <= present) return undefined;
+  if (row?.value == null || row?.at == null) return undefined;
+  return { value: String(row.value), row: Number(row.at) + 2 };
+}
+
+/**
  * Profiles the loaded file: distinct counts for every column, then the roll-up
  * chains. `apply` runs only while `isCurrent()` still holds, so a profile that
  * finishes after a later file has loaded is dropped instead of overwriting it.
@@ -72,9 +98,23 @@ export async function profileFile(
   apply: (profile: FileProfile) => void,
 ): Promise<void> {
   const distinct = await distinctCounts(query, columns);
+  const measures = new Set(measureColumns(columns));
+  const unread = new Map<string, UnreadCell>();
+  for (const column of columns) {
+    if (!measures.has(column.name) || isNumeric(column.type) || isDate(column.type)) continue;
+    const cell = await firstUnreadIn(query, column.name).catch(() => undefined);
+    if (cell !== undefined) unread.set(column.name, cell);
+  }
   const rollups = await findRollups(query, columns, distinct);
   if (!isCurrent()) return;
-  apply({ columns: columns.map((column) => ({ ...column, distinct: distinct.get(column.name) })), rollups });
+  apply({
+    columns: columns.map((column) => ({
+      ...column,
+      distinct: distinct.get(column.name),
+      ...(unread.has(column.name) ? { firstUnread: unread.get(column.name) } : {}),
+    })),
+    rollups,
+  });
 }
 
 // A column name looks like a customer, region, date or id column when any

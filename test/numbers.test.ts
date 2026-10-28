@@ -55,6 +55,10 @@ test("a semicolon file of decimal commas loads as decimals", async () => {
 });
 
 const ONE = "1 column was read as numbers written with a decimal comma.";
+const CURRENCY = (column: string, example: string, read: string) =>
+  `Numbers in ${column} such as ${example} were read with the currency sign or brackets removed, as ${read}.`;
+const GROUPED = (column: string, example: string, read: string) =>
+  `Numbers in ${column} such as ${example} were read with the comma between thousands, as ${read}.`;
 
 function ident(name: string): string {
   return `"${name.replaceAll('"', '""')}"`;
@@ -122,7 +126,10 @@ test("spaces around a decimal comma still convert, and spaces around dollar and 
   expectNumbers(await columnValues(query, "spaced", "euro"), [12.5]);
   expectNumbers(await columnValues(query, "spaced", "money"), [90]);
   expectNumbers(await columnValues(query, "spaced", "thousands"), [1260]);
-  assert.equal(await decimalCommaNote(query, "spaced"), ONE);
+  assert.equal(
+    await decimalCommaNote(query, "spaced"),
+    ONE + " " + CURRENCY("money", "$90.00", "90") + " " + GROUPED("thousands", "1,260", "1260"),
+  );
 });
 
 test("null and whitespace beside a decimal comma stay text", async () => {
@@ -140,7 +147,7 @@ test("north american formatted numbers keep today's readings", async () => {
   await convertFormattedNumbers(query, "us");
   assert.equal(await columnType(query, "us", "amount"), "DOUBLE");
   expectNumbers(await columnValues(query, "us", "amount"), [1260, 90, -45, -1260]);
-  assert.equal(await decimalCommaNote(query, "us"), null);
+  assert.equal(await decimalCommaNote(query, "us"), CURRENCY("amount", "$90.00", "90"));
 });
 
 test("a thousands comma of three digits keeps today's reading", async () => {
@@ -153,8 +160,8 @@ test("a thousands comma of three digits keeps today's reading", async () => {
   assert.equal(await columnType(query, "grouped", "amount"), "DOUBLE");
   expectNumbers(await columnValues(query, "alone", "amount"), [1234]);
   expectNumbers(await columnValues(query, "grouped", "amount"), [125, 1500]);
-  assert.equal(await decimalCommaNote(query, "alone"), null);
-  assert.equal(await decimalCommaNote(query, "grouped"), null);
+  assert.equal(await decimalCommaNote(query, "alone"), GROUPED("amount", "1,234", "1234"));
+  assert.equal(await decimalCommaNote(query, "grouped"), GROUPED("amount", "0,125", "125"));
 });
 
 test("a plain code stays text", async () => {
@@ -316,16 +323,16 @@ test("mixed number-shape pairs are named only when both sides prove a style", as
     numberPair("1.234,567", "0,125", [1234.567, 0.125], ONE),
     numberPair("12,5", "12,50", [12.5, 12.5], ONE),
     numberPair("1.234,567", "1.234,567", [1234.567, 1234.567], ONE),
-    numberPair("12.5", "1,260.00", [12.5, 1260], null),
-    numberPair("1,234,567", "1,260.00", [1234567, 1260], null),
-    numberPair("$90.00", "(1,260)", [90, -1260], null),
-    numberPair("1 500", "1,260", [1500, 1260], null),
-    numberPair("12.3456", "$90.00", [12.3456, 90], null),
-    numberPair("1,234", "1,260", [1234, 1260], null),
-    numberPair("1.234", "1,260", [1.234, 1260], null),
-    numberPair("1500", "$1,260", [1500, 1260], null),
-    numberPair("1 500", "$1,260", [1500, 1260], null),
-    numberPair("1,234", "1,260.00", [1234, 1260], null),
+    numberPair("12.5", "1,260.00", [12.5, 1260], GROUPED("amount", "1,260.00", "1260")),
+    numberPair("1,234,567", "1,260.00", [1234567, 1260], GROUPED("amount", "1,234,567", "1234567")),
+    numberPair("$90.00", "(1,260)", [90, -1260], CURRENCY("amount", "$90.00", "90")),
+    numberPair("1 500", "1,260", [1500, 1260], GROUPED("amount", "1,260", "1260")),
+    numberPair("12.3456", "$90.00", [12.3456, 90], CURRENCY("amount", "$90.00", "90")),
+    numberPair("1,234", "1,260", [1234, 1260], GROUPED("amount", "1,234", "1234")),
+    numberPair("1.234", "1,260", [1.234, 1260], GROUPED("amount", "1,260", "1260")),
+    numberPair("1500", "$1,260", [1500, 1260], CURRENCY("amount", "$1,260", "1260")),
+    numberPair("1 500", "$1,260", [1500, 1260], CURRENCY("amount", "$1,260", "1260")),
+    numberPair("1,234", "1,260.00", [1234, 1260], GROUPED("amount", "1,234", "1234")),
     textPair("1,234", "12,50", null),
     textPair("1,234", "1.234,567", null),
     textPair("1 234,567", "-1 234,567", null),
@@ -338,7 +345,7 @@ test("mixed number-shape pairs are named only when both sides prove a style", as
     textPair("$90e2", "1.234,567", null),
     textPair("1.234", "2.500", null),
     textPair("1500", "1000", null),
-    numberPair("1,234,567", "12.5", [1234567, 12.5], null),
+    numberPair("1,234,567", "12.5", [1234567, 12.5], GROUPED("amount", "1,234,567", "1234567")),
     textPair("1.234,567", "(1 234,567)", null),
     textPair("1.234,56", "1 234,567", null),
   ];
@@ -364,7 +371,9 @@ test("mixed number-shape pairs are named only when both sides prove a style", as
   assert.ok(pairs.some(([, , expected]) => expected.type === "VARCHAR" && expected.note === MIXED_STYLES));
   assert.ok(pairs.some(([, , expected]) => expected.type === "VARCHAR" && expected.note === null));
   assert.ok(pairs.some(([, , expected]) => expected.type === "DOUBLE" && expected.note === ONE));
-  assert.ok(pairs.some(([, , expected]) => expected.type === "DOUBLE" && expected.note === null));
+  // Every converted pair here carried a currency sign, brackets or a comma
+  // between thousands, so each one is named.
+  assert.ok(pairs.every(([, , expected]) => expected.type !== "DOUBLE" || expected.note !== null));
 });
 
 test("text values, a malformed number and single decorated styles stay text and are not named", async () => {
@@ -531,7 +540,7 @@ test("parentheses around a decimal comma stay text, and today's parentheses stil
   assert.equal(await columnType(query, "parens", "us"), "DOUBLE");
   assert.deepEqual(await columnValues(query, "parens", "euro"), ["(12,50)", "(1.234,56)"]);
   expectNumbers(await columnValues(query, "parens", "us"), [-45, -1260]);
-  assert.equal(await decimalCommaNote(query, "parens"), null);
+  assert.equal(await decimalCommaNote(query, "parens"), CURRENCY("us", "(45)", "-45"));
 });
 
 test("three digits after a dot group mark read as a decimal comma", async () => {

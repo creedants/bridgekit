@@ -10,6 +10,8 @@ import {
   type Periods,
 } from "../src/app/fileProblems.ts";
 import type { Column } from "../src/app/setup.ts";
+import { profileFile } from "../src/app/profile.ts";
+import { openDatabase } from "../src/duckdb.ts";
 
 const text = (name: string): Column => ({ name, type: "VARCHAR" });
 const number = (name: string): Column => ({ name, type: "INTEGER" });
@@ -489,4 +491,117 @@ test("an empty Sales beside a numeric net_revenue gets no text net_sales message
     salesColumn: "",
   });
   assert.deepEqual(fileProblem(numericNet), { kind: "none" });
+});
+
+async function profiledColumns(sql: string): Promise<Column[]> {
+  const query = await openDatabase();
+  await query(`CREATE TABLE data AS ${sql}`);
+  const columns = (await query(`DESCRIBE data`)).map((row) => ({
+    name: String(row.column_name),
+    type: String(row.column_type),
+  }));
+  let profiled = columns;
+  await profileFile(query, columns, () => true, (profile) => {
+    profiled = profile.columns;
+  });
+  return profiled;
+}
+
+test("R7: a mostly numeric sales column names its first text cell and its row", async () => {
+  const columns = await profiledColumns(`SELECT * FROM (VALUES
+    ('2025', 'A', 1, '100'),
+    ('2025', 'B', 2, '110'),
+    ('2026', 'A', 3, '120'),
+    ('2026', 'B', 4, 'n/a'),
+    ('2026', 'C', 5, '130')
+  ) v(period, product, units, net_sales)`);
+  assert.deepEqual(
+    fileProblem(
+      input({
+        columns,
+        rows: 5,
+        periodColumn: "period",
+        periods: ["2025", "2026"],
+        unitsColumn: "units",
+        salesColumn: "",
+      }),
+    ),
+    {
+      kind: "reason",
+      message: 'Sales must be a column of numbers, and "net_sales" holds text, such as "n/a" in row 5.',
+    },
+  );
+});
+
+test("R7: a mostly numeric units column names its first text cell and its row", async () => {
+  const columns = await profiledColumns(`SELECT * FROM (VALUES
+    ('2025', 'A', '10', 100),
+    ('2025', 'B', '11', 110),
+    ('2025', 'C', '12', 120),
+    ('2026', 'A', '13', 130),
+    ('2026', 'B', '14', 140),
+    ('2026', 'C', '15', 150),
+    ('2026', 'D', '16', 160),
+    ('2026', 'E', 'n/a', 170)
+  ) v(period, product, qty, sales)`);
+  assert.deepEqual(
+    fileProblem(
+      input({
+        columns,
+        rows: 8,
+        periodColumn: "period",
+        periods: ["2025", "2026"],
+        unitsColumn: "",
+        salesColumn: "sales",
+      }),
+    ),
+    {
+      kind: "reason",
+      message: 'Units must be a column of numbers, and "qty" holds text, such as "n/a" in row 9.',
+    },
+  );
+});
+
+test("R7: a mostly text column keeps the message without a cell", async () => {
+  const columns = await profiledColumns(`SELECT * FROM (VALUES
+    ('2025', 'A', 1, '100'),
+    ('2025', 'B', 2, 'n/a'),
+    ('2026', 'A', 3, 'n/a'),
+    ('2026', 'B', 4, 'n/a')
+  ) v(period, product, units, net_sales)`);
+  assert.deepEqual(
+    fileProblem(
+      input({
+        columns,
+        rows: 4,
+        periodColumn: "period",
+        periods: ["2025", "2026"],
+        unitsColumn: "units",
+        salesColumn: "",
+      }),
+    ),
+    { kind: "reason", message: 'Sales must be a column of numbers, and "net_sales" holds text.' },
+  );
+});
+
+test("R7: a currency sign is not a text cell", async () => {
+  const columns = await profiledColumns(`SELECT * FROM (VALUES
+    ('2025', 'A', 1, '€600'),
+    ('2025', 'B', 2, '€700'),
+    ('2026', 'A', 3, '€800'),
+    ('2026', 'B', 4, '€900')
+  ) v(period, product, units, sales)`);
+  assert.deepEqual(
+    fileProblem(
+      input({
+        columns,
+        rows: 4,
+        periodColumn: "period",
+        periods: ["2025", "2026"],
+        unitsColumn: "units",
+        salesColumn: "",
+      }),
+    ),
+    { kind: "reason", message: 'Sales must be a column of numbers, and "sales" holds text.' },
+  );
 });

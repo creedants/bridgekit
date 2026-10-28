@@ -142,7 +142,7 @@ function provesBothStyles(counts: ColumnCounts): boolean {
 function formattingMeasures(column: string, index: number): string {
   return [
     `count(${column})::DOUBLE AS n${index}`,
-    `count(${northAmerican(moneyField(index, "text"))})::DOUBLE AS ok${index}`,
+    `count(*) FILTER (WHERE ${readsAsNumber(column)})::DOUBLE AS ok${index}`,
     `count(*) FILTER (WHERE ${formatted(column, index)})::DOUBLE AS f${index}`,
   ].join(", ");
 }
@@ -276,10 +276,15 @@ export async function convertFormattedNumbers(query: Query, table: string): Prom
       if (!parsesWithFormatting(counts)) continue;
       const canonical = parsed[index] ? `(${parsed[index]}).text` : column;
       if (isDecimalComma(counts)) {
+        const mark = await readingMark(query, tableName, column, false, decimalComma);
         await query(`ALTER TABLE ${tableName} ALTER ${column} TYPE DOUBLE USING ${decimalComma(canonical)}`);
-        await query(`COMMENT ON COLUMN ${tableName}.${column} IS 'decimal comma'`);
+        await query(
+          `COMMENT ON COLUMN ${tableName}.${column} IS ${literal(mark === undefined ? "decimal comma" : `decimal comma; ${mark}`)}`,
+        );
       } else if (lacksDecimalProof(counts)) {
+        const mark = await readingMark(query, tableName, column, true, northAmerican);
         await query(`ALTER TABLE ${tableName} ALTER ${column} TYPE DOUBLE USING ${northAmerican(canonical)}`);
+        if (mark !== undefined) await query(`COMMENT ON COLUMN ${tableName}.${column} IS ${literal(mark)}`);
       } else if (counts.present > 0 && counts.wellFormed === counts.nonBlank && provesBothStyles(counts)) {
         await query(`COMMENT ON COLUMN ${tableName}.${column} IS 'mixed number styles'`);
       }
@@ -301,21 +306,75 @@ export async function convertFormattedNumbers(query: Query, table: string): Prom
 // first dotted value after a colon, because the sentence quotes it.
 const THOUSANDS_DOTS = "thousands dots";
 const DECIMAL_DOTS = "decimal dots";
+// A converted column whose values carried a currency sign or brackets, or a
+// comma between thousands, carries the first such value and the number it was
+// read as, because the sentence quotes both.
+const CURRENCY_SIGN = "currency sign";
+const GROUPED_COMMA = "grouped comma";
+
+const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
+
+const currencyOrBracket = (column: string) =>
+  `(((${money(column)}).currency) IS NOT NULL OR regexp_matches(trim(${column}), '^\\(.*\\)$'))`;
+const commaThousands = (column: string) => `regexp_matches(trim(${column}), '\\d,\\d{3}')`;
+
+/** The number a formatted value was read as, by the same parse the column converted with. */
+async function readNumber(query: Query, example: string, parse: (text: string) => string): Promise<string> {
+  const [row] = await query(`SELECT CAST(${parse(`(${money(literal(example))}).text`)} AS VARCHAR) AS n`);
+  return String(row?.n).replace(/\.0$/, "");
+}
+
+/**
+ * The reading mark a converted column carries, when its values held a currency
+ * sign or brackets, or a comma between thousands. A currency sign wins over a
+ * comma, because a value like `$1,000.50` was not read for its comma alone.
+ */
+async function readingMark(
+  query: Query,
+  tableName: string,
+  column: string,
+  grouped: boolean,
+  parse: (text: string) => string,
+): Promise<string | undefined> {
+  const [row] = await query(
+    `SELECT arg_min(trim(${column}), rowid) FILTER (WHERE ${currencyOrBracket(column)}) AS c${
+      grouped ? `, arg_min(trim(${column}), rowid) FILTER (WHERE ${commaThousands(column)}) AS g` : ""
+    } FROM ${tableName}`,
+  );
+  const currency = row?.c == null ? undefined : String(row.c);
+  const commas = grouped && row?.g != null ? String(row.g) : undefined;
+  const example = currency ?? commas;
+  if (example === undefined) return undefined;
+  const mark = currency !== undefined ? CURRENCY_SIGN : GROUPED_COMMA;
+  const read = await readNumber(query, example, parse);
+  return `${mark}:${example}|${read}`;
+}
+
+/** Splits a reading mark back into its quoted value and the number it was read as. */
+function readingOf(comment: string, mark: string): { example: string; read: string } | undefined {
+  const body = comment.slice(mark.length + 1);
+  const cut = body.lastIndexOf("|");
+  if (cut < 0) return undefined;
+  return { example: body.slice(0, cut), read: body.slice(cut + 1) };
+}
+
+/** One column's comment as its marks, so a column can carry a decimal comma and a reading mark. */
+const marksOf = (comment: string) => comment.split("; ");
 
 // A period text may be a whole record written with another separator. The
 // check reads the text in one cell, never the row's shape: a valid file with a
 // sparse footer row has the same shape as a mixed file.
 const WHOLE_ROW_SEPARATORS = [",", ";", "\t"];
-const SHORT_PERIOD = 40;
+const SHORT_TEXT = 40;
 
 function sqlSeparator(separator: string): string {
   return separator === "\t" ? "chr(9)" : `'${separator}'`;
 }
 
 /** Cuts a quoted value the way the file problems list does: 39 characters and an ellipsis. */
-function shortened(value: string): string {
+export function shortened(value: string): string {
   const characters = Array.from(value);
-  return characters.length <= SHORT_PERIOD ? value : characters.slice(0, SHORT_PERIOD - 1).join("") + "…";
+  return characters.length <= SHORT_TEXT ? value : characters.slice(0, SHORT_TEXT - 1).join("") + "…";
 }
 
 /**
@@ -366,8 +425,9 @@ export async function decimalCommaNote(query: Query, table: string): Promise<str
   const rows = await query(
     `SELECT column_name, comment FROM duckdb_columns() WHERE schema_name = current_schema() AND table_name = '${table.replaceAll("'", "''")}' AND comment IS NOT NULL ORDER BY column_index`,
   );
-  const decimal = rows.filter((row) => row.comment === "decimal comma").map((row) => String(row.column_name));
-  const mixed = rows.filter((row) => row.comment === "mixed number styles").map((row) => String(row.column_name));
+  const columns = rows.map((row) => ({ name: String(row.column_name), marks: marksOf(String(row.comment ?? "")) }));
+  const decimal = columns.filter((column) => column.marks.includes("decimal comma")).map((column) => column.name);
+  const mixed = columns.filter((column) => column.marks.includes("mixed number styles")).map((column) => column.name);
   const sentences: string[] = [];
   if (decimal.length === 1) sentences.push("1 column was read as numbers written with a decimal comma.");
   if (decimal.length > 1) sentences.push(`${decimal.length} columns were read as numbers written with a decimal comma.`);
@@ -375,19 +435,33 @@ export async function decimalCommaNote(query: Query, table: string): Promise<str
   if (mixed.length > 1) {
     sentences.push(`${mixed.slice(0, -1).join(", ")} and ${mixed[mixed.length - 1]} mix number styles, so they were read as text.`);
   }
-  for (const row of rows) {
-    const comment = String(row.comment ?? "");
-    const column = String(row.column_name);
-    if (comment.startsWith(`${THOUSANDS_DOTS}:`)) {
-      const example = comment.slice(THOUSANDS_DOTS.length + 1);
-      sentences.push(
-        `Numbers in ${column} such as ${example} were read with a dot between thousands, as ${example.replaceAll(".", "")}.`,
-      );
-    } else if (comment.startsWith(`${DECIMAL_DOTS}:`)) {
-      const example = comment.slice(DECIMAL_DOTS.length + 1);
-      sentences.push(
-        `Numbers in ${column} such as ${example} were read as decimals, as ${dotExampleValue(example)}. If they are whole numbers with dots between thousands, save the file with plain numbers.`,
-      );
+  for (const column of columns) {
+    for (const mark of column.marks) {
+      if (mark.startsWith(`${CURRENCY_SIGN}:`)) {
+        const reading = readingOf(mark, CURRENCY_SIGN);
+        if (reading) {
+          sentences.push(
+            `Numbers in ${column.name} such as ${reading.example} were read with the currency sign or brackets removed, as ${reading.read}.`,
+          );
+        }
+      } else if (mark.startsWith(`${GROUPED_COMMA}:`)) {
+        const reading = readingOf(mark, GROUPED_COMMA);
+        if (reading) {
+          sentences.push(
+            `Numbers in ${column.name} such as ${reading.example} were read with the comma between thousands, as ${reading.read}.`,
+          );
+        }
+      } else if (mark.startsWith(`${THOUSANDS_DOTS}:`)) {
+        const example = mark.slice(THOUSANDS_DOTS.length + 1);
+        sentences.push(
+          `Numbers in ${column.name} such as ${example} were read with a dot between thousands, as ${example.replaceAll(".", "")}.`,
+        );
+      } else if (mark.startsWith(`${DECIMAL_DOTS}:`)) {
+        const example = mark.slice(DECIMAL_DOTS.length + 1);
+        sentences.push(
+          `Numbers in ${column.name} such as ${example} were read as decimals, as ${dotExampleValue(example)}. If they are whole numbers with dots between thousands, save the file with plain numbers.`,
+        );
+      }
     }
   }
   const whole = await wholeRowNote(query, table);
