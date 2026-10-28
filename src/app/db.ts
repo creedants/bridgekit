@@ -148,10 +148,12 @@ function widestSeparator(counts: SeparatorCounts, preferred: number): number {
 }
 
 /**
- * True when a record's delimiter differs from the header's. Split on unquoted
- * line breaks; the first with a separator sets the field count, and a later
- * record is mixed when no separator gives that count. Quotes hide separators
- * and line breaks.
+ * True when a record splits on a different separator from the header's. Records
+ * are split on unquoted line breaks, and the header is the first record with a
+ * separator outside quotes. A later record takes the separator that gives the
+ * header's field count, else the one that occurs most, the header's winning a
+ * tie; the file is mixed when that is not the header's separator. Quotes hide
+ * separators and line breaks.
  */
 export function mentionsMixedSeparators(prefix: string): boolean {
   const records: SeparatorCounts[] = [];
