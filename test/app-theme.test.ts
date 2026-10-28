@@ -84,17 +84,19 @@ test("the picture's drawing uses no colour the tool does not", () => {
   const start = HOME_PAGE.indexOf('<a class="frame"');
   assert.ok(start >= 0, 'index.html has no <a class="frame"> picture of the tool');
   const frame = HOME_PAGE.slice(start, HOME_PAGE.indexOf("</a>", start));
-  const palette = new Set([...TOOL.keys()].map(tool));
-  const painted = [...frame.matchAll(/\b(fill|stroke)="(#[0-9a-fA-F]{3,6})"/g)];
-  assert.ok(painted.length > 0, "index.html's picture has no fill or stroke colours to check");
-  for (const [, attribute, hex] of painted) {
-    const colour = hex.toLowerCase();
-    if (colour === "#fff" || colour === "#ffffff" || palette.has(colour)) continue;
-    assert.ok(
-      HOME.includes(`[${attribute}="${hex}"]`),
-      `index.html's picture draws ${attribute}="${hex}", which is not a src/tokens.css colour: restate it in src/site/home.css with a .hero [${attribute}="${hex}"] rule`,
-    );
+  const painted = [
+    ...[...frame.matchAll(/\b(fill|stroke|stop-color)="([^"]*)"/g)].map(([, attribute, value]) => ({ attribute, value })),
+    ...[...frame.matchAll(/\bstyle="([^"]*)"/g)].flatMap(([, style]) =>
+      [...style.matchAll(/(color|background(?:-color)?|fill|stroke)\s*:\s*([^;]+)/g)].map(([, attribute, value]) => ({ attribute, value: value.trim() }))),
+  ];
+  assert.ok(painted.length > 0, "index.html's picture has no colours to check");
+  for (const { attribute, value } of painted) {
+    if (/^#fff(fff)?$/i.test(value)) continue; // the logo's white bars: --paper
+    const ref = /^var\((--t-[\w-]+)\)$/.exec(value);
+    assert.ok(ref, `index.html's picture paints ${attribute} ${value}: paint it with a .hero --t-* colour such as var(--t-up), so the picture follows src/tokens.css`);
+    assert.ok(HERO.has(ref[1]), `index.html's picture paints ${attribute} with ${ref[1]}, which src/site/home.css .hero does not declare`);
   }
+  assert.doesNotMatch(HOME, /\[(?:fill|stroke)\s*=/, "src/site/home.css restyles the picture by its attributes: paint it in index.html with var(--t-*)");
 });
 
 test("the tool loads Instrument Sans from this site, as the home page does", () => {
