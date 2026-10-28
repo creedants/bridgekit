@@ -16,10 +16,10 @@ echarts.use([BarChart, GridComponent, TooltipComponent, LegacyGridContainLabel, 
 export function Legend(props: { controls?: React.ReactNode; actions?: React.ReactNode }) {
   return (
     <div className="legend">
-      <span><i style={{ background: "var(--up)" }} /> Increase</span>
-      <span><i style={{ background: "var(--down)" }} /> Decrease</span>
-      <span><i style={{ background: "var(--total)" }} /> Period total</span>
-      <span style={{ marginLeft: "auto" }}>{props.controls}</span>
+      <span className="key"><i style={{ background: "var(--up)" }} /> Increase</span>
+      <span className="key"><i style={{ background: "var(--down)" }} /> Decrease</span>
+      <span className="key"><i style={{ background: "var(--total)" }} /> Period total</span>
+      <span className="legend-controls">{props.controls}</span>
       {props.actions}
     </div>
   );
@@ -61,6 +61,8 @@ export function BridgeChart(props: {
     const stack = chartStack(bars);
     // On a narrow chart the category labels are angled and value labels that would collide are dropped.
     const narrow = element.current.clientWidth < 560;
+    // "Discontinued configurations" needs about 84px a bar on two lines.
+    const roomy = !narrow && element.current.clientWidth / bars.length >= 84;
 
     chart.setOption({
       animation: false,
@@ -85,9 +87,9 @@ export function BridgeChart(props: {
         type: "category",
         data: bars.map((b) => {
           const label = (narrow ? b.label.replace(": ", " ") : b.label).replace(" (like-for-like)", "");
-          const wrapped = narrow
-            ? label.replace("New configurations", "New\nconfigs").replace("Discontinued configurations", "Discont.\nconfigs")
-            : label.replace("New configurations", "New\nconfigurations").replace("Discontinued configurations", "Discontinued\nconfigurations");
+          const wrapped = roomy
+            ? label.replace("New configurations", "New\nconfigurations").replace("Discontinued configurations", "Discontinued\nconfigurations")
+            : label.replace("New configurations", "New\nconfigs").replace("Discontinued configurations", "Discont.\nconfigs");
           return wrapped.replace("Sales with no units", "No\nunits").replace(": ", ":\n");
         }),
         axisTick: { show: false },

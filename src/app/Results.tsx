@@ -935,7 +935,7 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
 
   return (
     <div>
-      <p className="hint">Movers: the products and attribute values that changed sales the most.</p>
+      <p className="hint">Movers: the products and attribute values that changed {measureName(config).toLowerCase()} the most.</p>
       <div className="toolbar">
         <label>
           Group by
@@ -1175,7 +1175,7 @@ function Check(props: { run: Run; warnings: string[]; query: () => Promise<Query
     <div className="data-check">
       <h3>Money tie-out</h3>
       <p className="hint">
-        Money tie-out: for each period, the file total minus what the filters removed equals the sales in the bridge.
+        Money tie-out: for each period, the file total minus what the filters removed equals the {measureName(config).toLowerCase()} in the bridge.
       </p>
       <table className="narrow tieout">
         <tbody>
