@@ -133,12 +133,10 @@ export async function readLoadedTable(
   }
 }
 
-/** Outside-quote separator counts for one record, in comma, semicolon, tab order. */
 type SeparatorCounts = [number, number, number];
 
 const SEPARATOR_COUNT = 3;
 
-/** The separator index with the most counts, and the preferred one on a tie. */
 function widestSeparator(counts: SeparatorCounts, preferred: number): number {
   let widest = 0;
   for (let index = 1; index < SEPARATOR_COUNT; index += 1) {
