@@ -55,23 +55,6 @@ test("the sample file and any file that bridges give no message", () => {
   assert.deepEqual(fileProblem(HEALTHY), { kind: "none" });
 });
 
-test("a mixed-separator file warns before any calculation, ahead of other reasons", () => {
-  const mixed = "Rows in this file use different separators, so its columns may be split wrongly. Save it again with one separator.";
-  assert.deepEqual(fileProblem({ ...HEALTHY, mixedSeparators: true }), { kind: "reason", message: mixed });
-  const brokenColumns = input({
-    columns: [text("column0"), text("column1"), text("column2")],
-    rows: 4,
-    periodColumn: "",
-    periods: [],
-    unitsColumn: "",
-    salesColumn: "",
-    mixedSeparators: true,
-  });
-  assert.deepEqual(fileProblem(brokenColumns), { kind: "reason", message: mixed });
-  const onePeriod = input({ ...HEALTHY, periods: ["2025"], mixedSeparators: true });
-  assert.deepEqual(fileProblem(onePeriod), { kind: "reason", message: mixed });
-});
-
 test("a real date column compared by year stays under the period label limit", () => {
   const dates = input({
     columns: [date("order_date"), text("design"), number("units"), number("sales")],

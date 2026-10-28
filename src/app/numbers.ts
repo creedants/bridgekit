@@ -1,5 +1,4 @@
 import { amountsNote, DEFAULT_CELLS_TABLE, HUGE_AMOUNTS, type Query } from "../engine.ts";
-import { MIXED_SEPARATORS_SENTENCE } from "./fileProblems.ts";
 
 // read_csv options that keep well-formed files identical while letting short
 // rows load with blanks. null_padding pads short rows, parallel=false keeps
@@ -298,7 +297,6 @@ export async function convertFormattedNumbers(query: Query, table: string): Prom
 // first dotted value after a colon, because the sentence quotes it.
 const THOUSANDS_DOTS = "thousands dots";
 const DECIMAL_DOTS = "decimal dots";
-export const MIXED_SEPARATORS = "mixed separators";
 
 export async function decimalCommaNote(query: Query, table: string): Promise<string | null> {
   const rows = await query(
@@ -327,12 +325,6 @@ export async function decimalCommaNote(query: Query, table: string): Promise<str
         `Numbers in ${column} such as ${example} were read as decimals, as ${dotExampleValue(example)}. If they are whole numbers with dots between thousands, save the file with plain numbers.`,
       );
     }
-  }
-  const tables = await query(
-    `SELECT comment FROM duckdb_tables() WHERE table_name = '${table.replaceAll("'", "''")}' AND comment = '${MIXED_SEPARATORS}'`,
-  );
-  if (tables.length > 0) {
-    sentences.push(MIXED_SEPARATORS_SENTENCE);
   }
   const huge = await amountsNote(query, DEFAULT_CELLS_TABLE).catch(() => null);
   if (huge !== null) sentences.push(huge);
@@ -424,9 +416,4 @@ export function typesForDotColumns(readings: DotReading[]): string | null {
   const thousands = readings.filter((reading) => reading.thousands);
   if (thousands.length === 0) return null;
   return `, types={${thousands.map((reading) => `'${reading.column.replaceAll("'", "''")}': 'VARCHAR'`).join(", ")}}`;
-}
-
-/** Notes a mixed-separator file on its table, where the data-check notes show. */
-export async function markMixedSeparators(query: Query, table: string): Promise<void> {
-  await query(`COMMENT ON TABLE ${quotedName(table)} IS '${MIXED_SEPARATORS}'`);
 }

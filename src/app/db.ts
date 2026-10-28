@@ -9,8 +9,6 @@ import {
   applyDotColumns,
   convertFormattedNumbers,
   CSV_OPTIONS,
-  markMixedSeparators,
-  MIXED_SEPARATORS,
   planDotColumns,
   typesForDotColumns,
 } from "./numbers.ts";
@@ -93,19 +91,12 @@ const MONTH_FIRST_MARK = "month first";
 // reader had to decide, and the year.
 const SLASH_DATE = "^\\s*(\\d{1,2})/(\\d{1,2})/(\\d{4})\\s*$";
 
-export interface CsvShape {
-  /** The delimiter the reader's sniffer reported, or a comma when it reported none. */
-  readonly delimiter: string;
-  /** Columns the reader produced for the loaded table. */
-  readonly columns: number;
-}
-
 export async function readCsvTable(
   query: Query,
   table: string,
   path: string,
   skipMonthFirst = false,
-): Promise<CsvShape> {
+): Promise<void> {
   const escaped = path.replaceAll("'", "''");
   const delimiter = await sniffDelimiter(query, path);
   // Raw text decides the dots before the database types them: an all-dotted
@@ -114,8 +105,7 @@ export async function readCsvTable(
   const types = typesForDotColumns(dots);
   await query(`CREATE OR REPLACE TABLE ${quote(table)} AS SELECT * FROM read_csv('${escaped}', ${CSV_OPTIONS}${types ?? ""})`);
   await applyDotColumns(query, table, dots);
-  const shape: CsvShape = { delimiter, columns: (await query(`DESCRIBE ${quote(table)}`)).length };
-  if (skipMonthFirst) return shape;
+  if (skipMonthFirst) return;
   const { ambiguous, monthFirst } = await ambiguousDateColumns(query, table, path);
   for (const column of ambiguous) {
     const name = quote(table);
@@ -127,7 +117,6 @@ export async function readCsvTable(
     }
     await query(`COMMENT ON COLUMN ${name}.${field} IS '${MONTH_FIRST_MARK}'`);
   }
-  return shape;
 }
 
 // Excel workbooks flatten to comma CSV before DuckDB sees them, so they load
@@ -139,62 +128,12 @@ export async function readLoadedTable(
   table: string,
   path: string,
   isExcel: boolean,
-): Promise<CsvShape> {
+): Promise<void> {
   try {
-    return await readCsvTable(query, table, path, isExcel);
+    await readCsvTable(query, table, path, isExcel);
   } catch (error) {
     throw csvEncodingFailure(error);
   }
-}
-
-const SEPARATORS = [",", ";", "\t"] as const;
-
-type Separator = (typeof SEPARATORS)[number];
-
-/**
- * A later record proves mixed separators when it holds no unquoted occurrence of
- * the reader's own delimiter but splits into exactly the reader's column count on
- * another of comma, semicolon or tab.
- * It reads the bytes the loader already took.
- */
-function mixedSeparatorsInText(text: string, delimiter: string, columns: number): boolean {
-  const own = SEPARATORS.indexOf(delimiter as Separator);
-  if (columns < 2 || own < 0) return false;
-  const records: number[][] = [];
-  let counts = SEPARATORS.map(() => 0);
-  let inQuotes = false;
-  for (let i = 0; i < text.length; i += 1) {
-    const ch = text[i];
-    if (ch === '"') {
-      if (inQuotes && text[i + 1] === '"') i += 1;
-      else inQuotes = !inQuotes;
-      continue;
-    }
-    if (inQuotes) continue;
-    if (ch === "\n" || ch === "\r") {
-      if (ch === "\r" && text[i + 1] === "\n") i += 1;
-      records.push(counts);
-      counts = SEPARATORS.map(() => 0);
-      continue;
-    }
-    const at = SEPARATORS.indexOf(ch as Separator);
-    if (at >= 0) counts[at] += 1;
-  }
-  // A record still open at the end of the prefix may be cut inside a quoted field.
-  if (!inQuotes) records.push(counts);
-  const separated = records.filter((record) => record.some((count) => count > 0));
-  return separated.slice(1).some(
-    (record) =>
-      record[own] === 0 && SEPARATORS.some((_, index) => index !== own && record[index] === columns - 1),
-  );
-}
-
-/** Whether the loaded table carries the mixed-separator marker from the load path. */
-export async function hasMixedSeparators(query: Query, table: string): Promise<boolean> {
-  const rows = await query(
-    `SELECT comment FROM duckdb_tables() WHERE table_name = '${table.replaceAll("'", "''")}' AND comment = '${MIXED_SEPARATORS}'`,
-  ).catch(() => []);
-  return rows.length > 0;
 }
 
 /** Refuses an empty or header-only table: the file problems list never sees one. */
@@ -219,12 +158,9 @@ export async function stageCsvAndSwap(
 ): Promise<void> {
   if (file.size === 0) throw new Error(NO_DATA_ROWS);
   const staging = `${table}__staging`;
-  const shape = await readLoadedTable(query, staging, readablePath, false);
+  await readLoadedTable(query, staging, readablePath, false);
   await convertFormattedNumbers(query, staging);
-  const prefix = new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer());
-  if (mixedSeparatorsInText(new TextDecoder().decode(prefix), shape.delimiter, shape.columns)) {
-    await markMixedSeparators(query, staging);
-  }
+  // No mixed-separator check: a record split by another separator can match a valid sparse record byte for byte.
   await requireDataRows(query, staging);
   await swapLoadedTable(query, staging, table);
 }
