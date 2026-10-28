@@ -2192,7 +2192,7 @@ async function recorded(steps) {
 /**
  * avifenc settings for the guide pictures. Speed and one thread are fixed, so the same avifenc writes the same bytes
  * from the same PNG at the same quality. The rest pins colour settings avifenc would otherwise choose, and drops the
- * PNG's colour profile and metadata, so a new avifenc default cannot change the files.
+ * PNG's colour profile and metadata. Codec selection and other unpinned defaults can still change the files.
  */
 const AVIFENC = ["--speed", "6", "--jobs", "1", "--yuv", "444", "--depth", "8", "--range", "full", "--cicp", "1/13/6", "--ignore-icc", "--ignore-exif", "--ignore-xmp"];
 /** Qualities tried in turn. Each picture keeps the first that fits its budget, so one busy picture does not blur the rest. */
