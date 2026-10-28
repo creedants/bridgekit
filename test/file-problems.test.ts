@@ -577,7 +577,16 @@ const MULTILINE_CELLS: (string | number)[][] = [
   ["2026", "A-100", 10, 130],
 ];
 
+const BLANK_RECORD =
+  "period,Product,units,NET_SALES\n" +
+  "2025,A-100,10,100\n" +
+  "\n" +
+  "2025,A-100,10,110\n" +
+  "2026,A-100,10,n/a\n" +
+  "2026,A-100,10,130\n";
+
 const ROW_4 = 'Sales must be a column of numbers, and "NET_SALES" holds text, such as "n/a" in row 4.';
+const ROW_5 = 'Sales must be a column of numbers, and "NET_SALES" holds text, such as "n/a" in row 5.';
 const NO_ROW = 'Sales must be a column of numbers, and "NET_SALES" holds text, such as "n/a".';
 
 /** The setup the multiline file gets: four rows, no sales column picked. */
@@ -767,6 +776,39 @@ test("R7: a blank record before the bad cell counts as a row", async () => {
     kind: "reason",
     message: 'Sales must be a column of numbers, and "NET_SALES" holds text, such as "n/a" in row 5.',
   });
+});
+
+test("R7: a blank-record CSV names row 5 through a forwarding query wrapper", async () => {
+  const query = await openDatabase();
+  await stagedCsv(query, "blank-record.csv", BLANK_RECORD);
+  const forwarded = async (sql: string) => query(sql);
+  const columns = await profileLoaded(forwarded, "data");
+  assert.deepEqual(fileProblem(multilineProblem(columns)), { kind: "reason", message: ROW_5 });
+});
+
+test("R7: the same blank-record cells in a workbook name row 5 through a wrapper", async () => {
+  const query = await openDatabase();
+  await stagedWorkbook(query, "blank-record.xlsx", [
+    ["period", "Product", "units", "NET_SALES"],
+    ["2025", "A-100", 10, 100],
+    [],
+    ["2025", "A-100", 10, 110],
+    ["2026", "A-100", 10, "n/a"],
+    ["2026", "A-100", 10, 130],
+  ]);
+  const forwarded = async (sql: string) => query(sql);
+  const columns = await profileLoaded(forwarded, "data");
+  assert.deepEqual(fileProblem(multilineProblem(columns)), { kind: "reason", message: ROW_5 });
+});
+
+test("R7: an upload whose source the registry no longer holds names no row", async () => {
+  const first = await openDatabase();
+  const second = await openDatabase();
+  await stagedCsv(first, "first.csv", BLANK_RECORD);
+  // A second database's upload takes the table's one source slot.
+  await stagedCsv(second, "second.csv", MULTILINE);
+  const columns = await profileLoaded(first, "data");
+  assert.deepEqual(fileProblem(multilineProblem(columns)), { kind: "reason", message: NO_ROW });
 });
 
 test("R7: CRLF line endings do not move the row", async () => {
