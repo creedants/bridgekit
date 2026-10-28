@@ -904,3 +904,37 @@ test("the guide and the PVM analysis page carry the corrected wording", () => {
     );
   }
 });
+
+const REMEMBERING =
+  "The tool can remember your column choices, attribute order and options in this browser, so the next file with the same columns opens with the same setup. It is off until you tick <b>Remember this setup in this browser</b>. Filter selections and your data are never stored. Unticking the box deletes what was stored. To move a setup to another computer or share it, choose <b>Save setup to file</b>.";
+
+/** Exercise optional-feature wording with all flags enabled and with all flags disabled. */
+const BUILDS: [string, Record<string, boolean>][] = [
+  ["all optional features", { ai: true, counts: true, workspaces: true }],
+  ["no optional features", {}],
+];
+
+test("the guide says remembering a setup is opt-in", () => {
+  for (const [build, features] of BUILDS) {
+    const html = applyFeatureBlocks(readPage("guide.html"), features);
+    assert.ok(html.includes(`<p>${REMEMBERING}</p>`), `guide.html in the ${build} build does not hold the opt-in paragraph`);
+    assert.ok(
+      !html.includes("The tool remembers your column choices"),
+      `guide.html in the ${build} build still says remembering is automatic`,
+    );
+  }
+});
+
+test("no site page says dearer or fell back to", () => {
+  for (const page of PAGES) {
+    for (const [build, features] of BUILDS) {
+      const text = ` ${visibleWordsOf(applyFeatureBlocks(readPage(page.file), features)).join(" ")} `;
+      for (const old of ["dearer", "fell back to"]) {
+        assert.ok(
+          !text.includes(old),
+          `${page.file} in the ${build} build still says "${old}": use the wording the reader is meant to see`,
+        );
+      }
+    }
+  }
+});

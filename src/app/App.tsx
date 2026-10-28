@@ -42,7 +42,7 @@ import {
   type LoadSource,
   type Setup,
 } from "./setup.ts";
-import { SetupPanel } from "./SetupPanel.tsx";
+import { agree, SetupPanel } from "./SetupPanel.tsx";
 
 // Pro workspaces exist only in builds with VITE_WORKSPACES=1; elsewhere the code is left out.
 const WorkspacePanel = import.meta.env.VITE_WORKSPACES === "1" ? lazy(() => import("./Workspace.tsx")) : null;
@@ -77,6 +77,10 @@ const RESULTS_PREFETCH_SETTLE_MS = 150;
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function sourceCaption(source: string, rows: number, columns: number): string {
+  return `${source} · ${whole(rows)} ${agree(rows, "row")} · ${whole(columns)} ${agree(columns, "column")}`;
 }
 
 function previewCell(type: string, value: unknown): string {
@@ -544,7 +548,7 @@ export function App() {
           {phase.kind === "reading"
             ? ""
             : source
-              ? `${source} · ${whole(rowCount)} rows · ${columns.length} columns`
+              ? sourceCaption(source, rowCount, columns.length)
               : "No data loaded"}
         </span>
         <span className="status" aria-live="polite">{status}</span>
