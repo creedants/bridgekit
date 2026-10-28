@@ -92,7 +92,7 @@ const MONTH_FIRST_MARK = "month first";
 // reader had to decide, and the year.
 const SLASH_DATE = "^\\s*(\\d{1,2})/(\\d{1,2})/(\\d{4})\\s*$";
 
-export async function readCsvTable(query: Query, table: string, path: string): Promise<void> {
+export async function readCsvTable(query: Query, table: string, path: string, skipMonthFirst = false): Promise<void> {
   const escaped = path.replaceAll("'", "''");
   const delimiter = await sniffDelimiter(query, path);
   // Raw text decides the dots before the database types them: an all-dotted
@@ -101,6 +101,7 @@ export async function readCsvTable(query: Query, table: string, path: string): P
   const types = typesForDotColumns(dots);
   await query(`CREATE OR REPLACE TABLE ${quote(table)} AS SELECT * FROM read_csv('${escaped}', ${CSV_OPTIONS}${types ?? ""})`);
   await applyDotColumns(query, table, dots);
+  if (skipMonthFirst) return;
   const { ambiguous, monthFirst } = await ambiguousDateColumns(query, table, path);
   for (const column of ambiguous) {
     const name = quote(table);
@@ -115,16 +116,17 @@ export async function readCsvTable(query: Query, table: string, path: string): P
 }
 
 // Excel workbooks flatten to comma CSV before DuckDB sees them, so they load
-// through the same reader: the same options, thousands dots, slash-date fix
-// and number conversion as a CSV with the same columns and values.
+// through the same options, thousands dots and number conversion as a CSV
+// with the same columns and values. Slash dates keep the plain reader's
+// order, as before, because that change is for CSV text exports only.
 export async function readLoadedTable(
   query: Query,
   table: string,
   path: string,
-  _isExcel: boolean,
+  isExcel: boolean,
 ): Promise<void> {
   try {
-    await readCsvTable(query, table, path);
+    await readCsvTable(query, table, path, isExcel);
   } catch (error) {
     throw csvEncodingFailure(error);
   }
