@@ -127,51 +127,81 @@ test("Q28: an empty table is refused and the loaded data stays loaded", async ()
 });
 
 test("Q30: mixed separators warn where the file notes show", async () => {
-  const { mentionsMixedSeparators, hasMixedSeparators, stageCsvAndSwap } = await import("../src/app/db.ts");
-  const { markMixedSeparators } = await import("../src/app/numbers.ts");
-  assert.equal(mentionsMixedSeparators("a,b,c\n1;2;3\n4;5;6\n"), true);
-  assert.equal(mentionsMixedSeparators("a;b;c\n1;2;3\n"), false);
-  assert.equal(mentionsMixedSeparators("a,b,c\n1,2,3\n"), false);
-  assert.equal(mentionsMixedSeparators("period,units,sales\n2025,10,100\n2026\t20\t200\n"), true);
-  assert.equal(mentionsMixedSeparators("period\tunits\tsales\n2025\t10\t100\n2026;20;200\n"), true);
-  const quoted = "period,Product,units,sales\n2025,\"A-\n100;X\nend\",10,100\n2026,\"A-\n100;X\nend\",10,120\n";
-  assert.equal(mentionsMixedSeparators(quoted), false);
-  const directory = await mkdtemp("/tmp/bridgekit-qa-");
-  const file = path.join(directory, "mixed.csv");
-  await writeFile(file, "a,b,c\n1;2;3\n4;5;6\n");
+  const { hasMixedSeparators, stageCsvAndSwap } = await import("../src/app/db.ts");
   const query = await openDatabase();
-  await readCsvTable(query, "mixed", file);
-  await convertFormattedNumbers(query, "mixed");
-  await markMixedSeparators(query, "mixed");
-  assert.equal(await hasMixedSeparators(query, "mixed"), true);
-  assert.equal(
-    await decimalCommaNote(query, "mixed"),
-    "Rows in this file use different separators, so its columns may be split wrongly. Save it again with one separator.",
-  );
+  const directory = await mkdtemp("/tmp/bridgekit-qa-");
   const loaded = async (name: string, text: string): Promise<{ mixed: boolean; note: string | null }> => {
     const source = path.join(directory, name);
     await writeFile(source, text);
     const table = `q30_${name.replace(/\W/g, "_")}`;
-    await stageCsvAndSwap(query, new File([text], name), table, source, mentionsMixedSeparators(text));
+    await stageCsvAndSwap(query, new File([text], name), table, source);
     return { mixed: await hasMixedSeparators(query, table), note: await decimalCommaNote(query, table) };
   };
-  const decimalComma = await loaded("decimal-comma.csv", "period;Product;units;sales\n2025;A-100;10;100,49\n2026;A-100;10;134,51\n");
-  assert.equal(decimalComma.mixed, false);
-  assert.equal(decimalComma.note, "1 column was read as numbers written with a decimal comma.");
-  assert.doesNotMatch(decimalComma.note ?? "", /Rows in this file use different separators/);
-  const literalSemicolon = await loaded("literal-semicolon.csv", "period,Product,units,sales\n2025,A-100;X,10,100\n2026,A-100;X,10,120\n");
-  assert.equal(literalSemicolon.mixed, false);
-  assert.equal(literalSemicolon.note, null);
-  assert.doesNotMatch(literalSemicolon.note ?? "", /Rows in this file use different separators/);
-  const mixedFiles: readonly (readonly [string, string])[] = [
-    ["semicolon-rows.csv", "period,units,sales\n2025,10,100\n2026;20;200\n2025\t30\t300\n"],
+  const decimalComma = "1 column was read as numbers written with a decimal comma.";
+  // The third item is the exact note where the file earns a decimal-comma one.
+  const validCases: readonly (readonly [string, string, string | null])[] = [
+    [
+      "decimal-comma.csv",
+      "period;Product;units;sales\n2025;A-100;10;100,49\n2026;A-100;10;134,51\n",
+      decimalComma,
+    ],
+    [
+      "literal-semicolon.csv",
+      "period,Product,units,sales\n2025,A-100;X,10,100\n2026,A-100;X,10,120\n",
+      null,
+    ],
+    [
+      "short-semicolon-header.csv",
+      "period;Product\n2025;A-100;10;100,49\n2026;A-100;10;134,51\n",
+      decimalComma,
+    ],
+    [
+      "wide-comma-header.csv",
+      "period,Product;Code;Version;Size;Colour,units,sales\n2025,A-100,10,100\n2026,A-100,10,120\n",
+      null,
+    ],
+    [
+      "quoted-semicolon.csv",
+      'period;Product;units;sales\n2025;"A;100";10;100,49\n2026;"A;100";10;134,51\n',
+      decimalComma,
+    ],
+    [
+      "quoted-semicolons-and-tabs.csv",
+      'period,Product,units,sales\n2025,"A;1;B;2\tC\tD",10,100\n2026,"A;1;B;2\tC\tD",10,120\n',
+      null,
+    ],
+    [
+      "quoted-multiline.csv",
+      'period,Product,units,sales\n2025,"A,1;B\tC\nand a ""quoted"" tail",10,100\n2026,"A,1;B\tC\nand a ""quoted"" tail",10,120\n',
+      null,
+    ],
+    [
+      "tab-thousands.csv",
+      "period\tProduct\tunits\tsales\n2025\tA-100\t10\t1,234.50\n2026\tA-100\t10\t1,234.60\n",
+      null,
+    ],
+    ["blank-lines.csv", "period,units,sales\n2025,10,100\n\n2026,20,200\n\n", null],
+    ["crlf.csv", "period,units,sales\r\n2025,10,100\r\n\r\n2026,20,200\r\n\r\n", null],
+    ["bom.csv", "\uFEFFperiod,units,sales\n2025,10,100\n2026,20,200\n", null],
+    ["quoted-one-column.csv", 'notes\n"a,b;c\tx"\n"plain"\n', null],
+    ["semicolon-header-short-rows.csv", "period;Product;units;sales\n2025;100,49\n2026;134,51\n", null],
+    ["short-comma-header.csv", "period,Product\n2025,A-100,10,100\n2026,A-100,10,120\n", null],
+  ];
+  for (const [name, text, note] of validCases) {
+    const result = await loaded(name, text);
+    assert.equal(result.mixed, false, `${name}: no separator marker`);
+    assert.doesNotMatch(result.note ?? "", /Rows in this file use different separators/, `${name}: no mixed sentence`);
+    if (note !== null) assert.equal(result.note, note, `${name}: decimal-comma note`);
+  }
+  const mixedCases: readonly (readonly [string, string])[] = [
+    ["three-separators.csv", "period,units,sales\n2025,10,100\n2026;20;200\n2025\t30\t300\n"],
     ["tab-row.csv", "period,units,sales\n2025,10,100\n2026\t20\t200\n"],
     ["tab-header.csv", "period\tunits\tsales\n2025\t10\t100\n2026;20;200\n"],
   ];
-  for (const [name, text] of mixedFiles) {
+  for (const [name, text] of mixedCases) {
     const result = await loaded(name, text);
-    assert.equal(result.mixed, true);
-    assert.match(result.note ?? "", /Rows in this file use different separators/);
+    assert.equal(result.mixed, true, `${name}: separator marker`);
+    assert.match(result.note ?? "", /Rows in this file use different separators/, `${name}: mixed sentence`);
   }
 });
 
@@ -238,7 +268,7 @@ test("Q28: a 0-byte file through the loader keeps the loaded data", async () => 
   const valid = path.join(directory, "valid.csv");
   await writeFile(valid, "a\n2\n");
   const empty = new File([], "empty.csv", { type: "text/csv" });
-  await assert.rejects(stageCsvAndSwap(query, empty, "kept", valid, false), /This file has no data rows\./);
+  await assert.rejects(stageCsvAndSwap(query, empty, "kept", valid), /This file has no data rows\./);
   assert.deepEqual(await query(`SELECT * FROM kept`), [{ a: 1 }]);
 });
 
@@ -250,7 +280,7 @@ test("Q28: a header-only file through the loader keeps the loaded data", async (
   const headerOnly = path.join(directory, "header-only.csv");
   await writeFile(headerOnly, "a,b\n");
   const headerFile = new File(["a,b\n"], "header-only.csv", { type: "text/csv" });
-  await assert.rejects(stageCsvAndSwap(query, headerFile, "kept2", headerOnly, false), /This file has no data rows\./);
+  await assert.rejects(stageCsvAndSwap(query, headerFile, "kept2", headerOnly), /This file has no data rows\./);
   assert.deepEqual(await query(`SELECT * FROM kept2`), [{ a: 1 }]);
 });
 
