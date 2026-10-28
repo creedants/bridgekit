@@ -126,82 +126,198 @@ test("Q28: an empty table is refused and the loaded data stays loaded", async ()
   assert.deepEqual(await query(`SELECT * FROM t`), [{ a: 2 }]);
 });
 
-test("Q30: mixed separators warn where the file notes show", async () => {
-  const { hasMixedSeparators, stageCsvAndSwap } = await import("../src/app/db.ts");
+test("Q30: no file gets a mixed-separator warning", async () => {
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
   const query = await openDatabase();
   const directory = await mkdtemp("/tmp/bridgekit-qa-");
-  const loaded = async (name: string, text: string): Promise<{ mixed: boolean; note: string | null }> => {
+  const loaded = async (
+    name: string,
+    text: string,
+    table: string,
+  ): Promise<{ columns: string[]; rows: number; comments: (string | null)[]; note: string | null }> => {
     const source = path.join(directory, name);
     await writeFile(source, text);
-    const table = `q30_${name.replace(/\W/g, "_")}`;
     await stageCsvAndSwap(query, new File([text], name), table, source);
-    return { mixed: await hasMixedSeparators(query, table), note: await decimalCommaNote(query, table) };
+    const columns = (await query(`DESCRIBE ${table}`)).map((row) => String(row.column_name));
+    const [count] = await query(`SELECT count(*)::DOUBLE AS n FROM ${table}`);
+    const comments = await query(`SELECT comment FROM duckdb_tables() WHERE table_name = '${table}'`);
+    return {
+      columns,
+      rows: Number(count.n),
+      comments: comments.map((row) => (row.comment == null ? null : String(row.comment))),
+      note: await decimalCommaNote(query, table),
+    };
   };
   const decimalComma = "1 column was read as numbers written with a decimal comma.";
-  // The third item is the exact note where the file earns a decimal-comma one.
-  const validCases: readonly (readonly [string, string, string | null])[] = [
+  const shapes: readonly (readonly [
+    name: string,
+    text: string,
+    columns: readonly string[],
+    rows: number,
+    note: string | null,
+  ])[] = [
     [
       "decimal-comma.csv",
       "period;Product;units;sales\n2025;A-100;10;100,49\n2026;A-100;10;134,51\n",
+      ["period", "Product", "units", "sales"],
+      2,
       decimalComma,
     ],
     [
       "literal-semicolon.csv",
       "period,Product,units,sales\n2025,A-100;X,10,100\n2026,A-100;X,10,120\n",
+      ["period", "Product", "units", "sales"],
+      2,
       null,
     ],
     [
       "short-semicolon-header.csv",
       "period;Product\n2025;A-100;10;100,49\n2026;A-100;10;134,51\n",
+      ["period", "Product", "column2", "column3"],
+      2,
       decimalComma,
     ],
     [
       "wide-comma-header.csv",
       "period,Product;Code;Version;Size;Colour,units,sales\n2025,A-100,10,100\n2026,A-100,10,120\n",
+      ["period", "Product;Code;Version;Size;Colour", "units", "sales"],
+      2,
       null,
     ],
     [
       "quoted-semicolon.csv",
       'period;Product;units;sales\n2025;"A;100";10;100,49\n2026;"A;100";10;134,51\n',
+      ["period", "Product", "units", "sales"],
+      2,
       decimalComma,
     ],
     [
       "quoted-semicolons-and-tabs.csv",
       'period,Product,units,sales\n2025,"A;1;B;2\tC\tD",10,100\n2026,"A;1;B;2\tC\tD",10,120\n',
+      ["period", "Product", "units", "sales"],
+      2,
       null,
     ],
     [
       "quoted-multiline.csv",
       'period,Product,units,sales\n2025,"A,1;B\tC\nand a ""quoted"" tail",10,100\n2026,"A,1;B\tC\nand a ""quoted"" tail",10,120\n',
+      ["period", "Product", "units", "sales"],
+      2,
       null,
     ],
     [
       "tab-thousands.csv",
       "period\tProduct\tunits\tsales\n2025\tA-100\t10\t1,234.50\n2026\tA-100\t10\t1,234.60\n",
+      ["period", "Product", "units", "sales"],
+      2,
       null,
     ],
-    ["blank-lines.csv", "period,units,sales\n2025,10,100\n\n2026,20,200\n\n", null],
-    ["crlf.csv", "period,units,sales\r\n2025,10,100\r\n\r\n2026,20,200\r\n\r\n", null],
-    ["bom.csv", "\uFEFFperiod,units,sales\n2025,10,100\n2026,20,200\n", null],
-    ["quoted-one-column.csv", 'notes\n"a,b;c\tx"\n"plain"\n', null],
-    ["semicolon-header-short-rows.csv", "period;Product;units;sales\n2025;100,49\n2026;134,51\n", null],
-    ["short-comma-header.csv", "period,Product\n2025,A-100,10,100\n2026,A-100,10,120\n", null],
+    [
+      "blank-lines.csv",
+      "period,units,sales\n2025,10,100\n\n2026,20,200\n\n",
+      ["period", "units", "sales"],
+      2,
+      null,
+    ],
+    [
+      "crlf.csv",
+      "period,units,sales\r\n2025,10,100\r\n\r\n2026,20,200\r\n\r\n",
+      ["period", "units", "sales"],
+      2,
+      null,
+    ],
+    [
+      "bom.csv",
+      "\uFEFFperiod,units,sales\n2025,10,100\n2026,20,200\n",
+      ["period", "units", "sales"],
+      2,
+      null,
+    ],
+    [
+      "quoted-one-column.csv",
+      'notes\n"a,b;c\tx"\n"plain"\n',
+      ["notes"],
+      2,
+      null,
+    ],
+    [
+      "semicolon-header-short-rows.csv",
+      "period;Product;units;sales\n2025;100,49\n2026;134,51\n",
+      ["column0", "column1"],
+      3,
+      null,
+    ],
+    [
+      "short-comma-header.csv",
+      "period,Product\n2025,A-100,10,100\n2026,A-100,10,120\n",
+      ["period", "Product", "column2", "column3"],
+      2,
+      null,
+    ],
+    [
+      "three-separators.csv",
+      "period,units,sales\n2025,10,100\n2026;20;200\n2025\t30\t300\n",
+      ["column0", "column1", "column2"],
+      4,
+      null,
+    ],
+    [
+      "tab-row.csv",
+      "period,units,sales\n2025,10,100\n2026\t20\t200\n",
+      ["column0", "column1", "column2"],
+      3,
+      null,
+    ],
+    [
+      "tab-header.csv",
+      "period\tunits\tsales\n2025\t10\t100\n2026;20;200\n",
+      ["column0", "column1", "column2"],
+      3,
+      null,
+    ],
+    [
+      "footer-total-semicolons.csv",
+      '"period","Product","units","sales"\n2025,A-100,10,100\n2026,A-100,10,120\nTotal;;;\n',
+      ["period", "Product", "units", "sales"],
+      3,
+      null,
+    ],
+    [
+      "footer-semicolons-only.csv",
+      '"period","Product","units","sales"\n2025,A-100,10,100\n2026,A-100,10,120\n;;;\n',
+      ["period", "Product", "units", "sales"],
+      3,
+      null,
+    ],
+    [
+      "footer-total-quoted-comma-product.csv",
+      'period,Product,units,sales\n2025,"A,100",10,100\n2026,"A,100",10,120\nTotal;;;\n',
+      ["period", "Product", "units", "sales"],
+      3,
+      null,
+    ],
+    [
+      "footer-total-fully-quoted.csv",
+      '"period","Product","units","sales"\n"2025","A-100","10","100"\n"2026","A-100","10","120"\nTotal;;;\n',
+      ["period", "Product", "units", "sales"],
+      3,
+      null,
+    ],
+    [
+      "footer-note-fully-quoted.csv",
+      '"period","Product","units","sales"\n"2025","A-100","10","100"\n"2026","A-100","10","120"\nsee;notes;here;please\n',
+      ["period", "Product", "units", "sales"],
+      3,
+      null,
+    ],
   ];
-  for (const [name, text, note] of validCases) {
-    const result = await loaded(name, text);
-    assert.equal(result.mixed, false, `${name}: no separator marker`);
-    assert.doesNotMatch(result.note ?? "", /Rows in this file use different separators/, `${name}: no mixed sentence`);
-    if (note !== null) assert.equal(result.note, note, `${name}: decimal-comma note`);
-  }
-  const mixedCases: readonly (readonly [string, string])[] = [
-    ["three-separators.csv", "period,units,sales\n2025,10,100\n2026;20;200\n2025\t30\t300\n"],
-    ["tab-row.csv", "period,units,sales\n2025,10,100\n2026\t20\t200\n"],
-    ["tab-header.csv", "period\tunits\tsales\n2025\t10\t100\n2026;20;200\n"],
-  ];
-  for (const [name, text] of mixedCases) {
-    const result = await loaded(name, text);
-    assert.equal(result.mixed, true, `${name}: separator marker`);
-    assert.match(result.note ?? "", /Rows in this file use different separators/, `${name}: mixed sentence`);
+  for (const [name, text, columns, rows, note] of shapes) {
+    const table = `q30_${name.replace(/\W/g, "_")}`;
+    const result = await loaded(name, text, table);
+    assert.deepEqual(result.columns, columns, `${name}: columns`);
+    assert.equal(result.rows, rows, `${name}: rows`);
+    assert.ok(result.comments.every((comment) => comment == null || comment === ""), `${name}: no table comment`);
+    assert.equal(result.note, note, `${name}: note`);
   }
 });
 
