@@ -120,7 +120,7 @@ export async function readCsvTable(
   }
   // After the slash-date pass, so a column whose every value is a month
   // becomes a date without changing which slash dates were reinterpreted.
-  await convertMonthColumns(query, table, path).catch(() => {});
+  await convertMonthColumns(query, table).catch(() => {});
 }
 
 // A month with no day, in the three shapes the tool reads as the first of that
@@ -132,22 +132,19 @@ const MONTH_TEXT = [
 ].join("|");
 const ISO_MONTH = "^(19|20)\\d{2}-";
 
-async function convertMonthColumns(query: Query, table: string, path: string): Promise<void> {
+async function convertMonthColumns(query: Query, table: string): Promise<void> {
   const described = await query(`DESCRIBE ${quote(table)}`);
   const text = described.filter((row) => String(row.column_type) === "VARCHAR").map((row) => String(row.column_name));
-  if (text.length === 0) return;
-  const escaped = path.replaceAll("'", "''");
-  const raw = `read_csv('${escaped}', all_varchar=true, ${CSV_OPTIONS})`;
-  const names = new Set((await query(`DESCRIBE SELECT * FROM ${raw}`)).map((row) => String(row.column_name)));
   for (const column of text) {
-    if (!names.has(column)) continue;
     const field = quote(column);
     const value = `trim(${field})`;
     const blank = `(${field} IS NULL OR ${value} = '')`;
+    // A VARCHAR column still holds the file's own text, so the month check
+    // reads the loaded table instead of reading the file a second time.
     const [counts] = await query(
       `SELECT count(*) FILTER (WHERE NOT ${blank})::DOUBLE AS n,
               count(*) FILTER (WHERE NOT ${blank} AND NOT regexp_matches(${value}, '${MONTH_TEXT}'))::DOUBLE AS bad
-       FROM ${raw}`,
+       FROM ${quote(table)}`,
     );
     if (!(Number(counts?.n) > 0) || Number(counts?.bad) > 0) continue;
     const year = `CASE WHEN regexp_matches(${value}, '${ISO_MONTH}') THEN CAST(substr(${value}, 1, 4) AS INTEGER) ELSE CAST(substr(${value}, length(${value}) - 3, 4) AS INTEGER) END`;
