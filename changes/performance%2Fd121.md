@@ -1,6 +1,6 @@
 - Opening `/app/?sample` or choosing `Use sample data` shows one loading panel until the first sample bridge is drawn. `Load a sales file` and `No data loaded` no longer flash in between.
 - While the engine downloads, the loading panel reads `Loading the calculation engine (about 5 MB). On a slow connection this can take a minute or two. Your file is not uploaded.` Once it is ready, the panel reads `Reading <file name>…`, `Making the sample data…` or `Calculating the sample bridge…`.
-- The calculation engine starts downloading as soon as the page has painted, so the first file reads sooner.
+- The calculation engine starts loading right after the page first paints, instead of when the browser is idle after loading. A `/app/?sample` link starts its sample at the same moment.
 - The Calculate button and the reason it is off stay in view at the foot of the setup panel. While a bridge is calculated, the button reads `Calculating…`.
 - After a calculation the page scrolls to the bridge's title, or to the error if it failed, without hiding it under the top bar.
 - `Suggest attributes` looks like a normal button. The attributes hint reads `Put the attribute you care about most at the top; each mix step is measured after the ones above it. One attribute gives a classic bridge.` and the suggest hint reads `Adds the columns that look like product attributes, fewest values first. Reorder them with the arrows.`
@@ -10,13 +10,13 @@
 - The Split by preview says `Preview: Split by is new and may still change.`
 - A partial match now reads `Where the full configuration did not match, matched on <attributes>.`, for example `Where the full configuration did not match, matched on Size + Colour.`
 - The chart tooltip says `Select for movers` and the table hint says `Select a row to break it down by the next attribute.` When each bar has room, the bars read `New configurations` and `Discontinued configurations` in full over two lines. The chart's colour key wraps whole words to a second line instead of breaking them.
-- The report option reads `Leave the file name, filter values and mover names out of the report`. It shows only when the report would carry one of those names.
+- The report option reads `Leave the file name, filter values and mover names out of the report`. It shows only when the report would carry one of those names or a renamed attribute.
 - `Download report`, `Download PNG`, `Save setup to file` and `Export Excel` each save one file on a double click. `Download report` is off while the report is built.
 - The saved setup file is called `pvm-bridge-setup.json`.
 - A planned increase that is not a number from -100 to 1000 shows `Enter a planned increase between -100% and 1000%.` and no plan columns. A planned increase of 0 shows no plan line.
-- Long text in Movers, Accounts, price changes, price gaps, unmatched and the file preview is cut to 40 characters with the whole value on hover, so the number columns stay in view. Attribute names stop at 60 characters, and a restored setup is cut to 60 too.
+- Long text in Movers, Accounts, price changes, price gaps, unmatched, Trend, Setup check and the file preview is cut to 40 characters with the whole value on hover. Attribute names stop at 60 characters whether typed, suggested or added from a column, and a restored setup is cut to 60 too.
 - On a phone the start page fits the screen without sideways scrolling, the example table scrolls on its own, and the intro reads `Choose a CSV or Excel file with one row per sales line. It needs a period or date column, units, sales, and the product attributes you want in the bridge.`
-- On a phone narrower than 440 px the top bar reads `Export` and `Clear`, so the results page does not scroll sideways. Screen readers still hear `Export Excel` and `Clear data`.
+- On a screen 440 px wide or narrower the top bar reads `Export` and `Clear`, so the results page does not scroll sideways. Screen readers still hear `Export Excel` and `Clear data`.
 - When amounts are too long for a phone, the bridge's step tables scroll sideways inside their own column. The chart and the summary keep the screen's width.
 - On a touch screen buttons, menus, tabs, check boxes and the `↑` `↓` `×` buttons are at least 44 px, with 8 px between the arrows. A chart tooltip opened by touch closes when the finger lifts or taps elsewhere.
 - Leaving or reloading the page while data is loaded asks first. `Clear data` does not ask.

@@ -410,23 +410,22 @@ export function App() {
 
   useEffect(() => scheduleSpeculative(prefetchResults, RESULTS_PREFETCH_SETTLE_MS), []);
 
-  // Start the engine download once the first frame is painted.
+  // Start the engine download once the first frame is painted. A link to /app/?sample
+  // starts its load then too, so it opens with the sample already calculated.
   useEffect(() => {
     let timer = 0;
     const frame = requestAnimationFrame(() => {
-      timer = window.setTimeout(() => void startEngine().catch(() => {}), 0);
+      timer = window.setTimeout(() => {
+        void startEngine().catch(() => {});
+        if (sampleLinkRead.current || phase.kind !== "reading" || phase.load !== 0) return;
+        sampleLinkRead.current = true;
+        loadSample();
+      }, 0);
     });
     return () => {
       cancelAnimationFrame(frame);
       clearTimeout(timer);
     };
-  }, []);
-
-  // A link to /app/?sample opens the tool with the sample already calculated.
-  useEffect(() => {
-    if (sampleLinkRead.current || phase.kind !== "reading" || phase.load !== 0) return;
-    sampleLinkRead.current = true;
-    loadSample();
   }, []);
   const autoRanFor = useRef(-1);
   useEffect(() => {
@@ -690,7 +689,7 @@ export function App() {
                   setup={setup}
                   bridge={fresh ? { summary: summarize(fresh.result, fresh.config), setup } : null}
                   onUseSetup={(saved) => {
-                    if (isValidSetup(saved, columns)) setSetup(saved);
+                    if (isValidSetup(saved, columns)) setSetup(restoredSetup(saved));
                     else setError("That saved setup does not match the columns in this data.");
                   }}
                 />

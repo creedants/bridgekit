@@ -38,7 +38,8 @@ export function SetupPanel(props: {
   );
   const distinctByName = new Map(columns.map((column) => [column.name, column.distinct ?? 0]));
   const suggested = suggestAttributes(columns, distinctByName, usedNames);
-  const setLevels = (levels: Level[]) => onChange({ levels });
+  // Names made from column headers are capped here, like typed ones.
+  const setLevels = (levels: Level[]) => onChange({ levels: levels.map((level) => ({ ...level, name: level.name.slice(0, MAX_LEVEL_NAME) })) });
   const setFilters = (filters: Filter[]) => onChange({ filters });
   const suggestRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
