@@ -16,6 +16,8 @@
 - A planned increase that is not a number from -100 to 1000 shows `Enter a planned increase between -100% and 1000%.` and no plan columns. A planned increase of 0 shows no plan line.
 - Long text in Movers, Accounts, price changes, price gaps, unmatched and the file preview is cut to 40 characters with the whole value on hover, so the number columns stay in view. Attribute names stop at 60 characters, and a restored setup is cut to 60 too.
 - On a phone the start page fits the screen without sideways scrolling, the example table scrolls on its own, and the intro reads `Choose a CSV or Excel file with one row per sales line. It needs a period or date column, units, sales, and the product attributes you want in the bridge.`
+- On a phone narrower than 440 px the top bar reads `Export` and `Clear`, so the results page does not scroll sideways. Screen readers still hear `Export Excel` and `Clear data`.
+- When amounts are too long for a phone, the bridge's step tables scroll sideways inside their own column. The chart and the summary keep the screen's width.
 - On a touch screen buttons, menus, tabs, check boxes and the `↑` `↓` `×` buttons are at least 44 px, with 8 px between the arrows. A chart tooltip opened by touch closes when the finger lifts or taps elsewhere.
 - Leaving or reloading the page while data is loaded asks first. `Clear data` does not ask.
 - Pasting text that is not a table shows `The pasted text is not a table. Copy cells from a spreadsheet, with a header row.`

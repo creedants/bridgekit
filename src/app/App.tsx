@@ -551,16 +551,17 @@ export function App() {
         <span className="status" aria-live="polite">{status}</span>
         <nav>
           {filePicker}
-          <button disabled={!fresh || busy} onClick={exportWorkbook}>Export Excel</button>
+          <button disabled={!fresh || busy} onClick={exportWorkbook} aria-label="Export Excel">Export<span className="wide-only"> Excel</span></button>
           {setup && (
             <button
               title="Remove the loaded data from this tab"
+              aria-label="Clear data"
               onClick={() => {
                 leaving.current = true;
                 location.replace(location.pathname);
               }}
             >
-              Clear data
+              Clear<span className="wide-only"> data</span>
             </button>
           )}
           <a href="/guide.html" target="_blank" rel="noreferrer">Guide</a>

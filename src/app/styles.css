@@ -86,6 +86,12 @@ main { padding: 12px 16px 40px; min-width: 0; }
   .source, .status, .topbar nav a { display: none; }
   .topbar nav { margin-left: auto; }
 }
+/* A flex item drops its leading space unless whitespace is preserved. */
+.wide-only { white-space: pre; }
+/* The wordmark and three full button labels need about 415px. */
+@media (max-width: 440px) {
+  .wide-only { display: none; }
+}
 
 fieldset { border: 0; border-bottom: 1px solid var(--line); margin: 0; padding: 10px 0 12px; display: grid; gap: 8px; min-width: 0; }
 legend { font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-2); padding: 0; }
@@ -133,7 +139,9 @@ fieldset select, fieldset input:not([type="checkbox"]) { width: 100%; min-width:
 .tabs button[aria-selected="true"] { color: var(--text); font-weight: 600; border-bottom-color: var(--accent); }
 
 .bridge { display: grid; grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); gap: 20px; align-items: start; }
-@media (max-width: 1100px) { .bridge { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) { .bridge { grid-template-columns: minmax(0, 1fr); } }
+/* Huge amounts make the step tables wider than a phone; they scroll here, not the page. */
+.bridge > div { overflow-x: auto; }
 .waterfall { margin: 0; }
 .waterfall .chart { height: 340px; }
 .waterfall figcaption { font-size: 11px; color: var(--text-3); }
