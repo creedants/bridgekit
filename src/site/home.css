@@ -71,9 +71,7 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 /* Hero */
 
 /* The mockup was drawn on a page with the browser's default body type. */
-.hero { --t-bg: #ffffff; --t-panel: #f5f6f8; --t-line: #dde1e6; --t-line-strong: #c4cad3; --t-text: #14181f; --t-text-2: #4a5360; --t-text-3: #6b7480; --t-up: #2a78d6; --t-down: #e34948; --t-total: #6b7480; --sans: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; font-size: 1rem; line-height: normal; -webkit-font-smoothing: antialiased; }
-
-.hero .shell { max-width: 84rem; }
+.hero { --t-bg: #ffffff; --t-panel: #f5f6f8; --t-line: #dde1e6; --t-line-strong: #c4cad3; --t-text: #14181f; --t-text-2: #4a5360; --t-text-3: #6b7480; --t-up: #2a78d6; --t-down: #e34948; --t-total: #6b7480; --sans: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; --pad: clamp(1.25rem, 5vw, 5rem); --gutter: max(0px, (100vw - 76rem) / 2); font-size: 1rem; line-height: normal; -webkit-font-smoothing: antialiased; }
 
 .hero .button { display: inline-flex; align-items: center; gap: .6rem; padding: .6rem 1rem; background: var(--plum); color: #fff; border: 1px solid var(--plum); font: 600 .875rem/1 var(--sans); text-decoration: none; }
 
@@ -81,8 +79,8 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .hero { position: relative; overflow: hidden; padding-block: 4.5rem 4rem; }
 
-.hero::before { /* the sun slab the product sits on, bleeding off the right edge */
-  content: ""; position: absolute; top: 2.5rem; bottom: 0; left: 44%; right: 0; background: var(--sun); border-top-left-radius: 28px;
+.hero::before { /* the sun slab the product sits on, bleeding off the right edge; it starts 5rem into the picture, past the 23rem copy column and the 4rem gap */
+  content: ""; position: absolute; top: 2.5rem; bottom: 0; left: calc(var(--gutter) + var(--pad) + 32rem); right: 0; background: var(--sun); border-top-left-radius: 28px;
 }
 
 .hero .hero-grid { position: relative; display: grid; grid-template-columns: minmax(0, 23rem) minmax(0, 1fr); gap: 4rem; align-items: center; }
@@ -98,6 +96,9 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 .hero .copy .cta:hover span { transform: translateX(3px); }
 
 .hero .copy .fine { margin-top: 1rem; font: 400 .8125rem/1.5 var(--sans); color: var(--plum-2); }
+
+/* The picture runs on into the shell's right padding and stops 2rem or the page gutter short of the edge, whichever is wider, so the five KPI tiles fit beside the copy. */
+.hero figure { margin-right: calc(-1 * var(--pad) - min(0px, var(--gutter) - 2rem)); }
 
 .hero .frame { background: var(--t-bg); border-radius: 12px; overflow: hidden; font-family: var(--sans); color: var(--t-text);
   box-shadow: 0 0 0 1px rgba(66, 32, 61, .10), 0 2px 4px rgba(66, 32, 61, .06), 0 24px 60px -12px rgba(66, 32, 61, .35); }
@@ -116,7 +117,7 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .hero .body { padding: 1.1rem 1.25rem 1rem; }
 
-.hero .kpis { display: grid; grid-template-columns: repeat(5, 1fr); border: 1px solid var(--t-line); border-radius: 4px; }
+.hero .kpis { display: grid; grid-template-columns: repeat(5, auto); border: 1px solid var(--t-line); border-radius: 4px; }
 
 .hero .kpi { padding: .7rem .8rem .75rem; border-left: 1px solid var(--t-line); min-width: 0; }
 
@@ -148,14 +149,36 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .hero .wf-narrow { display: none; }
 
-@media (max-width: 760px) {
-  .hero { padding-block: 2.5rem 0; }
+@media (max-width: 1239px) {
+  .hero { padding-block: 3.5rem 0; }
 
   .hero::before { display: none; }
 
-  .hero figure { margin-inline: -1.25rem; padding: 1.75rem .75rem 1.5rem; background: var(--sun); }
+  .hero .hero-grid { grid-template-columns: minmax(0, 1fr); gap: 3rem; }
 
-  .hero .hero-grid { grid-template-columns: minmax(0, 1fr); gap: 2.25rem; }
+  .hero figure { margin-inline: calc(-1 * var(--pad)); padding: 2.5rem var(--pad); background: var(--sun); }
+
+  .hero .frame { max-width: 48rem; }
+}
+
+@media (max-width: 800px) {
+  .hero .kpis { grid-template-columns: 1fr 1fr; }
+
+  .hero .kpi { border-left: 0; border-top: 1px solid var(--t-line); padding: .55rem .65rem .6rem; }
+
+  .hero .kpi:nth-child(even) { border-left: 1px solid var(--t-line); }
+
+  .hero .kpi:nth-child(-n+2) { border-top: 0; }
+
+  .hero .kpi:last-child { grid-column: span 2; }
+}
+
+@media (max-width: 760px) {
+  .hero { padding-block: 2.5rem 0; }
+
+  .hero figure { padding: 1.75rem .75rem 1.5rem; }
+
+  .hero .hero-grid { gap: 2.25rem; }
 
   .hero .copy h1 { font-size: 3rem; }
 
@@ -173,16 +196,6 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
   .hero .body { padding: .8rem .6rem .75rem; }
 
-  .hero .kpis { grid-template-columns: 1fr 1fr; }
-
-  .hero .kpi { border-left: 0; border-top: 1px solid var(--t-line); padding: .55rem .65rem .6rem; }
-
-  .hero .kpi:nth-child(even) { border-left: 1px solid var(--t-line); }
-
-  .hero .kpi:nth-child(-n+2) { border-top: 0; }
-
-  .hero .kpi:last-child { grid-column: span 2; }
-
   .hero .kpi strong { font-size: .9375rem; margin-top: .25rem; }
 
   .hero .tabs { gap: .9rem; font-size: .6875rem; overflow: hidden; -webkit-mask-image: linear-gradient(90deg, #000 80%, transparent); mask-image: linear-gradient(90deg, #000 80%, transparent); }
@@ -198,6 +211,11 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
   .hero .wf .ax, .hero .wf .cat { font-size: 9px; }
 
   .hero .wf .val { font-size: 8px; letter-spacing: -.01em; }
+}
+
+@media (max-width: 389px) {
+  /* the narrow chart draws below its 390 px size here, so its values grow to stay at 8 px or more */
+  .hero .wf .val { font-size: 8.75px; }
 }
 
 /* What you get */
