@@ -27,7 +27,7 @@ import {
 } from "../engine.ts";
 import { commentary } from "../commentary.ts";
 import { summarize, type BridgeSummary } from "../summary.ts";
-import { download, toExportCsv, toExportTsv } from "./files.ts";
+import { download, makeGuard, parsePlannedIncrease, shorten, toExportCsv, toExportTsv } from "./files.ts";
 import { finiteOrBlank } from "./exportExcel.ts";
 import { percent, price, shareOfPrior, signedPercent, signedWhole, whole } from "./format.ts";
 import { dateOrderNote } from "./db.ts";
@@ -64,6 +64,24 @@ export interface Run {
 type Tab = "bridge" | "movers" | "accounts" | "price" | "gaps" | "trend" | "unmatched" | "setup" | "check";
 
 const display = (value: unknown) => (value === null || value === undefined ? "(blank)" : String(value));
+
+/** A text cell cut to fit, with the whole value on hover, so the number columns stay in view. */
+function TextCell(props: { value: unknown }) {
+  const text = display(props.value);
+  const short = shorten(text);
+  return <td title={short === text ? undefined : text}>{short}</td>;
+}
+
+/** The engine's match label, with a partial match said the way a first-time reader follows it. */
+export function matchLabel(config: BridgeConfig, level: number): string {
+  if (level > 0 && level < config.levels.length && config.newAndDiscontinued !== "full") {
+    return `Where the full configuration did not match, matched on ${config.levels
+      .slice(0, level)
+      .map((l) => l.name)
+      .join(" + ")}.`;
+  }
+  return coverageLabel(config, level);
+}
 
 export function Results(props: { run: Run; query: () => Promise<Query> }) {
   const { run } = props;
@@ -107,6 +125,10 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
         <Kpi label="Like-for-like price" value={signedWhole(priceEffect)} note={signedPercent(shareOfPrior(priceEffect, result.priorSales))} />
         <Kpi label="Matched exactly" value={percent(exact)} note={t.exactNote} />
       </div>
+      <p className="hint">
+        Like-for-like price: the price change on configurations sold in both periods. A configuration is one combination
+        of attribute values, such as A-100, Large, Red.
+      </p>
 
       <div className="tabs" role="tablist">
         {tabs.map((entry) => (
@@ -123,10 +145,13 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
               result={combineMix ? withCombinedMix(result) : result}
               controls={
                 mixCount > 1 && (
-                  <label className="check">
-                    <input type="checkbox" checked={combineMix} onChange={(e) => setCombineMix(e.target.checked)} />
-                    Combine mix
-                  </label>
+                  <>
+                    <label className="check">
+                      <input type="checkbox" checked={combineMix} onChange={(e) => setCombineMix(e.target.checked)} />
+                      Combine mix
+                    </label>{" "}
+                    <span className="hint">Shows the mix steps of all attributes as one Mix bar.</span>
+                  </>
                 )
               }
               priorLabel={String(config.prior)}
@@ -162,7 +187,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
                 <tbody>
                   {result.coverage.map((c) => (
                     <tr key={c.level}>
-                      <td>{c.label}</td>
+                      <td>{matchLabel(config, c.level)}</td>
                       <td className="num">{percent(c.share)}</td>
                       <td className="num">{whole(c.cells)}</td>
                     </tr>
@@ -171,6 +196,10 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
               </table>
               <p className="hint">
                 Only exact matches count as price. The rest is in “New configurations”; see the Unmatched tab. {t.sharesNote}
+              </p>
+              <p className="hint">
+                New configurations sold in the current period but not the prior one. Discontinued configurations sold in
+                the prior period but not the current one.
               </p>
             </div>
           </div>
@@ -189,14 +218,36 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
   );
 }
 
+type MoverRows = Awaited<ReturnType<typeof drill>>;
+
 function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<Query> }) {
   const [omitNames, setOmitNames] = useState(false);
+  const [movers, setMovers] = useState<MoverRows | null>(null);
+  const [building, setBuilding] = useState(false);
+  const [reportGuard] = useState(() => makeGuard());
   const paragraphs = commentary(props.result, props.run.config);
+  const { config, setup } = props.run;
+  const first = config.levels[0];
+  useEffect(() => {
+    let stale = false;
+    props
+      .query()
+      .then((query) => drill(query, config, { columns: first.columns, limit: 15 }))
+      .then((rows) => !stale && setMovers(rows))
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, [props.run]);
+  // Offered only when the report would carry a name that leaving out removes.
+  const hasNames =
+    !props.run.sample ||
+    setup.filters.some((filter) => filter.values.length > 0) ||
+    (movers?.length ?? 0) > 0 ||
+    config.levels.some((level) => level.name !== level.columns.join(" + "));
   const downloadReport = async () => {
-    const { config } = props.run;
-    const first = config.levels[0];
     const query = await props.query();
-    const rows = await drill(query, config, { columns: first.columns, limit: 15 });
+    const rows = movers ?? (await drill(query, config, { columns: first.columns, limit: 15 }));
     const accountColumn = props.run.textColumns.find((c) => /customer|account|client|parent|sold.?to|buyer/i.test(c));
     const canvas = document.querySelector<HTMLCanvasElement>(".waterfall canvas");
     const html = buildReport({
@@ -211,21 +262,32 @@ function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<
       accounts: accountColumn
         ? { column: accountColumn, groups: await accountBridge(query, config, accountColumn) }
         : undefined,
-      omitNames,
+      omitNames: hasNames && omitNames,
     });
     download(`bridge-${config.prior}-to-${config.current}.html`, html, "text/html");
   };
+  const saveReport = () =>
+    reportGuard.run(async () => {
+      setBuilding(true);
+      try {
+        await downloadReport();
+      } finally {
+        setBuilding(false);
+      }
+    });
   return (
     <div className="summary">
       <div className="toolbar">
         <h3>Summary</h3>
         <span className="actions">
           <CopyButton text={() => paragraphs.join("\n\n")} />
-          <label className="check">
-            <input type="checkbox" checked={omitNames} onChange={(e) => setOmitNames(e.target.checked)} />
-            Leave out names
-          </label>
-          <button onClick={downloadReport}>Download report</button>
+          {hasNames && (
+            <label className="check">
+              <input type="checkbox" checked={omitNames} onChange={(e) => setOmitNames(e.target.checked)} />
+              Leave the file name, filter values and mover names out of the report
+            </label>
+          )}
+          <button onClick={saveReport} disabled={building}>Download report</button>
         </span>
       </div>
       {paragraphs.map((p) => <p key={p}>{p}</p>)}
@@ -380,7 +442,7 @@ function Accounts(props: { run: Run; query: () => Promise<Query> }) {
               <tbody>
                 {g.top.map((a) => (
                   <tr key={a.name ?? "(blank)"}>
-                    <td>{display(a.name)}</td>
+                    <TextCell value={a.name} />
                     <td className="num">{whole(a.prior)}</td>
                     <td className="num">{whole(a.current)}</td>
                     <td className="num strong">{signedWhole(a.change)}</td>
@@ -610,8 +672,9 @@ function RealizationTable(props: { run: Run; query: () => Promise<Query>; overal
   }, [props.run, groupBy]);
   const columns = levels[data.groupBy].columns;
   const t = terms(props.run.config);
-  const planned = Number(target) / 100;
-  const hasTarget = target.trim() !== "" && Number.isFinite(planned) && planned !== 0;
+  const plan = parsePlannedIncrease(target);
+  const planned = typeof plan === "object" ? plan.value / 100 : 0;
+  const hasTarget = planned !== 0;
   const againstPlan = (row: Realization) => (row.change - planned) * (row.matchedSales - row.priceEffect);
   const header = [...columns, t.matched, "Price effect", "Realized change", ...(hasTarget ? ["Realization", "Against plan"] : [])];
   const cells = (row: Realization) => [
@@ -641,6 +704,11 @@ function RealizationTable(props: { run: Run; query: () => Promise<Query>; overal
             {levels.map((level, i) => <option key={level.name} value={i}>{level.name}</option>)}
           </select>
         </label>
+        {plan === "invalid" && (
+          <span className="error" role="alert" style={{ flex: "none", minWidth: 0 }}>
+            Enter a planned increase between -100% and 1000%.
+          </span>
+        )}
         {hasTarget && (
           <span className="hint" style={{ flex: "none", minWidth: 0 }}>
             Overall: {signedPercent(props.overall)} realized against {signedPercent(planned)} planned, or{" "}
@@ -657,7 +725,7 @@ function RealizationTable(props: { run: Run; query: () => Promise<Query>; overal
           <tbody>
             {data.rows.map((row) => (
               <tr key={columns.map((c) => display(row.keys[c])).join("|")}>
-                {columns.map((c) => <td key={c}>{display(row.keys[c])}</td>)}
+                {columns.map((c) => <TextCell key={c} value={row.keys[c]} />)}
                 <td className="num">{whole(row.matchedSales)}</td>
                 <td className="num">{signedWhole(row.priceEffect)}</td>
                 <td className="num">{signedPercent(row.change)}</td>
@@ -731,7 +799,7 @@ function PriceGaps(props: { run: Run; query: () => Promise<Query> }) {
           <tbody>
             {data.rows.map((row) => (
               <tr key={keys.map((c) => display(row.keys[c])).join("|")}>
-                {keys.map((c) => <td key={c}>{display(row.keys[c])}</td>)}
+                {keys.map((c) => <TextCell key={c} value={row.keys[c]} />)}
                 <td className="num">{whole(row.units)}</td>
                 <td className="num">{whole(row.sales)}</td>
                 <td className="num">{price(row.price)}</td>
@@ -867,6 +935,7 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
 
   return (
     <div>
+      <p className="hint">Movers: the products and attribute values that changed sales the most.</p>
       <div className="toolbar">
         <label>
           Group by
@@ -937,7 +1006,7 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
                     setGroupBy(data.groupBy + 1);
                   }}
                 >
-                  {group.columns.map((c) => <td key={c}>{display(row[c])}</td>)}
+                  {group.columns.map((c) => <TextCell key={c} value={row[c]} />)}
                   <td className="num">{whole(v.s0)}</td>
                   <td className="num">{whole(v.s1)}</td>
                   <td className="num strong">{signedWhole(v.change)}</td>
@@ -958,7 +1027,7 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
       </div>
       <p className="hint">
         Top 200 by size. Each row’s effects add up to its change. {t.hintUnits}
-        {canDrill && " Click a row to break it down by the next attribute."} {t.hintChange}
+        {canDrill && " Select a row to break it down by the next attribute."} {t.hintChange}
       </p>
     </div>
   );
@@ -987,7 +1056,7 @@ function Unmatched(props: { run: Run; query: () => Promise<Query> }) {
     Number(row.q1),
     Number(row.s1),
     Number(row.s1) / Number(row.q1),
-    coverageLabel(config, Number(row.match_level)),
+    matchLabel(config, Number(row.match_level)),
     row.ref_price === null ? "" : Number(row.ref_price),
     Number(row.new_config),
   ];
@@ -1012,11 +1081,11 @@ function Unmatched(props: { run: Run; query: () => Promise<Query> }) {
           <tbody>
             {rows.map((row) => (
               <tr key={keys.map((c) => display(row[c])).join("|")}>
-                {keys.map((c) => <td key={c}>{display(row[c])}</td>)}
+                {keys.map((c) => <TextCell key={c} value={row[c]} />)}
                 <td className="num">{whole(Number(row.q1))}</td>
                 <td className="num">{whole(Number(row.s1))}</td>
                 <td className="num">{price(Number(row.s1) / Number(row.q1))}</td>
-                <td>{coverageLabel(config, Number(row.match_level))}</td>
+                <td>{matchLabel(config, Number(row.match_level))}</td>
                 <td className="num">{row.ref_price === null ? "" : price(Number(row.ref_price))}</td>
                 <td className="num">{signedWhole(Number(row.new_config))}</td>
               </tr>
@@ -1105,6 +1174,9 @@ function Check(props: { run: Run; warnings: string[]; query: () => Promise<Query
   return (
     <div className="data-check">
       <h3>Money tie-out</h3>
+      <p className="hint">
+        Money tie-out: for each period, the file total minus what the filters removed equals the sales in the bridge.
+      </p>
       <table className="narrow tieout">
         <tbody>
           {tieOut.map((line) => (

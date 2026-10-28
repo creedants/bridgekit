@@ -62,3 +62,18 @@ test("the Setup check hint keeps its first and last sentences and its figures", 
   assert.ok(text.startsWith(`${FIRST} -1,234 to +5,678.`), `the opening sentence changed: ${text}`);
   assert.ok(text.endsWith(LAST), `the closing sentence changed: ${text}`);
 });
+
+test("a partial match says which attributes it matched on", async () => {
+  const { matchLabel } = await import("../src/app/Results.tsx");
+  const levels = [
+    { name: "Size", columns: ["size"] },
+    { name: "Colour", columns: ["colour"] },
+    { name: "Product", columns: ["product"] },
+  ];
+  const config = { table: "t", periodColumn: "p", prior: "2025", current: "2026", unitsColumn: "u", salesColumn: "s", levels };
+  assert.equal(matchLabel(config, 1), "Where the full configuration did not match, matched on Size.");
+  assert.equal(matchLabel(config, 2), "Where the full configuration did not match, matched on Size + Colour.");
+  assert.equal(matchLabel(config, 3), "Exact configuration");
+  assert.equal(matchLabel(config, 0), "No comparable group (overall average)");
+  assert.equal(matchLabel({ ...config, newAndDiscontinued: "full" }, 1), "New configuration (shown at full sales)");
+});

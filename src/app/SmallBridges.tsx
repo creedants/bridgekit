@@ -231,6 +231,7 @@ export function SmallBridges(props: { run: Run; query: () => Promise<Query> }) {
           </select>
         </label>
         <span className="chip">Preview</span>
+        <span className="hint">Preview: Split by is new and may still change.</span>
       </div>
       {painted.view === "calculating" ? (
         <p className="hint" role="status">Calculating…</p>
