@@ -59,10 +59,8 @@ test("restores a 301-character attribute name typed in the editor", () => {
 test("restores a 400-character header name after its chip is removed", () => {
   const header = "h".repeat(400);
   const columns = [...COLUMNS, { name: header, type: "VARCHAR" }];
-  const setup: Setup = {
-    ...SETUP,
-    levels: [{ name: header, columns: ["design"] }],
-  };
+  const level = { name: header, columns: [header, "design"] };
+  const setup: Setup = { ...SETUP, levels: [{ ...level, columns: level.columns.filter((column) => column !== header) }] };
   assert.equal(isValidSetup(setup, columns), true);
   saveSetup(columns, setup);
   const restored = loadSavedSetup(columns);

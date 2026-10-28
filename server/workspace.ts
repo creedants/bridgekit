@@ -170,8 +170,8 @@ function checkSetupShape(setup: Setup, columns: string[]): void {
       used.add(column);
     }
   }
-  // The level-name bound already keeps levels under the column count, but the
-  // save's bound stays explicit.
+  // Redundant with the set above while every level names a column of the file,
+  // and kept as the save's own bound.
   if (setup.levels.length > columns.length) throw new WorkspaceError(400, SETUP_MISMATCH_SENTENCE);
 }
 
