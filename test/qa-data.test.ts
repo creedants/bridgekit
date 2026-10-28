@@ -126,26 +126,39 @@ test("Q28: an empty table is refused and the loaded data stays loaded", async ()
   assert.deepEqual(await query(`SELECT * FROM t`), [{ a: 2 }]);
 });
 
-test("Q30: no file gets a mixed-separator warning", async () => {
+test("Q30: a file with one separator gets no mixed-separator warning", async () => {
   const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { viewSql } = await import("../src/app/setup.ts");
   const query = await openDatabase();
   const directory = await mkdtemp("/tmp/bridgekit-qa-");
   const loaded = async (
     name: string,
     text: string,
-    table: string,
   ): Promise<{ columns: string[]; rows: number; comments: (string | null)[]; note: string | null }> => {
     const source = path.join(directory, name);
     await writeFile(source, text);
-    await stageCsvAndSwap(query, new File([text], name), table, source);
-    const columns = (await query(`DESCRIBE ${table}`)).map((row) => String(row.column_name));
-    const [count] = await query(`SELECT count(*)::DOUBLE AS n FROM ${table}`);
-    const comments = await query(`SELECT comment FROM duckdb_tables() WHERE table_name = '${table}'`);
+    await stageCsvAndSwap(query, new File([text], name), "data", source);
+    const columns = (await query(`DESCRIBE data`)).map((row) => String(row.column_name));
+    const [count] = await query(`SELECT count(*)::DOUBLE AS n FROM data`);
+    const comments = await query(`SELECT comment FROM duckdb_tables() WHERE table_name = 'data'`);
+    // The app reads the note against the period view its settings build. With
+    // no view the note returns null before the check runs, which hides a wrong
+    // warning on a valid file.
+    await query(
+      viewSql({
+        periodColumn: columns[0],
+        grain: "value",
+        unitsColumn: "",
+        salesColumn: "",
+        levels: [],
+        filters: [],
+      }),
+    );
     return {
       columns,
       rows: Number(count.n),
       comments: comments.map((row) => (row.comment == null ? null : String(row.comment))),
-      note: await decimalCommaNote(query, table),
+      note: await decimalCommaNote(query, "data"),
     };
   };
   const decimalComma = "1 column was read as numbers written with a decimal comma.";
@@ -254,26 +267,28 @@ test("Q30: no file gets a mixed-separator warning", async () => {
       2,
       null,
     ],
+    // These three files use one separator in the header and another in their own
+    // rows, so the mixed-separator sentence is true of them.
     [
       "three-separators.csv",
       "period,units,sales\n2025,10,100\n2026;20;200\n2025\t30\t300\n",
       ["column0", "column1", "column2"],
       4,
-      null,
+      '2 rows have a period such as "2025,10,100" that looks like a whole row. The file may mix separators. Save it again with one separator.',
     ],
     [
       "tab-row.csv",
       "period,units,sales\n2025,10,100\n2026\t20\t200\n",
       ["column0", "column1", "column2"],
       3,
-      null,
+      '1 row has a period such as "2025,10,100" that looks like a whole row. The file may mix separators. Save it again with one separator.',
     ],
     [
       "tab-header.csv",
       "period\tunits\tsales\n2025\t10\t100\n2026;20;200\n",
       ["column0", "column1", "column2"],
       3,
-      null,
+      '1 row has a period such as "2025\t10\t100" that looks like a whole row. The file may mix separators. Save it again with one separator.',
     ],
     [
       "footer-total-semicolons.csv",
@@ -312,8 +327,7 @@ test("Q30: no file gets a mixed-separator warning", async () => {
     ],
   ];
   for (const [name, text, columns, rows, note] of shapes) {
-    const table = `q30_${name.replace(/\W/g, "_")}`;
-    const result = await loaded(name, text, table);
+    const result = await loaded(name, text);
     assert.deepEqual(result.columns, columns, `${name}: columns`);
     assert.equal(result.rows, rows, `${name}: rows`);
     assert.ok(result.comments.every((comment) => comment == null || comment === ""), `${name}: no table comment`);
