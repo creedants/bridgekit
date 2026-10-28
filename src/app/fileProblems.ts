@@ -166,12 +166,10 @@ export function sameSuggestedLevels(
 /**
  * Why Calculate stays off for a file the tool cannot bridge. The sample file
  * and any file that loads, guesses a setup and offers two periods give
- * `none`, so the general hint under Calculate stays as it is.
+ * `none`, so the general hint under Calculate stays as it is. A file with no
+ * rows never reaches this list: the load refuses it first.
  */
 export function fileProblem(input: FileProblemInput): FileProblem {
-  if (input.rows === 0) {
-    return { kind: "reason", message: "This file has no data rows, so there is nothing to bridge." };
-  }
   const count = periodCount(input.periods);
   if (input.periodColumn !== "" && count === 1) {
     return {

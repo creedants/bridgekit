@@ -63,6 +63,16 @@ export function holeRenames(
   return renames;
 }
 
+/** A file that is not a ZIP archive is not an Excel workbook. */
+const ZIP_MAGIC: readonly [number, number] = [0x50, 0x4b];
+
+/** Shown when an .xlsx file cannot be opened as a workbook. Never a library message. */
+export const INVALID_WORKBOOK =
+  "This file is not a valid Excel workbook. Open it in Excel and save it again as .xlsx, or save it as CSV.";
+
+/** Shown when the workbook holds no data rows. The load refuses it, so the file problems list never sees it. */
+export const NO_DATA_ROWS = "This file has no data rows.";
+
 /** The Excel library and the first worksheet of an .xlsx file, read before DuckDB sees any rows. */
 export async function firstSheetAsCsv(
   file: File,
@@ -70,8 +80,14 @@ export async function firstSheetAsCsv(
 ): Promise<{ csv: string; holes: readonly number[]; formulaBlanks: number }> {
   const ExcelJS = await tools.load();
   const data = await file.arrayBuffer();
-  const loaded = await loadFirstSheet(ExcelJS, data);
-  if (!loaded) throw new Error("The first sheet of that workbook has no data rows.");
+  if (!isZipArchive(data)) throw new Error(INVALID_WORKBOOK);
+  let loaded: Awaited<ReturnType<typeof loadFirstSheet>>;
+  try {
+    loaded = await loadFirstSheet(ExcelJS, data);
+  } catch {
+    throw new Error(INVALID_WORKBOOK);
+  }
+  if (!loaded) throw new Error(NO_DATA_ROWS);
   const { sheet, bytes } = loaded;
   const width = sheet.columnCount;
   const rows: unknown[][] = [];
@@ -91,6 +107,14 @@ export async function firstSheetAsCsv(
     holes,
     formulaBlanks: await countFormulaBlanks(bytes, rowNumbers.slice(1), sheet.id),
   };
+}
+
+// An .xlsx file is a ZIP archive, so it starts with the PK magic. Checking
+// before the library runs keeps its zip errors, and any third-party URL they
+// may name, off the screen.
+function isZipArchive(data: ArrayBuffer): boolean {
+  const bytes = new Uint8Array(data);
+  return bytes.length >= 2 && bytes[0] === ZIP_MAGIC[0] && bytes[1] === ZIP_MAGIC[1];
 }
 
 // ExcelJS compares literal element names for SpreadsheetML and package parts.

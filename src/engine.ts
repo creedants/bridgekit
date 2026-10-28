@@ -379,10 +379,29 @@ export function coverageLabel(config: BridgeConfig, level: number): string {
   if (level === config.levels.length) return "Exact configuration";
   if (config.newAndDiscontinued === "full") return "New configuration (shown at full sales)";
   if (level === 0) return "No comparable group (overall average)";
-  return `Fell back to ${config.levels
+  return `Where the full configuration did not match, matched on ${config.levels
     .slice(0, level)
     .map((l) => l.name)
-    .join(" + ")}`;
+    .join(" + ")}.`;
+}
+
+/** Thrown when the prior period has no positive units to bridge from. */
+export class NoPriorUnits extends Error {
+  constructor(prior: string | number) {
+    super(`Units for prior period '${String(prior).replaceAll("'", "''")}' are all zero or negative.`);
+    this.name = "NoPriorUnits";
+  }
+}
+
+/** Marker comment on the bridge cells table when amounts outgrow exact integers. */
+export const HUGE_AMOUNTS = "huge amounts";
+
+/** The data-check sentence for bridges whose amounts are too large to add up exactly. */
+export async function amountsNote(query: Query): Promise<string | null> {
+  const rows = await query(`SELECT table_name FROM duckdb_tables() WHERE comment = '${HUGE_AMOUNTS}'`).catch(() => []);
+  return rows.length === 0
+    ? null
+    : "Some amounts are too large to add up exactly, so the steps may not sum to the change.";
 }
 
 export async function runBridge(query: Query, config: BridgeConfig): Promise<BridgeResult> {
@@ -394,7 +413,7 @@ export async function runBridge(query: Query, config: BridgeConfig): Promise<Bri
      FROM ${ident(config.table)} WHERE ${period} = ${literal(config.prior)}`,
   );
   if (!(Number(priorTotals.q0) > 0)) {
-    throw new Error(`No units found for prior period ${literal(config.prior)}`);
+    throw new NoPriorUnits(config.prior);
   }
 
   await query(`CREATE OR REPLACE TEMP TABLE ${ident(cellsTable)} AS ${cellsSql(config)}`);
@@ -409,6 +428,11 @@ export async function runBridge(query: Query, config: BridgeConfig): Promise<Bri
   const currentSales = Number(totals.s1);
   const unitSales = Number(totals.unit_s1);
 
+  const effects = columns.map((c) => ({ ...c, value: Number(totals[c.key]) }));
+  if ([Number(totals.s0), currentSales, ...effects.map((e) => e.value)].some((v) => Math.abs(v) > Number.MAX_SAFE_INTEGER)) {
+    await query(`COMMENT ON TABLE ${ident(cellsTable)} IS '${HUGE_AMOUNTS}'`);
+  }
+
   const coverageRows = await query(
     `SELECT match_level, count(*)::DOUBLE AS cells, sum(s1) AS sales
      FROM ${ident(cellsTable)} WHERE q1 <> 0 OR s1 <> 0
@@ -418,7 +442,7 @@ export async function runBridge(query: Query, config: BridgeConfig): Promise<Bri
   return {
     priorSales: Number(totals.s0),
     currentSales,
-    effects: columns.map((c) => ({ ...c, value: Number(totals[c.key]) })),
+    effects,
     coverage: coverageRows.map((row) => {
       const level = Number(row.match_level);
       const sales = Number(row.sales);
@@ -1296,7 +1320,7 @@ export async function bridgeBy(
           result = await runBridge(query, { ...config, table: view, cellsTable: cells });
         } catch (error) {
           // The census has already decided this panel has prior units.
-          if (!(error instanceof Error) || !error.message.startsWith("No units found for prior period")) throw error;
+          if (!(error instanceof NoPriorUnits)) throw error;
         }
       }
       const status = panelStatus(plan);

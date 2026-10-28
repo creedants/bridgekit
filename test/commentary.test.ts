@@ -26,9 +26,10 @@ const result: BridgeResult = {
 
 test("the summary states the change, ranks the drivers and qualifies price", () => {
   const text = commentary(result, config);
-  assert.equal(text[0], "Sales rose 10.0%, from 1M in 2025 to 1.1M in 2026 (+100K).");
-  assert.match(text[1], /^The largest driver was volume \(\+60K, 6\.0% of prior sales\), followed by price/);
-  assert.match(text[2], /Like-for-like price added 30K, 3\.0% of prior sales\. It is measured on the 95\.0%/);
+  assert.equal(text[0], "Sales rose +10.0%, from 1M in 2025 to 1.1M in 2026 (+100K).");
+  assert.match(text[1], /^The largest driver was volume \(\+60K, \+6\.0% of prior sales\), followed by price/);
+  assert.match(text[1], /mix: Product \(−10K, -1\.0% of prior sales\)/);
+  assert.match(text[2], /Like-for-like price added 30K, \+3\.0% of prior sales\. It is measured on the 95\.0%/);
   // Zero lines and the no-units line are left out when they are nil.
   assert.equal(text.some((p) => p.includes("no units")), false);
   assert.equal(text.join(" ").includes("discontinued"), false);
@@ -36,6 +37,40 @@ test("the summary states the change, ranks the drivers and qualifies price", () 
 
 test("a fall is worded as a fall and the same input gives the same text", () => {
   const down = { ...result, currentSales: 900_000, effects: [{ key: "volume", label: "Volume", value: -100_000 }] };
-  assert.equal(commentary(down, config)[0], "Sales fell 10.0%, from 1M in 2025 to 900K in 2026 (−100K).");
+  assert.equal(commentary(down, config)[0], "Sales fell -10.0%, from 1M in 2025 to 900K in 2026 (−100K).");
   assert.deepEqual(commentary(result, config), commentary(result, config));
+});
+
+test("two totals rounding to the same short figure still print differently", () => {
+  const near = { ...result, priorSales: 2_400, currentSales: 2_440, effects: [] };
+  assert.equal(
+    commentary(near, config)[0],
+    "Sales rose +1.7%, from 2.4K in 2025 to 2.44K in 2026 (+40).",
+  );
+});
+
+test("the change prints the whole-dollar difference the bridge table shows", () => {
+  const cents = { ...result, priorSales: 1_000_000.4, currentSales: 1_100_000.6, effects: [] };
+  assert.match(commentary(cents, config)[0], /\(\+100K\)\.$/);
+});
+
+test("one leftover line adds up in the singular and two in the plural", () => {
+  const many: BridgeResult = {
+    ...result,
+    priorSales: 10_000_000,
+    effects: [
+      { key: "volume", label: "Volume", value: 600_000 },
+      { key: "price", label: "Price (like-for-like)", value: 300_000 },
+      { key: "mix_1", label: "Mix: Product", value: -100_000 },
+      { key: "new_config", label: "New configurations", value: 200_000 },
+      { key: "discontinued", label: "Discontinued configurations", value: 10_000 },
+      { key: "no_units", label: "Sales with no units", value: 0 },
+    ],
+  };
+  assert.match(commentary(many, config)[1], /The other line adds up to \+10K\./);
+  const more: BridgeResult = {
+    ...many,
+    effects: [...many.effects, { key: "mix_2", label: "Mix: Size", value: 20_000 }],
+  };
+  assert.match(commentary(more, { ...config, levels: [...config.levels, { name: "Size", columns: ["size"] }] })[1], /The other 2 lines add up to \+30K\./);
 });

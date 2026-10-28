@@ -90,7 +90,7 @@ test("an unmatched configuration falls back to its parent group's prior price", 
   const fallback = result.coverage.find((c) => c.level === 1);
   assert.ok(fallback);
   near(fallback.share, 200 / 1000);
-  assert.equal(fallback.label, "Fell back to Design");
+  assert.equal(fallback.label, "Where the full configuration did not match, matched on Design.");
 });
 
 test("multi-column levels and null attribute values reconcile", async () => {
@@ -765,7 +765,7 @@ test("rejects a missing prior period and duplicate columns", async () => {
     unitsColumn: "units", salesColumn: "sales",
     levels: [{ name: "Product", columns: ["product"] }],
   };
-  await assert.rejects(runBridge(query, config), /No units found for prior period/);
+  await assert.rejects(runBridge(query, config), /Units for prior period 'p0' are all zero or negative\./);
   await assert.rejects(
     runBridge(query, { ...config, prior: "p1", levels: [...config.levels, ...config.levels] }),
     /more than one level/,

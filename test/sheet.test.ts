@@ -429,7 +429,7 @@ test("rejects a prefixed workbook with no data rows instead of loading it empty"
   const book = await rewriteWorkbook(await headerOnlyWorkbook(), {
     "xl/worksheets/sheet1.xml": (xml) => prefixPart(xml, "x"),
   });
-  await assert.rejects(firstSheetAsCsv(book), /The first sheet of that workbook has no data rows\./);
+  await assert.rejects(firstSheetAsCsv(book), /This file has no data rows\./);
 });
 
 async function payloadWorkbook(): Promise<ArrayBuffer> {

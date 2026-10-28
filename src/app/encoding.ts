@@ -6,6 +6,24 @@
 /** The one sentence shown when a file's text encoding cannot be read. */
 export const ENCODING_SENTENCE = "This file's text encoding could not be read. Save it as CSV UTF-8.";
 
+/** The one sentence shown when the file is not text at all. */
+export const NOT_TEXT_FILE = "This file is not a text file. Save it as CSV UTF-8 or Excel (.xlsx).";
+
+/**
+ * True when the prefix holds a byte no text CSV uses: NUL or a C0 control
+ * other than the whitespace a CSV needs. A UTF-16 byte-order mark exempts the
+ * scan, because that file decodes as text below.
+ */
+export function looksBinary(bytes: Uint8Array): boolean {
+  if (bytes.length === 0) return false;
+  if (startsWith(bytes, BOM_UTF16_LE) || startsWith(bytes, BOM_UTF16_BE)) return false;
+  for (const byte of bytes) {
+    if (byte === 0x00) return true;
+    if (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d) return true;
+  }
+  return false;
+}
+
 export type DecodedCsv = { kind: "utf8"; bytes: Uint8Array } | { kind: "text"; text: string };
 
 const UTF8 = new TextDecoder("utf-8", { fatal: true });
