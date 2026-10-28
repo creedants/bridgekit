@@ -1,4 +1,4 @@
-import { columnsKey, isValidSetup, type Setup } from "../src/app/setup.ts";
+import { columnsKey, isValidSetup, MAX_COLUMN_NAME, MAX_COLUMNS, type Setup } from "../src/app/setup.ts";
 import { parseSummary, type BridgeSummary } from "../src/summary.ts";
 import type { D1Database } from "./cloudflare.ts";
 import {
@@ -147,17 +147,40 @@ const text = (value: unknown, max: number): value is string =>
   typeof value === "string" && value.trim().length > 0 && value.length <= max;
 
 function parseColumns(value: unknown): string[] {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 1000 || !value.every((c) => text(c, 300))) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_COLUMNS || !value.every((c) => text(c, MAX_COLUMN_NAME))) {
     throw new WorkspaceError(400, "The column list is missing or too long.");
   }
   return value;
 }
 
+/** What a refused save setup answers with, whether it fails validation or a save-shape bound. */
+const SETUP_MISMATCH_SENTENCE = "That setup does not match the columns.";
+
+/**
+ * The save-shape bounds that belong to the server alone: the browser keeps
+ * setups with longer names and repeated columns. One set spans every level, so
+ * a column repeated inside one level is refused too.
+ */
+function checkSetupShape(setup: Setup, columns: string[]): void {
+  const used = new Set<string>();
+  for (const level of setup.levels) {
+    if (level.name.length > MAX_COLUMN_NAME) throw new WorkspaceError(400, SETUP_MISMATCH_SENTENCE);
+    for (const column of level.columns) {
+      if (used.has(column)) throw new WorkspaceError(400, SETUP_MISMATCH_SENTENCE);
+      used.add(column);
+    }
+  }
+  // The level-name bound already keeps levels under the column count, but the
+  // save's bound stays explicit.
+  if (setup.levels.length > columns.length) throw new WorkspaceError(400, SETUP_MISMATCH_SENTENCE);
+}
+
 /** A setup as stored: valid for these columns and with no filter values, which come from the data. */
 function parseSetup(value: unknown, columns: string[]): Setup {
   if (!isValidSetup(value, columns.map((name) => ({ name, type: "" })))) {
-    throw new WorkspaceError(400, "That setup does not match the columns.");
+    throw new WorkspaceError(400, SETUP_MISMATCH_SENTENCE);
   }
+  checkSetupShape(value, columns);
   if (value.filters.length > 0) throw new WorkspaceError(400, "Filter selections are not saved to a workspace.");
   return value;
 }

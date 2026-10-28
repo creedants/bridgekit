@@ -34,16 +34,10 @@ export interface Setup {
   newAndDiscontinued?: "difference" | "full";
 }
 
-/** The most columns a save may carry, mirroring `parseColumns` in `server/workspace.ts`. */
+/** The most columns a save may carry. */
 export const MAX_COLUMNS = 1000;
-/** The longest column name a save may carry, mirroring `parseColumns` in `server/workspace.ts`. */
+/** The longest column or level name a save may carry. */
 export const MAX_COLUMN_NAME = 300;
-/** The longest level name a setup may carry. */
-export const MAX_LEVEL_NAME = 300;
-/** The most values one filter may carry, mirroring `MAX_FILTER_VALUES` in `src/app/SetupPanel.tsx`. */
-export const MAX_FILTER_VALUES = 500;
-/** The longest value a filter may carry. */
-export const MAX_FILTER_VALUE = 300;
 
 export const isDate = (type: string) => /DATE|TIMESTAMP/i.test(type);
 export const isNumeric = (type: string) => /INT|DOUBLE|DECIMAL|FLOAT|REAL/i.test(type);
@@ -204,21 +198,6 @@ const COLUMN_RULES: Record<"period" | "datePeriod" | "units" | "sales" | "gross"
   cost: { allows: isNumeric, empty: true },
 };
 
-/**
- * True when every column is named at most once across the setup, so a setup
- * holds no more column references than the file has columns.
- */
-function columnsAppearOnce(levels: Level[]): boolean {
-  const used = new Set<string>();
-  for (const level of levels) {
-    for (const column of level.columns) {
-      if (used.has(column)) return false;
-      used.add(column);
-    }
-  }
-  return true;
-}
-
 export function isValidSetup(value: unknown, columns: Column[]): value is Setup {
   if (typeof value !== "object" || value === null) return false;
   const setup = value as Partial<Setup>;
@@ -243,22 +222,17 @@ export function isValidSetup(value: unknown, columns: Column[]): value is Setup 
     (setup.costColumn === undefined || fits(setup.costColumn, COLUMN_RULES.cost)) &&
     ["value", "year", "ytd", "quarter", "month"].includes(setup.grain as string) &&
     Array.isArray(setup.levels) &&
-    setup.levels.length <= Math.min(MAX_COLUMNS, columns.length) &&
     setup.levels.every(
       (l) => typeof l?.name === "string" && Array.isArray(l.columns) && l.columns.length > 0 && l.columns.every(named),
     ) &&
-    columnsAppearOnce(setup.levels) &&
-    setup.levels.every((l) => l.name.length <= MAX_LEVEL_NAME || l.columns.includes(l.name)) &&
     [undefined, "difference", "full"].includes(setup.newAndDiscontinued) &&
     Array.isArray(setup.filters) &&
-    setup.filters.length <= columns.length &&
     setup.filters.every(
       (f) =>
         named(f?.column) &&
         (f.mode === "include" || f.mode === "exclude") &&
         Array.isArray(f.values) &&
-        f.values.length <= MAX_FILTER_VALUES &&
-        f.values.every((v) => typeof v === "string" && v.length <= MAX_FILTER_VALUE),
+        f.values.every((v) => typeof v === "string"),
     )
   );
 }

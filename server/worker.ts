@@ -238,11 +238,14 @@ async function userId(c: Context<App>): Promise<string> {
   return session.user.id;
 }
 
+/** What every unreadable or invalid request body answers with. */
+const NOT_JSON = "The request was not valid JSON.";
+
 async function json(c: Context<App>): Promise<unknown> {
   try {
     return await c.req.json();
   } catch {
-    throw new WorkspaceError(400, "The request was not valid JSON.");
+    throw new WorkspaceError(400, NOT_JSON);
   }
 }
 
@@ -262,17 +265,31 @@ async function boundedJson(c: Context<App>, limit: number): Promise<unknown> {
   if (declared !== undefined && Number(declared) > limit) throw new BodyTooLarge();
   const chunks: Uint8Array[] = [];
   let size = 0;
-  const reader = c.req.raw.body?.getReader();
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    reader = c.req.raw.body?.getReader();
+  } catch {
+    throw new WorkspaceError(400, NOT_JSON);
+  }
   if (reader) {
     for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } catch {
+        throw new WorkspaceError(400, NOT_JSON);
+      }
+      if (chunk.done) break;
+      size += chunk.value.byteLength;
       if (size > limit) {
-        await reader.cancel();
+        try {
+          await reader.cancel();
+        } catch {
+          // A source can reject cancel; the over-limit refusal is already decided.
+        }
         throw new BodyTooLarge();
       }
-      chunks.push(value);
+      chunks.push(chunk.value);
     }
   }
   const bytes = new Uint8Array(size);
@@ -284,7 +301,7 @@ async function boundedJson(c: Context<App>, limit: number): Promise<unknown> {
   try {
     return JSON.parse(new TextDecoder().decode(bytes));
   } catch {
-    throw new WorkspaceError(400, "The request was not valid JSON.");
+    throw new WorkspaceError(400, NOT_JSON);
   }
 }
 
@@ -292,7 +309,7 @@ function parseWebhookBody(raw: string): unknown {
   try {
     return JSON.parse(raw);
   } catch {
-    throw new WorkspaceError(400, "The request was not valid JSON.");
+    throw new WorkspaceError(400, NOT_JSON);
   }
 }
 

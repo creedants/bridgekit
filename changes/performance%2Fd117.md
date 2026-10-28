@@ -1,2 +1,3 @@
-- A saved setup now has bounds: at most as many levels as the file has columns and never more than 1,000, no column in two levels, level names of at most 300 characters unless the name is one of that level's own columns, and at most as many filters as columns, each with at most 500 values of at most 300 characters. A setup with 1,000 columns of 300 characters each is still accepted.
-- A setup or bridge save over 8 MiB is refused with `This is too large to save.` before the body is parsed, whether or not the request states its size.
+- The browser accepts every setup it accepted before: remembered mappings, setup files and saved setups with long attribute names, long header names, long filter values and 501-value total-row filters all validate and restore.
+- A workspace save refuses more levels than the file has columns, a column in two levels and a level name over 300 characters with `That setup does not match the columns.`, and the attribute-name input stops at 300 characters.
+- Every save body over 8 MiB is refused with `This is too large to save.` before parsing, and a body that cannot be read answers 400 rather than 500.
