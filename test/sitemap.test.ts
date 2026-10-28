@@ -199,15 +199,15 @@ test("every page carries the same social preview", () => {
 
 test("the social image is a 1200 by 630 PNG under the size limit", () => {
   const path = new URL("../public/img/og-bridge.png", import.meta.url);
-  assert.ok(existsSync(path), "public/img/og-bridge.png is missing: render it at 1200 by 630 from the bridge in index.html");
+  assert.ok(existsSync(path), "public/img/og-bridge.png is missing: run npm run build && npm run smoke:preview -- --gallery");
   const bytes = statSync(path).size;
   assert.ok(bytes < 150_000, `public/img/og-bridge.png is ${bytes} bytes, over the 150,000 limit: render it smaller`);
   const png = readFileSync(path);
   assert.deepEqual(
     [...png.subarray(0, 8)],
     [137, 80, 78, 71, 13, 10, 26, 10],
-    "public/img/og-bridge.png is not a PNG: render it from the bridge in index.html with scripts/cdp.mjs",
+    "public/img/og-bridge.png is not a PNG: run npm run build && npm run smoke:preview -- --gallery",
   );
-  assert.equal(png.readUInt32BE(16), 1200, "public/img/og-bridge.png is not 1200 pixels wide: render it at 1200 by 630");
-  assert.equal(png.readUInt32BE(20), 630, "public/img/og-bridge.png is not 630 pixels tall: render it at 1200 by 630");
+  assert.equal(png.readUInt32BE(16), 1200, "public/img/og-bridge.png is not 1200 pixels wide: run npm run build && npm run smoke:preview -- --gallery");
+  assert.equal(png.readUInt32BE(20), 630, "public/img/og-bridge.png is not 630 pixels tall: run npm run build && npm run smoke:preview -- --gallery");
 });
