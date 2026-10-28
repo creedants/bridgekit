@@ -906,7 +906,7 @@ test("the guide and the PVM analysis page carry the corrected wording", () => {
 });
 
 const REMEMBERING =
-  "The tool can remember your column choices, attribute order and options in this browser, so the next file with the same columns opens with the same setup. It is off until you tick Remember this setup in this browser. Filter selections and your data are never stored. Unticking the box deletes what was stored. To move a setup to another computer or share it, choose Save setup to file.";
+  "The tool can remember your column choices, attribute order and options in this browser, so the next file with the same columns opens with the same setup. It is off until you tick <b>Remember this setup in this browser</b>. Filter selections and your data are never stored. Unticking the box deletes what was stored. To move a setup to another computer or share it, choose <b>Save setup to file</b>.";
 
 /** The two shapes the pages ship in: every optional feature on, and the free build with none. */
 const BUILDS: [string, Record<string, boolean>][] = [
@@ -916,10 +916,10 @@ const BUILDS: [string, Record<string, boolean>][] = [
 
 test("the guide says remembering a setup is opt-in", () => {
   for (const [build, features] of BUILDS) {
-    const text = visibleWordsOf(applyFeatureBlocks(readPage("guide.html"), features)).join(" ");
-    assert.ok(text.includes(REMEMBERING), `guide.html in the ${build} build does not say "${REMEMBERING}"`);
+    const html = applyFeatureBlocks(readPage("guide.html"), features);
+    assert.ok(html.includes(`<p>${REMEMBERING}</p>`), `guide.html in the ${build} build does not hold the opt-in paragraph`);
     assert.ok(
-      !text.includes("The tool remembers your column choices"),
+      !html.includes("The tool remembers your column choices"),
       `guide.html in the ${build} build still says remembering is automatic`,
     );
   }
