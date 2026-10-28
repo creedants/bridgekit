@@ -3,10 +3,10 @@ import { GridComponent, TooltipComponent } from "echarts/components";
 import * as echarts from "echarts/core";
 import { LegacyGridContainLabel } from "echarts/features";
 import { CanvasRenderer } from "echarts/renderers";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import type React from "react";
 import type { BridgeResult } from "../engine.ts";
-import { makeGuard } from "./files.ts";
+import { saveOnce } from "./files.ts";
 import { compact, signedCompact } from "./format.ts";
 import { axisCaption, axisFloor, chartStack, steps, type Step, type ValueScale } from "./small-bridges.ts";
 
@@ -23,6 +23,97 @@ export function Legend(props: { controls?: React.ReactNode; actions?: React.Reac
       {props.actions}
     </div>
   );
+}
+
+export interface LabelPlan {
+  /** Category labels, wrapped onto at most two lines and cut with "…" when even that is too long. */
+  axis: string[];
+  axisRotate: 0 | 50;
+  /** Value labels, every one shown with its sign. */
+  values: string[];
+  /** Upright value labels when they are wider than a bar's slot. */
+  valueRotate: 0 | 90;
+  /** Room above the bars for the value labels. */
+  top: number;
+}
+
+type Measure = (text: string, fontSize: number) => number;
+
+/** A width estimate for tests and for a browser without a canvas. */
+const estimate: Measure = (text, fontSize) => text.length * fontSize * 0.6;
+
+const SHORT_TERMS: [string, string][] = [
+  ["Discontinued configurations", "Discont. configs"],
+  ["New configurations", "New configs"],
+  ["Sales with no units", "No units"],
+];
+
+/** Words onto lines that fit; a word too wide alone is cut when `cutWords`, and otherwise the wrap fails. */
+function wrap(text: string, fits: (line: string) => boolean, cutWords = false): string[] | null {
+  const lines: string[] = [];
+  for (const word of text.split(" ")) {
+    const joined = lines.length > 0 ? `${lines[lines.length - 1]} ${word}` : word;
+    if (lines.length > 0 && fits(joined)) lines[lines.length - 1] = joined;
+    else if (fits(word) || cutWords) lines.push(cut(word, fits));
+    else return null;
+  }
+  return lines;
+}
+
+/** Cuts `text` with "…" to the longest start that fits. */
+function cut(text: string, fits: (line: string) => boolean): string {
+  if (fits(text)) return text;
+  let end = text.length - 1;
+  while (end > 1 && !fits(`${text.slice(0, end).trimEnd()}…`)) end--;
+  return `${text.slice(0, end).trimEnd()}…`;
+}
+
+/**
+ * Where a waterfall's labels go, decided before drawing so none overlaps another or loses its sign. Labels
+ * that fit stay level; a bar slot too narrow for its words angles every category label instead; a long
+ * attribute name is cut, and the tooltip keeps it whole.
+ */
+export function labelPlan(
+  labels: readonly string[],
+  values: readonly string[],
+  widthPx: number,
+  measure: Measure = estimate,
+): LabelPlan {
+  const valueSize = 11;
+  const axisSize = widthPx < 560 ? 10 : 11;
+  const widest = (texts: readonly string[], size: number) => Math.max(0, ...texts.map((t) => measure(t, size)));
+  // The value axis takes about the width of the widest value; the rest is shared by the bars.
+  const slot = (widthPx - widest(values, valueSize) - 20) / Math.max(labels.length, 1);
+  const valueWidth = widest(values, valueSize);
+  const valueRotate = valueWidth <= slot - 4 ? 0 : 90;
+  const top = valueRotate === 0 ? 26 : Math.ceil(valueWidth) + 12;
+
+  const lineFits = (line: string) => measure(line, axisSize) <= slot - 6;
+  const shorter = (label: string) =>
+    SHORT_TERMS.reduce((text, [long, brief]) => text.replace(long, brief), label.replace(" (like-for-like)", ""));
+  // Seven characters a line is the least a level label can say; below that every label is angled.
+  if (lineFits("Volume.")) {
+    const axis = labels.map((label) => {
+      for (const candidate of [label.replace(" (like-for-like)", ""), shorter(label)]) {
+        const lines = wrap(candidate, lineFits);
+        if (lines && lines.length <= 2) return lines.join("\n");
+      }
+      const [first, ...rest] = wrap(shorter(label), lineFits, true) ?? [];
+      return rest.length === 0 ? first : `${first}\n${cut(rest.join(" "), lineFits)}`;
+    });
+    return { axis, axisRotate: 0, values: [...values], valueRotate, top };
+  }
+  const axis = labels.map((label) => cut(shorter(label), (line) => measure(line, axisSize) <= 110));
+  return { axis, axisRotate: 50, values: [...values], valueRotate, top };
+}
+
+function canvasMeasure(font: string): Measure {
+  const context = document.createElement("canvas").getContext("2d");
+  if (!context) return estimate;
+  return (text, fontSize) => {
+    context.font = `${fontSize}px ${font}`;
+    return context.measureText(text).width;
+  };
 }
 
 /**
@@ -59,18 +150,26 @@ export function BridgeChart(props: {
     const colors = { total: token("--total"), up: token("--up"), down: token("--down") };
     const ink = token("--text");
     const stack = chartStack(bars);
-    // On a narrow chart the category labels are angled and value labels that would collide are dropped.
-    const narrow = element.current.clientWidth < 560;
-    // "Discontinued configurations" needs about 84px a bar on two lines.
-    const roomy = !narrow && element.current.clientWidth / bars.length >= 84;
+    const valueText = (bar: Step) => (bar.kind === "total" ? compact(bar.value) : signedCompact(bar.value));
+    const width = element.current.clientWidth;
+    const plan = labelPlan(bars.map((b) => b.label), bars.map(valueText), width, canvasMeasure(token("--font")));
+    // A finger has no hover: a tap shows the value, and the tooltip's own button opens Movers.
+    const box = element.current;
+    let touch = matchMedia("(pointer: coarse)").matches;
+    const onPointer = (event: PointerEvent) => {
+      touch = event.pointerType === "touch";
+    };
+    box.addEventListener("pointerdown", onPointer);
 
     chart.setOption({
       animation: false,
       textStyle: { fontFamily: token("--font") },
-      grid: { left: 4, right: 8, top: 26, bottom: 4, containLabel: true },
+      grid: { left: 4, right: 8, top: slim ? 26 : plan.top, bottom: 4, containLabel: true },
       tooltip: {
         trigger: "axis",
-        axisPointer: { type: "shadow" },
+        enterable: true,
+        // A shaded column left behind after a swipe reads as a selection.
+        axisPointer: { type: touch ? "none" : "shadow" },
         backgroundColor: token("--bg"),
         borderColor: token("--line-strong"),
         textStyle: { color: ink, fontSize: 12 },
@@ -79,24 +178,22 @@ export function BridgeChart(props: {
           const amount = bar.value.toLocaleString("en-US", { maximumFractionDigits: 0 });
           if (bar.kind === "total") return `<b>${bar.label}</b><br/>${amount}`;
           const share = ((bar.value / priorSales) * 100).toFixed(1);
-          const hint = onSelect.current ? "<br/><i>Select for movers</i>" : "";
+          const hint = !onSelect.current
+            ? ""
+            : touch
+              ? `<br/><button type="button" class="tip-action" data-movers="${params[0].dataIndex}">Show movers</button>`
+              : "<br/><i>Select for movers</i>";
           return `<b>${bar.label}</b><br/>${bar.value > 0 ? "+" : ""}${amount}<br/>${share}% of prior sales${hint}`;
         },
       },
       xAxis: {
         type: "category",
-        data: bars.map((b) => {
-          const label = (narrow ? b.label.replace(": ", " ") : b.label).replace(" (like-for-like)", "");
-          const wrapped = roomy
-            ? label.replace("New configurations", "New\nconfigurations").replace("Discontinued configurations", "Discontinued\nconfigurations")
-            : label.replace("New configurations", "New\nconfigs").replace("Discontinued configurations", "Discont.\nconfigs");
-          return wrapped.replace("Sales with no units", "No\nunits").replace(": ", ":\n");
-        }),
+        data: plan.axis,
         axisTick: { show: false },
         axisLine: { lineStyle: { color: token("--line-strong") } },
         axisLabel: slim
           ? { show: false }
-          : { color: token("--text-2"), fontSize: narrow ? 10 : 11, interval: 0, lineHeight: 14, rotate: narrow ? 50 : 0 },
+          : { color: token("--text-2"), fontSize: width < 560 ? 10 : 11, interval: 0, lineHeight: 14, rotate: plan.axisRotate },
       },
       yAxis: {
         type: "value",
@@ -119,17 +216,17 @@ export function BridgeChart(props: {
           stack: "bridge",
           stackStrategy: stack.strategy,
           barMaxWidth: 52,
-          labelLayout: { hideOverlap: true },
+          // A small panel has no room to plan; its colliding labels are dropped, and its tooltip has every value.
+          labelLayout: slim ? { hideOverlap: true } : undefined,
           cursor: onSelect.current ? "pointer" : "default",
+          emphasis: { disabled: touch },
           label: {
             show: true,
             position: "top",
             color: ink,
             fontSize: slim ? 9 : 11,
-            formatter: (p: { dataIndex: number }) => {
-              const bar = bars[p.dataIndex];
-              return bar.kind === "total" ? compact(bar.value) : signedCompact(bar.value);
-            },
+            ...(!slim && plan.valueRotate === 90 ? { rotate: 90, align: "left", verticalAlign: "middle", distance: 4 } : {}),
+            formatter: (p: { dataIndex: number }) => (slim ? valueText(bars[p.dataIndex]) : plan.values[p.dataIndex]),
           },
           data: bars.map((bar, index) => ({
             value: stack.extents[index],
@@ -139,26 +236,55 @@ export function BridgeChart(props: {
       ],
     });
 
+    const select = (index: number) => {
+      const key = bars[index]?.key;
+      if (key) onSelect.current?.(key);
+    };
     if (onSelect.current) {
       chart.on("click", (event) => {
-        const key = bars[event.dataIndex]?.key;
-        if (key) onSelect.current?.(key);
+        if (!touch) select(event.dataIndex);
       });
     }
+    const onTipAction = (event: MouseEvent) => {
+      const action = (event.target as Element).closest?.("[data-movers]");
+      if (action) select(Number(action.getAttribute("data-movers")));
+    };
+    box.addEventListener("click", onTipAction);
 
-    // A tooltip opened by touch has no mouse leaving to close it.
-    const box = element.current;
-    const hideTip = () => chart.dispatchAction({ type: "hideTip" });
+    // A tooltip opened by touch has no mouse leaving to close it, and a swipe across the chart opens none.
+    const hideTip = () => {
+      chart.dispatchAction({ type: "hideTip" });
+      chart.dispatchAction({ type: "downplay" });
+    };
+    let start: { x: number; y: number } | null = null;
+    let swiped = false;
+    const onTouchStart = (event: TouchEvent) => {
+      start = { x: event.touches[0].clientX, y: event.touches[0].clientY };
+      swiped = false;
+    };
+    const onTouchMove = (event: TouchEvent) => {
+      const t = event.touches[0];
+      if (start && Math.hypot(t.clientX - start.x, t.clientY - start.y) > 10) swiped = true;
+    };
+    const onTouchEnd = () => {
+      if (swiped) setTimeout(hideTip, 0);
+    };
     const tapElsewhere = (event: TouchEvent) => {
       if (!box.contains(event.target as Node)) hideTip();
     };
-    box.addEventListener("touchend", hideTip);
+    box.addEventListener("touchstart", onTouchStart, { passive: true });
+    box.addEventListener("touchmove", onTouchMove, { passive: true });
+    box.addEventListener("touchend", onTouchEnd);
     document.addEventListener("touchstart", tapElsewhere, { passive: true });
 
     const observer = new ResizeObserver(() => chart.resize());
     observer.observe(element.current);
     return () => {
-      box.removeEventListener("touchend", hideTip);
+      box.removeEventListener("pointerdown", onPointer);
+      box.removeEventListener("click", onTipAction);
+      box.removeEventListener("touchstart", onTouchStart);
+      box.removeEventListener("touchmove", onTouchMove);
+      box.removeEventListener("touchend", onTouchEnd);
       document.removeEventListener("touchstart", tapElsewhere);
       onReady.current?.(null);
       observer.disconnect();
@@ -182,7 +308,6 @@ export function Waterfall(props: {
   ariaLabel?: string;
 }) {
   const chartRef = useRef<echarts.ECharts>(null);
-  const [pngGuard] = useState(() => makeGuard());
   const bars = steps(props.result, props.priorLabel, props.currentLabel);
   const caption = axisCaption(bars);
 
@@ -194,14 +319,14 @@ export function Waterfall(props: {
           <button
             className="quiet"
             onClick={() =>
-              pngGuard.run(() => {
-                const url = chartRef.current?.getDataURL({ type: "png", pixelRatio: 2, backgroundColor: "#ffffff" });
-                if (!url) return false;
-                const link = document.createElement("a");
-                link.href = url;
-                link.download = `bridge-${props.priorLabel}-to-${props.currentLabel}.png`;
-                link.click();
-              })
+              saveOnce(
+                `bridge-${props.priorLabel}-to-${props.currentLabel}.png`,
+                () => {
+                  const url = chartRef.current?.getDataURL({ type: "png", pixelRatio: 2, backgroundColor: "#ffffff" });
+                  return url ? Uint8Array.from(atob(url.slice(url.indexOf(",") + 1)), (c) => c.charCodeAt(0)) : null;
+                },
+                "image/png",
+              )
             }
           >
             Download PNG
