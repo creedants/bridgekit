@@ -38,6 +38,8 @@ export interface Setup {
 export const MAX_COLUMNS = 1000;
 /** The longest column or level name a save may carry. */
 export const MAX_COLUMN_NAME = 300;
+/** The longest attribute name the editor takes; a restored setup is cut to it. */
+export const MAX_LEVEL_NAME = 60;
 
 export const isDate = (type: string) => /DATE|TIMESTAMP/i.test(type);
 export const isNumeric = (type: string) => /INT|DOUBLE|DECIMAL|FLOAT|REAL/i.test(type);
@@ -144,21 +146,34 @@ export function viewSql(setup: Setup): string {
     ${conditions.length ? "WHERE " + conditions.join(" AND ") : ""}`;
 }
 
-// Private by default: nothing from the data is written to the browser. The
-// column mapping is remembered unless the user turns that off, keyed by the set
-// of column names. Filter selections are never stored because they are values
-// from the data. Turning it off deletes everything and leaves only the "off"
-// preference, so the choice survives a reload. Turning it on removes only that
-// preference, so a setup another tab saved stays.
+// Private by default: nothing is written to the browser until the visitor ticks
+// Remember. Then the column mapping is stored, keyed by the set of column names.
+// Filter selections are never stored because they are values from the data.
+// Unticking deletes every key the tool has written, the choice included.
 const PREFIX = "bridgekit:";
+const SETUP_PREFIX = PREFIX + "setup:";
 const REMEMBER_KEY = PREFIX + "remember";
 /** Identifies a file layout by its column names, so a setup is offered again for files with the same columns. */
 export const columnsKey = (names: string[]) => names.toSorted().join("|");
-const storageKey = (columns: Column[]) => PREFIX + "setup:" + columnsKey(columns.map((c) => c.name));
+const storageKey = (columns: Column[]) => SETUP_PREFIX + columnsKey(columns.map((c) => c.name));
+
+/**
+ * Reads the choice from the stored value and the stored keys. Visitors from
+ * before the opt-in have no value but do have saved setups; they had it on.
+ */
+export function rememberFrom(value: string | null, keys: readonly string[]): boolean {
+  if (value === null) return keys.some((key) => key.startsWith(SETUP_PREFIX));
+  return value === "on";
+}
+
+/** Whether a change to this storage key, null for a clear, can change the choice. */
+export function affectsRemember(key: string | null): boolean {
+  return key === null || key === REMEMBER_KEY || key.startsWith(SETUP_PREFIX);
+}
 
 export function isRemembering(): boolean {
   try {
-    return localStorage.getItem(REMEMBER_KEY) !== "off";
+    return rememberFrom(localStorage.getItem(REMEMBER_KEY), Object.keys(localStorage));
   } catch {
     return false;
   }
@@ -168,16 +183,20 @@ export function isRemembering(): boolean {
 export function setRemembering(on: boolean): void {
   try {
     if (on) {
-      localStorage.removeItem(REMEMBER_KEY);
+      localStorage.setItem(REMEMBER_KEY, "on");
       return;
     }
     for (const key of Object.keys(localStorage)) {
       if (key.startsWith(PREFIX)) localStorage.removeItem(key);
     }
-    localStorage.setItem(REMEMBER_KEY, "off");
   } catch {
     // Storage can be blocked; then nothing is stored, which is the safe outcome.
   }
+}
+
+/** A setup from storage or a file, with attribute names cut to what the editor takes. */
+export function restoredSetup(setup: Setup): Setup {
+  return { ...setup, levels: setup.levels.map((level) => ({ ...level, name: level.name.slice(0, MAX_LEVEL_NAME) })) };
 }
 
 interface ColumnRule {
@@ -242,7 +261,7 @@ export function loadSavedSetup(columns: Column[]): Setup | null {
   try {
     const saved: unknown = JSON.parse(localStorage.getItem(storageKey(columns)) ?? "null");
     // Very early versions stored filters too; drop them rather than trust them.
-    return isValidSetup(saved, columns) ? { ...saved, filters: [] } : null;
+    return isValidSetup(saved, columns) ? restoredSetup({ ...saved, filters: [] }) : null;
   } catch {
     return null;
   }
@@ -255,4 +274,84 @@ export function saveSetup(columns: Column[], setup: Setup): void {
   } catch {
     // Storage can be full or blocked; the setup still works for this session.
   }
+}
+
+/** Where the calculation engine's download stands. */
+export type EngineState = "idle" | "loading" | "ready" | "failed";
+export type LoadSource = "file" | "sample";
+
+/**
+ * What the tool is doing with data. A load is numbered so that events from a
+ * load the visitor has since replaced change nothing.
+ */
+export type Phase =
+  | { kind: "start" }
+  | { kind: "reading"; load: number; source: LoadSource; label: string; back: "start" | "workspace" }
+  /** A sample is loaded and its first bridge is being calculated. */
+  | { kind: "autoRun"; load: number }
+  | { kind: "workspace"; load: number };
+
+export type PhaseEvent =
+  | { type: "read"; load: number; source: LoadSource; label: string }
+  | { type: "loaded"; load: number }
+  | { type: "failed"; load: number }
+  | { type: "ran"; load: number };
+
+export const ENGINE_LOADING_TEXT =
+  "Loading the calculation engine (about 5 MB). On a slow connection this can take a minute or two. Your file is not uploaded.";
+export const SAMPLE_LABEL = "Making the sample data…";
+const SAMPLE_RUN_LABEL = "Calculating the sample bridge…";
+
+export function initialPhase(search: string): Phase {
+  return new URLSearchParams(search).has("sample")
+    ? { kind: "reading", load: 0, source: "sample", label: SAMPLE_LABEL, back: "start" }
+    : { kind: "start" };
+}
+
+export function nextPhase(phase: Phase, event: PhaseEvent): Phase {
+  const load = phase.kind === "start" ? -1 : phase.load;
+  if (event.type === "read") {
+    if (event.load <= load) return phase;
+    const back = phase.kind === "start" ? "start" : phase.kind === "reading" ? phase.back : "workspace";
+    return { kind: "reading", load: event.load, source: event.source, label: event.label, back };
+  }
+  if (event.load !== load) return phase;
+  switch (event.type) {
+    case "loaded":
+      if (phase.kind !== "reading") return phase;
+      return phase.source === "sample" ? { kind: "autoRun", load } : { kind: "workspace", load };
+    case "ran":
+      return phase.kind === "autoRun" ? { kind: "workspace", load } : phase;
+    case "failed":
+      if (phase.kind === "reading" && phase.back === "start") return { kind: "start" };
+      return phase.kind === "workspace" ? phase : { kind: "workspace", load };
+  }
+}
+
+export type MainView = { kind: "start" } | { kind: "loading"; text: string } | { kind: "workspace" };
+
+export function mainView(phase: Phase, engine: EngineState): MainView {
+  switch (phase.kind) {
+    case "start":
+    case "workspace":
+      return { kind: phase.kind };
+    case "reading":
+      return { kind: "loading", text: engine === "ready" ? phase.label : ENGINE_LOADING_TEXT };
+    case "autoRun":
+      return { kind: "loading", text: engine === "ready" ? SAMPLE_RUN_LABEL : ENGINE_LOADING_TEXT };
+  }
+}
+
+/** The sample's first bridge runs once the setup is complete and the periods offered are its own. */
+export function shouldAutoRun(phase: Phase, ready: boolean, periodsFresh: boolean): boolean {
+  return phase.kind === "autoRun" && ready && periodsFresh;
+}
+
+export function hasData(phase: Phase): boolean {
+  return phase.kind !== "start";
+}
+
+/** Leaving would lose loaded data, unless the visitor chose Clear data. */
+export function shouldWarn(phase: Phase, leaving: boolean): boolean {
+  return hasData(phase) && !leaving;
 }
