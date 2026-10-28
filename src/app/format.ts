@@ -34,9 +34,9 @@ export const shareOfPrior = (value: number, prior: number) => value / Math.abs(p
 export const signedShare = (value: number, prior: number) => signedPercent(shareOfPrior(value, prior));
 
 /**
- * The two totals as the bridge table prints them. Whole figures when they
- * differ, and increasing decimal precision only when they do not, so two
- * totals that both round whole still read differently.
+ * Starts with whole figures. When distinct finite totals print alike, tries up
+ * to ten fractional digits. Falls back to the whole figures if they still
+ * print alike.
  */
 export function distinctPair(prior: number, current: number): [string, string] {
   const pair: [string, string] = [whole(prior), whole(current)];

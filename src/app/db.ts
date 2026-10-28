@@ -184,10 +184,9 @@ export async function requireDataRows(query: Query, table: string): Promise<void
 }
 
 /**
- * True when the line the reader takes as the header holds more fields than the
- * reader takes. A line longer than the prefix is judged on the prefix alone: it
- * still holds every field the file's own header does, so a count over the limit
- * inside the prefix is over the limit for the line.
+ * Checks the first physical line in the prefix by counting delimiter characters
+ * plus one. Quoted delimiters are counted too; characters past the end of the
+ * prefix are not inspected.
  */
 function headerTooWide(prefix: string, delimiter: string): boolean {
   if (delimiter === "") return false;

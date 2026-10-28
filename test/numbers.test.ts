@@ -371,8 +371,8 @@ test("mixed number-shape pairs are named only when both sides prove a style", as
   assert.ok(pairs.some(([, , expected]) => expected.type === "VARCHAR" && expected.note === MIXED_STYLES));
   assert.ok(pairs.some(([, , expected]) => expected.type === "VARCHAR" && expected.note === null));
   assert.ok(pairs.some(([, , expected]) => expected.type === "DOUBLE" && expected.note === ONE));
-  // Every converted pair here carried a currency sign, brackets or a comma
-  // between thousands, so each one is named.
+  // Every converted pair here has a decimal-comma sentence or an example
+  // naming its currency sign, brackets or thousands comma.
   assert.ok(pairs.every(([, , expected]) => expected.type !== "DOUBLE" || expected.note !== null));
 });
 

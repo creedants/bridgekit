@@ -112,7 +112,7 @@ test("a single leftover line is named, with the table's amount style", () => {
   assert.ok(text[1].endsWith(" Mix: Size adds -284."), text[1]);
 });
 
-test("amounts print whole with an ASCII sign, never a decimal or a compact suffix", () => {
+test("fractional driver amounts print whole figures with ASCII signs", () => {
   const tiny: BridgeResult = {
     ...result,
     priorSales: 1_000,
