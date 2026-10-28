@@ -1,0 +1,5 @@
+- The guide's four screenshots and the social card show the tool in its plum look, with Instrument Sans and square controls. The social card is now the home page's own picture of the tool on its sun band, titled "Sales bridge" with the same dataset line as before.
+- `npm run build && npm run smoke:preview -- --gallery` rewrites the four guide screenshots, their AVIFs and the social card, and prints `changed` or `unchanged` for each file. Each AVIF is encoded at the best quality that keeps it within about 5% of its old size, and the run prints that quality. A second run prints `unchanged` for all nine. The run needs `avifenc` on PATH and stops before it starts a server when it is missing. A run that fails while rendering or encoding leaves `public/img` as it was.
+- The home page's picture of the tool takes its bars, grid lines and logo from the tool's own colours, with no stylesheet override, and looks the same as before.
+- The saved bridge dialog's text is the tool's plum instead of black.
+- When motion is reduced, the still loading bar is drawn in the tool's third text colour and stands out at least 3:1 from the page and the track.

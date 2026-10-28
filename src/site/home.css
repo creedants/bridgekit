@@ -122,13 +122,6 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .hero .app-name svg { width: 18px; height: 18px; }
 
-/* index.html's picture still carries the old palette; restate it from the tool's. */
-.hero .app-name rect[fill="#1f4b99"] { fill: var(--plum); }
-
-.hero .wf [stroke="#e6e9ed"] { stroke: var(--t-grid); }
-
-.hero .wf [stroke="#c4cad3"] { stroke: var(--t-line-strong); }
-
 .hero .dataset { font-size: .75rem; color: var(--t-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .hero .body { padding: 1.1rem 1.25rem 1rem; }

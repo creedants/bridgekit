@@ -1,12 +1,12 @@
 //   npm run build            && npm run smoke:preview    (serves dist/ itself)
-//   npm run build            && npm run smoke:preview -- --gallery   (rewrites the four public/img screenshots)
+//   npm run build            && npm run smoke:preview -- --gallery   (rewrites the guide screenshots, their AVIFs and the social card in public/img)
 //   npm run build:cloudflare && npm run smoke:wrangler   (local wrangler dev, accounts on)
 //   npm run dev   (in another terminal)
 //   npm run smoke [-- http://localhost:5173] [rows]
 //   CHROMIUM=/path/to/chrome starts that browser. The default is chromium on PATH.
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { get as httpGet } from "node:http";
 import { get as httpsGet } from "node:https";
 import { tmpdir } from "node:os";
@@ -2190,37 +2190,211 @@ async function recorded(steps) {
 }
 
 /**
- * Writes the four site screenshots from a served build. The size matches the
- * gallery figures on the site, and the sample is the one the app loads by
- * default, so a rerun reproduces the same images.
+ * avifenc settings for the guide pictures. Speed and one thread are fixed, so the same avifenc writes the same bytes
+ * from the same PNG at the same quality. The rest pins colour settings avifenc would otherwise choose, and drops the
+ * PNG's colour profile and metadata. Codec selection and other unpinned defaults can still change the files.
+ */
+const AVIFENC = ["--speed", "6", "--jobs", "1", "--yuv", "444", "--depth", "8", "--range", "full", "--cicp", "1/13/6", "--ignore-icc", "--ignore-exif", "--ignore-xmp"];
+/** Qualities tried in turn. Each picture keeps the first that fits its budget, so one busy picture does not blur the rest. */
+const AVIF_QUALITIES = [60, 55, 50, 45, 40, 35, 30];
+
+/** The avifenc version line. Fails before the gallery starts a server when avifenc cannot run. @returns {string} */
+function avifencVersion() {
+  const run = spawnSync("avifenc", ["--version"], { encoding: "utf8" });
+  if (run.error?.code === "ENOENT") fail("gallery: avifenc is not on PATH. Install libavif's avifenc (the libavif-bin or libavif package), then run npm run smoke:preview -- --gallery again. No image was changed.");
+  if (run.status !== 0) fail(`gallery: avifenc --version failed (${run.error?.message ?? `exit ${run.status}`}). No image was changed.`);
+  return run.stdout.split("\n")[0].trim();
+}
+
+/** True once Instrument Sans has loaded in the page. A canvas drawn before then keeps fallback metrics. */
+const FONT_LOADED = `document.fonts.ready.then(() => [...document.fonts].some((face) => face.family.replaceAll('"', "") === "Instrument Sans" && face.status === "loaded"))`;
+
+/**
+ * A served page the pictures start from. `ready` is true once the page shows what every picture of it needs.
+ * @typedef {{ path: string, ready: string }} Page
+ */
+const APP = { path: "/app/?sample", ready: "!!document.querySelector('.kpis') && !!document.querySelector('.bridge table')" };
+const HOME = { path: "/", ready: "!!document.querySelector('.hero svg.wf-wide')" };
+
+/**
+ * One picture on the site. The gallery loop is its only writer.
+ * @typedef {object} Picture
+ * @property {string} name  File stem in public/img.
+ * @property {Page} page  Loaded once for a run of consecutive pictures of the same page.
+ * @property {readonly [number, number]} size  Viewport, device scale 1.
+ * @property {(browser: Awaited<ReturnType<typeof open>>) => Promise<void>} show  Brings the loaded page to what this picture shows. Fails on a wrong state.
+ * @property {number | null} avifBytes  null: PNG only. Otherwise also writes <name>.avif, which must stay under this size.
+ */
+
+/** @returns {Picture["show"]} a show step that opens tab `label` and waits for `ready`. */
+const tab = (label, ready) => async (browser) => {
+  await browser.evalJs(`T.tab(${JSON.stringify(label)})`);
+  await browser.waitFor(ready, 240);
+};
+
+/** The movers tab with its first row opened, so the table shows the finish level. @type {Picture["show"]} */
+async function openFirstMover(browser) {
+  await browser.evalJs(`T.tab("Movers")`);
+  await browser.waitFor("document.querySelectorAll('.dense tbody tr.clickable').length > 0", 240);
+  await browser.evalJs("document.querySelector('.dense tbody tr.clickable').click()");
+  await browser.waitFor("document.querySelector('.dense thead th')?.textContent.trim() === 'finish'", 240);
+}
+
+/** The social card's title and dataset line. Beyond the chart's own labels, these are the only words it shows. */
+const CARD_HEADER = ["Sales bridge", "2025 to 2026", "Model › Finish › Color › Material"];
+
+/**
+ * The parts of the home page the card hides, and the sizes it gives the picture. The hero's own rules do the rest:
+ * below the 1240 px breakpoint the picture sits tilted on its sun band, with its corners, shadow, window dots and
+ * logo, as a 1200 px visitor sees it. The chart's text grows so its labels still read in a small link preview.
+ */
+const CARD_CSS = `
+  .hero { padding: 0; }
+  .hero .hero-grid { max-width: none; padding: 0; }
+  .hero .copy, .hero .kpis, .hero .tabs, .hero .legend { display: none; }
+  .hero figure { height: 630px; margin: 0; padding: 0 64px; display: flex; align-items: center; }
+  .hero .frame { width: 100%; max-width: none; }
+  .hero .chrome { height: 60px; gap: 1.1rem; padding: 0 1.4rem; }
+  .hero .app-name { font-size: 1.25rem; gap: .6rem; }
+  .hero .app-name svg { width: 26px; height: 26px; }
+  .hero .dataset { font-size: 1.05rem; overflow: visible; }
+  .hero .dataset span + span { margin-left: 1.25rem; }
+  .hero .body { padding: 1rem 1.5rem 1.25rem; }
+  .hero .wf .ax, .hero .wf .cat { font-size: 12.5px; }
+  .hero .wf .val { font-size: 13px; }
+`;
+
+/**
+ * Turns the served home page into the social card: hides every body child that does not hold the hero, adds CARD_CSS,
+ * and writes CARD_HEADER into the picture's title bar. Runs in the page.
+ */
+function dressHero([css, title, ...dataset]) {
+  const hero = document.querySelector("section.hero");
+  for (const child of document.body.children) if (!child.contains(hero)) child.hidden = true;
+  document.head.append(Object.assign(document.createElement("style"), { textContent: css }));
+  document.querySelector(".hero .app-name").lastChild.data = title;
+  document.querySelector(".hero .dataset").replaceChildren(...dataset.map((text) => Object.assign(document.createElement("span"), { textContent: text })));
+  return true;
+}
+
+/** The visible words beyond `header` and the shown chart's labels, and the ones of them that do not show. Runs in the page. */
+function cardWords(header) {
+  const extra = [];
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let node; (node = walker.nextNode()); ) {
+    const text = node.data.trim();
+    if (text && node.parentElement.checkVisibility({ opacityProperty: true, visibilityProperty: true })) extra.push(text);
+  }
+  const labels = [...document.querySelectorAll(".hero svg.wf-wide text")].map((label) => label.textContent.trim());
+  const missing = [];
+  for (const word of [...header, ...labels]) {
+    const at = extra.indexOf(word);
+    if (at < 0) missing.push(word);
+    else extra.splice(at, 1);
+  }
+  return { extra, missing };
+}
+
+/** @type {Picture["show"]} */
+async function heroAsCard(browser) {
+  await browser.evalJs(`(${dressHero})(${JSON.stringify([CARD_CSS, ...CARD_HEADER])})`);
+  const { extra, missing } = await browser.evalJs(`(${cardWords})(${JSON.stringify(CARD_HEADER)})`);
+  const quote = (words) => words.map((word) => JSON.stringify(word)).join(", ");
+  if (extra.length) fail(`gallery: the social card shows words beyond today's card: ${quote(extra)}. No image was changed.`);
+  if (missing.length) fail(`gallery: the social card does not show ${quote(missing)}. No image was changed.`);
+}
+
+const GUIDE = /** @type {const} */ ([1280, 860]);
+/**
+ * Every picture of the tool on the site, in the order they are taken: opening a mover changes the app's state.
+ * Each AVIF budget is its size before the plum look plus about 5%. og-bridge's limit lives in test/sitemap.test.ts.
+ * @type {readonly Picture[]}
+ */
+const PICTURES = [
+  { name: "g-bridge", page: APP, size: GUIDE, avifBytes: 54_000, show: tab("Bridge", "!!document.querySelector('.waterfall canvas')") },
+  { name: "g-movers", page: APP, size: GUIDE, avifBytes: 40_000, show: openFirstMover },
+  { name: "g-price", page: APP, size: GUIDE, avifBytes: 46_000, show: tab("Price changes", "!!document.querySelector('.distribution tbody tr')") },
+  { name: "g-setup", page: APP, size: GUIDE, avifBytes: 34_000, show: tab("Setup check", "!!document.querySelector('table.narrow-wide tbody tr')") },
+  { name: "og-bridge", page: HOME, size: [1200, 630], avifBytes: null, show: heroAsCard },
+];
+
+/**
+ * Screenshots the viewport until two shots in a row are byte-equal, then returns those bytes. A still page repeats
+ * at once, while an animation, a late font or a redraw shows up as a difference.
+ * @returns {Promise<Buffer>}
+ */
+async function stillShot(browser, name) {
+  let last = null;
+  for (let shots = 0; shots < 24; shots++) {
+    const now = Buffer.from((await browser.send("Page.captureScreenshot", { format: "png" })).data, "base64");
+    if (last?.equals(now)) return now;
+    last = now;
+    await browser.sleep(250);
+  }
+  fail(`gallery: ${name} kept changing for 6 s (24 screenshots, no two in a row alike): something on the page still moves. No image was changed.`);
+}
+
+/** Writes `<dir>/<name>.avif` from the PNG next to it at the best quality under `budget` bytes. @returns {number} the quality */
+function encodeAvif(dir, name, budget) {
+  const avif = join(dir, `${name}.avif`);
+  let bytes = 0;
+  for (const quality of AVIF_QUALITIES) {
+    const run = spawnSync("avifenc", ["--qcolor", String(quality), ...AVIFENC, join(dir, `${name}.png`), avif], { encoding: "utf8" });
+    if (run.status !== 0) fail(`gallery: avifenc could not encode ${name}.png (${run.error?.message ?? `exit ${run.status}`}). No image was changed.\n${`${run.stdout ?? ""}${run.stderr ?? ""}`.slice(-2000)}`);
+    bytes = statSync(avif).size;
+    if (bytes <= budget) return quality;
+  }
+  fail(`gallery: ${name}.avif is ${bytes.toLocaleString("en-US")} bytes at quality ${AVIF_QUALITIES.at(-1)}, over its ${budget.toLocaleString("en-US")} budget: the picture changed a lot, so check it and raise its avifBytes in PICTURES in scripts/smoke.mjs. No image was changed.`);
+}
+
+/** Copies every staged picture that differs into public/img and prints one row per picture. */
+function publish(staged, qualities) {
+  const dir = join(root, "public", "img");
+  const put = (file) => {
+    const bytes = readFileSync(join(staged, file));
+    const target = join(dir, file);
+    const same = existsSync(target) && readFileSync(target).equals(bytes);
+    if (!same) writeFileSync(target, bytes);
+    return `${bytes.length.toLocaleString("en-US").padStart(7)} ${same ? "unchanged" : "changed  "}`;
+  };
+  for (const { name, size, avifBytes } of PICTURES) {
+    const avif = avifBytes ? `   avif ${put(`${name}.avif`)}   (quality ${qualities.get(name)}, budget ${avifBytes.toLocaleString("en-US")})` : "";
+    console.log(`gallery: ${name.padEnd(9)}  ${size.join("x")}  png ${put(`${name}.png`)}${avif}`);
+  }
+}
+
+/**
+ * Renders every picture into a scratch directory, then publishes them all into public/img. A failure before the
+ * publish leaves public/img as it was. The sample is the one the app loads by default, so a rerun repeats the bytes.
  */
 async function captureGallery(origin) {
-  const dir = join(root, "public", "img");
-  const browser = await open(DEBUG_PORT, { chromium: CHROMIUM });
+  const staged = mkdtempSync(join(tmpdir(), "bridgekit-gallery-"));
+  const qualities = new Map();
   try {
-    await browser.size(1280, 860);
-    await browser.goto(`${origin}/app/?sample`);
-    await browser.waitFor("!!document.querySelector('.kpis') && !!document.querySelector('.bridge table')", 600);
-    const capture = async (name, ready) => {
-      if (ready) await browser.waitFor(ready, 240);
-      await browser.sleep(1500);
-      const error = await browser.evalJs("document.querySelector('.error')?.textContent ?? null");
-      if (error) fail(`gallery: ${name} shows ${JSON.stringify(error)}`);
-      await browser.shot(join(dir, name));
-      console.log(`gallery: wrote ${name}`);
-    };
-    await browser.evalJs(`T.tab("Bridge")`);
-    await capture("g-bridge.png", "!!document.querySelector('.waterfall canvas')");
-    await browser.evalJs(`T.tab("Movers")`);
-    await browser.waitFor("document.querySelectorAll('.dense tbody tr.clickable').length > 0", 240);
-    await browser.evalJs("document.querySelector('.dense tbody tr.clickable').click()");
-    await capture("g-movers.png", "document.querySelector('.dense thead th')?.textContent.trim() === 'finish'");
-    await browser.evalJs(`T.tab("Price changes")`);
-    await capture("g-price.png", "!!document.querySelector('.distribution tbody tr')");
-    await browser.evalJs(`T.tab("Setup check")`);
-    await capture("g-setup.png", "!!document.querySelector('table.narrow-wide tbody tr')");
+    const browser = await open(DEBUG_PORT, { chromium: CHROMIUM });
+    try {
+      console.log(`gallery: rendered with ${await browser.evalJs("navigator.userAgent.match(/\\w*Chrome\\/[\\d.]+/)?.[0] ?? navigator.userAgent")}`);
+      let page = null;
+      for (const picture of PICTURES) {
+        await browser.size(...picture.size);
+        if (picture.page !== page) {
+          await browser.goto(origin + picture.page.path);
+          await browser.waitFor(FONT_LOADED, 40);
+          await browser.waitFor(picture.page.ready, 600);
+          page = picture.page;
+        }
+        await picture.show(browser);
+        const error = await browser.evalJs("T.err()");
+        if (error) fail(`gallery: ${picture.name} shows ${JSON.stringify(error)}. No image was changed.`);
+        writeFileSync(join(staged, `${picture.name}.png`), await stillShot(browser, picture.name));
+        if (picture.avifBytes) qualities.set(picture.name, encodeAvif(staged, picture.name, picture.avifBytes));
+      }
+    } finally {
+      await browser.close();
+    }
+    publish(staged, qualities);
   } finally {
-    await browser.close();
+    rmSync(staged, { recursive: true, force: true });
   }
 }
 
@@ -2231,6 +2405,7 @@ if (gallery) {
   let server = null;
   let failure = null;
   try {
+    console.log(`gallery: avifenc ${avifencVersion()}`);
     server = await serve(target);
     await captureGallery(server.origin);
   } catch (error) {
