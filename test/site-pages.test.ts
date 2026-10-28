@@ -446,6 +446,26 @@ test("the home page has exactly one h1 and it reads See why sales moved.", () =>
   );
 });
 
+test("the home page lead follows the price-volume-mix order", () => {
+  const html = readPage("index.html");
+  const lead = /<p class="lead">([\s\S]*?)<\/p>/i.exec(html);
+  assert.ok(
+    lead,
+    'index.html has no <p class="lead"> element: restore the hero lead paragraph',
+  );
+  assert.equal(
+    collapseSpaces(lead[1]),
+    "Price, volume, and a mix step for every product attribute, in one bridge.",
+    `index.html lead is "${collapseSpaces(lead[1])}": restore "Price, volume, and a mix step for every product attribute, in one bridge."`,
+  );
+  assert.ok(
+    !html.includes(
+      "Volume, price, and a mix step for every product attribute, in one bridge.",
+    ),
+    "index.html still carries the old lead sentence: restore the price-volume-mix order",
+  );
+});
+
 test("the home page title and description name price-volume-mix", () => {
   const head = headOf("index.html", readPage("index.html"));
   assert.ok(
