@@ -168,6 +168,23 @@ test("a guard drops a second trigger while the first runs and just after", async
   assert.equal(runs, 2);
 });
 
+test("a guard drops every click of a slow triple click and frees the trigger after it", async () => {
+  let clock = 0;
+  const guard = makeGuard(() => clock, 800);
+  let saved = 0;
+  for (const at of [0, 465, 918]) {
+    clock = at;
+    await guard.run(() => void saved++);
+  }
+  assert.equal(saved, 1, "the 465 ms and 918 ms clicks must not save again");
+  clock = 1717;
+  await guard.run(() => void saved++);
+  assert.equal(saved, 1, "the trigger stays held for 800 ms after the last suppressed click");
+  clock = 1718;
+  await guard.run(() => void saved++);
+  assert.equal(saved, 2, "a separate deliberate click after the sequence saves again");
+});
+
 test("a guard frees its trigger at once when the work fails or saves nothing", async () => {
   const guard = makeGuard(() => 0, 800);
   await assert.rejects(guard.run(() => {
