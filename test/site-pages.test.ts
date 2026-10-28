@@ -430,7 +430,7 @@ test("the home page carries fewer than 400 visible words", () => {
   );
 });
 
-test("the home page has exactly one h1 and it names price-volume-mix", () => {
+test("the home page has exactly one h1 and it reads See why sales moved.", () => {
   const headings = [
     ...readPage("index.html").matchAll(/<h1\b[^>]*>([\s\S]*?)<\/h1>/gi),
   ];
@@ -439,11 +439,38 @@ test("the home page has exactly one h1 and it names price-volume-mix", () => {
     1,
     `index.html has ${headings.length} <h1> elements: give the page exactly one heading`,
   );
-  const text = collapseSpaces(headings[0][1]).toLowerCase();
-  assert.ok(
-    text.includes("price-volume-mix"),
-    `index.html h1 is "${collapseSpaces(headings[0][1])}": write a heading that names price-volume-mix`,
+  assert.equal(
+    collapseSpaces(headings[0][1]),
+    "See why sales moved.",
+    `index.html h1 is "${collapseSpaces(headings[0][1])}": use the mockup headline "See why sales moved."`,
   );
+});
+
+test("the home page title and description name price-volume-mix", () => {
+  const head = headOf("index.html", readPage("index.html"));
+  assert.ok(
+    titlesOf(head)[0].toLowerCase().includes("price-volume-mix"),
+    `index.html title is "${titlesOf(head)[0]}": keep price-volume-mix in the title, since the h1 no longer names it`,
+  );
+  assert.ok(
+    descriptionsOf(head)[0].toLowerCase().includes("price-volume-mix"),
+    "index.html meta description does not name price-volume-mix: keep the term in the description, since the h1 no longer names it",
+  );
+});
+
+test("the home page hero drops the axis note and the sample caption", () => {
+  const html = readPage("index.html");
+  for (const removed of [
+    "Value axis starts at 40M, not zero, so the steps are visible.",
+    "The Bridge tab on the built-in sample: 1,000,000 made-up sales lines.",
+    'class="axis-note"',
+    'class="under"',
+  ]) {
+    assert.ok(
+      !html.includes(removed),
+      `index.html contains ${removed}: the owner removed the chart captions from the hero`,
+    );
+  }
 });
 
 const HOME_LINKS = [
