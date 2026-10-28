@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { dataCheck, periodMoney, runBridge, type BridgeConfig, type Query } from "../engine.ts";
 import { summarize } from "../summary.ts";
 import { resolveSample, type Sample } from "../synth.ts";
@@ -9,7 +9,7 @@ import {
   type BrowserDatabase,
 } from "./db.ts";
 import { exportExcel, lazyChunk, type ChunkSentences } from "./exportExcel.ts";
-import { download } from "./files.ts";
+import { download, isPastedTable, makeGuard, shorten } from "./files.ts";
 import { fileProblem, periodView, periodsFor, type FileProblem, type LoadedPeriods } from "./fileProblems.ts";
 import { whole } from "./format.ts";
 import { findTotalRows, profileFile, type TotalRow } from "./profile.ts";
@@ -17,18 +17,29 @@ import { loadPeriodList } from "./periods.ts";
 import { describeSetup } from "./report.ts";
 import type { Run } from "./Results.tsx";
 import {
+  affectsRemember,
   guessSetup,
+  hasData,
+  initialPhase,
   isRemembering,
   isValidSetup,
   loadSavedSetup,
+  mainView,
+  nextPhase,
   PERIOD,
   quote,
+  restoredSetup,
+  SAMPLE_LABEL,
   saveSetup,
   setRemembering,
+  shouldAutoRun,
+  shouldWarn,
   TABLE,
   VIEW,
   viewSql,
   type Column,
+  type EngineState,
+  type LoadSource,
   type Setup,
 } from "./setup.ts";
 import { SetupPanel } from "./SetupPanel.tsx";
@@ -97,6 +108,39 @@ function previewCell(type: string, value: unknown): string {
   return String(value);
 }
 
+// The engine's download state, kept outside React so the first query of any
+// load, and the start after first paint, report to the same place.
+let engine: EngineState = "idle";
+const engineWatchers = new Set<() => void>();
+
+function setEngine(next: EngineState): void {
+  if (engine === next) return;
+  engine = next;
+  for (const watcher of engineWatchers) watcher();
+}
+
+/** Opens the page's database. db.ts caches the open and forgets a failed one, so a later call retries. */
+function startEngine(): Promise<BrowserDatabase> {
+  const opening = openBrowserDatabase();
+  if (engine !== "ready") setEngine("loading");
+  opening.then(() => setEngine("ready"), () => setEngine("failed"));
+  return opening;
+}
+
+function watchEngine(watcher: () => void): () => void {
+  engineWatchers.add(watcher);
+  return () => void engineWatchers.delete(watcher);
+}
+
+function useEngine(): EngineState {
+  return useSyncExternalStore(watchEngine, () => engine);
+}
+
+type TaskKind = "periods" | "calc" | "export" | "import";
+
+const SETUP_FILE = "pvm-bridge-setup.json";
+const NOT_A_TABLE = "The pasted text is not a table. Copy cells from a spreadsheet, with a header row.";
+
 /** The loaded file's rows with the same period column as VIEW, before the filters. */
 const FILE_VIEW = "data_all";
 
@@ -111,10 +155,13 @@ async function buildViews(q: Query, setup: Setup): Promise<void> {
 }
 
 export function App() {
-  const [busy, setBusy] = useState("");
+  const [phase, dispatch] = useReducer(nextPhase, location.search, initialPhase);
+  const engineState = useEngine();
+  const [tasks, setTasks] = useState<ReadonlyMap<TaskKind, { label: string; id: number }>>(new Map());
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [source, setSource] = useState("");
+  const [fromSample, setFromSample] = useState(false);
   const [rowCount, setRowCount] = useState(0);
   const [columns, setColumns] = useState<Column[]>([]);
   const [setup, setSetup] = useState<Setup | null>(null);
@@ -129,30 +176,61 @@ export function App() {
   const [detected, setDetected] = useState<{ key: string; rows: TotalRow[] } | null>(null);
   const [run, setRun] = useState<(Run & { id: number; signature: string }) | null>(null);
   const [formulaBlanks, setFormulaBlanks] = useState(0);
+  const [saveGuard] = useState(() => makeGuard());
+  const [exportGuard] = useState(() => makeGuard());
   // A demonstration sample must not overwrite a setup saved for a file with the same columns.
   const writesSetup = useRef(true);
   // Labels the newest load, so work started for an earlier file can tell it is stale.
   const loadRef = useRef(0);
+  const taskRef = useRef(0);
+  const scrollAfterRun = useRef(false);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const errorRef = useRef<HTMLParagraphElement>(null);
+  // Clear data reloads on purpose, so it must not ask whether to leave.
+  const leaving = useRef(false);
+  const sampleLinkRead = useRef(false);
 
   function db(): Promise<BrowserDatabase> {
-    return openBrowserDatabase();
+    return startEngine();
   }
   const query = () => db().then((d) => d.query);
 
-  async function task(label: string, work: () => Promise<void>) {
-    setBusy(label);
+  // Each kind of task keeps its own label, so one finishing cannot clear another's.
+  async function task(kind: TaskKind, label: string, work: () => Promise<void>): Promise<boolean> {
+    const id = ++taskRef.current;
+    setTasks((running) => new Map([...running].filter(([key]) => key !== kind)).set(kind, { label, id }));
     setError("");
     try {
       await work();
+      return true;
     } catch (e) {
       setError(describeError(e));
+      return false;
     } finally {
-      setBusy("");
+      setTasks((running) => {
+        if (running.get(kind)?.id !== id) return running;
+        const next = new Map(running);
+        next.delete(kind);
+        return next;
+      });
     }
   }
 
-  async function afterLoad(name: string, preset?: Sample) {
+  async function readData(source: LoadSource, label: string, work: (thisLoad: number) => Promise<void>) {
     const thisLoad = ++loadRef.current;
+    dispatch({ type: "read", load: thisLoad, source, label });
+    setError("");
+    try {
+      await work(thisLoad);
+      dispatch({ type: "loaded", load: thisLoad });
+    } catch (e) {
+      if (loadRef.current !== thisLoad) return;
+      setError(describeError(e));
+      dispatch({ type: "failed", load: thisLoad });
+    }
+  }
+
+  async function afterLoad(thisLoad: number, name: string, preset?: Sample) {
     const q = await query();
     const described = await q(`DESCRIBE ${quote(TABLE)}`);
     const found = described.map((row) => ({ name: String(row.column_name), type: String(row.column_type) }));
@@ -162,6 +240,7 @@ export function App() {
     setColumns(found);
     setRowCount(Number(count.n));
     setSource(name);
+    setFromSample(!!preset);
     setRun(null);
     setLoad(thisLoad);
     setSetup(preset?.setup ?? saved ?? guessSetup(found));
@@ -182,23 +261,22 @@ export function App() {
   const loadSample = () => {
     prefetchResults();
     const { sample, rows } = resolveSample(new URLSearchParams(location.search).get("sample"));
-    return task("Generating sample data…", async () => {
+    return readData("sample", SAMPLE_LABEL, async (thisLoad) => {
       await sample.create(await query(), rows, TABLE);
       setFormulaBlanks(0);
-      await afterLoad(sample.label, sample);
+      await afterLoad(thisLoad, sample.label, sample);
     });
   };
 
   const loadFile = (file: File) => {
     if (/\.parquet$/i.test(file.name)) {
-      return task(`Reading ${file.name}…`, async () => {
-        throw new Error(PARQUET_REFUSAL);
-      });
+      setError(PARQUET_REFUSAL);
+      return;
     }
     prefetchResults();
-    return task(`Reading ${file.name}…`, async () => {
+    return readData("file", `Reading ${file.name}…`, async (thisLoad) => {
       setFormulaBlanks(await (await db()).loadFile(file, TABLE));
-      await afterLoad(file.name);
+      await afterLoad(thisLoad, file.name);
     });
   };
 
@@ -215,7 +293,7 @@ export function App() {
     }
     let stale = false;
     const requested = view;
-    task("Reading periods…", async () => {
+    task("periods", "Reading periods…", async () => {
       const q = await query();
       await buildViews(q, setup);
       const list = await loadPeriodList(q, quote(PERIOD), quote(VIEW));
@@ -258,7 +336,9 @@ export function App() {
   const signature = JSON.stringify([setup, prior, current, source]);
   const fresh = run && run.signature === signature ? run : null;
   const ready =
-    setup && setup.unitsColumn && setup.salesColumn && setup.levels.length > 0 && prior && current && prior !== current;
+    !!setup && !!setup.unitsColumn && !!setup.salesColumn && setup.levels.length > 0 && !!prior && !!current && prior !== current;
+  const calculating = tasks.has("calc");
+  const busy = tasks.size > 0 || phase.kind === "reading" || phase.kind === "autoRun";
   const problem: FileProblem = setup
     ? fileProblem({
         columns,
@@ -270,59 +350,94 @@ export function App() {
       })
     : { kind: "none" };
 
-  const calculate = () =>
-    task("Calculating…", async () => {
+  /** `sampleLoad` names the sample load whose first bridge this is. */
+  const calculate = (sampleLoad?: number) =>
+    task("calc", "Calculating…", async () => {
       if (!setup) return;
-      const [q] = await Promise.all([query(), resultsChunk.load()]);
-      const config: BridgeConfig = {
-        table: VIEW,
-        periodColumn: PERIOD,
-        prior,
-        current,
-        unitsColumn: setup.unitsColumn,
-        salesColumn: setup.salesColumn,
-        grossColumn: setup.grossColumn || undefined,
-        costColumn: setup.costColumn || undefined,
-        levels: setup.levels,
-        newAndDiscontinued: setup.newAndDiscontinued ?? "difference",
-      };
-      const start = performance.now();
-      const result = await runBridge(q, config);
-      const ms = performance.now() - start;
-      const check = await dataCheck(q, config);
-      const tieOut = await periodMoney(q, config, { table: FILE_VIEW, periodColumn: PERIOD });
-      setRun({
-        config,
-        result,
-        check,
-        tieOut,
-        ms,
-        periods: offeredPeriods,
-        textColumns: columns.filter((c) => !/INT|DOUBLE|DECIMAL|FLOAT|REAL|DATE|TIMESTAMP/i.test(c.type)).map((c) => c.name),
-        description: describeSetup(setup, prior, current, source),
-        setup,
-        source,
-        formulaBlanks,
-        id: Date.now(),
-        signature,
-      });
+      try {
+        const [q] = await Promise.all([query(), resultsChunk.load()]);
+        const config: BridgeConfig = {
+          table: VIEW,
+          periodColumn: PERIOD,
+          prior,
+          current,
+          unitsColumn: setup.unitsColumn,
+          salesColumn: setup.salesColumn,
+          grossColumn: setup.grossColumn || undefined,
+          costColumn: setup.costColumn || undefined,
+          levels: setup.levels,
+          newAndDiscontinued: setup.newAndDiscontinued ?? "difference",
+        };
+        const start = performance.now();
+        const result = await runBridge(q, config);
+        const ms = performance.now() - start;
+        const check = await dataCheck(q, config);
+        const tieOut = await periodMoney(q, config, { table: FILE_VIEW, periodColumn: PERIOD });
+        setRun({
+          config,
+          result,
+          check,
+          tieOut,
+          ms,
+          periods: offeredPeriods,
+          textColumns: columns.filter((c) => !/INT|DOUBLE|DECIMAL|FLOAT|REAL|DATE|TIMESTAMP/i.test(c.type)).map((c) => c.name),
+          description: describeSetup(setup, prior, current, source),
+          setup,
+          source,
+          sample: fromSample,
+          formulaBlanks,
+          id: Date.now(),
+          signature,
+        });
+        if (sampleLoad !== undefined) dispatch({ type: "ran", load: sampleLoad });
+      } finally {
+        scrollAfterRun.current = true;
+      }
       if (writesSetup.current) saveSetup(columns, setup);
       setNotice("");
     });
 
+  // After a calculation, bring its result or its error into view and hand it focus.
+  useEffect(() => {
+    if (!scrollAfterRun.current) return;
+    const target = error ? errorRef.current : resultsRef.current?.querySelector<HTMLElement>(".results-title");
+    if (!target) return;
+    scrollAfterRun.current = false;
+    const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    target.scrollIntoView({ block: "start", behavior: still ? "auto" : "smooth" });
+    target.focus({ preventScroll: true });
+  }, [run?.id, error, phase]);
+
   useEffect(() => scheduleSpeculative(prefetchResults, RESULTS_PREFETCH_SETTLE_MS), []);
 
-  // A link to /app/?sample opens the tool with the sample already calculated.
-  const autoRun = useRef(new URLSearchParams(location.search).has("sample"));
+  // Start the engine download once the first frame is painted.
   useEffect(() => {
-    if (autoRun.current && !setup && !busy) loadSample();
+    let timer = 0;
+    const frame = requestAnimationFrame(() => {
+      timer = window.setTimeout(() => void startEngine().catch(() => {}), 0);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(timer);
+    };
   }, []);
+
+  // A link to /app/?sample opens the tool with the sample already calculated.
   useEffect(() => {
-    if (autoRun.current && ready && !busy) {
-      autoRun.current = false;
-      calculate();
-    }
-  }, [ready, busy]);
+    if (sampleLinkRead.current || phase.kind !== "reading" || phase.load !== 0) return;
+    sampleLinkRead.current = true;
+    loadSample();
+  }, []);
+  const autoRanFor = useRef(-1);
+  useEffect(() => {
+    if (!shouldAutoRun(phase, ready, view !== null && loadedPeriods?.view === view)) return;
+    if (phase.kind !== "autoRun" || autoRanFor.current === phase.load) return;
+    const sampleLoad = phase.load;
+    autoRanFor.current = sampleLoad;
+    void calculate(sampleLoad).then((ran) => {
+      if (!ran) dispatch({ type: "failed", load: sampleLoad });
+    });
+  });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -338,22 +453,48 @@ export function App() {
       const target = e.target as HTMLElement | null;
       if (target?.closest("input, textarea, select")) return;
       const text = e.clipboardData?.getData("text/plain") ?? "";
-      if (text.split("\n").length < 2 || !text.includes("\t")) return;
+      if (text === "") return;
       e.preventDefault();
+      if (!isPastedTable(text)) {
+        setError(NOT_A_TABLE);
+        return;
+      }
       loadFile(new File([text], "Pasted cells.tsv", { type: "text/tab-separated-values" }));
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
   });
 
+  // Another tab can tick or untick Remember; this tab's box follows.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (affectsRemember(e.key)) setRemember(isRemembering());
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  useEffect(() => {
+    if (!hasData(phase)) return;
+    const onLeave = (e: BeforeUnloadEvent) => {
+      if (!shouldWarn(phase, leaving.current)) return;
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onLeave);
+    return () => window.removeEventListener("beforeunload", onLeave);
+  }, [phase]);
+
   const exportWorkbook = () =>
-    task("Building Excel file…", async () => {
-      if (!fresh) return;
-      await exportExcel(await query(), fresh.config, fresh.result, fresh.check, fresh.tieOut, fresh.description);
+    exportGuard.run(async () => {
+      await task("export", "Building Excel file…", async () => {
+        if (!fresh) return;
+        await exportExcel(await query(), fresh.config, fresh.result, fresh.check, fresh.tieOut, fresh.description);
+      });
     });
 
   const importSetup = (file: File) =>
-    task("Reading setup…", async () => {
+    task("import", "Reading setup…", async () => {
       let parsed: unknown;
       try {
         parsed = JSON.parse(await file.text());
@@ -363,7 +504,7 @@ export function App() {
       if (!isValidSetup(parsed, columns)) {
         throw new Error("That setup file does not match the columns in this data.");
       }
-      setSetup(parsed);
+      setSetup(restoredSetup(parsed));
     });
 
   const filePicker = (
@@ -382,6 +523,8 @@ export function App() {
   );
 
   const Results = resultsChunk.loaded;
+  const shown = mainView(phase, engineState);
+  const status = phase.kind === "reading" ? phase.label : ([...tasks.values()].at(-1)?.label ?? "");
 
   return (
     <div
@@ -399,16 +542,23 @@ export function App() {
           PVM Bridge
         </a>
         <span className="source">
-          {source ? `${source} · ${whole(rowCount)} rows · ${columns.length} columns` : "No data loaded"}
+          {phase.kind === "reading"
+            ? ""
+            : source
+              ? `${source} · ${whole(rowCount)} rows · ${columns.length} columns`
+              : "No data loaded"}
         </span>
-        <span className="status" aria-live="polite">{busy}</span>
+        <span className="status" aria-live="polite">{status}</span>
         <nav>
           {filePicker}
-          <button disabled={!fresh || !!busy} onClick={exportWorkbook}>Export Excel</button>
+          <button disabled={!fresh || busy} onClick={exportWorkbook}>Export Excel</button>
           {setup && (
             <button
               title="Remove the loaded data from this tab"
-              onClick={() => location.replace(location.pathname)}
+              onClick={() => {
+                leaving.current = true;
+                location.replace(location.pathname);
+              }}
             >
               Clear data
             </button>
@@ -418,31 +568,37 @@ export function App() {
         </nav>
       </header>
 
-      {error && <p className="error" role="alert">{error}</p>}
+      {error && <p className="error" role="alert" ref={errorRef} tabIndex={-1}>{error}</p>}
 
-      {!setup ? (
+      {shown.kind === "loading" ? (
+        <main className="empty">
+          <p role="status">{shown.text}</p>
+        </main>
+      ) : shown.kind === "start" || !setup ? (
         <main className="empty">
           <h1>Load a sales file</h1>
           <p>
-            Drop a CSV or Excel file anywhere on this page, or paste cells copied from a spreadsheet (Ctrl+V), one row per sales line. It needs a period or date
-            column, units, sales, and the product attributes you want in the bridge.
+            <span className="fine-pointer">Drop a CSV or Excel file anywhere on this page, or paste cells copied from a spreadsheet (Ctrl+V), one row per sales line. It needs a period or date column, units, sales, and the product attributes you want in the bridge.</span>
+            <span className="coarse-pointer">Choose a CSV or Excel file with one row per sales line. It needs a period or date column, units, sales, and the product attributes you want in the bridge.</span>
           </p>
           <p className="row">
             {filePicker}
-            <button onClick={loadSample} disabled={!!busy}>Use sample data</button>
+            <button onClick={loadSample} disabled={busy}>Use sample data</button>
           </p>
           <p className="hint">The file is read inside this browser tab. It is not uploaded.</p>
           <h3>What the file should look like</h3>
-          <table className="example">
-            <thead>
-              <tr><th>period</th><th>customer</th><th>model</th><th>material</th><th>finish</th><th className="num">units</th><th className="num">gross_sales</th><th className="num">net_sales</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>2025</td><td>C0001</td><td>MD12</td><td>MT2</td><td>FN01</td><td className="num">40</td><td className="num">4,400</td><td className="num">3,960</td></tr>
-              <tr><td>2026</td><td>C0001</td><td>MD12</td><td>MT2</td><td>FN01</td><td className="num">52</td><td className="num">5,980</td><td className="num">5,262</td></tr>
-              <tr><td>2026</td><td>C0002</td><td>MD12</td><td>MT5</td><td>FN00</td><td className="num">8</td><td className="num">1,120</td><td className="num">1,120</td></tr>
-            </tbody>
-          </table>
+          <div className="scroll">
+            <table className="example">
+              <thead>
+                <tr><th>period</th><th>customer</th><th>model</th><th>material</th><th>finish</th><th className="num">units</th><th className="num">gross_sales</th><th className="num">net_sales</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>2025</td><td>C0001</td><td>MD12</td><td>MT2</td><td>FN01</td><td className="num">40</td><td className="num">4400</td><td className="num">3960</td></tr>
+                <tr><td>2026</td><td>C0001</td><td>MD12</td><td>MT2</td><td>FN01</td><td className="num">52</td><td className="num">5980</td><td className="num">5262</td></tr>
+                <tr><td>2026</td><td>C0002</td><td>MD12</td><td>MT5</td><td>FN00</td><td className="num">8</td><td className="num">1120</td><td className="num">1120</td></tr>
+              </tbody>
+            </table>
+          </div>
           <p className="hint">
             Column names do not matter; you map them in the next step. A date column works in place of a period, and
             gross sales and cost are optional. See the <a href="/guide.html">guide</a>, or{" "}
@@ -471,8 +627,8 @@ export function App() {
               onCurrent={setCurrent}
             />
             <div className="run">
-              <button className="primary" disabled={!ready || !!busy} onClick={calculate}>
-                Calculate bridge
+              <button className="primary" disabled={!ready || busy} onClick={() => calculate()}>
+                {calculating ? "Calculating…" : "Calculate bridge"}
               </button>
               {problem.kind === "note" && <p className="hint">{problem.message}</p>}
               {!ready && (
@@ -484,6 +640,8 @@ export function App() {
                       : "Choose periods, units, sales and at least one attribute."}
                 </p>
               )}
+            </div>
+            <div className="keep">
               <label className="check">
                 <input
                   type="checkbox"
@@ -499,12 +657,14 @@ export function App() {
               <p className="hint">
                 {remember
                   ? "Column choices, attribute order and options are stored in this browser. Filter selections and your data are not. Untick to delete what is stored."
-                  : "Off: nothing is stored except this choice. Closing or reloading the tab removes everything."}
+                  : "Off: nothing is stored in this browser. Closing or reloading the tab removes everything."}
               </p>
               <p className="row">
                 <button
                   className="quiet"
-                  onClick={() => download("bridgekit-setup.json", JSON.stringify(setup, null, 2), "application/json")}
+                  onClick={() =>
+                    saveGuard.run(() => download(SETUP_FILE, JSON.stringify(setup, null, 2), "application/json"))
+                  }
                 >
                   Save setup to file
                 </button>
@@ -542,12 +702,16 @@ export function App() {
               <p className="notice">The setup changed since this bridge was calculated. Calculate again to update it.</p>
             )}
             {run && Results ? (
-              <Results key={run.id} run={run} query={query} />
+              <div className="results-anchor" ref={resultsRef}>
+                <Results key={run.id} run={run} query={query} />
+              </div>
             ) : !run ? (
               <div>
-                <p className="hint">
-                  First rows of the file. Set up the bridge on the left, then choose Calculate bridge (Ctrl+Enter).
-                </p>
+                {!calculating && (
+                  <p className="hint">
+                    First rows of the file. Set up the bridge on the left, then choose Calculate bridge (Ctrl+Enter).
+                  </p>
+                )}
                 <div className="scroll">
                   <table className="dense">
                     <thead>
@@ -556,11 +720,19 @@ export function App() {
                     <tbody>
                       {preview.map((row, i) => (
                         <tr key={i}>
-                          {columns.map((c) => (
-                            <td key={c.name} className={/INT|DOUBLE|DECIMAL|FLOAT|REAL/i.test(c.type) ? "num" : ""}>
-                              {previewCell(c.type, row[c.name])}
-                            </td>
-                          ))}
+                          {columns.map((c) => {
+                            const text = previewCell(c.type, row[c.name]);
+                            const short = shorten(text);
+                            return (
+                              <td
+                                key={c.name}
+                                className={/INT|DOUBLE|DECIMAL|FLOAT|REAL/i.test(c.type) ? "num" : ""}
+                                title={short === text ? undefined : text}
+                              >
+                                {short}
+                              </td>
+                            );
+                          })}
                         </tr>
                       ))}
                     </tbody>

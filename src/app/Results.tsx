@@ -49,6 +49,8 @@ export interface Run {
   /** Structured setup and file name, so the ticked report rebuilds Setup without copying values. */
   setup: Setup;
   source: string;
+  /** Whether the data is one of the built-in samples, not the visitor's file. */
+  sample: boolean;
   /** Data-row Excel formulas with no saved result, read as blank. Zero for a CSV, a paste, or a sample. */
   formulaBlanks: number;
   config: BridgeConfig;
@@ -97,7 +99,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
 
   return (
     <>
-      <h1 className="results-title">Price-volume-mix bridge</h1>
+      <h1 className="results-title" tabIndex={-1}>Price-volume-mix bridge</h1>
       <div className="kpis">
         <Kpi label={`${measureName(config)} ${config.prior}`} value={whole(result.priorSales)} />
         <Kpi label={`${measureName(config)} ${config.current}`} value={whole(result.currentSales)} />
