@@ -908,10 +908,10 @@ test("the guide and the PVM analysis page carry the corrected wording", () => {
 const REMEMBERING =
   "The tool can remember your column choices, attribute order and options in this browser, so the next file with the same columns opens with the same setup. It is off until you tick <b>Remember this setup in this browser</b>. Filter selections and your data are never stored. Unticking the box deletes what was stored. To move a setup to another computer or share it, choose <b>Save setup to file</b>.";
 
-/** The two shapes the pages ship in: every optional feature on, and the free build with none. */
+/** Exercise optional-feature wording with all flags enabled and with all flags disabled. */
 const BUILDS: [string, Record<string, boolean>][] = [
-  ["default", { ai: true, counts: true, workspaces: true }],
-  ["free", {}],
+  ["all optional features", { ai: true, counts: true, workspaces: true }],
+  ["no optional features", {}],
 ];
 
 test("the guide says remembering a setup is opt-in", () => {
