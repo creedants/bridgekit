@@ -137,7 +137,7 @@ export function BridgeChart(props: {
   onReady?: (chart: echarts.ECharts | null) => void;
 }) {
   const element = useRef<HTMLDivElement>(null);
-  const [redrawWidth, setRedrawWidth] = useState(0);
+  const [redraws, setRedraws] = useState(0);
   const onSelect = useRef(props.onSelect);
   onSelect.current = props.onSelect;
   const onReady = useRef(props.onReady);
@@ -283,7 +283,7 @@ export function BridgeChart(props: {
     const drawn = JSON.stringify([plan, width < 560]);
     const observer = new ResizeObserver(() => {
       const now = box.clientWidth;
-      if (!slim && JSON.stringify([planAt(now), now < 560]) !== drawn) setRedrawWidth(now);
+      if (!slim && JSON.stringify([planAt(now), now < 560]) !== drawn) setRedraws((n) => n + 1);
       else chart.resize();
     });
     observer.observe(element.current);
@@ -298,7 +298,7 @@ export function BridgeChart(props: {
       observer.disconnect();
       chart.dispose();
     };
-  }, [bars, priorSales, scale, slim, redrawWidth]);
+  }, [bars, priorSales, scale, slim, redraws]);
 
   return <div ref={element} className="chart" role="img" aria-label={props.ariaLabel} />;
 }
