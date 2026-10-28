@@ -17,6 +17,174 @@ import { download } from "./files.ts";
 import { shareOfPrior } from "./format.ts";
 import { terms } from "./report.ts";
 
+type ChunkFailure = "network" | "gone";
+
+export type ChunkSentences = Readonly<Record<ChunkFailure, string>>;
+
+interface ChunkSource<T> {
+  /** Written inline as one literal import(). The retry reads the chunk URL from this function's text. */
+  importer: () => Promise<unknown>;
+  parse: (module: unknown) => T | undefined;
+  /**
+   * Reads a fresh copy of the chunk at an address the browser has not cached as
+   * failed. The default is the build's chunk address plus a retry stamp.
+   */
+  freshCopy?: (stamp: string) => Promise<unknown>;
+}
+
+export interface LazyChunk<T> {
+  /** One shared load per chunk. Rejects only with an Error whose message is one of the two sentences. */
+  load(): Promise<T>;
+  readonly loaded: T | undefined;
+}
+
+type ChunkState<T> =
+  | { phase: "untried" }
+  | { phase: "failed" }
+  | { phase: "loading"; attempt: Promise<T> }
+  | { phase: "loaded"; attempt: Promise<T>; value: T };
+
+type ChunkResult<T> = { value: T } | { failure: ChunkFailure };
+
+export class ChunkUnavailable extends Error {}
+
+/** A dynamic chunk that recovers from a failed load. */
+export function lazyChunk<T>(options: ChunkSource<T> & { sentences: ChunkSentences }): LazyChunk<T> {
+  let state: ChunkState<T> = { phase: "untried" };
+  return {
+    load() {
+      if (state.phase === "loading" || state.phase === "loaded") return state.attempt;
+      const reading = state.phase === "failed" ? retriedChunk(options) : firstChunk(options);
+      const attempt: Promise<T> = reading.then((result) => {
+        if ("failure" in result) {
+          state = { phase: "failed" };
+          throw new ChunkUnavailable(options.sentences[result.failure]);
+        }
+        state = { phase: "loaded", attempt, value: result.value };
+        return result.value;
+      });
+      state = { phase: "loading", attempt };
+      return attempt;
+    },
+    get loaded() {
+      return state.phase === "loaded" ? state.value : undefined;
+    },
+  };
+}
+
+function parsedChunk<T>(source: ChunkSource<T>, module: unknown): ChunkResult<T> {
+  const value = source.parse(module);
+  return value === undefined ? { failure: "gone" } : { value };
+}
+
+async function firstChunk<T>(source: ChunkSource<T>): Promise<ChunkResult<T>> {
+  try {
+    return parsedChunk(source, await source.importer());
+  } catch {
+    return { failure: "network" };
+  }
+}
+
+let retryAttempts = 0;
+
+// Chromium keeps a failed import failed for that URL for the life of the page.
+async function retriedChunk<T>(source: ChunkSource<T>): Promise<ChunkResult<T>> {
+  retryAttempts += 1;
+  const stamp = Date.now() + "." + retryAttempts;
+  if (source.freshCopy) {
+    try {
+      return parsedChunk(source, await source.freshCopy(stamp));
+    } catch {
+      return { failure: "network" };
+    }
+  }
+  const url = chunkUrl(source.importer);
+  if (url === null) return { failure: "gone" };
+  const retryUrl = url + "?retry=" + stamp;
+  try {
+    if (!(await servedAsJavaScript(retryUrl))) return { failure: "gone" };
+    const module: unknown = await import(/* @vite-ignore */ retryUrl);
+    return parsedChunk(source, module);
+  } catch {
+    return { failure: "network" };
+  }
+}
+
+async function servedAsJavaScript(url: string): Promise<boolean> {
+  const response = await fetch(url, { cache: "no-store", redirect: "manual" });
+  const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+  if (!response.ok || contentType.includes("text/html") || !isJavaScriptContentType(contentType)) return false;
+  return !(await bodyStartsWithMarkup(response));
+}
+
+const IMPORT_SPECIFIER = /\bimport\(\s*(["'`])([^"'`\\$]+)\1\s*\)/g;
+const CHUNK_PATH = /^\/assets\/[A-Za-z0-9_.-]+\.js$/;
+
+// The build writes the chunk's file name into the importer as a literal, and
+// a leaf chunk gets no modulepreload link to read it from.
+function chunkUrl(importer: () => Promise<unknown>): string | null {
+  const specifiers = [...Function.prototype.toString.call(importer).matchAll(IMPORT_SPECIFIER)];
+  if (specifiers.length !== 1) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(specifiers[0][2], import.meta.url);
+  } catch {
+    return null;
+  }
+  if (!CHUNK_PATH.test(parsed.pathname) || parsed.search !== "" || parsed.hash !== "") return null;
+  if (typeof location === "undefined") return null;
+  if (parsed.origin !== location.origin) return null;
+  return parsed.origin + parsed.pathname;
+}
+
+function isJavaScriptContentType(contentType: string): boolean {
+  const mediaType = contentType.split(";", 1)[0]?.trim() ?? "";
+  return mediaType === "text/javascript" || mediaType === "application/javascript";
+}
+
+async function bodyStartsWithMarkup(response: Response): Promise<boolean> {
+  const body = response.body;
+  if (body === null) return false;
+  const reader = body.getReader();
+  try {
+    const chunk = await reader.read();
+    const bytes = chunk.value;
+    if (bytes === undefined || bytes.length === 0) return false;
+    return new TextDecoder().decode(bytes.subarray(0, 64)).trimStart().startsWith("<");
+  } finally {
+    void reader.cancel().catch(() => {});
+  }
+}
+
+export type ExcelModule = typeof import("exceljs");
+
+const EXCEL_TOOLS_SENTENCE = "The Excel tools could not load. Check your internet connection and try again.";
+
+function excelModule(module: unknown): ExcelModule | undefined {
+  if (typeof module !== "object" || module === null) return undefined;
+  const excel = (module as { default?: { Workbook?: unknown } }).default;
+  if (typeof excel !== "object" || excel === null || typeof excel.Workbook !== "function") return undefined;
+  return excel as unknown as ExcelModule;
+}
+
+/** The Excel library. Exported so a test can feed a failing importer through the real machinery. */
+export function excelLoader(
+  importer: () => Promise<unknown>,
+  freshCopy?: (stamp: string) => Promise<unknown>,
+): LazyChunk<ExcelModule> {
+  return lazyChunk({
+    importer,
+    parse: excelModule,
+    sentences: { network: EXCEL_TOOLS_SENTENCE, gone: EXCEL_TOOLS_SENTENCE },
+    freshCopy,
+  });
+}
+
+/** The page's one Excel loader, and the only code that names the exceljs chunk's address. */
+export const excelTools = excelLoader(() => import("exceljs"));
+
+export type ExcelTools = Pick<LazyChunk<ExcelModule>, "load">;
+
 /** Above this many configurations the detail sheet is left out and the bridge is written as values. */
 const MAX_DETAIL_ROWS = 150_000;
 
@@ -44,8 +212,9 @@ export async function exportExcel(
   check: DataCheck,
   tieOut: TieOut,
   description: string[],
+  tools: ExcelTools = excelTools,
 ): Promise<void> {
-  const { default: ExcelJS } = await import("exceljs");
+  const ExcelJS = await tools.load();
   const workbook = new ExcelJS.Workbook();
   workbook.calcProperties.fullCalcOnLoad = true;
   const k = config.levels.length;

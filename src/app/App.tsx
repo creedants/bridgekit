@@ -3,14 +3,12 @@ import { dataCheck, periodMoney, runBridge, type BridgeConfig, type Query } from
 import { summarize } from "../summary.ts";
 import { resolveSample, type Sample } from "../synth.ts";
 import {
-  lazyChunk,
   openBrowserDatabase,
   PARQUET_REFUSAL,
   scheduleSpeculative,
   type BrowserDatabase,
-  type ChunkSentences,
 } from "./db.ts";
-import { exportExcel } from "./exportExcel.ts";
+import { exportExcel, lazyChunk, type ChunkSentences } from "./exportExcel.ts";
 import { download } from "./files.ts";
 import { fileProblem, periodView, periodsFor, type FileProblem, type LoadedPeriods } from "./fileProblems.ts";
 import { whole } from "./format.ts";

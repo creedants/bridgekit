@@ -1,4 +1,5 @@
 import type { Worksheet } from "exceljs";
+import { excelTools, type ExcelModule, type ExcelTools } from "./exportExcel.ts";
 import { toCsv } from "./files.ts";
 
 function flattenCell(value: unknown): unknown {
@@ -62,9 +63,14 @@ export function holeRenames(
   return renames;
 }
 
-export async function firstSheetAsCsv(file: File): Promise<{ csv: string; holes: readonly number[]; formulaBlanks: number }> {
+/** The Excel library and the first worksheet of an .xlsx file, read before DuckDB sees any rows. */
+export async function firstSheetAsCsv(
+  file: File,
+  tools: ExcelTools = excelTools,
+): Promise<{ csv: string; holes: readonly number[]; formulaBlanks: number }> {
+  const ExcelJS = await tools.load();
   const data = await file.arrayBuffer();
-  const loaded = await loadFirstSheet(data);
+  const loaded = await loadFirstSheet(ExcelJS, data);
   if (!loaded) throw new Error("The first sheet of that workbook has no data rows.");
   const { sheet, bytes } = loaded;
   const width = sheet.columnCount;
@@ -106,9 +112,12 @@ const LITERAL_NAMESPACES = [
   "http://schemas.openxmlformats.org/package/2006/content-types",
 ];
 
-async function loadFirstSheet(data: ArrayBuffer): Promise<{ sheet: Worksheet; bytes: ArrayBuffer } | undefined> {
+async function loadFirstSheet(
+  ExcelJS: ExcelModule,
+  data: ArrayBuffer,
+): Promise<{ sheet: Worksheet; bytes: ArrayBuffer } | undefined> {
   const repaired = (await hasPrefixedRoot(data)) ? await repairPackage(data) : undefined;
-  const first = await readSheet(repaired ?? data);
+  const first = await readSheet(ExcelJS, repaired ?? data);
   if (first.sheet && first.sheet.rowCount >= 2) return { sheet: first.sheet, bytes: repaired ?? data };
   if (repaired) return undefined;
   const whole = await repairPackage(data);
@@ -116,13 +125,12 @@ async function loadFirstSheet(data: ArrayBuffer): Promise<{ sheet: Worksheet; by
     if (first.error) throw first.error;
     return undefined;
   }
-  const second = await readSheet(whole);
+  const second = await readSheet(ExcelJS, whole);
   return second.sheet && second.sheet.rowCount >= 2 ? { sheet: second.sheet, bytes: whole } : undefined;
 }
 
-async function readSheet(bytes: ArrayBuffer): Promise<{ sheet?: Worksheet; error?: unknown }> {
+async function readSheet(ExcelJS: ExcelModule, bytes: ArrayBuffer): Promise<{ sheet?: Worksheet; error?: unknown }> {
   try {
-    const { default: ExcelJS } = await import("exceljs");
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(bytes);
     return { sheet: workbook.worksheets[0] };

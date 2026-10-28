@@ -1719,9 +1719,122 @@ async function drive(browser, origin, rows) {
     const groupingTitle = await browser.evalJs("document.querySelector('article h1')?.textContent ?? ''");
     if (!groupingTitle.includes("grouping level")) fail(`grouping-level page: ${groupingTitle}`);
     console.log("ok  grouping-level");
+
+    await excelOfflineRecovery(browser, origin, fixtures);
   } finally {
     rmSync(fixtureDir, { recursive: true, force: true, maxRetries: 3 });
   }
+}
+
+// T69: Chromium keeps a failed dynamic import failed for that address for the
+// life of the page, so both Excel actions have to recover by reading a fresh
+// copy of the chunk. The first run makes the chunk fail without the network
+// going down at all. The recorded browser check for this ticket covers the
+// harder variant, a response cut off mid-transfer, with a server that can drop
+// a body it has started sending.
+const EXCEL_SENTENCE = "The Excel tools could not load. Check your internet connection and try again.";
+const EXCEL_CHUNK = "*exceljs.min-*";
+const NET_ONLINE = { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1, connectionType: "none" };
+const NET_OFFLINE = { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0, connectionType: "none" };
+const EXCEL_SOURCE = "document.querySelector('.source')?.textContent?.trim() ?? ''";
+const EXCEL_ERROR = "document.querySelector('.error')?.textContent?.trim() ?? null";
+/** Keeps every blob the page hands the browser, so the next click's workbook is readable. */
+const CAPTURE_WORKBOOKS = `(() => {
+  if (!window.__capturedWorkbooks) {
+    window.__capturedWorkbooks = true;
+    window.__workbooks = [];
+    const original = URL.createObjectURL;
+    URL.createObjectURL = (blob) => { window.__workbooks.push(blob); return original(blob); };
+  }
+  window.__workbooks.length = 0;
+  return true;
+})()`;
+
+async function chooseDataFile(browser, path) {
+  const { root } = await browser.send("DOM.getDocument");
+  const { nodeId } = await browser.send("DOM.querySelector", { nodeId: root.nodeId, selector: "input[type=file][accept*=csv]" });
+  await browser.send("DOM.setFileInputFiles", { nodeId, files: [path] });
+}
+
+/** A page whose bridge is already calculated, so Export Excel has something to write. */
+async function loadCalculatedSample(browser, origin) {
+  await browser.goto(`${origin}/app/?sample=budget`);
+  await browser.waitFor("!!document.querySelector('.kpis')", 600);
+  await browser.sleep(500);
+}
+
+/** Clicks Export Excel and waits for that click's own download or error. */
+async function clickExport(browser) {
+  await browser.evalJs(CAPTURE_WORKBOOKS);
+  return JSON.parse(
+    await browser.evalJs(`(async () => {
+      T.btn('Export Excel').click();
+      // The click clears the last error in a React commit, so read the banner only after it.
+      await new Promise(r => setTimeout(r, 400));
+      for (let i = 0; i < 400 && window.__workbooks.length === 0 && !document.querySelector('.error'); i++) await new Promise(r => setTimeout(r, 200));
+      return JSON.stringify({ error: ${EXCEL_ERROR}, bytes: window.__workbooks[0]?.size ?? 0, source: ${EXCEL_SOURCE} });
+    })()`),
+  );
+}
+
+/**
+ * T69's browser regression, in a production preview build. The first action
+ * makes the Excel chunk fail to load, so the browser caches that import as
+ * failed and every later action has to reach the library through a fresh
+ * address. The last two runs repeat the plain offline-then-online pair for
+ * Export Excel and for an .xlsx load.
+ */
+async function excelOfflineRecovery(browser, origin, fixtures) {
+  await browser.size(1360, 1000);
+  await browser.send("Network.setCacheDisabled", { cacheDisabled: true });
+
+  await loadCalculatedSample(browser, origin);
+  const sample = await browser.evalJs(EXCEL_SOURCE);
+  await browser.send("Network.setBlockedURLs", { urls: [EXCEL_CHUNK] });
+  const blocked = await clickExport(browser);
+  if (blocked.error !== EXCEL_SENTENCE) fail(`Excel blocked chunk: ${JSON.stringify(blocked.error)}`);
+  if (blocked.bytes) fail("Excel blocked chunk: a workbook was produced while the chunk could not load");
+  if (blocked.source !== sample) fail(`Excel blocked chunk: the loaded data changed to ${JSON.stringify(blocked.source)}`);
+  await browser.send("Network.setBlockedURLs", { urls: [] });
+  const recovered = await clickExport(browser);
+  if (recovered.error) fail(`Excel blocked chunk: the click after unblocking says ${JSON.stringify(recovered.error)}`);
+  if (recovered.bytes < 10_000) fail(`Excel blocked chunk: the click after unblocking wrote ${recovered.bytes} bytes`);
+  if (recovered.source !== sample) fail(`Excel blocked chunk: the loaded data changed to ${JSON.stringify(recovered.source)}`);
+  await chooseDataFile(browser, fixtures.xlsxPath);
+  await browser.waitFor("document.querySelector('.source')?.textContent?.includes('smoke.xlsx')", 240);
+  const sheet = JSON.parse(await browser.evalJs(`JSON.stringify({ error: ${EXCEL_ERROR}, source: ${EXCEL_SOURCE} })`));
+  if (sheet.error) fail(`Excel blocked chunk: the .xlsx load in the same page says ${JSON.stringify(sheet.error)}`);
+  if (!/240 rows/.test(sheet.source)) fail(`Excel blocked chunk: the .xlsx load shows ${JSON.stringify(sheet.source)}`);
+  console.log(`ok  Excel blocked chunk: the Excel tools sentence, then the same page exports ${recovered.bytes} bytes and loads smoke.xlsx with no reload`);
+
+  await loadCalculatedSample(browser, origin);
+  await browser.send("Network.emulateNetworkConditions", NET_OFFLINE);
+  const offlineExport = await clickExport(browser);
+  if (offlineExport.error !== EXCEL_SENTENCE) fail(`Excel offline export: ${JSON.stringify(offlineExport.error)}`);
+  if (offlineExport.bytes) fail("Excel offline export wrote a workbook");
+  await browser.send("Network.emulateNetworkConditions", NET_ONLINE);
+  const reconnectedExport = await clickExport(browser);
+  if (reconnectedExport.error) fail(`Excel offline export after reconnecting: ${JSON.stringify(reconnectedExport.error)}`);
+  if (reconnectedExport.bytes < 10_000) fail(`Excel offline export after reconnecting wrote ${reconnectedExport.bytes} bytes`);
+  console.log(`ok  Excel offline export: the sentence offline, then ${reconnectedExport.bytes} bytes from the same click after reconnecting`);
+
+  await loadCalculatedSample(browser, origin);
+  const sampleBeforeXlsx = await browser.evalJs(EXCEL_SOURCE);
+  await browser.send("Network.emulateNetworkConditions", NET_OFFLINE);
+  await chooseDataFile(browser, fixtures.xlsxPath);
+  await browser.waitFor("!!document.querySelector('.error')", 240);
+  const offlineLoad = JSON.parse(await browser.evalJs(`JSON.stringify({ error: ${EXCEL_ERROR}, source: ${EXCEL_SOURCE} })`));
+  if (offlineLoad.error !== EXCEL_SENTENCE) fail(`Excel offline load: ${JSON.stringify(offlineLoad.error)}`);
+  if (offlineLoad.source !== sampleBeforeXlsx) fail(`Excel offline load replaced the data with ${JSON.stringify(offlineLoad.source)}`);
+  await browser.send("Network.emulateNetworkConditions", NET_ONLINE);
+  await chooseDataFile(browser, fixtures.xlsxPath);
+  await browser.waitFor("document.querySelector('.source')?.textContent?.includes('smoke.xlsx')", 240);
+  const reconnectedLoad = JSON.parse(await browser.evalJs(`JSON.stringify({ error: ${EXCEL_ERROR}, source: ${EXCEL_SOURCE} })`));
+  if (reconnectedLoad.error) fail(`Excel offline load after reconnecting: ${JSON.stringify(reconnectedLoad.error)}`);
+  if (!/240 rows/.test(reconnectedLoad.source)) fail(`Excel offline load after reconnecting shows ${JSON.stringify(reconnectedLoad.source)}`);
+  console.log("ok  Excel offline load: the sentence offline, then smoke.xlsx with 240 rows after reconnecting, no reload");
+
+  await browser.send("Network.emulateNetworkConditions", NET_ONLINE);
 }
 
 /**
@@ -2059,6 +2172,11 @@ try {
   const judged = judge(app.record, origin, { devServer: policies === 0 });
   for (const note of judged.notes) console.log(note);
   if (judged.failures.length) fail(judged.failures.join("\n"));
+  const excelRequests = app.record.network.filter((entry) => /\/assets\/exceljs\.min-[^/?]+\.js/.test(entry.url));
+  const stamped = excelRequests.filter((entry) => /\?retry=\d/.test(entry.url));
+  if (!excelRequests.length) fail("Excel offline recovery: no request for the Excel chunk was recorded");
+  if (!stamped.length) fail("Excel offline recovery: no stamped retry was recorded, so nothing proves a fresh address was read");
+  console.log(`ok  Excel retry: ${stamped.length} of ${excelRequests.length} Excel chunk requests used a stamped address after a failure`);
   await crossPageRemembering(origin);
 } catch (error) {
   failures.push(error);
