@@ -16,7 +16,6 @@ article h1::before { content: ""; display: block; width: 3rem; height: 0.375rem;
 
 article .sub { margin-top: 1.25rem; font-size: 1.3125rem; line-height: 1.5; color: var(--plum-2); }
 
-/* The date under a page title is a small note, not a lead. */
 article .date { margin-top: 1rem; font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; font-size: 0.8125rem; color: var(--plum-2); }
 
 article .date + .sub { margin-top: 0.75rem; }
@@ -46,7 +45,6 @@ article dd { margin: 0.25rem 0 0; }
 
 code { padding: 0.1em 0.35em; border-radius: 3px; background: #f6eef4; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8em; }
 
-/* Wide tables scroll inside their box on phones instead of widening the page. */
 .boxed { margin: 1.25rem 0 1.75rem; border: 1px solid var(--blush); border-radius: 6px; overflow-x: auto; }
 
 table { width: 100%; border-collapse: collapse; font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; font-size: 0.875rem; line-height: 1.45; }
