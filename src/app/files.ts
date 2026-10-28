@@ -1,3 +1,9 @@
+/** A file's contents, or a function that builds them; a function that returns null saved nothing. */
+export type Content = BlobPart | (() => BlobPart | null | Promise<BlobPart | null>);
+
+export type Download = (name: string, content: Content, type: string) => Promise<void>;
+
+/** Saves a file at once. The Excel export calls this behind its own guard in App. */
 export function download(name: string, content: BlobPart, type: string): void {
   const url = URL.createObjectURL(new Blob([content], { type }));
   const link = document.createElement("a");
@@ -6,6 +12,34 @@ export function download(name: string, content: BlobPart, type: string): void {
   link.click();
   URL.revokeObjectURL(url);
 }
+
+/**
+ * Saves a file once per click sequence: a call with the same name while that file is being built, or soon after
+ * it was saved, is dropped. Content that throws or comes back null frees the name at once, and the throw reaches
+ * the caller.
+ */
+export function makeDownloader(
+  save: (name: string, content: BlobPart, type: string) => void,
+  now?: () => number,
+  coolMs?: number,
+): Download {
+  const guards = new Map<string, Guard>();
+  return (name, content, type) => {
+    let guard = guards.get(name);
+    if (!guard) {
+      guard = makeGuard(now, coolMs);
+      guards.set(name, guard);
+    }
+    return guard.run(async () => {
+      const body = typeof content === "function" ? await content() : content;
+      if (body === null) return false;
+      save(name, body, type);
+    });
+  };
+}
+
+/** The tool's save buttons go through here, so a double or triple click saves one file. */
+export const saveOnce: Download = makeDownloader(download);
 
 const escapeCsv = (value: unknown) => {
   const s = value === null || value === undefined ? "" : String(value);
