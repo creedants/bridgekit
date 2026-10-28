@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { registerHooks } from "node:module";
+import path from "node:path";
 import { test } from "node:test";
 import {
   fileProblem,
@@ -12,6 +15,15 @@ import {
 import type { Column } from "../src/app/setup.ts";
 import { profileFile } from "../src/app/profile.ts";
 import { openDatabase } from "../src/duckdb.ts";
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.includes("?url")) {
+      return { url: 'data:text/javascript,export default "stub"', shortCircuit: true };
+    }
+    return nextResolve(specifier, context);
+  },
+});
 
 const text = (name: string): Column => ({ name, type: "VARCHAR" });
 const number = (name: string): Column => ({ name, type: "INTEGER" });
@@ -496,7 +508,12 @@ test("an empty Sales beside a numeric net_revenue gets no text net_sales message
 async function profiledColumns(sql: string): Promise<Column[]> {
   const query = await openDatabase();
   await query(`CREATE TABLE data AS ${sql}`);
-  const columns = (await query(`DESCRIBE data`)).map((row) => ({
+  return profileLoaded(query, "data");
+}
+
+/** Describes the loaded table, profiles it, and returns the columns the profile applied. */
+async function profileLoaded(query: Awaited<ReturnType<typeof openDatabase>>, table: string): Promise<Column[]> {
+  const columns = (await query(`DESCRIBE ${table}`)).map((row) => ({
     name: String(row.column_name),
     type: String(row.column_type),
   }));
@@ -581,6 +598,72 @@ test("R7: a mostly text column keeps the message without a cell", async () => {
       }),
     ),
     { kind: "reason", message: 'Sales must be a column of numbers, and "net_sales" holds text.' },
+  );
+});
+
+test("R7: a blank CSV line keeps the cell locator on the file's own row", async () => {
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const query = await openDatabase();
+  const directory = await mkdtemp("/tmp/bridgekit-rows-");
+  const content =
+    "period,Product,units,NET_SALES\n2025,A-100,10,100\n\n2025,A-100,10,110\n2026,A-100,10,n/a\n2026,A-100,10,130\n";
+  const source = path.join(directory, "blank.csv");
+  await writeFile(source, content);
+  await stageCsvAndSwap(query, new File([content], "blank.csv"), "data", source);
+  const columns = await profileLoaded(query, "data");
+  assert.deepEqual(
+    fileProblem(
+      input({
+        columns,
+        rows: 4,
+        periodColumn: "period",
+        periods: ["2025", "2026"],
+        unitsColumn: "units",
+        salesColumn: "",
+      }),
+    ),
+    {
+      kind: "reason",
+      message: 'Sales must be a column of numbers, and "NET_SALES" holds text, such as "n/a" in row 5.',
+    },
+  );
+});
+
+test("R7: a blank Excel row keeps the cell locator on the file's own row", async () => {
+  const { default: ExcelJS } = await import("exceljs");
+  const { firstSheetAsCsv } = await import("../src/app/sheet.ts");
+  const { readCsvTable, recordSourceRows } = await import("../src/app/db.ts");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("sales");
+  sheet.addRow(["period", "Product", "units", "NET_SALES"]);
+  sheet.addRow(["2025", "A-100", 10, 100]);
+  sheet.addRow([]);
+  sheet.addRow(["2025", "A-100", 10, 110]);
+  sheet.addRow(["2026", "A-100", 10, "n/a"]);
+  sheet.addRow(["2026", "A-100", 10, 130]);
+  const flat = await firstSheetAsCsv(new File([await workbook.xlsx.writeBuffer()], "blank.xlsx"));
+  const directory = await mkdtemp("/tmp/bridgekit-rows-");
+  const flatPath = path.join(directory, "blank-flat.csv");
+  await writeFile(flatPath, flat.csv);
+  const query = await openDatabase();
+  await readCsvTable(query, "data", flatPath);
+  await recordSourceRows(query, "data", flat.dataRows);
+  const columns = await profileLoaded(query, "data");
+  assert.deepEqual(
+    fileProblem(
+      input({
+        columns,
+        rows: 4,
+        periodColumn: "period",
+        periods: ["2025", "2026"],
+        unitsColumn: "units",
+        salesColumn: "",
+      }),
+    ),
+    {
+      kind: "reason",
+      message: 'Sales must be a column of numbers, and "NET_SALES" holds text, such as "n/a" in row 5.',
+    },
   );
 });
 
