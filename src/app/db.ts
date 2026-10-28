@@ -4,9 +4,9 @@ import ehWasm from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
 import mvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import type { Query } from "../engine.ts";
 import { decodeCsvBuffer, ENCODING_SENTENCE, isUtf8Prefix } from "./encoding.ts";
-import { ChunkUnavailable, excelSheetAsCsv, lazyChunk, type ChunkSentences } from "./exportExcel.ts";
+import { ChunkUnavailable, lazyChunk, type ChunkSentences } from "./exportExcel.ts";
 import { convertFormattedNumbers } from "./numbers.ts";
-import { holeRenames } from "./sheet.ts";
+import { firstSheetAsCsv, holeRenames } from "./sheet.ts";
 
 const IDLE_CAP_MS = 2000;
 
@@ -478,7 +478,7 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
           let excelHoles: readonly number[] = [];
           let formulaBlanks = 0;
           if (isExcel) {
-            const sheet = await excelSheetAsCsv(file);
+            const sheet = await firstSheetAsCsv(file);
             excelHoles = sheet.holes;
             formulaBlanks = sheet.formulaBlanks;
             await db.registerFileText(registered, sheet.csv);

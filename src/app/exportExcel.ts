@@ -16,7 +16,6 @@ import {
 import { download } from "./files.ts";
 import { shareOfPrior } from "./format.ts";
 import { terms } from "./report.ts";
-import { firstSheetAsCsv } from "./sheet.ts";
 
 type ChunkFailure = "network" | "gone";
 
@@ -27,13 +26,10 @@ interface ChunkSource<T> {
   importer: () => Promise<unknown>;
   parse: (module: unknown) => T | undefined;
   /**
-   * Another module imports this chunk by its bare address, and Chromium keeps a
-   * failed dynamic import failed for that address for the life of the page. With
-   * this set, an attempt proves the address answers before importing it when the
-   * address can be read, so an attempt made offline does not import the address
-   * the sibling import still needs.
+   * Reads a fresh copy of the chunk at an address the browser has not cached as
+   * failed. The default is the build's chunk address plus a retry stamp.
    */
-  sharedAddress?: true;
+  freshCopy?: (stamp: string) => Promise<unknown>;
 }
 
 export interface LazyChunk<T> {
@@ -58,11 +54,7 @@ export function lazyChunk<T>(options: ChunkSource<T> & { sentences: ChunkSentenc
   return {
     load() {
       if (state.phase === "loading" || state.phase === "loaded") return state.attempt;
-      const reading = options.sharedAddress
-        ? probedChunk(options)
-        : state.phase === "failed"
-        ? retriedChunk(options)
-        : firstChunk(options);
+      const reading = state.phase === "failed" ? retriedChunk(options) : firstChunk(options);
       const attempt: Promise<T> = reading.then((result) => {
         if ("failure" in result) {
           state = { phase: "failed" };
@@ -97,10 +89,18 @@ let retryAttempts = 0;
 
 // Chromium keeps a failed import failed for that URL for the life of the page.
 async function retriedChunk<T>(source: ChunkSource<T>): Promise<ChunkResult<T>> {
+  retryAttempts += 1;
+  const stamp = Date.now() + "." + retryAttempts;
+  if (source.freshCopy) {
+    try {
+      return parsedChunk(source, await source.freshCopy(stamp));
+    } catch {
+      return { failure: "network" };
+    }
+  }
   const url = chunkUrl(source.importer);
   if (url === null) return { failure: "gone" };
-  retryAttempts += 1;
-  const retryUrl = url + "?retry=" + Date.now() + "." + retryAttempts;
+  const retryUrl = url + "?retry=" + stamp;
   try {
     if (!(await servedAsJavaScript(retryUrl))) return { failure: "gone" };
     const module: unknown = await import(/* @vite-ignore */ retryUrl);
@@ -110,20 +110,8 @@ async function retriedChunk<T>(source: ChunkSource<T>): Promise<ChunkResult<T>> 
   }
 }
 
-// A probe leaves the bare address clean for the sibling import that shares it.
-async function probedChunk<T>(source: ChunkSource<T>): Promise<ChunkResult<T>> {
-  const url = chunkUrl(source.importer);
-  if (url === null) return firstChunk(source);
-  try {
-    if (!(await servedAsJavaScript(url, "default"))) return { failure: "gone" };
-  } catch {
-    return { failure: "network" };
-  }
-  return firstChunk(source);
-}
-
-async function servedAsJavaScript(url: string, cache: RequestCache = "no-store"): Promise<boolean> {
-  const response = await fetch(url, { cache, redirect: "manual" });
+async function servedAsJavaScript(url: string): Promise<boolean> {
+  const response = await fetch(url, { cache: "no-store", redirect: "manual" });
   const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
   if (!response.ok || contentType.includes("text/html") || !isJavaScriptContentType(contentType)) return false;
   return !(await bodyStartsWithMarkup(response));
@@ -179,12 +167,20 @@ function excelModule(module: unknown): ExcelModule | undefined {
   return excel as unknown as ExcelModule;
 }
 
-/** The Excel library behind the shared, probed address. Exported so a test can feed a failing importer through the real machinery. */
-export function excelLoader(importer: () => Promise<unknown>): LazyChunk<ExcelModule> {
-  return lazyChunk({ importer, parse: excelModule, sentences: { network: EXCEL_TOOLS_SENTENCE, gone: EXCEL_TOOLS_SENTENCE }, sharedAddress: true });
+/** The Excel library. Exported so a test can feed a failing importer through the real machinery. */
+export function excelLoader(
+  importer: () => Promise<unknown>,
+  freshCopy?: (stamp: string) => Promise<unknown>,
+): LazyChunk<ExcelModule> {
+  return lazyChunk({
+    importer,
+    parse: excelModule,
+    sentences: { network: EXCEL_TOOLS_SENTENCE, gone: EXCEL_TOOLS_SENTENCE },
+    freshCopy,
+  });
 }
 
-/** The page's one Excel loader. Its importer is the only import("exceljs") in src/app outside sheet.ts. */
+/** The page's one Excel loader, and the only code that names the exceljs chunk's address. */
 export const excelTools = excelLoader(() => import("exceljs"));
 
 export type ExcelTools = Pick<LazyChunk<ExcelModule>, "load">;
@@ -447,10 +443,4 @@ export async function exportExcel(
     buffer,
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   );
-}
-
-/** The Excel library and the first worksheet of an .xlsx file, read before DuckDB sees any rows. */
-export async function excelSheetAsCsv(file: File, tools: ExcelTools = excelTools): Promise<Awaited<ReturnType<typeof firstSheetAsCsv>>> {
-  await tools.load();
-  return firstSheetAsCsv(file);
 }
