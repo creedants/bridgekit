@@ -48,10 +48,11 @@ export function isPastedTable(text: string): boolean {
 }
 
 export interface Guard {
-  run(work: () => void | Promise<void>): Promise<void>;
+  /** `work` returns false, or throws, when it saved nothing; then the trigger is free again at once. */
+  run(work: () => boolean | void | Promise<boolean | void>): Promise<void>;
 }
 
-/** Drops a trigger while its work runs and for a short while after, so a double click saves one file. */
+/** Drops a trigger while its work runs and for a short while after it saves, so a double click saves one file. */
 export function makeGuard(now: () => number = () => performance.now(), coolMs = 800): Guard {
   let running = false;
   let until = -Infinity;
@@ -60,10 +61,9 @@ export function makeGuard(now: () => number = () => performance.now(), coolMs = 
       if (running || now() < until) return;
       running = true;
       try {
-        await work();
+        if ((await work()) !== false) until = now() + coolMs;
       } finally {
         running = false;
-        until = now() + coolMs;
       }
     },
   };

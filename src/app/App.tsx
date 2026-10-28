@@ -486,12 +486,12 @@ export function App() {
   }, [phase]);
 
   const exportWorkbook = () =>
-    exportGuard.run(async () => {
-      await task("export", "Building Excel file…", async () => {
+    exportGuard.run(() =>
+      task("export", "Building Excel file…", async () => {
         if (!fresh) return;
         await exportExcel(await query(), fresh.config, fresh.result, fresh.check, fresh.tieOut, fresh.description);
-      });
-    });
+      }),
+    );
 
   const importSetup = (file: File) =>
     task("import", "Reading setup…", async () => {

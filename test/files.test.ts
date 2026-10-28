@@ -168,18 +168,20 @@ test("a guard drops a second trigger while the first runs and just after", async
   assert.equal(runs, 2);
 });
 
-test("a guard frees its trigger after the work fails", async () => {
-  let clock = 0;
-  const guard = makeGuard(() => clock, 800);
+test("a guard frees its trigger at once when the work fails or saves nothing", async () => {
+  const guard = makeGuard(() => 0, 800);
   await assert.rejects(guard.run(() => {
     throw new Error("no canvas");
   }), /no canvas/);
-  clock = 800;
-  let ran = false;
+  let runs = 0;
   await guard.run(() => {
-    ran = true;
+    runs++;
+    return false;
   });
-  assert.equal(ran, true);
+  await guard.run(() => void runs++);
+  assert.equal(runs, 2);
+  await guard.run(() => void runs++);
+  assert.equal(runs, 2);
 });
 
 test("a long cell is cut to 39 characters and an ellipsis", () => {

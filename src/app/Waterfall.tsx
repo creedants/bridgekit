@@ -194,7 +194,7 @@ export function Waterfall(props: {
             onClick={() =>
               pngGuard.run(() => {
                 const url = chartRef.current?.getDataURL({ type: "png", pixelRatio: 2, backgroundColor: "#ffffff" });
-                if (!url) return;
+                if (!url) return false;
                 const link = document.createElement("a");
                 link.href = url;
                 link.download = `bridge-${props.priorLabel}-to-${props.currentLabel}.png`;
