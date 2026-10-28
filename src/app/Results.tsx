@@ -126,8 +126,8 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
         <Kpi label="Matched exactly" value={percent(exact)} note={t.exactNote} />
       </div>
       <p className="hint">
-        Like-for-like price: the price change on configurations sold in both periods. A configuration is one combination
-        of attribute values, such as A-100, Large, Red.
+        Like-for-like price: The price change on configurations sold in both periods. Configuration: One combination of
+        attribute values, such as A-100, Large, Red.
       </p>
 
       <div className="tabs" role="tablist">
@@ -935,7 +935,7 @@ function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; 
 
   return (
     <div>
-      <p className="hint">Movers: the products and attribute values that changed {measureName(config).toLowerCase()} the most.</p>
+      <p className="hint">Movers: The products and attribute values that changed {measureName(config).toLowerCase()} the most.</p>
       <div className="toolbar">
         <label>
           Group by

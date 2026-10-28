@@ -657,7 +657,7 @@ export function App() {
               <p className="hint">
                 {remember
                   ? "Column choices, attribute order and options are stored in this browser. Filter selections and your data are not. Untick to delete what is stored."
-                  : "Off: nothing is stored in this browser. Closing or reloading the tab removes everything."}
+                  : "Off: the tool is not saving setups in this browser. Closing or reloading the tab clears its loaded data."}
               </p>
               <p className="row">
                 <button
