@@ -318,6 +318,10 @@ test("an empty profile returns an empty list", () => {
   assert.deepEqual(suggestAttributes([], new Map(), new Set()), []);
 });
 
+// R26 is blocked: the measure word lists live in src/app/setup.ts, which this
+// change may not edit. The German file's columns must pick Menge and Umsatz.
+test.todo("R26: German measure names pick Menge and Umsatz");
+
 test("R8: German customer names are left out and the other attributes are suggested", () => {
   const columns: Column[] = [
     { name: "Datum", type: "DATE" },
