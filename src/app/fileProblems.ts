@@ -65,7 +65,7 @@ export interface FileProblemInput {
   readonly unitsColumn: string;
   /** The column picked for sales, empty when none is picked. */
   readonly salesColumn: string;
-  /** True when the loaded file mixes commas, semicolons and tabs outside quoted fields. */
+  /** True when a loaded record is split by a separator other than the reader's. */
   readonly mixedSeparators?: boolean;
 }
 

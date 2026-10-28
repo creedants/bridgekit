@@ -93,7 +93,19 @@ const MONTH_FIRST_MARK = "month first";
 // reader had to decide, and the year.
 const SLASH_DATE = "^\\s*(\\d{1,2})/(\\d{1,2})/(\\d{4})\\s*$";
 
-export async function readCsvTable(query: Query, table: string, path: string, skipMonthFirst = false): Promise<void> {
+export interface CsvShape {
+  /** The delimiter the reader's sniffer reported, or a comma when it reported none. */
+  readonly delimiter: string;
+  /** Columns the reader produced for the loaded table. */
+  readonly columns: number;
+}
+
+export async function readCsvTable(
+  query: Query,
+  table: string,
+  path: string,
+  skipMonthFirst = false,
+): Promise<CsvShape> {
   const escaped = path.replaceAll("'", "''");
   const delimiter = await sniffDelimiter(query, path);
   // Raw text decides the dots before the database types them: an all-dotted
@@ -102,7 +114,8 @@ export async function readCsvTable(query: Query, table: string, path: string, sk
   const types = typesForDotColumns(dots);
   await query(`CREATE OR REPLACE TABLE ${quote(table)} AS SELECT * FROM read_csv('${escaped}', ${CSV_OPTIONS}${types ?? ""})`);
   await applyDotColumns(query, table, dots);
-  if (skipMonthFirst) return;
+  const shape: CsvShape = { delimiter, columns: (await query(`DESCRIBE ${quote(table)}`)).length };
+  if (skipMonthFirst) return shape;
   const { ambiguous, monthFirst } = await ambiguousDateColumns(query, table, path);
   for (const column of ambiguous) {
     const name = quote(table);
@@ -114,6 +127,7 @@ export async function readCsvTable(query: Query, table: string, path: string, sk
     }
     await query(`COMMENT ON COLUMN ${name}.${field} IS '${MONTH_FIRST_MARK}'`);
   }
+  return shape;
 }
 
 // Excel workbooks flatten to comma CSV before DuckDB sees them, so they load
@@ -125,70 +139,54 @@ export async function readLoadedTable(
   table: string,
   path: string,
   isExcel: boolean,
-): Promise<void> {
+): Promise<CsvShape> {
   try {
-    await readCsvTable(query, table, path, isExcel);
+    return await readCsvTable(query, table, path, isExcel);
   } catch (error) {
     throw csvEncodingFailure(error);
   }
 }
 
-type SeparatorCounts = [number, number, number];
+const SEPARATORS = [",", ";", "\t"] as const;
 
-const SEPARATOR_COUNT = 3;
-
-function widestSeparator(counts: SeparatorCounts, preferred: number): number {
-  let widest = 0;
-  for (let index = 1; index < SEPARATOR_COUNT; index += 1) {
-    if (counts[index] > counts[widest] || (counts[index] === counts[widest] && index === preferred)) widest = index;
-  }
-  return widest;
-}
+type Separator = (typeof SEPARATORS)[number];
 
 /**
- * True when a record splits on a different separator from the header's. Records
- * are split on unquoted line breaks, and the header is the first record with a
- * separator outside quotes. A later record takes the separator that gives the
- * header's field count, else the one that occurs most, the header's winning a
- * tie; the file is mixed when that is not the header's separator. Quotes hide
- * separators and line breaks.
+ * A later record proves mixed separators when it holds no unquoted occurrence of
+ * the reader's own delimiter but splits into exactly the reader's column count on
+ * another of comma, semicolon or tab.
+ * It reads the bytes the loader already took.
  */
-export function mentionsMixedSeparators(prefix: string): boolean {
-  const records: SeparatorCounts[] = [];
-  let counts: SeparatorCounts = [0, 0, 0];
+function mixedSeparatorsInText(text: string, delimiter: string, columns: number): boolean {
+  const own = SEPARATORS.indexOf(delimiter as Separator);
+  if (columns < 2 || own < 0) return false;
+  const records: number[][] = [];
+  let counts = SEPARATORS.map(() => 0);
   let inQuotes = false;
-  for (let i = 0; i < prefix.length; i += 1) {
-    const ch = prefix[i];
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
     if (ch === '"') {
-      if (inQuotes && prefix[i + 1] === '"') {
-        i += 1;
-        continue;
-      }
-      inQuotes = !inQuotes;
+      if (inQuotes && text[i + 1] === '"') i += 1;
+      else inQuotes = !inQuotes;
       continue;
     }
     if (inQuotes) continue;
-    if (ch === "\n" || (ch === "\r" && prefix[i + 1] === "\n")) {
-      if (ch === "\r") i += 1;
+    if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") i += 1;
       records.push(counts);
-      counts = [0, 0, 0];
-    } else if (ch === ",") counts[0] += 1;
-    else if (ch === ";") counts[1] += 1;
-    else if (ch === "\t") counts[2] += 1;
+      counts = SEPARATORS.map(() => 0);
+      continue;
+    }
+    const at = SEPARATORS.indexOf(ch as Separator);
+    if (at >= 0) counts[at] += 1;
   }
-  records.push(counts);
-  const separated = (record: SeparatorCounts) => record[0] + record[1] + record[2] > 0;
-  const headerAt = records.findIndex(separated);
-  if (headerAt < 0) return false;
-  const header = widestSeparator(records[headerAt], -1);
-  const fields = records[headerAt][header] + 1;
-  return records.slice(headerAt + 1).some((record) => {
-    if (!separated(record)) return false;
-    const gives = (index: number) => record[index] + 1 === fields;
-    if (gives(header)) return false;
-    const exact = [0, 1, 2].find(gives);
-    return (exact ?? widestSeparator(record, header)) !== header;
-  });
+  // A record still open at the end of the prefix may be cut inside a quoted field.
+  if (!inQuotes) records.push(counts);
+  const separated = records.filter((record) => record.some((count) => count > 0));
+  return separated.slice(1).some(
+    (record) =>
+      record[own] === 0 && SEPARATORS.some((_, index) => index !== own && record[index] === columns - 1),
+  );
 }
 
 /** Whether the loaded table carries the mixed-separator marker from the load path. */
@@ -218,13 +216,15 @@ export async function stageCsvAndSwap(
   file: File,
   table: string,
   readablePath: string,
-  mixedSeparators: boolean,
 ): Promise<void> {
   if (file.size === 0) throw new Error(NO_DATA_ROWS);
   const staging = `${table}__staging`;
-  await readLoadedTable(query, staging, readablePath, false);
+  const shape = await readLoadedTable(query, staging, readablePath, false);
   await convertFormattedNumbers(query, staging);
-  if (mixedSeparators) await markMixedSeparators(query, staging);
+  const prefix = new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer());
+  if (mixedSeparatorsInText(new TextDecoder().decode(prefix), shape.delimiter, shape.columns)) {
+    await markMixedSeparators(query, staging);
+  }
   await requireDataRows(query, staging);
   await swapLoadedTable(query, staging, table);
 }
@@ -618,7 +618,6 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
           }
           let excelHoles: readonly number[] = [];
           let formulaBlanks = 0;
-          let mixedSeparators = false;
           if (isExcel) {
             const sheet = await firstSheetAsCsv(file);
             excelHoles = sheet.holes;
@@ -627,7 +626,6 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
           } else {
             const prefix = new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer());
             if (looksBinary(prefix)) throw new Error(NOT_TEXT_FILE);
-            mixedSeparators = mentionsMixedSeparators(new TextDecoder().decode(prefix));
             const continues = prefix.byteLength < file.size;
             if (continues && isUtf8Prefix(prefix)) {
               await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
@@ -653,11 +651,10 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
               }
             }
             await convertFormattedNumbers(query, staging);
-            if (mixedSeparators) await markMixedSeparators(query, staging);
             await requireDataRows(query, staging);
             await swapLoadedTable(query, staging, table);
           } else {
-            await stageCsvAndSwap(query, file, table, registered, mixedSeparators);
+            await stageCsvAndSwap(query, file, table, registered);
           }
           return formulaBlanks;
         } catch (error) {
