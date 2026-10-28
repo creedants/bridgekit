@@ -198,6 +198,101 @@ function headerTooWide(prefix: string, delimiter: string): boolean {
 }
 
 /**
+ * The 1-based line each record starts on, the header first. A record is skipped
+ * when its line is completely empty, the way the reader skips it, and a quoted
+ * field may span line breaks. A line holding only spaces or tabs is a record,
+ * because the reader keeps it as a short row. Reads the same delimiter the
+ * reader was given, so a quote opens only at the start of a field.
+ */
+async function csvDataRows(file: File, delimiter: string): Promise<number[]> {
+  const rows: number[] = [];
+  let line = 1;
+  let start = 1;
+  let content = false;
+  let fieldStart = true;
+  let quoted = false;
+  let afterQuote = false;
+  let carryCR = false;
+  const breakLine = () => {
+    if (!quoted) {
+      if (content) rows.push(start);
+      content = false;
+      fieldStart = true;
+    }
+    line += 1;
+    if (!quoted) start = line;
+  };
+  const decoder = new TextDecoder();
+  const closeQuote = () => {
+    if (afterQuote) {
+      afterQuote = false;
+      quoted = false;
+    }
+  };
+  const feed = (text: string) => {
+    for (const char of text) {
+      if (carryCR) {
+        carryCR = false;
+        breakLine();
+        if (char === "\n") continue;
+      }
+      if (char === "\r") {
+        closeQuote();
+        carryCR = true;
+        continue;
+      }
+      if (char === "\n") {
+        closeQuote();
+        breakLine();
+        continue;
+      }
+      content = true;
+      if (quoted) {
+        if (afterQuote) {
+          afterQuote = false;
+          if (char === '"') continue;
+          quoted = false;
+        } else if (char === '"') {
+          afterQuote = true;
+          continue;
+        } else continue;
+      }
+      if (char === '"' && fieldStart) {
+        quoted = true;
+        fieldStart = false;
+      } else if (char === delimiter) fieldStart = true;
+      else fieldStart = false;
+    }
+  };
+  for await (const chunk of file.stream()) feed(decoder.decode(chunk, { stream: true }));
+  feed(decoder.decode());
+  if (carryCR) breakLine();
+  if (content) rows.push(start);
+  return rows;
+}
+
+/**
+ * Records the file lines the reader skipped, so a profile names the file's own
+ * row. `rows` is the start line of each loaded data record. The lines are
+ * written only when they account for the loaded rows exactly, because
+ * otherwise they describe another shape than the table.
+ */
+export async function recordSourceRows(query: Query, table: string, rows: readonly number[]): Promise<void> {
+  const source = `${table}__source`;
+  const [counted] = await query(`SELECT count(*)::DOUBLE AS n FROM ${quote(table)}`);
+  if (rows.length === 0 || Number(counted?.n) !== rows.length) {
+    await query(`DROP TABLE IF EXISTS ${quote(source)}`);
+    return;
+  }
+  const present = new Set(rows);
+  const last = rows[rows.length - 1];
+  const skips: number[] = [];
+  for (let line = 2; line <= last; line += 1) if (!present.has(line)) skips.push(line);
+  const list = skips.length === 0 ? "[]::BIGINT[]" : `[${skips.join(", ")}]::BIGINT[]`;
+  await query(`CREATE OR REPLACE TABLE ${quote(source)} AS SELECT ${list} AS skips`);
+}
+
+/**
  * Stages a CSV file's readable path and swaps it into place. The file's own
  * byte length refuses an empty file, its header width refuses a file with too
  * many columns, and the staged table's row count refuses a header-only file,
@@ -211,7 +306,8 @@ export async function stageCsvAndSwap(
 ): Promise<void> {
   if (file.size === 0) throw new Error(NO_DATA_ROWS);
   const prefix = new TextDecoder().decode(new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer()));
-  if (headerTooWide(prefix, await sniffDelimiter(query, readablePath))) {
+  const delimiter = await sniffDelimiter(query, readablePath);
+  if (headerTooWide(prefix, delimiter)) {
     throw new Error(TOO_MANY_COLUMNS_SENTENCE);
   }
   const staging = `${table}__staging`;
@@ -219,16 +315,30 @@ export async function stageCsvAndSwap(
   await convertFormattedNumbers(query, staging);
   // No mixed-separator check: a record split by another separator can match a valid sparse record byte for byte.
   await requireDataRows(query, staging);
+  // The first record is the header, which sits on line 1 and is not a data row.
+  await recordSourceRows(query, staging, (await csvDataRows(file, delimiter)).slice(1));
   await swapLoadedTable(query, staging, table);
 }
 
 /**
  * Swaps a staged load into place: the old table stays until the staged one is
  * fully converted and checked, so a refused file leaves the loaded data alone.
+ * A table's source companion moves with it, and a missing companion is not an
+ * error, because a table can be built without one.
  */
 export async function swapLoadedTable(query: Query, staging: string, table: string): Promise<void> {
   const previous = `${table}__previous`;
+  const source = (name: string) => `${name}__source`;
+  // Asking first keeps a missing companion from running a rename that must
+  // fail, which the database worker logs as a console error.
+  const hasSource = async (name: string) => {
+    const [row] = await query(
+      `SELECT count(*)::DOUBLE AS n FROM duckdb_tables() WHERE schema_name = current_schema() AND table_name = '${source(name).replaceAll("'", "''")}'`,
+    );
+    return Number(row?.n) > 0;
+  };
   await query(`DROP TABLE IF EXISTS ${quote(previous)}`);
+  await query(`DROP TABLE IF EXISTS ${quote(source(previous))}`);
   // Asking first keeps a first load from running a rename that must fail, which
   // the database worker logs as a console error.
   const [existing] = await query(
@@ -239,6 +349,9 @@ export async function swapLoadedTable(query: Query, staging: string, table: stri
     try {
       await query(`ALTER TABLE ${quote(table)} RENAME TO ${quote(previous)}`);
       renamed = true;
+      if (await hasSource(table)) {
+        await query(`ALTER TABLE ${quote(source(table))} RENAME TO ${quote(source(previous))}`);
+      }
     } catch {
       // A table the catalog names but the rename cannot move stays as it is.
     }
@@ -246,10 +359,19 @@ export async function swapLoadedTable(query: Query, staging: string, table: stri
   try {
     await query(`ALTER TABLE ${quote(staging)} RENAME TO ${quote(table)}`);
   } catch (error) {
-    if (renamed) await query(`ALTER TABLE ${quote(previous)} RENAME TO ${quote(table)}`).catch(() => {});
+    if (renamed) {
+      await query(`ALTER TABLE ${quote(previous)} RENAME TO ${quote(table)}`).catch(() => {});
+      if (await hasSource(previous)) {
+        await query(`ALTER TABLE ${quote(source(previous))} RENAME TO ${quote(source(table))}`).catch(() => {});
+      }
+    }
     throw error;
   }
+  if (await hasSource(staging)) {
+    await query(`ALTER TABLE ${quote(source(staging))} RENAME TO ${quote(source(table))}`);
+  }
   await query(`DROP TABLE IF EXISTS ${quote(previous)}`);
+  await query(`DROP TABLE IF EXISTS ${quote(source(previous))}`);
 }
 
 async function ambiguousDateColumns(
@@ -617,10 +739,12 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
             uploadRegistered = false;
           }
           let excelHoles: readonly number[] = [];
+          let excelRows: readonly number[] = [];
           let formulaBlanks = 0;
           if (isExcel) {
             const sheet = await firstSheetAsCsv(file);
             excelHoles = sheet.holes;
+            excelRows = sheet.dataRows;
             formulaBlanks = sheet.formulaBlanks;
             await db.registerFileText(registered, sheet.csv);
           } else {
@@ -652,6 +776,7 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
             }
             await convertFormattedNumbers(query, staging);
             await requireDataRows(query, staging);
+            await recordSourceRows(query, staging, excelRows);
             await swapLoadedTable(query, staging, table);
           } else {
             await stageCsvAndSwap(query, file, table, registered);

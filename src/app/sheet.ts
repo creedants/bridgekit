@@ -81,7 +81,7 @@ export const NO_DATA_ROWS = "This file has no data rows.";
 export async function firstSheetAsCsv(
   file: File,
   tools: ExcelTools = excelTools,
-): Promise<{ csv: string; holes: readonly number[]; formulaBlanks: number }> {
+): Promise<{ csv: string; holes: readonly number[]; formulaBlanks: number; dataRows: number[] }> {
   const ExcelJS = await tools.load();
   const data = await file.arrayBuffer();
   if (!isZipArchive(data)) throw new Error(INVALID_WORKBOOK);
@@ -111,6 +111,9 @@ export async function firstSheetAsCsv(
     csv: toCsv(header, dataRows),
     holes,
     formulaBlanks: await countFormulaBlanks(bytes, rowNumbers.slice(1), sheet.id),
+    // The spreadsheet row of each data row, so a cell the reader cannot use is
+    // named by its own row even after a blank row is dropped.
+    dataRows: rowNumbers.slice(1),
   };
 }
 

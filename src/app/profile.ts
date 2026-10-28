@@ -64,10 +64,14 @@ export interface FileProfile {
 
 /**
  * The first cell of a measure column that does not read as a number, when more
- * than half of the column's filled cells do. The row counts spreadsheet rows
- * with the header as row 1, so the first data row is row 2.
+ * than half of the column's filled cells do. The row is the file's own record
+ * line, with the header on line 1 and skipped blank lines counted.
  */
-async function firstUnreadIn(query: Query, column: string): Promise<UnreadCell | undefined> {
+async function firstUnreadIn(
+  query: Query,
+  column: string,
+  skips: readonly number[],
+): Promise<UnreadCell | undefined> {
   const field = quote(column);
   const text = `CAST(${field} AS VARCHAR)`;
   const blank = `(${field} IS NULL OR trim(${text}) = '')`;
@@ -83,7 +87,30 @@ async function firstUnreadIn(query: Query, column: string): Promise<UnreadCell |
   const parsed = Number(row?.parsed);
   if (!(present > 0) || parsed * 2 <= present) return undefined;
   if (row?.value == null || row?.at == null) return undefined;
-  return { value: String(row.value), row: Number(row.at) + 2 };
+  return { value: String(row.value), row: sourceRow(Number(row.at), skips) };
+}
+
+/**
+ * The file's record line for a loaded record. The first data record is line 2,
+ * and every skipped line at or below the running row moves it down one.
+ */
+function sourceRow(ordinal: number, skips: readonly number[]): number {
+  let row = ordinal + 2;
+  for (const skip of skips) {
+    if (skip > row) break;
+    row += 1;
+  }
+  return row;
+}
+
+/** The file lines the loader skipped, so a row number counts the file's own lines. */
+async function sourceSkips(query: Query): Promise<readonly number[]> {
+  try {
+    const rows = await query(`SELECT unnest(skips) AS skip FROM ${quote(`${TABLE}__source`)} ORDER BY skip`);
+    return rows.map((row) => Number(row.skip));
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -99,10 +126,11 @@ export async function profileFile(
 ): Promise<void> {
   const distinct = await distinctCounts(query, columns);
   const measures = new Set(measureColumns(columns));
+  const skips = await sourceSkips(query);
   const unread = new Map<string, UnreadCell>();
   for (const column of columns) {
     if (!measures.has(column.name) || isNumeric(column.type) || isDate(column.type)) continue;
-    const cell = await firstUnreadIn(query, column.name).catch(() => undefined);
+    const cell = await firstUnreadIn(query, column.name, skips).catch(() => undefined);
     if (cell !== undefined) unread.set(column.name, cell);
   }
   const rollups = await findRollups(query, columns, distinct);
