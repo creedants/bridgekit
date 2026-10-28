@@ -133,14 +133,29 @@ export async function readLoadedTable(
   }
 }
 
+/** Outside-quote separator counts for one record, in comma, semicolon, tab order. */
+type SeparatorCounts = [number, number, number];
+
+const SEPARATOR_COUNT = 3;
+
+/** The separator index with the most counts, and the preferred one on a tie. */
+function widestSeparator(counts: SeparatorCounts, preferred: number): number {
+  let widest = 0;
+  for (let index = 1; index < SEPARATOR_COUNT; index += 1) {
+    if (counts[index] > counts[widest] || (counts[index] === counts[widest] && index === preferred)) widest = index;
+  }
+  return widest;
+}
+
 /**
- * True when more than one of comma, semicolon and tab appears outside quoted
- * fields. A doubled quote inside a quoted field is an escaped quote, and a
- * line break inside quotes does not end the field, so separators and breaks
- * inside quotes never count.
+ * True when a record's delimiter differs from the header's. Split on unquoted
+ * line breaks; the first with a separator sets the field count, and a later
+ * record is mixed when no separator gives that count. Quotes hide separators
+ * and line breaks.
  */
 export function mentionsMixedSeparators(prefix: string): boolean {
-  const seen = new Set<string>();
+  const records: SeparatorCounts[] = [];
+  let counts: SeparatorCounts = [0, 0, 0];
   let inQuotes = false;
   for (let i = 0; i < prefix.length; i += 1) {
     const ch = prefix[i];
@@ -152,12 +167,28 @@ export function mentionsMixedSeparators(prefix: string): boolean {
       inQuotes = !inQuotes;
       continue;
     }
-    if (!inQuotes && (ch === "," || ch === ";" || ch === "\t")) {
-      seen.add(ch);
-      if (seen.size > 1) return true;
-    }
+    if (inQuotes) continue;
+    if (ch === "\n" || (ch === "\r" && prefix[i + 1] === "\n")) {
+      if (ch === "\r") i += 1;
+      records.push(counts);
+      counts = [0, 0, 0];
+    } else if (ch === ",") counts[0] += 1;
+    else if (ch === ";") counts[1] += 1;
+    else if (ch === "\t") counts[2] += 1;
   }
-  return false;
+  records.push(counts);
+  const separated = (record: SeparatorCounts) => record[0] + record[1] + record[2] > 0;
+  const headerAt = records.findIndex(separated);
+  if (headerAt < 0) return false;
+  const header = widestSeparator(records[headerAt], -1);
+  const fields = records[headerAt][header] + 1;
+  return records.slice(headerAt + 1).some((record) => {
+    if (!separated(record)) return false;
+    const gives = (index: number) => record[index] + 1 === fields;
+    if (gives(header)) return false;
+    const exact = [0, 1, 2].find(gives);
+    return (exact ?? widestSeparator(record, header)) !== header;
+  });
 }
 
 /** Whether the loaded table carries the mixed-separator marker from the load path. */
