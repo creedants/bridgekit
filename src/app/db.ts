@@ -315,7 +315,9 @@ export async function stageCsvAndSwap(
   // No mixed-separator check: a record split by another separator can match a valid sparse record byte for byte.
   await requireDataRows(query, staging);
   // The first record is the header, which sits on line 1 and is not a data row.
-  await recordSourceRows(query, staging, (await csvDataRows(file, delimiter)).slice(1));
+  // A source-line read that fails leaves no provenance rather than failing a load.
+  const sourceRows = await csvDataRows(file, delimiter).catch(() => []);
+  await recordSourceRows(query, staging, sourceRows.slice(1));
   await swapLoadedTable(query, staging, table);
 }
 
@@ -355,6 +357,7 @@ export async function swapLoadedTable(query: Query, staging: string, table: stri
       // A table the catalog names but the rename cannot move stays as it is.
     }
   }
+  if (!renamed) await query(`DROP TABLE IF EXISTS ${quote(source(table))}`);
   try {
     await query(`ALTER TABLE ${quote(staging)} RENAME TO ${quote(table)}`);
   } catch (error) {

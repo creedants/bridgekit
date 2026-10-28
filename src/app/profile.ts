@@ -103,14 +103,19 @@ function sourceRow(ordinal: number, skips: readonly number[]): number {
   return row;
 }
 
-/** The file lines the loader skipped, so a row number counts the file's own lines. */
+/**
+ * The file lines the loader skipped, so a row number counts the file's own
+ * lines. Asking the catalog first keeps a table built without a companion from
+ * running a query that must fail, which the database worker logs as an error.
+ */
 async function sourceSkips(query: Query): Promise<readonly number[]> {
-  try {
-    const rows = await query(`SELECT unnest(skips) AS skip FROM ${quote(`${TABLE}__source`)} ORDER BY skip`);
-    return rows.map((row) => Number(row.skip));
-  } catch {
-    return [];
-  }
+  const name = `${TABLE}__source`;
+  const [found] = await query(
+    `SELECT count(*)::DOUBLE AS n FROM duckdb_tables() WHERE schema_name = current_schema() AND table_name = '${name}'`,
+  );
+  if (!(Number(found?.n) > 0)) return [];
+  const rows = await query(`SELECT unnest(skips) AS skip FROM ${quote(name)} ORDER BY skip`).catch(() => []);
+  return rows.map((row) => Number(row.skip));
 }
 
 /**
