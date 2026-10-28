@@ -592,7 +592,7 @@ function multilineProblem(columns: Column[]): FileProblemInput {
   });
 }
 
-function utf16leWithMark(text: string): Uint8Array {
+function utf16leWithMark(text: string): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(2 + text.length * 2);
   bytes[0] = 0xff;
   bytes[1] = 0xfe;

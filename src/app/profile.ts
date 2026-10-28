@@ -2,6 +2,7 @@ import type { Query } from "../engine.ts";
 import { isDate, isNumeric, quote, TABLE, type Column, type Filter, type Setup } from "./setup.ts";
 import { measureColumns, type UnreadCell } from "./fileProblems.ts";
 import { readsAsNumber } from "./numbers.ts";
+import { readCsvFile } from "./encoding.ts";
 
 const SAMPLE_ROWS = 200_000;
 const MAX_CANDIDATES = 14;
@@ -63,59 +64,279 @@ export interface FileProfile {
 }
 
 /**
- * The first cell of a measure column that does not read as a number, when more
- * than half of the column's filled cells do. The row is the file's own record
- * line, with the header on line 1 and skipped blank lines counted.
+ * How DuckDB's sniffer read a CSV, which read_csv then used. `quote` and
+ * `escape` are one character, or "" for none.
  */
-async function firstUnreadIn(
-  query: Query,
-  column: string,
-  skips: readonly number[],
-): Promise<UnreadCell | undefined> {
+export interface CsvDialect {
+  readonly delimiter: string;
+  /** "" means the file uses no quotes. */
+  readonly quote: string;
+  /** "" means a doubled quote stands for one quote. */
+  readonly escape: string;
+  readonly header: boolean;
+  readonly skipRows: number;
+  readonly comment: string;
+}
+
+/**
+ * Where each loaded record sits in the file it came from, as the load knew it
+ * for free. A sheet already knows its rows. A CSV keeps the file and the
+ * dialect the reader used, and is read again only when a sentence is about to
+ * name a row.
+ */
+export type SourceRows =
+  | { readonly kind: "sheet"; readonly rows: readonly number[] }
+  | { readonly kind: "csv"; readonly file: Blob; readonly dialect: CsvDialect | undefined };
+
+// One entry per database and table. The loader is the only writer, and it
+// writes after its swap succeeds, so a refused file leaves the last load's
+// entry beside the last load's table. A table built in SQL has no entry.
+const sourceRowsByDatabase = new WeakMap<Query, Map<string, SourceRows>>();
+
+/** Records where `table`'s rows came from. Reads nothing and costs no query. */
+export function rememberSourceRows(query: Query, table: string, rows: SourceRows): void {
+  let tables = sourceRowsByDatabase.get(query);
+  if (tables === undefined) {
+    tables = new Map();
+    sourceRowsByDatabase.set(query, tables);
+  }
+  tables.set(table, rows);
+}
+
+/** A first unread cell before the file's own row is known. */
+interface UnreadCandidate {
+  readonly column: string;
+  readonly value: string;
+  /** 0-based position among the loaded records, as rowid counts. */
+  readonly ordinal: number;
+  /** 0-based position of the column, which is its field in the file. */
+  readonly field: number;
+  /** Loaded records in the table: the count the locator's proof must match. */
+  readonly records: number;
+}
+
+interface FieldAsk {
+  readonly ordinal: number;
+  readonly field: number;
+}
+
+interface FoundField {
+  readonly row: number;
+  readonly text: string;
+}
+
+interface RecordScan {
+  /** Loaded records after the header. */
+  readonly dataRecords: number;
+  /** Per ask, in order: the spreadsheet row of that record and that field's text. */
+  readonly found: readonly (FoundField | undefined)[];
+}
+
+/**
+ * The first cell of a measure column that does not read as a number, when more
+ * than half of the column's filled cells do. The locator uses the loader's
+ * source positions when present. Otherwise, it counts loaded records with
+ * the header as row 1.
+ */
+async function firstUnreadIn(query: Query, column: string): Promise<UnreadCandidate | undefined> {
   const field = quote(column);
   const text = `CAST(${field} AS VARCHAR)`;
   const blank = `(${field} IS NULL OR trim(${text}) = '')`;
   const unread = `NOT ${blank} AND NOT ${readsAsNumber(field)}`;
+  // The column's field position rides along in the same statement, so naming a
+  // row never costs a second pass over the table.
+  const position = `(SELECT column_index - 1 FROM duckdb_columns()
+    WHERE schema_name = current_schema() AND table_name = '${TABLE.replaceAll("'", "''")}'
+      AND column_name = '${column.replaceAll("'", "''")}')::DOUBLE`;
   const [row] = await query(
     `SELECT count(*) FILTER (WHERE NOT ${blank})::DOUBLE AS present,
             count(*) FILTER (WHERE NOT ${blank} AND ${readsAsNumber(field)})::DOUBLE AS parsed,
+            count(*)::DOUBLE AS records,
             arg_min(${text}, rowid) FILTER (WHERE ${unread}) AS value,
-            min(rowid) FILTER (WHERE ${unread}) AS at
+            min(rowid) FILTER (WHERE ${unread}) AS at,
+            ${position} AS field
      FROM ${quote(TABLE)}`,
   );
   const present = Number(row?.present);
   const parsed = Number(row?.parsed);
   if (!(present > 0) || parsed * 2 <= present) return undefined;
-  if (row?.value == null || row?.at == null) return undefined;
-  return { value: String(row.value), row: sourceRow(Number(row.at), skips) };
+  if (row?.value == null || row?.at == null || row?.field == null) return undefined;
+  const ordinal = Number(row.at);
+  const at = Number(row.field);
+  if (!Number.isFinite(ordinal) || !Number.isFinite(at)) return undefined;
+  return { column, value: String(row.value), ordinal, field: at, records: Number(row.records) };
 }
 
+type FieldMode = "start" | "unquoted" | "quoted" | "escaped" | "quoteSeen";
+
 /**
- * The file's record line for a loaded record. The first data record is line 2,
- * and every skipped line at or below the running row moves it down one.
+ * Reads a CSV the way the loader did and counts record slots, which are the
+ * spreadsheet's rows: a line break outside a quoted field ends one slot, a
+ * completely empty slot is a row the loader skips, and a break inside quotes
+ * belongs to its record. Undefined when the text ends inside a quoted field,
+ * or when a closing quote is followed by something the reader would refuse.
  */
-function sourceRow(ordinal: number, skips: readonly number[]): number {
-  let row = ordinal + 2;
-  for (const skip of skips) {
-    if (skip > row) break;
-    row += 1;
+async function scanCsvRecords(
+  file: Blob,
+  dialect: CsvDialect,
+  asks: readonly FieldAsk[],
+): Promise<RecordScan | undefined> {
+  const asked = new Map<number, Map<number, number>>();
+  asks.forEach((ask, index) => {
+    const fields = asked.get(ask.ordinal) ?? new Map<number, number>();
+    fields.set(ask.field, index);
+    asked.set(ask.ordinal, fields);
+  });
+  const found: (FoundField | undefined)[] = asks.map(() => undefined);
+  const delimiter = dialect.delimiter;
+  const quoteChar = dialect.quote;
+  // The reader treats a doubled quote as one quote, and the sniffer reports that
+  // convention as either an empty escape or the quote itself.
+  const escapeChar = dialect.escape === quoteChar ? "" : dialect.escape;
+  const headerOffset = dialect.header ? 1 : 0;
+
+  let slot = 1;
+  let loaded = 0;
+  let empty = true;
+  let field = 0;
+  let mode: FieldMode = "start";
+  let carryCR = false;
+  let recordRow = 1;
+  let wanted: Map<number, number> | undefined;
+  let captured: string[] = [];
+
+  const capture = (char: string) => {
+    if (wanted === undefined || !wanted.has(field)) return;
+    captured[field] = (captured[field] ?? "") + char;
+  };
+
+  const endSlot = () => {
+    if (!empty) {
+      if (wanted !== undefined) {
+        for (const [fieldIndex, ask] of wanted) {
+          found[ask] = { row: recordRow, text: captured[fieldIndex] ?? "" };
+        }
+      }
+      loaded += 1;
+    }
+    empty = true;
+    field = 0;
+    mode = "start";
+    wanted = undefined;
+    slot += 1;
+  };
+
+  const nextField = () => {
+    field += 1;
+    mode = "start";
+  };
+
+  // Read inside a closure, because the state changes only in `feed`.
+  const insideQuotes = () => mode === "quoted" || mode === "escaped";
+
+  const feed = (text: string): boolean => {
+    for (const char of text) {
+      if (carryCR) {
+        carryCR = false;
+        if (char === "\n") continue;
+      }
+      if (!insideQuotes() && (char === "\r" || char === "\n")) {
+        endSlot();
+        carryCR = char === "\r";
+        continue;
+      }
+      if (empty) {
+        empty = false;
+        recordRow = slot;
+        wanted = asked.get(loaded - headerOffset);
+        captured = [];
+      }
+      switch (mode) {
+        case "start":
+          if (char === delimiter) nextField();
+          // A space before an opening quote keeps the quote eligible, and a
+          // tab does too unless the file separates fields with it.
+          else if (char === " " || (char === "\t" && delimiter !== "\t")) break;
+          else if (quoteChar !== "" && char === quoteChar) mode = "quoted";
+          else {
+            mode = "unquoted";
+            capture(char);
+          }
+          break;
+        case "unquoted":
+          if (char === delimiter) nextField();
+          else capture(char);
+          break;
+        case "quoted":
+          if (escapeChar !== "" && char === escapeChar) mode = "escaped";
+          else if (char === quoteChar) mode = "quoteSeen";
+          else capture(char);
+          break;
+        case "escaped":
+          capture(char);
+          mode = "quoted";
+          break;
+        case "quoteSeen":
+          if (char === quoteChar) {
+            capture(char);
+            mode = "quoted";
+          } else if (char === delimiter) nextField();
+          else if (char !== " " && char !== "\t") return false;
+          break;
+      }
+    }
+    return true;
+  };
+
+  const reading = await readCsvFile(file);
+  if (reading.kind === "text") {
+    if (!feed(reading.text)) return undefined;
+  } else {
+    const decoder = new TextDecoder("utf-8");
+    const reader = file.stream().getReader();
+    try {
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        if (!feed(decoder.decode(chunk.value, { stream: true }))) return undefined;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    if (!feed(decoder.decode())) return undefined;
   }
-  return row;
+  if (insideQuotes()) return undefined;
+  if (!empty) endSlot();
+  return { dataRecords: loaded - headerOffset, found };
 }
 
 /**
- * The file lines the loader skipped, so a row number counts the file's own
- * lines. Asking the catalog first keeps a table built without a companion from
- * running a query that must fail, which the database worker logs as an error.
+ * The spreadsheet row of each candidate, or undefined where the file cannot
+ * prove one. A sheet already knows its rows. A CSV is read once, and only a
+ * record count that matches the table, with the named row holding the named
+ * text, proves a row.
  */
-async function sourceSkips(query: Query): Promise<readonly number[]> {
-  const name = `${TABLE}__source`;
-  const [found] = await query(
-    `SELECT count(*)::DOUBLE AS n FROM duckdb_tables() WHERE schema_name = current_schema() AND table_name = '${name}'`,
-  );
-  if (!(Number(found?.n) > 0)) return [];
-  const rows = await query(`SELECT unnest(skips) AS skip FROM ${quote(name)} ORDER BY skip`).catch(() => []);
-  return rows.map((row) => Number(row.skip));
+async function locateRows(
+  source: SourceRows | undefined,
+  cells: readonly UnreadCandidate[],
+): Promise<readonly (number | undefined)[]> {
+  if (source === undefined) return cells.map((cell) => cell.ordinal + 2);
+  if (source.kind === "sheet") {
+    return cells.map((cell) =>
+      source.rows.length === cell.records && cell.ordinal < source.rows.length ? source.rows[cell.ordinal] : undefined,
+    );
+  }
+  const dialect = source.dialect;
+  if (dialect === undefined || dialect.delimiter.length !== 1 || dialect.skipRows !== 0 || dialect.comment !== "") {
+    return cells.map(() => undefined);
+  }
+  const scan = await scanCsvRecords(source.file, dialect, cells);
+  if (scan === undefined) return cells.map(() => undefined);
+  return cells.map((cell, index) => {
+    const found = scan.found[index];
+    if (scan.dataRecords !== cell.records || found === undefined) return undefined;
+    return found.text.trim() === cell.value.trim() ? found.row : undefined;
+  });
 }
 
 /**
@@ -129,15 +350,25 @@ export async function profileFile(
   isCurrent: () => boolean,
   apply: (profile: FileProfile) => void,
 ): Promise<void> {
+  const source = sourceRowsByDatabase.get(query)?.get(TABLE);
   const distinct = await distinctCounts(query, columns);
   const measures = new Set(measureColumns(columns));
-  const skips = await sourceSkips(query);
-  const unread = new Map<string, UnreadCell>();
+  const candidates: UnreadCandidate[] = [];
   for (const column of columns) {
     if (!measures.has(column.name) || isNumeric(column.type) || isDate(column.type)) continue;
-    const cell = await firstUnreadIn(query, column.name, skips).catch(() => undefined);
-    if (cell !== undefined) unread.set(column.name, cell);
+    const cell = await firstUnreadIn(query, column.name).catch(() => undefined);
+    if (cell !== undefined) candidates.push(cell);
   }
+  if (!isCurrent()) return;
+  const located =
+    candidates.length === 0
+      ? []
+      : await locateRows(source, candidates).catch(() => candidates.map(() => undefined));
+  const unread = new Map<string, UnreadCell>();
+  candidates.forEach((cell, index) => {
+    const row = located[index];
+    unread.set(cell.column, row === undefined ? { value: cell.value } : { value: cell.value, row });
+  });
   const rollups = await findRollups(query, columns, distinct);
   if (!isCurrent()) return;
   apply({
@@ -149,6 +380,7 @@ export async function profileFile(
     rollups,
   });
 }
+
 
 // A column name looks like a customer, region, date or id column when any
 // word in it is one of these, where a word is a part split on

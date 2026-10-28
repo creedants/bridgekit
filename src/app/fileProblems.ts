@@ -1,10 +1,10 @@
 import { guessSetup, isNumeric, netSalesHeldAsText, type Column, type Filter, type Grain } from "./setup.ts";
 import { shortened } from "./numbers.ts";
 
-/** The first cell of a measure column that does not read as a number, with its spreadsheet row. */
+/** The first cell of a measure column that does not read as a number, with its spreadsheet row when the file proves one. */
 export interface UnreadCell {
   readonly value: string;
-  readonly row: number;
+  readonly row?: number;
 }
 
 /** A column as the profile hands it to the file problems list. */
@@ -176,7 +176,8 @@ function measureMessage(role: Role, column: Column, text: boolean): string {
   const measure = role === "sales" ? "Sales" : "Units";
   if (!text) return `"${column.name}" cannot be used for ${measure} because it is not a column of numbers.`;
   const unread = firstUnreadOf(column);
-  const such = unread === undefined ? "" : `, such as "${shortened(unread.value)}" in row ${unread.row}`;
+  const where = unread === undefined || unread.row === undefined ? "" : ` in row ${unread.row}`;
+  const such = unread === undefined ? "" : `, such as "${shortened(unread.value)}"${where}`;
   return `${measure} must be a column of numbers, and "${column.name}" holds text${such}.`;
 }
 

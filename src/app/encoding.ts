@@ -24,6 +24,20 @@ export function looksBinary(bytes: Uint8Array): boolean {
   return false;
 }
 
+/**
+ * The most the loader reads up front. A prefix may stop between two bytes of
+ * one character, and a prefix that cannot decide is read in full, to tell its
+ * encoding from its whole text.
+ */
+export const CSV_PREFIX_BYTES = 65536;
+
+/**
+ * How the loader hands a CSV to the database: the file's own bytes when they
+ * are UTF-8, otherwise the text it decoded from them (UTF-16 by its mark, or
+ * Windows-1252).
+ */
+export type CsvReading = { readonly kind: "bytes" } | { readonly kind: "text"; readonly text: string };
+
 export type DecodedCsv = { kind: "utf8"; bytes: Uint8Array } | { kind: "text"; text: string };
 
 const UTF8 = new TextDecoder("utf-8", { fatal: true });
@@ -120,4 +134,18 @@ function readsAsSingleByteText(bytes: Uint8Array): boolean {
     if (byte < 0x20 || byte === 0x7f) return false;
   }
   return highByte;
+}
+
+/**
+ * The loader's one decoding decision, so the database and the row locator read
+ * the same text. Reads the whole file only when the prefix cannot decide.
+ * Throws NOT_TEXT_FILE or ENCODING_SENTENCE.
+ */
+export async function readCsvFile(file: Blob): Promise<CsvReading> {
+  const prefix = new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer());
+  if (looksBinary(prefix)) throw new Error(NOT_TEXT_FILE);
+  const continues = prefix.byteLength < file.size;
+  if (continues && isUtf8Prefix(prefix)) return { kind: "bytes" };
+  const decision = decodeCsvBuffer(continues ? new Uint8Array(await file.arrayBuffer()) : prefix);
+  return decision.kind === "utf8" ? { kind: "bytes" } : { kind: "text", text: decision.text };
 }
