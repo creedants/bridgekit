@@ -162,8 +162,9 @@ button.action:hover:not(:disabled) { background: var(--accent); color: #fff; }
 .placeholder { margin-top: 20vh; text-align: center; font-size: 13px; }
 
 /* Each tile draws its right and bottom rule; the container clips the ones on its outer edge, however the tiles wrap. */
-.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
-.kpi { padding: 8px 10px; min-width: 0; box-shadow: 1px 0 0 var(--line), 0 1px 0 var(--line); }
+/* 112px holds an eight-digit signed change in Instrument Sans on one line; narrower boxes split the figure. */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.kpi { padding: 8px; min-width: 0; box-shadow: 1px 0 0 var(--line), 0 1px 0 var(--line); }
 .kpi-label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.04em; }
 .kpi-value { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 0; overflow-wrap: anywhere; }
 .kpi-note { font-size: 12px; color: var(--text-2); }
@@ -263,8 +264,6 @@ table.narrow-wide { max-width: 900px; }
 /* On a phone the example keeps the period, a product, units and sales, with no sideways scroll. */
 @media (max-width: 440px) {
   .example .detail { display: none; }
-  /* Instrument Sans figures are wider; at 375px an eight-digit change needs these 4px to stay on one line. */
-  .kpi { padding: 8px; }
 }
 .check { display: inline-flex; gap: 5px; align-items: center; color: var(--text-2); font-size: 12px; }
 .account-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 8px 24px; }
