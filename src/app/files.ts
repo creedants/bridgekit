@@ -38,7 +38,7 @@ export function makeDownloader(
   };
 }
 
-/** The tool's save buttons go through here, so a double or triple click saves one file. */
+/** The tool's save buttons except Excel go through here; Excel keeps its own guard. */
 export const saveOnce: Download = makeDownloader(download);
 
 const escapeCsv = (value: unknown) => {
