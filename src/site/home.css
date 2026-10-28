@@ -87,6 +87,10 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .hero .copy h1 { font-size: 4.25rem; font-weight: 500; line-height: 1; letter-spacing: -.025em; }
 
+.hero .copy .eyebrow { display: flex; align-items: center; gap: .75rem; margin-bottom: 1.5rem; font: 600 .875rem/1.3 var(--sans); letter-spacing: .01em; color: var(--plum-2); }
+
+.hero .copy .eyebrow::before { content: ""; flex: none; width: 1.75rem; height: .25rem; background: var(--sun); }
+
 .hero .copy .lead { margin-top: 1.5rem; font-size: 1.3125rem; line-height: 1.45; color: var(--plum-2); max-width: 21rem; }
 
 .hero .copy .cta { margin-top: 2.25rem; padding: .95rem 1.35rem; font-size: .9375rem; }
@@ -99,6 +103,9 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 /* In the side-by-side layout, the picture runs into the shell's right padding to leave room for all five KPI tiles. */
 .hero figure { margin-right: calc(-1 * var(--pad) - min(0px, var(--gutter) - 2rem)); }
+
+/* The framed picture is a drawing of the tool, so nothing in it answers a pointer, a tap or a long press. */
+.hero figure { pointer-events: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 
 .hero .frame { background: var(--t-bg); border-radius: 12px; overflow: hidden; font-family: var(--sans); color: var(--t-text);
   box-shadow: 0 0 0 1px rgba(66, 32, 61, .10), 0 2px 4px rgba(66, 32, 61, .06), 0 24px 60px -12px rgba(66, 32, 61, .35); }
@@ -158,7 +165,7 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
   .hero figure { margin-inline: calc(-1 * (var(--pad) + var(--gutter))); padding: 2.5rem calc(var(--pad) + var(--gutter)); background: var(--sun); }
 
-  .hero .frame { max-width: 48rem; }
+  .hero .frame { max-width: 48rem; transform: rotate(-1.5deg); }
 }
 
 @media (max-width: 800px) {
@@ -182,6 +189,8 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
   .hero .copy h1 { font-size: 3rem; }
 
+  .hero .copy .eyebrow { margin-bottom: 1rem; font-size: .8125rem; }
+
   .hero .copy .lead { font-size: 1.1875rem; margin-top: 1.1rem; }
 
   .hero .copy .cta { margin-top: 1.6rem; }
@@ -189,8 +198,6 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
   .hero .frame { border-radius: 10px; }
 
   .hero .chrome { height: 38px; padding: 0 .8rem; }
-
-  .hero .dots { display: none; }
 
   .hero .dataset { font-size: .6875rem; }
 

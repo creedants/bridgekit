@@ -13,21 +13,22 @@
     <meta property="og:image" content="https://pvmbridge.com/img/og-bridge.png" />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/newsreader.woff2" />
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/instrument-sans.woff2" />
     <link rel="stylesheet" href="/src/site/site.css" />
   </head>
   <body>
-    <div class="nav">
-      <div class="wrap">
-        <a class="wordmark" href="/"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="6" fill="var(--accent)"/><rect x="6" y="17" width="5" height="9" fill="#fff"/><rect x="13.5" y="12" width="5" height="5" fill="#fff" opacity=".75"/><rect x="21" y="6" width="5" height="20" fill="#fff"/></svg>PVM Bridge</a>
+    <header class="nav">
+      <div class="shell nav-inner">
+        <a class="wordmark" href="/"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="6" fill="var(--plum)"/><rect x="6" y="17" width="5" height="9" fill="#fff"/><rect x="13.5" y="12" width="5" height="5" fill="#fff" opacity=".75"/><rect x="21" y="6" width="5" height="20" fill="#fff"/></svg>PVM Bridge</a>
         <nav>
-          <a class="optional" href="/#how">How it works</a>
-          <a class="optional" href="/guide.html">Guide</a>
-          <a class="optional" href="/method.html">Method</a>
-          <a class="optional" href="/#pricing">Pricing</a>
+          <a class="wide" href="/guide.html">Guide</a>
+          <a class="wide" href="/method.html">Method</a>
+          <a href="/#pricing">Pricing</a>
           <a class="button" href="/app/">Open the tool</a>
         </nav>
       </div>
-    </div>
+    </header>
 
     <article>
       <div class="wrap narrow">
@@ -36,12 +37,12 @@
 
         <h2>1. Check your file</h2>
         <p>Use one row per sales line, or per group of lines. A summarized export works as well as invoice detail, as long as it has these columns:</p>
-        <p>Numbers written like 12,50 or 1.234,56, with or without a leading minus sign, are read with the comma as the decimal mark when every value in the column is written that way; the Data check tab says when this happened.</p>
+        <p>Numbers written like 12,50 or 1.234,56 are read with the comma as the decimal mark when every value in the column is written that way. Whole numbers written like 9.600 or 1.234.567 are read with the dot between thousands when the file is separated by semicolons or a value has more than one dot. The Data check tab says when either happened.</p>
         <div class="boxed">
           <table>
             <thead><tr><th>Column</th><th>Needed</th><th>Notes</th></tr></thead>
             <tbody>
-              <tr><td>Period or date</td><td>Yes</td><td>A label such as <code>2026</code> or <code>YTD Aug 2026</code>, or a date. With a date you can compare by year, year to date, quarter or month.</td></tr>
+              <tr><td>Period or date</td><td>Yes</td><td>A label such as <code>2026</code> or <code>YTD Aug 2026</code> (year to date), or a date. With a date you can compare by year, year to date, quarter or month.</td></tr>
               <tr><td>Units</td><td>Yes</td><td>The quantity sold, such as pieces or cases. The tool divides sales by this count to calculate average price.</td></tr>
               <tr><td>Sales</td><td>Yes</td><td>Net sales is the usual choice.</td></tr>
               <tr><td>Gross sales</td><td>No</td><td>Sales before discounts. Adding it splits price into list price and discounts.</td></tr>
@@ -124,13 +125,13 @@
     </article>
 
     <footer>
-      <div class="wrap">
+      <div class="shell footer-inner">
         <span>PVM Bridge. MIT license.</span>
-        <a href="/">Home</a>
         <a href="/app/">Tool</a>
         <a href="/guide.html">Guide</a>
         <a href="/price-volume-mix-analysis.html">PVM analysis</a>
         <a href="/grouping-level.html">Grouping level</a>
+        <a href="/method.html">Method</a>
         <a href="/privacy.html">Privacy</a>
         <a href="/terms.html">Terms</a>
         <a href="mailto:support@pvmbridge.com">Contact</a>

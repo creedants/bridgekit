@@ -810,3 +810,97 @@ test("the styled images scale their width and let the height follow", () => {
     );
   }
 });
+
+test("the home page hero names price-volume-mix (PVM) analysis above the headline", () => {
+  const html = readPage("index.html");
+  const copy = html.indexOf('<div class="copy">');
+  assert.ok(copy !== -1, 'index.html has no <div class="copy"> in the hero: keep the hero copy column');
+  const heading = html.indexOf("<h1", copy);
+  const beforeHeading = html.slice(copy + '<div class="copy">'.length, heading);
+  const texts = [...beforeHeading.matchAll(/<([a-z][a-z0-9]*)\b[^>]*>([\s\S]*?)<\/\1>/gi)].map(
+    (match) => collapseSpaces(match[2]),
+  );
+  assert.ok(
+    texts.includes("Price-volume-mix (PVM) analysis"),
+    'index.html hero has no element reading Price-volume-mix (PVM) analysis before the h1: restore <p class="eyebrow">Price-volume-mix (PVM) analysis</p> above the headline',
+  );
+});
+
+const SITE_PAGES = [
+  "privacy.html",
+  "terms.html",
+  "guide.html",
+  "method.html",
+  "grouping-level.html",
+  "price-volume-mix-analysis.html",
+];
+
+function blockOf(file: string, html: string, pattern: RegExp, name: string): string {
+  const block = pattern.exec(html);
+  assert.ok(block, `${file} has no ${name}: copy the home page's ${name} block`);
+  return block[0];
+}
+
+const HEADER = /<header class="nav">[\s\S]*?<\/header>/;
+const FOOTER = /<footer>[\s\S]*?<\/footer>/;
+
+test("every site page carries the home page header, footer and look", () => {
+  const home = readPage("index.html");
+  const header = blockOf("index.html", home, HEADER, '<header class="nav">').replace(
+    'href="#pricing"',
+    'href="/#pricing"',
+  );
+  const footer = blockOf("index.html", home, FOOTER, "<footer>");
+  for (const file of SITE_PAGES) {
+    const html = readPage(file);
+    assert.equal(
+      blockOf(file, html, HEADER, '<header class="nav">'),
+      header,
+      `${file} header differs from the home page: copy index.html's <header class="nav"> block, with the Pricing link as href="/#pricing"`,
+    );
+    assert.equal(
+      blockOf(file, html, FOOTER, "<footer>"),
+      footer,
+      `${file} footer differs from the home page: copy index.html's <footer> block`,
+    );
+    assert.ok(
+      /<link\b[^>]*\shref="\/src\/site\/site\.css"/.test(headOf(file, html)),
+      `${file} does not link /src/site/site.css: keep the site stylesheet link in the head`,
+    );
+  }
+  const css = readFileSync(new URL("../src/site/site.css", import.meta.url), "utf8");
+  assert.ok(
+    /@import\s+(url\()?["']\.\/home\.css["']\)?/.test(css),
+    "src/site/site.css does not import ./home.css: import it so the site pages share the home page tokens, fonts, header and footer",
+  );
+  for (const remote of css.matchAll(/url\(\s*["']?(https?:)?\/\//gi)) {
+    assert.fail(`src/site/site.css loads ${remote[0]}: serve every font and image from this site`);
+  }
+});
+
+test("the guide and the PVM analysis page carry the corrected wording", () => {
+  const guide = visibleWordsOf(readPage("guide.html")).join(" ");
+  for (const sentence of [
+    "Numbers written like 12,50 or 1.234,56 are read with the comma as the decimal mark when every value in the column is written that way. Whole numbers written like 9.600 or 1.234.567 are read with the dot between thousands when the file is separated by semicolons or a value has more than one dot. The Data check tab says when either happened.",
+    "YTD Aug 2026 (year to date)",
+  ]) {
+    assert.ok(guide.includes(sentence), `guide.html does not say "${sentence}": restore it as plain text`);
+  }
+  const analysis = visibleWordsOf(readPage("price-volume-mix-analysis.html")).join(" ");
+  for (const sentence of [
+    "Sales went from 300 to 510.",
+    "customers moved to more expensive products",
+    "products that are more expensive or cheaper than average",
+  ]) {
+    assert.ok(
+      analysis.includes(sentence),
+      `price-volume-mix-analysis.html does not say "${sentence}": restore it as plain text`,
+    );
+  }
+  for (const old of ["dearer", "300 to 660"]) {
+    assert.ok(
+      !analysis.includes(old),
+      `price-volume-mix-analysis.html still says "${old}": the worked example goes from 300 to 510 and says more expensive`,
+    );
+  }
+});
