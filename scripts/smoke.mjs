@@ -1252,22 +1252,14 @@ async function drive(browser, origin, rows) {
           ["Export Excel", "bridge-2024-to-2025.xlsx"],
         ]) {
           events.names.length = 0;
-          const box = JSON.parse(await browser.evalJs(`(() => {
-            const button = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === ${JSON.stringify(text)});
-            if (!button) return "null";
-            button.scrollIntoView({ block: "center" });
-            const rect = button.getBoundingClientRect();
-            return JSON.stringify({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
-          })()`));
-          if (!box) fail(`downloads: there is no ${text} button`);
           let at = 0;
-          for (const [index, offset] of [0, 465, 918].entries()) {
+          for (const offset of [0, 465, 918]) {
             await browser.sleep(offset - at);
             at = offset;
-            await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: box.x, y: box.y });
-            for (const [type, buttons] of [["mousePressed", 1], ["mouseReleased", 0]]) {
-              await browser.send("Input.dispatchMouseEvent", { type, x: box.x, y: box.y, button: "left", buttons, clickCount: index + 1 });
-            }
+            // A reasoned click, not a real pointer press: real input would leave the
+            // page with user activation, and this harness answers the leave-page
+            // dialog only in its own step, so a later file load would hang.
+            await browser.evalJs(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === ${JSON.stringify(text)}).click()`);
           }
           const deadline = Date.now() + 90_000;
           while (!events.names.length && Date.now() < deadline) await browser.sleep(500);
