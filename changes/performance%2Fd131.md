@@ -1,0 +1,3 @@
+- The footer on every site page reads "PVM Bridge, run by Marcus Gibson. MIT license.", so a first-time reader can tell who operates the site.
+- The terms open with "Who runs PVM Bridge", which names Marcus Gibson, an individual in the United States, and says that "we" and "us" in those terms mean him.
+- The privacy page says who is responsible for the data it describes, before the "If this changes" section, with the support@pvmbridge.com address to write to with a question about it.

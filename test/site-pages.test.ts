@@ -1043,3 +1043,80 @@ test("the guide says when to keep an attribute that describes the customer", () 
     "guide.html still says the attribute itself raises the match rate: say leaving it out raises it",
   );
 });
+
+const OPERATOR_FOOTER =
+  "<span>PVM Bridge, run by Marcus Gibson. MIT license.</span>";
+const TERMS_OPERATOR_TEXT =
+  'PVM Bridge is run by Marcus Gibson, an individual in the United States. In these terms, "we" and "us" mean Marcus Gibson.';
+const PRIVACY_OPERATOR_TEXT =
+  'PVM Bridge is run by Marcus Gibson, an individual in the United States, who is responsible for the data this page describes. Write to <a href="mailto:support@pvmbridge.com">support@pvmbridge.com</a> with any question about it.';
+
+test("every page footer names Marcus Gibson as the person who runs PVM Bridge", () => {
+  for (const page of ROOT_PAGES) {
+    const footer = blockOf(page.file, readPage(page.file), FOOTER, "<footer>");
+    const spans = footer.match(/<span>PVM Bridge[^<]*<\/span>/g) ?? [];
+    assert.equal(
+      spans.length,
+      1,
+      `${page.file} footer has ${spans.length} spans starting PVM Bridge: keep one span that reads ${OPERATOR_FOOTER}`,
+    );
+    assert.equal(
+      spans[0],
+      OPERATOR_FOOTER,
+      `${page.file} footer says "${spans[0]}": restore ${OPERATOR_FOOTER}`,
+    );
+  }
+});
+
+test("the terms say who runs PVM Bridge, after the date and before Using the tool", () => {
+  const html = readPage("terms.html");
+  const date = /<p class="date">[\s\S]*?<\/p>/.exec(html);
+  assert.ok(date, 'terms.html has no <p class="date">: restore the last changed line');
+  const section = /<h2>Who runs PVM Bridge<\/h2>\s*<p>([\s\S]*?)<\/p>/.exec(html);
+  assert.ok(
+    section,
+    `terms.html has no <h2>Who runs PVM Bridge</h2> and the paragraph under it: restore them after the date line`,
+  );
+  assert.equal(
+    collapseSpaces(section[1]),
+    TERMS_OPERATOR_TEXT,
+    `terms.html says "${collapseSpaces(section[1])}" who runs PVM Bridge: restore "${TERMS_OPERATOR_TEXT}"`,
+  );
+  const start = section.index;
+  const dateEnd = date.index + date[0].length;
+  assert.ok(
+    start > dateEnd,
+    "terms.html puts Who runs PVM Bridge before the date line: move it after <p class=\"date\">",
+  );
+  const using = html.indexOf("<h2>Using the tool</h2>");
+  assert.ok(using !== -1, "terms.html has no <h2>Using the tool</h2>: keep the first section");
+  assert.ok(
+    start < using,
+    "terms.html puts Who runs PVM Bridge after Using the tool: move it before that heading",
+  );
+});
+
+test("the privacy page says who is responsible for the data in every build", () => {
+  for (const [build, features] of BUILDS) {
+    const html = applyFeatureBlocks(readPage("privacy.html"), features);
+    const section = /<h2>Who is responsible<\/h2>\s*<p>([\s\S]*?)<\/p>/.exec(html);
+    assert.ok(
+      section,
+      `privacy.html in the ${build} build has no <h2>Who is responsible</h2> and the paragraph under it: restore them after Checking this yourself`,
+    );
+    assert.equal(
+      collapseSpaces(section[1]),
+      PRIVACY_OPERATOR_TEXT,
+      `privacy.html in the ${build} build says "${collapseSpaces(section[1])}" about who is responsible: restore "${PRIVACY_OPERATOR_TEXT}"`,
+    );
+    const changes = html.indexOf('<h2 id="if-this-changes">');
+    assert.ok(
+      changes !== -1,
+      `privacy.html in the ${build} build has no <h2 id="if-this-changes">: keep that heading where the page says it will be updated`,
+    );
+    assert.ok(
+      section.index < changes,
+      `privacy.html in the ${build} build puts Who is responsible after If this changes: move it before that heading`,
+    );
+  }
+});
