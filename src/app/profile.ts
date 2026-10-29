@@ -7,6 +7,8 @@ import { readCsvFile } from "./encoding.ts";
 const SAMPLE_ROWS = 200_000;
 const MAX_CANDIDATES = 14;
 const MAX_DISTINCT = 5_000;
+/** How close two columns' value counts are before the finer one is read as a code of the broader one. */
+const NEARLY_THE_SAME = 0.95;
 
 /**
  * Same numbers as count(DISTINCT col) and as count(DISTINCT (a, b)) filtered
@@ -633,9 +635,18 @@ export async function findRelationships(
     const together = byKey.get(`p${i}`) ?? 0;
     const aCount = count.get(a)!;
     const bCount = count.get(b)!;
-    if (aCount === bCount && aCount >= 2 && together === aCount) duplicates.push(earlier(a, b) as [string, string]);
     const [finer, broader] = aCount > bCount ? [a, b] : [b, a];
-    if (count.get(finer)! > count.get(broader)! && together === count.get(finer)) parents.get(finer)!.add(broader);
+    const finerCount = count.get(finer)!;
+    const broaderCount = count.get(broader)!;
+    // A code is the same thing as the name it belongs to: every finer value sits
+    // under one broader value and there are almost as many broader values as
+    // finer ones. A real hierarchy leaves a broader value with several finer.
+    const same = finerCount >= 2 && together === finerCount && broaderCount >= NEARLY_THE_SAME * finerCount;
+    if (same) {
+      duplicates.push(earlier(a, b) as [string, string]);
+      return;
+    }
+    if (finerCount > broaderCount && together === finerCount) parents.get(finer)!.add(broader);
   });
   duplicates.sort((x, y) => (position.get(x[0]) ?? 0) - (position.get(y[0]) ?? 0));
 

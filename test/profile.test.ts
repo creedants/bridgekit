@@ -409,3 +409,15 @@ test("D143: a fee row with no units is named in one sentence and kept", async ()
     "4 rows have no units but some sales, and 2 of them are named like fees or adjustments; they are counted like products.",
   );
 });
+
+test("D143: a class name whose code splits one class in two is still one thing", async () => {
+  const values = Array.from({ length: 100 }, (_, i) => `Class ${i}`)
+    .flatMap((name, i) => (i < 3 ? [[name, `C${i}a`], [name, `C${i}b`]] : [[name, `C${i}`]]))
+    .map(([name, code]) => `('${name}', '${code}')`)
+    .join(", ");
+  const { query, columns } = await load(`SELECT * FROM (VALUES ${values}) t(class_name, class_code)`);
+  const distinct = await distinctCounts(query, columns);
+  const { chains, duplicates } = await findRelationships(query, columns, distinct);
+  assert.deepEqual(chains, []);
+  assert.deepEqual(duplicates, [["class_name", "class_code"]]);
+});
