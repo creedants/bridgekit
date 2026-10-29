@@ -21,14 +21,55 @@ export interface BridgeSummary {
   newAndDiscontinued: "difference" | "full";
 }
 
+/** A bridge rounded to one unit, so the shown effect lines plus the shown prior total equal the shown current total. */
+export interface RoundedBridge {
+  prior: number;
+  current: number;
+  /** One rounded value per input effect, in the same order. */
+  values: number[];
+}
+
+/**
+ * Rounds a bridge with the largest-remainder rule: floor every effect, then hand
+ * the leftover units to the largest remainders, so prior + sum(values) === current.
+ */
+export function roundBridge(prior: number, current: number, values: readonly number[], unit = 1): RoundedBridge {
+  const priorUnits = Math.round(prior / unit);
+  const currentUnits = Math.round(current / unit);
+  const lines = values.map((value, index) => {
+    const exact = value / unit;
+    const floor = Math.floor(exact);
+    return { index, floor, remainder: exact - floor, size: Math.abs(value) };
+  });
+  const leftover = currentUnits - priorUnits - lines.reduce((sum, line) => sum + line.floor, 0);
+  const k = Math.max(-lines.length, Math.min(lines.length, leftover));
+  const step = k < 0 ? -1 : 1;
+  const ranked = [...lines].sort((a, b) =>
+    k < 0
+      ? a.remainder - b.remainder || b.size - a.size || a.index - b.index
+      : b.remainder - a.remainder || b.size - a.size || a.index - b.index,
+  );
+  const moved = new Set(ranked.slice(0, Math.abs(k)).map((line) => line.index));
+  return {
+    prior: priorUnits * unit,
+    current: currentUnits * unit,
+    values: lines.map((line) => (line.floor + (moved.has(line.index) ? step : 0)) * unit),
+  };
+}
+
 export function summarize(result: BridgeResult, config: BridgeConfig): BridgeSummary {
+  const shown = roundBridge(
+    result.priorSales,
+    result.currentSales,
+    result.effects.map((e) => e.value),
+  );
   return {
     measure: measureName(config),
     prior: String(config.prior),
     current: String(config.current),
-    priorTotal: Math.round(result.priorSales),
-    currentTotal: Math.round(result.currentSales),
-    effects: result.effects.map((e) => ({ label: e.label, value: Math.round(e.value) })),
+    priorTotal: shown.prior,
+    currentTotal: shown.current,
+    effects: result.effects.map((e, i) => ({ label: e.label, value: shown.values[i] })),
     attributes: config.levels.map((l) => l.name),
     exactMatchShare: Math.round((result.coverage.find((c) => c.level === config.levels.length)?.share ?? 0) * 1000) / 1000,
     newAndDiscontinued: config.newAndDiscontinued ?? "difference",

@@ -6,6 +6,7 @@ import { convertFormattedNumbers, decimalCommaNote } from "../src/app/numbers.ts
 import { openDatabase } from "../src/duckdb.ts";
 import type { Query } from "../src/engine.ts";
 import * as format from "../src/app/format.ts";
+import { roundBridge } from "../src/summary.ts";
 
 const DECIMAL_COMMA = "1 column was read as numbers written with a decimal comma.";
 const MIXED = "amount mixes number styles, so it was read as text.";
@@ -558,4 +559,60 @@ test("R33: the percentage cap says greater than only past the boundary", () => {
   assert.equal(percent(10000.1), ">1,000,000%");
   assert.equal(signedPercent(-10000.1), "<-1,000,000%");
   assert.equal(percent(9999.9), "999990.0%");
+});
+
+/** Runs the rule's two invariants on every case below and returns the rounded bridge. */
+function assertBridge(prior: number, current: number, exact: readonly number[], unit = 1) {
+  const shown = roundBridge(prior, current, exact, unit);
+  const lines = shown.values.reduce((sum, value) => sum + value, 0);
+  assert.equal(shown.prior + lines, shown.current, `prior ${shown.prior} plus the lines ${lines} is not current ${shown.current}`);
+  shown.values.forEach((value, index) => {
+    assert.ok(
+      Math.abs(value - exact[index]) <= unit,
+      `line ${index} rounded to ${value}, more than one unit from the exact ${exact[index]}`,
+    );
+  });
+  return shown;
+}
+
+test("R141: five equal small effects hand the one unit to the first line", () => {
+  const shown = assertBridge(0, 1, [0.2, 0.2, 0.2, 0.2, 0.2]);
+  assert.deepEqual(shown.values, [1, 0, 0, 0, 0]);
+});
+
+test("R141: a single negative effect takes the unit back to the total", () => {
+  const shown = assertBridge(100.4, 99.6, [-0.8]);
+  assert.equal(shown.prior, 100);
+  assert.equal(shown.current, 100);
+  assert.deepEqual(shown.values, [0]);
+});
+
+test("R141: mixed positive and negative effects still add up", () => {
+  const shown = assertBridge(100, 100, [0.5, -0.5]);
+  assert.deepEqual(shown.values, [1, -1]);
+});
+
+test("R141: a total that rounds the other way still foots", () => {
+  const shown = assertBridge(100.5, 100.5, [-0.4, 0.4]);
+  assert.equal(shown.prior, 101);
+  assert.equal(shown.current, 101);
+  assert.deepEqual(shown.values, [0, 0]);
+});
+
+test("R141: a half line takes the leftover unit and an integer line stays put", () => {
+  const shown = assertBridge(0, 2, [0.5, 1, 0.5]);
+  assert.deepEqual(shown.values, [1, 1, 0]);
+});
+
+test("R141: the budget sample's lines foot to its shown totals", () => {
+  const exact = [610.7, 475.3, 414.2, 443.6, -557.2];
+  assert.notEqual(
+    exact.reduce((sum, value) => sum + Math.round(value), 0),
+    52142 - 50756,
+    "the sample no longer shows the defect: rounding each line on its own misses the shown change",
+  );
+  const shown = assertBridge(50756.38, 52142.15, exact);
+  assert.equal(shown.prior, 50756);
+  assert.equal(shown.current, 52142);
+  assert.deepEqual(shown.values, [611, 475, 414, 443, -557]);
 });

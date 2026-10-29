@@ -569,3 +569,35 @@ test("a ticked movers table keeps ranks and the footing columns", async () => {
   }
   assert.equal(rows[0]?.[0], "1", "rank 1 is missing from the ticked movers table");
 });
+
+const budgetResult = {
+  priorSales: 50756.38,
+  currentSales: 52142.15,
+  effects: [
+    { key: "volume", label: "Volume", value: 610.7 },
+    { key: "mix_1", label: "Mix: Product", value: 475.3 },
+    { key: "price_list", label: "Price (list)", value: 414.2 },
+    { key: "new_config", label: "New configurations", value: 443.6 },
+    { key: "no_units", label: "Sales with no units", value: -557.2 },
+  ],
+  coverage: [],
+  cellsTable: "bridge_cells",
+};
+
+test("R141: the report's bridge lines foot to its totals and its summary quotes that change", () => {
+  const independent = budgetResult.effects.reduce((sum, effect) => sum + Math.round(effect.value), 0);
+  assert.notEqual(
+    independent,
+    Math.round(budgetResult.currentSales) - Math.round(budgetResult.priorSales),
+    "the sample no longer shows the defect: rounding each line on its own misses the shown change",
+  );
+  const html = build({ result: budgetResult });
+  const [, ...rows] = tableRows(html, "Bridge");
+  const amounts = rows.map((cells) => Number(cells[1].replaceAll(",", "").replace("+", "")));
+  const prior = amounts[0];
+  const current = amounts[amounts.length - 1];
+  const lines = amounts.slice(1, -1);
+  assert.equal(prior + lines.reduce((sum, value) => sum + value, 0), current, `the shown lines do not add up: ${amounts.join(", ")}`);
+  const summary = html.match(/<p>([^<]*)<\/p>/)?.[1] ?? "";
+  assert.ok(summary.includes(`+${(current - prior).toLocaleString("en-US")}`), `the first sentence does not quote the change: ${summary}`);
+});
