@@ -110,7 +110,7 @@ test("the proxy sends the summary to the model and returns paragraphs", async ()
   const system = String(calls[0].system);
   assert.ok(
     system.includes(
-      "Every figure is rounded to a whole number, so one line can differ by up to one from its exact value while the lines still add up.",
+      "The totals and effect values are rounded to whole numbers, so one line can differ by up to one from its exact value while the lines still add up.",
     ),
     "the request does not say the rounded lines can each differ by one",
   );

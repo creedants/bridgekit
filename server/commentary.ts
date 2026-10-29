@@ -59,7 +59,7 @@ How the bridge is built, so you read it correctly:
 - Discontinued configurations: the mirror of new.
 - Sales with no units: rebates, credits and fees, bridged on their own line.
 - exactMatchShare is the share of current unit sales whose configuration also sold in the prior period. Price is measured only on that share; when it is low, more of the change sits in new configurations.
-- The effects add up to the change between priorTotal and currentTotal. Every figure is rounded to a whole number, so one line can differ by up to one from its exact value while the lines still add up.
+- The effects add up to the change between priorTotal and currentTotal. The totals and effect values are rounded to whole numbers, so one line can differ by up to one from its exact value while the lines still add up.
 
 Rules:
 - Use only the figures given. Do not invent causes, products, customers, markets or events. Where the cause is unknown, say what would need checking.
