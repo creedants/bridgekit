@@ -85,7 +85,7 @@ function option(width: number, slim = false): Record<string, any> {
   return draw(tenSteps(), labelPlan(LABELS, VALUES, width), width, slim);
 }
 
-/** Every key anywhere in an option that would turn a label. */
+/** The path of every `rotate` key anywhere in an option, whatever its angle. */
 function rotations(value: unknown, path = "option"): string[] {
   if (Array.isArray(value)) return value.flatMap((item, i) => rotations(item, `${path}[${i}]`));
   if (value === null || typeof value !== "object") return [];
@@ -190,7 +190,7 @@ for (const [name, bars] of [
   });
 }
 
-test("a phone's rows keep the desktop chart's value axis, bars and tooltips", () => {
+test("a phone's rows keep the desktop chart's axis floor, bar extents and tooltips", () => {
   const rows = option(343);
   const columns = option(659);
   assert.equal(rows.xAxis.min, columns.yAxis.min);

@@ -171,8 +171,8 @@ export function bridgeOption(input: {
     data: plan.axis,
     axisTick: { show: false },
     axisLine: { lineStyle: { color: theme.lineStrong } },
-    // containLabel sizes axis labels in their own font, which does not inherit textStyle, so a row name drawn
-    // in the page font would run past the chart's left edge.
+    // containLabel sizes axis labels in their own font, which does not inherit textStyle, so a long row name
+    // drawn in the page font can run past the chart's left edge.
     axisLabel: slim
       ? { show: false }
       : rows
