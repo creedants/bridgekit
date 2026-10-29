@@ -167,9 +167,9 @@ interface RecordScan {
 
 /**
  * The first cell of a measure column that does not read as a number, when more
- * than half of the column's filled cells do. The locator uses the loader's
- * source positions when present. Otherwise, it counts loaded records with
- * the header as row 1.
+ * than half of the column's filled cells do. An upload names a source row
+ * only when the locator can prove one. A table created only through SQL
+ * counts loaded records with the header as row 1.
  */
 async function firstUnreadIn(query: Query, column: string): Promise<UnreadCandidate | undefined> {
   const field = quote(column);
