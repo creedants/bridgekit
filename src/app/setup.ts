@@ -54,7 +54,7 @@ const UNITS_PATTERN = /unit|qty|quant|jobs|volume|pieces|menge|stuck|stueck|anza
 
 /** A German unit price names a price: Stückpreis, Stueckpreis, Mengenpreis, Stückkosten. */
 const PRICE_DE = /preis|kosten/i;
-/** A German tax column names a tax, never sales: Umsatzsteuer. */
+/** German tax marker used to exclude fallback sales candidates. */
 const TAX_DE = /steuer/i;
 
 /**
@@ -131,7 +131,7 @@ export function guessSetup(columns: Column[]): Setup {
   const unitsCandidates = withoutNotes.filter((column) => !isUnitPrice(column.name));
   const net = find(/net/i, withoutNotes);
   const held = net ? "" : netSalesHeldAsText(columns);
-  // A tax column such as Umsatzsteuer holds umsatz but is never sales.
+  // The sales-stem fallback excludes columns containing the German tax marker.
   const salesCandidates = withoutNotes.filter((column) => !TAX_DE.test(fold(column.name)));
   const salesColumn = net || (held ? "" : find(salesPattern, salesCandidates));
   const grossColumn = find(/gross|list/i, withoutNotes);
