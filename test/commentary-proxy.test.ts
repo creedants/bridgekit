@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { handleCommentary, MODEL, type CommentaryOptions, type CommentarySpender } from "../server/commentary.ts";
+import { handleCommentary, commentaryClient, MODEL, type CommentaryOptions, type CommentarySpender } from "../server/commentary.ts";
 import type { Fetcher } from "../server/cloudflare.ts";
 import type { Env } from "../server/env.ts";
 import app from "../server/worker.ts";
@@ -28,20 +28,25 @@ const result: BridgeResult = {
 };
 
 test("the summary holds rounded totals and names, nothing else", () => {
-  assert.deepEqual(summarize(result, config), {
+  const summary = summarize(result, config);
+  assert.deepEqual(summary, {
     measure: "Sales",
     prior: "2025",
     current: "2026",
     priorTotal: 1_000_000,
     currentTotal: 1_100_001,
     effects: [
-      { label: "Volume", value: 60_000 },
+      { label: "Volume", value: 60_001 },
       { label: "Price (like-for-like)", value: 40_000 },
     ],
     attributes: ["Design", "Material"],
     exactMatchShare: 0.951,
     newAndDiscontinued: "difference",
   });
+  assert.equal(
+    summary.priorTotal + summary.effects.reduce((sum, effect) => sum + effect.value, 0),
+    summary.currentTotal,
+  );
 });
 
 test("only an exact summary passes the server's check", () => {
@@ -102,6 +107,22 @@ test("the proxy sends the summary to the model and returns paragraphs", async ()
   assert.equal(calls[0].model, "claude-opus-5-5");
   const content = (calls[0].messages as { content: string }[])[0].content;
   assert.match(content, /"priorTotal": 1000000/);
+  const system = String(calls[0].system);
+  assert.ok(
+    system.includes(
+      "The totals and effect values are rounded to whole numbers, so one line can differ by up to one from its exact value while the lines still add up.",
+    ),
+    "the request does not say the rounded lines can each differ by one",
+  );
+  assert.equal(system.includes("The effects add up exactly to the change"), false, "the request still says the lines add up exactly");
+});
+
+test("one accepted request makes one upstream attempt", async () => {
+  assert.equal(commentaryClient("k").maxRetries, 0);
+  const { client, calls } = fakeClient({ stop_reason: "end_turn", text: "Sales rose." });
+  const response = await handleCommentary(post(summaryPayload), { apiKey: "k", client });
+  assert.equal(response.status, 200);
+  assert.equal(calls.length, 1);
 });
 
 test("the proxy refuses anything that is not bridge totals, without calling the model", async () => {

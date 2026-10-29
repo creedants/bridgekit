@@ -54,19 +54,67 @@ test("two totals rounding to the same short figure still print differently", () 
   );
 });
 
-test("fractional totals that would both print whole still read differently", () => {
+test("fractional totals print the bridge's whole rounded totals and the exact change", () => {
   const fractional = { ...result, priorSales: 2400.1, currentSales: 2400.2, effects: [] };
-  const headline = commentary(fractional, config)[0];
-  assert.match(headline, /from 2,400\.1 in 2025 to 2,400\.2 in 2026/);
+  assert.equal(
+    commentary(fractional, config)[0],
+    "Sales rose 0.0%, from 2,400 in 2025 to 2,400 in 2026 (0).",
+  );
   const equal = { ...result, priorSales: 2400, currentSales: 2400, effects: [] };
   assert.match(commentary(equal, config)[0], /was unchanged/);
 });
 
-test("the change prints the raw change rounded like the bridge table", () => {
+test("the change amount is the change between the shown totals", () => {
   const small = { ...result, priorSales: 100.49, currentSales: 134.51, effects: [] };
-  assert.match(commentary(small, config)[0], /\(\+34\)\.$/);
+  assert.match(commentary(small, config)[0], /\(\+35\)\.$/);
   const tiny = { ...result, priorSales: 100.4, currentSales: 100.6, effects: [] };
-  assert.match(commentary(tiny, config)[0], /\(0\)\.$/);
+  assert.match(commentary(tiny, config)[0], /\(\+1\)\.$/);
+});
+
+test("D141: one price line prints the amount the table shows, with the exact share", () => {
+  const repro: BridgeResult = {
+    ...result,
+    priorSales: 100.4,
+    currentSales: 100.6,
+    effects: [{ key: "price", label: "Price (like-for-like)", value: 0.2 }],
+  };
+  const text = commentary(repro, config);
+  assert.equal(text[0], "Sales rose 0.2%, from 100 in 2025 to 101 in 2026 (+1).");
+  assert.ok(text[2].startsWith("Like-for-like price added 1, +0.2% of prior sales."), text[2]);
+});
+
+test("D141: a money word follows the shown amount it prints", () => {
+  // The review's helper probe: the exact price sum is +0.1 and the shown price
+  // lines total +1, so the word and the amount agree.
+  const probe: BridgeResult = {
+    ...result,
+    priorSales: 100.45,
+    currentSales: 100.55,
+    effects: [
+      { key: "price_list", label: "List price", value: 0.2 },
+      { key: "price_discount", label: "Discounts", value: 0.45 },
+      { key: "price", label: "Price (like-for-like)", value: -0.55 },
+    ],
+  };
+  const probeText = commentary(probe, config)[2];
+  assert.ok(probeText.startsWith("Like-for-like price added 1, +0.1% of prior sales."), probeText);
+
+  // The review's split-price CSV: the exact price sum is -0.095 and the shown
+  // lines are +1 and 0, so the word follows the shown +1 while the share keeps
+  // the exact sign.
+  const split: BridgeResult = {
+    ...result,
+    priorSales: 100.45,
+    currentSales: 150.58,
+    effects: [
+      { key: "volume", label: "Volume", value: 50.225 },
+      { key: "price_list", label: "List price", value: 0.447459 },
+      { key: "price_discount", label: "Discounts", value: -0.542459 },
+    ],
+  };
+  const text = commentary(split, config)[2];
+  assert.ok(text.startsWith("Like-for-like price added 1, -0.1% of prior sales."), text);
+  assert.ok(text.includes("list price changes were +1 and discount changes were 0"), text);
 });
 
 test("F9: every unnamed line joins the leftover sum, including one below the threshold", () => {
@@ -130,6 +178,7 @@ test("one leftover line adds up in the singular and two in the plural", () => {
   const many: BridgeResult = {
     ...result,
     priorSales: 10_000_000,
+    currentSales: 11_010_000,
     effects: [
       { key: "volume", label: "Volume", value: 600_000 },
       { key: "price", label: "Price (like-for-like)", value: 300_000 },
@@ -142,6 +191,7 @@ test("one leftover line adds up in the singular and two in the plural", () => {
   assert.match(commentary(many, config)[1], /Discontinued configurations adds \+10,000\.$/);
   const more: BridgeResult = {
     ...many,
+    currentSales: 11_030_000,
     effects: [...many.effects, { key: "mix_2", label: "Mix: Size", value: 20_000 }],
   };
   assert.match(

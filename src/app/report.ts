@@ -1,5 +1,6 @@
 import { commentary } from "../commentary.ts";
 import { coverageLabel, effectColumns, measureName, type AccountGroup, type BridgeConfig, type BridgeResult, type PriceBucket } from "../engine.ts";
+import { roundBridge } from "../summary.ts";
 import type { Setup } from "./setup.ts";
 import { percent, shareOfPrior, signedPercent, signedWhole, whole } from "./format.ts";
 
@@ -182,20 +183,22 @@ export function buildReport(input: {
     return { ...e, label: `Mix: ${safe}` };
   });
   const viewEffects = omit ? safeEffects : result.effects;
+  const rounded = roundBridge(result.priorSales, result.currentSales, viewEffects.map((e) => e.value));
+  const viewResult = { ...result, effects: viewEffects };
   const viewCoverage = omit
     ? result.coverage.map((c) => ({ ...c, label: coverageLabel(safeConfig, c.level) }))
     : result.coverage;
-  const paragraphs = omit
-    ? commentary({ ...result, effects: safeEffects }, safeConfig)
-    : commentary(result, config);
+  const paragraphs = commentary(viewResult, omit ? safeConfig : config, rounded);
   const safeMoversLabel = safeLevels[0]?.name ?? input.movers.label;
   const viewMoversLabel = omit ? safeMoversLabel : input.movers.label;
   const row = (cells: string[], tag = "td") =>
     `<tr>${cells.map((c, i) => `<${tag}${i > 0 ? ' class="n"' : ""}>${c}</${tag}>`).join("")}</tr>`;
   const bridge = [
-    row([cell(`${measureName(config)} ${config.prior}`), whole(result.priorSales), ""]),
-    ...viewEffects.map((e) => row([cell(e.label), signedWhole(e.value), signedPercent(shareOfPrior(e.value, result.priorSales))])),
-    row([cell(`${measureName(config)} ${config.current}`), whole(result.currentSales), ""]),
+    row([cell(`${measureName(config)} ${config.prior}`), whole(rounded.prior), ""]),
+    ...viewEffects.map((e, i) =>
+      row([cell(e.label), signedWhole(rounded.values[i]), signedPercent(shareOfPrior(e.value, result.priorSales))]),
+    ),
+    row([cell(`${measureName(config)} ${config.current}`), whole(rounded.current), ""]),
   ];
   const mixOf = (r: Record<string, unknown>) =>
     config.levels.reduce((sum, _, i) => sum + Number(r[`mix_${i + 1}`] ?? 0), 0);

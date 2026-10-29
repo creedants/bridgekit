@@ -1,8 +1,45 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { registerHooks } from "node:module";
 import { test } from "node:test";
+import { transformSync } from "esbuild";
 import { commentaryPanel, commentaryPro, commentarySnapshot, noteSignedOut, type CommentaryState } from "../src/app/useConfig.ts";
 import * as api from "../src/app/account.ts";
 import type { Config } from "../src/app/account.ts";
+
+// Results lives in a .tsx file, and this runner cannot load one by itself, so a
+// load hook transforms it with the esbuild copy the build already installs. The
+// flag reads off in that transform, the way test/app-counts.test.ts does it, so
+// a build without AI commentary is what these tests render. The page database
+// is kept off the wasm bundles the browser build imports by URL, and the chart
+// and small-bridge grids are stubbed because they open that database as they load.
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.includes("?url")) {
+      return { url: 'data:text/javascript,export default "stub"', shortCircuit: true };
+    }
+    if (specifier.endsWith("SmallBridges.tsx")) {
+      return { url: "data:text/javascript,export const SmallBridges = () => null", shortCircuit: true };
+    }
+    if (specifier.endsWith("Waterfall.tsx")) {
+      return { url: "data:text/javascript,export const Waterfall = (props) => props.footer ?? null", shortCircuit: true };
+    }
+    return nextResolve(specifier, context);
+  },
+  load(url, context, nextLoad) {
+    if (url.endsWith(".tsx")) {
+      const source = readFileSync(new URL(url), "utf8");
+      const { code } = transformSync(source, {
+        loader: "tsx",
+        format: "esm",
+        jsx: "automatic",
+        define: { "import.meta.env": "{}" },
+      });
+      return { format: "module", source: code, shortCircuit: true };
+    }
+    return nextLoad(url, context);
+  },
+});
 
 // One row per state the panel can be in, decided without a browser.
 
@@ -383,4 +420,98 @@ test("the decision is judged against the time it is read, not the last write", a
   } finally {
     Date.now = realNow;
   }
+});
+
+/** A run small enough to render, with no chart or database behind it. */
+function panelRun(): unknown {
+  const config = {
+    table: "data",
+    periodColumn: "period",
+    prior: "2025",
+    current: "2026",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: [{ name: "Size", columns: ["size"] }],
+  };
+  return {
+    check: {
+      rows: 2,
+      priorRows: 1,
+      currentRows: 1,
+      otherPeriodRows: 0,
+      blankPeriodRows: 0,
+      blankMeasureRows: 0,
+      negativeUnitRows: 0,
+      negativeSalesRows: 0,
+      zeroUnitSalesRows: 0,
+    },
+    config,
+    result: {
+      priorSales: 100,
+      currentSales: 120,
+      effects: [{ key: "volume", label: "Volume", value: 20 }],
+      coverage: [{ level: 1, share: 1, label: "Exact", cells: 10, sales: 120 }],
+      cellsTable: "bridge_cells",
+    },
+    tieOut: {
+      prior: { period: "2025", inFile: 100, afterFilters: 100 },
+      current: { period: "2026", inFile: 120, afterFilters: 120 },
+    },
+    ms: 1,
+    textColumns: ["size"],
+    periods: ["2025", "2026"],
+    description: [],
+    setup: {
+      periodColumn: "period",
+      grain: "value",
+      unitsColumn: "units",
+      salesColumn: "sales",
+      levels: [{ name: "Size", columns: ["size"] }],
+      filters: [],
+    },
+    source: "A-100.csv",
+    sample: false,
+    formulaBlanks: 0,
+    amounts: null,
+  };
+}
+
+test("a build without AI commentary renders no AI panel", async () => {
+  const React = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { Results } = await import("../src/app/Results.tsx");
+  const html = renderToStaticMarkup(
+    React.createElement(Results, {
+      run: panelRun() as never,
+      query: (() => Promise.resolve((async () => []) as never)) as never,
+    }),
+  );
+  for (const text of ["AI commentary (optional)", "A longer commentary written by", "Send totals and write commentary"]) {
+    assert.equal(html.includes(text), false, `${text} is in a build without AI commentary`);
+  }
+});
+
+test("the whole-row note is looked up once per result", async () => {
+  const { wholeRowWarningsFor } = await import("../src/app/Results.tsx");
+  let started = 0;
+  const sql: string[] = [];
+  const start = () => {
+    started += 1;
+    return Promise.resolve((async (statement: string) => {
+      sql.push(statement);
+      return [];
+    }) as never);
+  };
+  const run = panelRun();
+  const first = wholeRowWarningsFor(run as never, start as never);
+  const again = wholeRowWarningsFor(run as never, start as never);
+  assert.equal(first, again, "a new query callback for the same result started a second lookup");
+  assert.deepEqual(await first, []);
+  assert.equal(started, 1, `the same result was looked up ${started} times`);
+  assert.equal(sql.length, 1, `the same result issued ${sql.length} statements`);
+
+  const other = wholeRowWarningsFor(panelRun() as never, start as never);
+  assert.notEqual(other, first, "a different result reused the earlier lookup");
+  assert.deepEqual(await other, []);
+  assert.equal(started, 2, `the two results made ${started} lookups in total`);
 });
