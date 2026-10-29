@@ -605,7 +605,8 @@ test("R141: a half line takes the leftover unit and an integer line stays put", 
 });
 
 test("R141: the budget sample's lines foot to its shown totals", () => {
-  const exact = [610.7, 475.3, 414.2, 443.6, -557.2];
+  // The budget sample's own five effects, to four decimals.
+  const exact = [610.7051, 474.9887, 413.7554, 443.5355, -557.2147];
   assert.notEqual(
     exact.reduce((sum, value) => sum + Math.round(value), 0),
     52142 - 50756,
