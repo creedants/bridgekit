@@ -156,7 +156,7 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
      */
     const detached = new Set();
     // A reply to this cannot arrive. The flag separates it from a hang, which the caller must still treat as a fault.
-    const sessionDetached = (method) => Object.assign(new Error(`the browser detached the session during ${method}, so the target was closing`), { detached: true });
+    const sessionDetached = (method) => Object.assign(new Error(`the browser detached the session during ${method}`), { detached: true });
     const closedSocket = (method) => {
       if (closing) return new Error("the browser closed its debugging socket");
       const status = browserExit ? browserExit.signal ?? browserExit.code : "not exited";
@@ -285,8 +285,9 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
         return probe.result?.value === 1;
       } catch (error) {
         if (broken) throw error;
-        // The target closed before it answered: nothing is left to ask, which is what a missing target means too.
-        if (error.detached || /No target with given id|Target closed/.test(error.message)) return false;
+        // A detached session cannot answer; it does not establish whether its target still runs.
+        if (error.detached) throw error;
+        if (/No target with given id|Target closed/.test(error.message)) return false;
         throw (broken ??= new Error(`${error.message}, so the ${target.type} at ${target.url} was not recorded`));
       } finally {
         if (sessionId) await command("Target.detachFromTarget", { sessionId }).catch(() => {});
@@ -309,7 +310,14 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
         const seen = unwatchedSince.get(target.targetId) ?? Date.now();
         unwatchedSince.set(target.targetId, seen);
         if (Date.now() - seen < GRACE_MS) return unrecorded(target);
-        if (await executing(target)) throw (broken ??= new Error(unrecorded(target)));
+        let runs;
+        try {
+          runs = await executing(target);
+        } catch (error) {
+          if (error.detached && !broken) return unrecorded(target);
+          throw error;
+        }
+        if (runs) throw (broken ??= new Error(unrecorded(target)));
         stopped.add(target.targetId);
       }
       return null;
