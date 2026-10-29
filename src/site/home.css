@@ -550,6 +550,22 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
 
 .home .plan ul { margin-bottom: 2rem; }
 
+/* The free plan is the one on offer: a filled plum panel with the wordmark's three bars drawn large in its lower corner. */
+.home .plan:first-child { position: relative; margin-top: 1.5rem; padding: 2rem 2.25rem 2.25rem; background: var(--ink); color: var(--blush); }
+
+.home .plan:first-child::after { content: ""; position: absolute; right: 2.25rem; bottom: 2.25rem; width: 7.5rem; height: 7rem;
+  background: linear-gradient(var(--plum-2), var(--plum-2)) 0 100% / 2rem 3.15rem no-repeat, linear-gradient(var(--sun), var(--sun)) 2.75rem calc(100% - 3.15rem) / 2rem 1.75rem no-repeat, linear-gradient(var(--plum-2), var(--plum-2)) 100% 100% / 2rem 7rem no-repeat; }
+
+.home .plan:first-child h3, .home .plan:first-child .price { color: #fff; }
+
+.home .plan:first-child .tag { color: var(--sun); }
+
+.home .plan:first-child .button { border-color: var(--sun); background: var(--sun); color: var(--ink); }
+
+.home .plan:first-child a.button:hover { border-color: #fff; background: #fff; color: var(--ink); }
+
+.home .plan:first-child .button:focus-visible { outline-color: var(--sun); }
+
 /* 05 Questions: a ruled list, each question beside its answer. */
 
 .home .qa { grid-column: 3 / -1; border-top: 1px solid var(--rule-strong); border-bottom: 1px solid var(--rule-strong); }
@@ -644,6 +660,11 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
   .home .plan { padding: 1.5rem 0 2.5rem; }
 
   .home .plan + .plan { padding: 1.5rem 0 0; border-left: 0; border-top: 1px solid var(--rule); }
+
+  .home .plan:first-child { margin-block: 1.5rem; padding: 1.75rem 1.5rem 1.75rem; }
+
+  /* The bars at 0.6 scale, beside the button. */
+  .home .plan:first-child::after { right: 1.5rem; bottom: 1.75rem; width: 4.5rem; height: 4.2rem; background-size: 1.2rem 1.89rem, 1.2rem 1.05rem, 1.2rem 4.2rem; background-position: 0 100%, 1.65rem calc(100% - 1.89rem), 100% 100%; }
 
   .home .plan .price { font-size: 4rem; }
 
