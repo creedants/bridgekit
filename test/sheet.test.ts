@@ -1,6 +1,18 @@
 import assert from "node:assert/strict";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { registerHooks } from "node:module";
+import path from "node:path";
 import { test } from "node:test";
 import { excelHeaderNames, excelHoleIndexes, firstSheetAsCsv, holeRenames, unprefixPart } from "../src/app/sheet.ts";
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.includes("?url")) {
+      return { url: 'data:text/javascript,export default "stub"', shortCircuit: true };
+    }
+    return nextResolve(specifier, context);
+  },
+});
 
 async function formulaWorkbook(): Promise<ArrayBuffer> {
   const { default: ExcelJS } = await import("exceljs");
@@ -552,4 +564,72 @@ test("unprefixes a self-closing root and leaves an unprefixed part as it is", ()
   );
   const xml = `<worksheet xmlns="${SHEET_NS}"><sheetData><row r="1"><c r="A1"><v>x:c</v></c></row></sheetData></worksheet>`;
   assert.equal(unprefixPart(xml), xml);
+});
+
+async function sheetWorkbook(others: readonly (readonly (string | number)[][])[]): Promise<ArrayBuffer> {
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sales = workbook.addWorksheet("Sales");
+  sales.addRow(["period", "units"]);
+  sales.addRow(["2025", 10]);
+  sales.addRow(["2026", 12]);
+  others.forEach((rows, index) => {
+    const sheet = workbook.addWorksheet(`Other ${index + 1}`);
+    for (const row of rows) sheet.addRow([...row]);
+  });
+  return workbook.xlsx.writeBuffer();
+}
+
+async function stagedSheetNote(loaded: Awaited<ReturnType<typeof firstSheetAsCsv>>): Promise<string | null> {
+  const directory = await mkdtemp("/tmp/bridgekit-sheet-");
+  const flatPath = path.join(directory, "book.csv");
+  await writeFile(flatPath, loaded.csv);
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageExcelAndSwap } = await import("../src/app/db.ts");
+  const { decimalCommaNote } = await import("../src/app/numbers.ts");
+  const query = await openDatabase();
+  await stageExcelAndSwap(query, "data", flatPath, loaded.holes, loaded.dataRows, {
+    name: loaded.sheetName,
+    others: loaded.otherSheets,
+  });
+  return decimalCommaNote(query, "data");
+}
+
+test("a two-sheet workbook names the sheet it loaded and the one it left out", async () => {
+  const loaded = await firstSheetAsCsv(
+    new File([await sheetWorkbook([[["period", "units"], ["2025", 1]]])], "book.xlsx"),
+  );
+  assert.equal(loaded.sheetName, "Sales");
+  assert.equal(loaded.otherSheets, 1);
+  assert.equal(
+    await stagedSheetNote(loaded),
+    'The workbook\'s first sheet, "Sales", was loaded; the other sheet was not.',
+  );
+});
+
+test("a three-sheet workbook says how many sheets were left out", async () => {
+  const loaded = await firstSheetAsCsv(
+    new File(
+      [
+        await sheetWorkbook([
+          [["period", "units"], ["2025", 1]],
+          [["period", "units"], ["2026", 2]],
+        ]),
+      ],
+      "book.xlsx",
+    ),
+  );
+  assert.equal(loaded.sheetName, "Sales");
+  assert.equal(loaded.otherSheets, 2);
+  assert.equal(
+    await stagedSheetNote(loaded),
+    'The workbook\'s first sheet, "Sales", was loaded; the other 2 sheets were not.',
+  );
+});
+
+test("a one-sheet workbook reports no other sheet and no sentence", async () => {
+  const loaded = await firstSheetAsCsv(new File([await sheetWorkbook([])], "book.xlsx"));
+  assert.equal(loaded.sheetName, "Sales");
+  assert.equal(loaded.otherSheets, 0);
+  assert.equal(await stagedSheetNote(loaded), null);
 });

@@ -137,3 +137,33 @@ test("R35: a header longer than the read prefix with few fields is not refused a
   assert.equal((await query(`DESCRIBE data`)).length, 200);
   assert.ok(!text.includes(TOO_MANY_COLUMNS_SENTENCE));
 });
+
+test("R9: a NaN column loads as text and the rest of the table loads", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const text = "period,units,sales,note\n2025,2,NaN,a\n2026,3,Infinity,b\n2027,4,-Infinity,c\n2028,5,12.5,d\n";
+  const directory = await mkdtemp("/tmp/bridgekit-load-errors-");
+  const file = path.join(directory, "nan.csv");
+  await writeFile(file, text);
+  const query = await openDatabase();
+  await stageCsvAndSwap(query, new File([text], "nan.csv"), "data", file);
+  const described = await query("DESCRIBE data");
+  assert.equal(String(described.find((row) => String(row.column_name) === "sales")?.column_type), "VARCHAR");
+  assert.deepEqual(
+    described.map((row) => String(row.column_name)),
+    ["period", "units", "sales", "note"],
+  );
+  const rows = await query("SELECT period, units, sales FROM data ORDER BY period");
+  assert.equal(rows.length, 4);
+  assert.deepEqual(
+    rows.map((row) => [Number(row.period), Number(row.units), String(row.sales)]),
+    [
+      [2025, 2, "NaN"],
+      [2026, 3, "Infinity"],
+      [2027, 4, "-Infinity"],
+      [2028, 5, "12.5"],
+    ],
+  );
+});
