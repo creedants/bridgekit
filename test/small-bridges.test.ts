@@ -251,7 +251,7 @@ test("only the newest read publishes, even when the older one settles last", asy
   assert.deepEqual(await olderRead, { status: "superseded" });
 });
 
-test("a read that fails keeps its own error, so the page can show it", async () => {
+test("a read that fails keeps its own error, unless a newer read replaced it", async () => {
   const reads = createLatestOnly();
   const ticket = reads.start();
   await assert.rejects(
@@ -260,6 +260,15 @@ test("a read that fails keeps its own error, so the page can show it", async () 
     }),
     /the view would not build/,
   );
+  const replaced = reads.start();
+  const newer = reads.start();
+  assert.deepEqual(
+    await replaced.run(async () => [], async () => {
+      throw new Error("the replaced read failed after the newer one started");
+    }),
+    { status: "superseded" },
+  );
+  assert.deepEqual(await newer.run(async () => [], async () => "newer"), { status: "latest", value: "newer" });
 });
 
 test("A to B to A keeps the list on screen but holds the gate until the newest read finishes", () => {
@@ -276,12 +285,15 @@ test("A to B to A keeps the list on screen but holds the gate until the newest r
   assert.equal(viewsInstalled(state, view), true);
 });
 
-test("a failed rebuild keeps the gate held", () => {
+test("a rebuild in flight holds the gate, and a setup with no period column holds it too", () => {
   const view = periodView({ load: 1, periodColumn: "period", grain: "month", filters: [] });
   const installed = reducePeriodViews(NO_PERIOD_VIEWS, { type: "rebuilt", view, values: ["2025", "2026"] });
   const rebuilding = reducePeriodViews(installed, { type: "rebuilding" });
   assert.equal(viewsInstalled(rebuilding, view), false);
   assert.equal(viewsInstalled(rebuilding, null), false);
+  const noColumn = reducePeriodViews(installed, { type: "noPeriodColumn", view: `${view}:2` });
+  assert.deepEqual(noColumn.list, { view: `${view}:2`, values: [] });
+  assert.equal(viewsInstalled(noColumn, view), false);
 });
 
 test("a split belongs only to the displayed column while the run is fresh", async () => {

@@ -51,7 +51,9 @@ export function createLatestOnly(): { start(): LatestTicket } {
             const value = await work(current);
             return superseded() ? { status: "superseded" } : { status: "latest", value };
           } catch (error: unknown) {
-            if (error === SUPERSEDED) return { status: "superseded" };
+            // A read that was replaced reports nothing, so a stale failure cannot
+            // leave its error over the read that replaced it.
+            if (error === SUPERSEDED || superseded()) return { status: "superseded" };
             throw error;
           }
         },
@@ -86,7 +88,9 @@ export function reducePeriodViews(state: PeriodViews, event: PeriodViewsEvent): 
     case "rebuilt":
       return { list: { view: event.view, values: event.values }, installed: event.view };
     case "noPeriodColumn":
-      return { list: { view: event.view, values: [] }, installed: state.installed };
+      // A setup with no period column has no period SQL of its own either, so the
+      // gate stays shut until a later rebuild says which view the database holds.
+      return { list: { view: event.view, values: [] }, installed: null };
     default: {
       const _exhaustive: never = event;
       return _exhaustive;
