@@ -311,7 +311,7 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .steps .stair { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(1.25rem, 3vw, 2.5rem); margin: 0; padding: 0; list-style: none; counter-reset: step; }
 
-.steps .stair li { position: relative; padding-top: 6.25rem; counter-increment: step; }
+.steps .stair li { position: relative; display: flex; flex-direction: column; padding-top: 6.25rem; counter-increment: step; }
 
 /* The baseline the bars stand on. */
 .steps .stair li::after { content: ""; position: absolute; top: 5rem; left: 0; right: calc(-1 * clamp(1.25rem, 3vw, 2.5rem)); border-top: 1px solid var(--blush); }
@@ -332,7 +332,15 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .steps .stair h3::before { content: counter(step, decimal-leading-zero); display: block; margin-bottom: .6rem; font: 600 .8125rem/1 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; letter-spacing: .04em; color: #7a5f73; }
 
+/* Under each step, the part of the tool it names, cropped from the tool on the sample. The frames end on one line. */
+.steps .stair picture { display: block; margin-top: auto; padding-top: 1.5rem; }
+
+.steps .stair img { display: block; width: 100%; height: auto; border-radius: 10px; background: #fff; box-shadow: 0 0 0 1px rgba(66, 32, 61, .12), 0 2px 4px rgba(66, 32, 61, .06), 0 16px 32px -14px rgba(66, 32, 61, .3); }
+
 /* Questions: three short answers side by side, each under a rule. */
+
+/* Pricing above is white too, so its bottom padding is the gap. */
+.price + .faq { padding-top: 0; }
 
 .faq .qa { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(1.25rem, 3vw, 2.5rem); }
 
@@ -471,6 +479,9 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
 
   .steps .stair li::after { right: auto; width: 3.25rem; }
 
+  /* In one column the steps stay short; the pictures show from 56rem up. */
+  .steps .stair picture { display: none; }
+
   .keeps-grid { grid-template-columns: minmax(0, 1fr); }
 
   .plans { grid-template-columns: 1fr; }
@@ -500,6 +511,9 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
   .views .card picture { margin-inline: -1rem; }
 
   .views .card img { max-width: 24rem; margin-inline: auto; border-width: 1px 0 0; border-radius: 0; }
+
+  /* The free card's bars at 0.6 scale, low enough to sit beside its button, clear of the line above it. */
+  .plan:first-child::after { width: 4.5rem; height: 4.2rem; background-size: 1.2rem 1.89rem, 1.2rem 1.05rem, 1.2rem 4.2rem; background-position: 0 100%, 1.65rem calc(100% - 1.89rem), 100% 100%; }
 }
 
 @media (max-width: 22.4375rem) {
