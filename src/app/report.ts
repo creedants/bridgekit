@@ -196,7 +196,9 @@ export function buildReport(input: {
     `<tr>${cells.map((c, i) => `<${tag}${i > 0 ? ' class="n"' : ""}>${c}</${tag}>`).join("")}</tr>`;
   const bridge = [
     row([cell(`${measureName(config)} ${config.prior}`), whole(rounded.prior), ""]),
-    ...shownEffects.map((e) => row([cell(e.label), signedWhole(e.value), signedPercent(shareOfPrior(e.value, rounded.prior))])),
+    ...shownEffects.map((e, i) =>
+      row([cell(e.label), signedWhole(e.value), signedPercent(shareOfPrior(viewEffects[i].value, result.priorSales))]),
+    ),
     row([cell(`${measureName(config)} ${config.current}`), whole(rounded.current), ""]),
   ];
   const mixOf = (r: Record<string, unknown>) =>
