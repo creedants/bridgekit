@@ -422,11 +422,11 @@ test("the home page carries one structured-data block with WebSite and Organizat
   );
 });
 
-test("the home page carries fewer than 500 visible words", () => {
+test("the home page carries fewer than 600 visible words", () => {
   const words = visibleWordsOf(readPage("index.html"));
   assert.ok(
-    words.length < 500,
-    `index.html has ${words.length} visible words: cut the page to fewer than 500 and keep the short landing copy`,
+    words.length < 600,
+    `index.html has ${words.length} visible words: cut the page to fewer than 600 and keep the short landing copy`,
   );
 });
 

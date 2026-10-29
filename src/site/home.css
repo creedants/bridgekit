@@ -81,15 +81,9 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .hero a.button.ghost:hover { background: var(--blush); }
 
-.hero { position: relative; overflow: hidden; padding-block: 4.5rem 4.5rem; }
+.hero { position: relative; overflow: hidden; padding-block: 3.5rem 0; }
 
-.hero::before { /* In the side-by-side layout, the sun slab bleeds off the right edge and starts inside the picture, beyond the copy column and gap. */
-  content: ""; position: absolute; top: 2.5rem; bottom: 0; left: calc(var(--gutter) + var(--pad) + 33.5rem); right: 0; background: var(--sun); border-top-left-radius: 28px;
-}
-
-.hero .hero-grid { position: relative; display: grid; grid-template-columns: minmax(0, 25rem) minmax(0, 1fr); gap: 3.5rem; align-items: start; }
-
-.hero .copy { padding-top: 2.5rem; }
+.hero .hero-grid { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 3rem; }
 
 .hero .copy h1 { font-size: 4.25rem; font-weight: 500; line-height: 1; letter-spacing: -.025em; }
 
@@ -111,14 +105,19 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .hero .copy .fine { margin-top: 1rem; font: 400 .8125rem/1.5 var(--sans); color: var(--plum-2); }
 
-/* In the side-by-side layout, the picture runs into the shell's right padding to leave room for all five KPI tiles. */
-.hero figure { margin-right: calc(-1 * var(--pad) - min(0px, var(--gutter) - 2rem)); }
+/* The picture sits on a dark stage, lit from the top right: a band across the page, or an inset panel from 1240 px up. */
+.hero figure { position: relative; isolation: isolate; margin-inline: calc(-1 * (var(--pad) + var(--gutter))); padding: 2.5rem calc(var(--pad) + var(--gutter));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .1);
+  background: radial-gradient(60% 75% at 85% 0%, rgba(231, 211, 226, .2), transparent 65%), radial-gradient(26% 38% at 100% 0%, rgba(244, 191, 58, .3), transparent 70%), radial-gradient(60% 80% at 0% 100%, rgba(106, 75, 100, .5), transparent 70%), linear-gradient(160deg, #4a2444, #2a1227 60%, #1f0d1c); }
+
+/* A faint dot grid that fades out down the stage. */
+.hero figure::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: radial-gradient(rgba(255, 255, 255, .1) 1px, transparent 1.3px) 0 0 / 18px 18px; -webkit-mask-image: linear-gradient(#000, transparent 75%); mask-image: linear-gradient(#000, transparent 75%); }
 
 /* The picture links to the sample but still reads as a drawing: no link colour or underline, and no text selection. */
-.hero .frame { display: block; background: var(--t-bg); border-radius: 12px; overflow: hidden; font-family: var(--sans); color: var(--t-text); text-decoration: none; user-select: none; -webkit-user-select: none;
-  box-shadow: 0 0 0 1px rgba(66, 32, 61, .10), 0 2px 4px rgba(66, 32, 61, .06), 0 24px 60px -12px rgba(66, 32, 61, .35); transition: transform .2s ease, box-shadow .2s ease; }
+.hero .frame { display: block; max-width: 48rem; margin-inline: auto; background: var(--t-bg); border-radius: 12px; overflow: hidden; font-family: var(--sans); color: var(--t-text); text-decoration: none; user-select: none; -webkit-user-select: none;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .14), 0 2px 6px rgba(0, 0, 0, .2), 0 32px 70px -16px rgba(0, 0, 0, .6); transition: transform .2s ease, box-shadow .2s ease; }
 
-.hero a.frame:focus-visible { outline: 3px solid var(--plum); outline-offset: 4px; }
+.hero a.frame:focus-visible { outline: 3px solid var(--sun); outline-offset: 4px; }
 
 .hero .chrome { display: flex; align-items: center; gap: .9rem; height: 44px; padding: 0 1rem; border-bottom: 1px solid var(--t-line); }
 
@@ -167,32 +166,76 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .hero .wf-narrow { display: none; }
 
-/* A second real view, the Movers table, laps the picture's lower edge below the chart's labels. */
-.hero .peek { position: relative; z-index: 1; width: min(21rem, 64%); margin: -1.25rem 0 0 -3rem; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 0 0 1px rgba(66, 32, 61, .12), 0 2px 4px rgba(66, 32, 61, .06), 0 20px 44px -14px rgba(66, 32, 61, .4); }
+/* A second real view, the Movers table, laps the picture's lower edge below the chart's labels. Its right edge lines up with the picture's, or the band's when the picture fills it. */
+.hero .peek { position: relative; z-index: 1; width: min(21rem, 64%); margin: -1.25rem max(0px, (100% - 48rem) / 2) 0 auto; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 0 0 1px rgba(255, 255, 255, .16), 0 2px 6px rgba(0, 0, 0, .2), 0 24px 48px -14px rgba(0, 0, 0, .6); }
 
 .hero .peek-head { padding: .6rem .9rem; border-bottom: 1px solid var(--t-line); font: 600 .75rem/1.2 var(--sans); color: var(--t-text); }
 
 .hero .peek img { display: block; width: 100%; height: auto; }
 
-@media (max-width: 1239px) {
-  .hero { padding-block: 3.5rem 0; }
+/* From 1240 px the copy runs in two columns above the picture, which grows to the shell's width on an inset stage. */
+@media (min-width: 1240px) {
+  .hero { padding-block: 3rem 9rem; }
 
-  .hero::before { display: none; }
+  .hero .copy { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 27rem); column-gap: 4rem; }
 
-  .hero .hero-grid { grid-template-columns: minmax(0, 1fr); gap: 3rem; }
+  .hero .copy > * { grid-column: 2; }
 
-  .hero .copy { padding-top: 0; }
+  .hero .copy .eyebrow { grid-area: 1 / 1; }
 
-  .hero figure { margin-inline: calc(-1 * (var(--pad) + var(--gutter))); padding: 2.5rem calc(var(--pad) + var(--gutter)); background: var(--sun); }
+  .hero .copy h1 { grid-area: 2 / 1 / 7; font-size: 5.5rem; line-height: .96; letter-spacing: -.03em; }
 
-  .hero .frame { max-width: 48rem; margin-inline: auto; }
+  .hero .copy .lead { grid-row: 2; margin-top: 0; max-width: none; font-size: 1.4375rem; }
 
-  /* The table's right edge lines up with the picture's right edge, or the band's when the picture fills it. */
-  .hero .peek { margin: -1.25rem max(0px, (100% - 48rem) / 2) 0 auto; }
+  .hero .copy .for { grid-row: 3; }
+
+  .hero .copy .define { grid-row: 4; max-width: none; }
+
+  .hero .copy .actions { grid-row: 5; margin-top: 1.75rem; }
+
+  .hero .copy .fine { grid-row: 6; }
+
+  .hero .copy .fine br { display: none; }
+
+  .hero figure { margin-inline: -2rem; padding: 3rem 4rem 2.5rem; border-radius: 24px; }
+
+  .hero .frame { max-width: none; }
+
+  .hero .chrome { height: 48px; padding: 0 1.25rem; }
+
+  .hero .app-name { font-size: .875rem; }
+
+  .hero .dataset { font-size: .8125rem; }
+
+  .hero .body { padding: 1.25rem 1.5rem 1.5rem; }
+
+  .hero .kpi { padding: .85rem 1rem .9rem; }
+
+  .hero .kpi b { font-size: .6875rem; }
+
+  .hero .kpi strong { font-size: 1.375rem; }
+
+  .hero .kpi small { font-size: .75rem; }
+
+  .hero .tabs { gap: 1.5rem; margin-top: 1.1rem; font-size: .8125rem; }
+
+  .hero .legend { margin-top: 1rem; font-size: .75rem; }
+
+  /* The wide chart draws at about 1.25 of its 760 units here, so its labels are set to read at 13 to 14 px. */
+  .hero .wf .ax { font-size: 10px; }
+
+  .hero .wf .val { font-size: 11px; font-weight: 600; }
+
+  .hero .wf .cat { font-size: 10.5px; }
+
+  /* The table laps the picture's lower edge and hangs below the stage. */
+  .hero .peek { width: 23rem; margin: -1rem -1.75rem -9rem auto; }
+
+  .hero .peek-head { padding: .7rem 1rem; font-size: .8125rem; }
 }
 
 @media (hover: hover) {
-  .hero a.frame:hover { transform: translateY(-4px); box-shadow: 0 0 0 1px rgba(66, 32, 61, .16), 0 4px 8px rgba(66, 32, 61, .08), 0 32px 72px -12px rgba(66, 32, 61, .45); }
+  .hero a.frame:hover { transform: translateY(-4px); box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 4px 10px rgba(0, 0, 0, .25), 0 40px 80px -16px rgba(0, 0, 0, .7); }
 
   .hero-grid:has(a.frame:hover) .cta span { transform: translateX(3px); }
 }
@@ -258,9 +301,21 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
   /* The narrow chart is the tool's phone layout, one row per step, drawn at about its 330 units on a 375 px screen. */
   .hero .wf .ax { font-size: 10.5px; }
 
-  .hero .wf .cat, .hero .wf .val { font-size: 11px; }
+  .hero .wf .cat { font-size: 11px; }
+
+  .hero .wf .val { font-size: 12px; }
 
   .hero .peek { width: 88%; margin-top: -.25rem; }
+}
+
+/* Page structure: the section heads are numbered, the light sections are divided by hairlines, and on wide screens two rails run down the shell's edges. */
+
+.home { counter-reset: sec; }
+
+.home .anatomy, .home .views, .home .steps, .home .faq { border-top: 1px solid var(--blush); }
+
+@media (min-width: 1300px) {
+  .home > section:not(.keeps):not(.close) { background-image: linear-gradient(var(--blush), var(--blush)), linear-gradient(var(--blush), var(--blush)); background-repeat: no-repeat; background-size: 1px 100%; background-position: calc(50% - 38rem) 0, calc(50% + 38rem) 0; }
 }
 
 /* Calls to action: a filled and an outlined button side by side, each at least 44 px tall. */
@@ -271,20 +326,62 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 /* Section headings: a short sun rule, then a large two-tone heading. */
 
-.sec-head { margin-bottom: clamp(2rem, 4vw, 3rem); }
+.sec-head { margin-bottom: clamp(2rem, 4vw, 3rem); counter-increment: sec; }
 
-.sec-head::before { content: ""; display: block; width: 3rem; height: .375rem; margin-bottom: 1.25rem; background: var(--sun); }
+.sec-head::before { content: counter(sec, decimal-leading-zero); display: block; margin-bottom: 1.25rem; padding-left: 4rem; background: linear-gradient(var(--sun), var(--sun)) 0 50% / 3rem .375rem no-repeat; font: 600 .8125rem/1 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; letter-spacing: .08em; color: #7a5f73; }
 
 .sec-head h2,
 .close h2 { max-width: 22ch; font-size: clamp(2rem, 3.6vw, 3rem); line-height: 1.06; letter-spacing: -.022em; }
 
 .sec-head h2 span { color: #7a5f73; }
 
-/* Views: real screenshots of the tool on the sample, each on a tinted card with a caption. */
+/* What each step measures: four cells, each drawing the sample's bridge small and to scale from 52M to 72M, with its own steps filled. */
 
-.views .gallery { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 1.25rem; }
+.anatomy { background: #faf6f9; }
 
-.views .card { display: flex; flex-direction: column; padding: 1.25rem 1.25rem 0; overflow: hidden; background: #faf6f9; border: 1px solid var(--blush); border-radius: 14px; }
+.anatomy .figs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; padding: 0; list-style: none; counter-reset: fig; overflow: hidden; background: var(--paper); border: 1px solid var(--blush); border-radius: 14px; }
+
+.anatomy .figs li { position: relative; display: flex; flex-direction: column; padding: 0 1.5rem 1.5rem; border-left: 1px solid var(--blush); counter-increment: fig; }
+
+.anatomy .figs li:first-child { border-left: 0; }
+
+.anatomy .figs li::before { content: "Fig. " counter(fig); position: absolute; top: 1rem; left: 1.5rem; font: 500 .6875rem/1 ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; letter-spacing: .08em; text-transform: uppercase; color: #7a5f73; }
+
+.anatomy .mini { display: block; width: calc(100% + 3rem); height: auto; margin: 0 -1.5rem; padding: 2.5rem 1.5rem 1rem; border-bottom: 1px solid var(--blush); background: radial-gradient(rgba(66, 32, 61, .13) 1px, transparent 1.3px) 0 0 / 12px 12px, #fdfafc; }
+
+.anatomy .mini line { stroke: #9c8196; stroke-width: 1; }
+
+.anatomy .mini .link { stroke-dasharray: 2 2; }
+
+.anatomy .mini rect { stroke-width: 1; }
+
+.anatomy .mini .total, .anatomy .mini .step { fill: var(--paper); stroke: #b9a2b4; }
+
+.anatomy .mini .on { fill: var(--sun); stroke: var(--plum); }
+
+.anatomy .mini .on.down { fill: var(--plum); }
+
+.anatomy h3 { margin-top: 1.25rem; font-size: 1.5rem; line-height: 1.15; }
+
+.anatomy .figs p { margin-top: .4rem; font: 400 .9375rem/1.5 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
+
+.anatomy .figs .amt { display: grid; margin-top: auto; padding-top: 1.25rem; }
+
+.anatomy .amt span { display: flex; justify-content: space-between; gap: 1rem; padding-block: .35rem; border-top: 1px solid var(--blush); font: 400 .875rem/1.3 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
+
+.anatomy .amt b { font-weight: 600; color: var(--plum); }
+
+.anatomy .amt span:only-child b { font: 500 1.75rem/1.1 Newsreader, Georgia, "Times New Roman", serif; letter-spacing: -.01em; }
+
+/* Views: real screenshots of the tool on the sample, in one ruled grid of dotted cells, each with a caption. */
+
+.views .gallery { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--blush); border-radius: 14px; }
+
+.views .card { display: flex; flex-direction: column; padding: 1.5rem 1.5rem 0; overflow: hidden; background: radial-gradient(rgba(66, 32, 61, .09) 1px, transparent 1.3px) 0 0 / 14px 14px, #faf6f9; }
+
+.views .card:nth-child(n+2) { border-top: 1px solid var(--blush); }
+
+.views .card:nth-child(3) { border-left: 1px solid var(--blush); }
 
 .views .card:nth-child(2), .views .card:nth-child(3) { grid-column: span 6; }
 
@@ -305,50 +402,45 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .views .also span { padding: .4rem .8rem; border: 1px solid var(--blush); border-radius: 999px; font: 500 .8125rem/1.3 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
 
-/* Steps: three columns on a shared baseline, each topped by one bar of the wordmark. */
+/* Steps: three columns, each under a numbered tile, the tiles joined by a rail. */
 
 .steps { background: #faf6f9; }
 
 .steps .stair { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(1.25rem, 3vw, 2.5rem); margin: 0; padding: 0; list-style: none; counter-reset: step; }
 
-.steps .stair li { position: relative; display: flex; flex-direction: column; padding-top: 6.25rem; counter-increment: step; }
+.steps .stair li { position: relative; display: flex; flex-direction: column; padding-top: 4.75rem; counter-increment: step; }
 
-/* The baseline the bars stand on. */
-.steps .stair li::after { content: ""; position: absolute; top: 5rem; left: 0; right: calc(-1 * clamp(1.25rem, 3vw, 2.5rem)); border-top: 1px solid var(--blush); }
+/* The rail from each tile to the next. */
+.steps .stair li::after { content: ""; position: absolute; top: 1.5rem; left: 3rem; right: calc(-1 * clamp(1.25rem, 3vw, 2.5rem)); border-top: 1px solid #c9b3c4; }
 
-.steps .stair li:last-child::after { right: 0; }
+.steps .stair li:last-child::after { display: none; }
 
-.steps .stair li::before { content: ""; position: absolute; left: 0; width: 3.25rem; background: var(--plum); }
+.steps .stair li::before { content: ""; position: absolute; top: 0; left: 0; width: 3rem; height: 3rem; border-radius: 10px; background: var(--plum); }
 
-.steps .stair li:nth-child(1)::before { top: 2.75rem; height: 2.25rem; }
-
-.steps .stair li:nth-child(2)::before { top: 1.5rem; height: 1.25rem; background: var(--sun); }
-
-.steps .stair li:nth-child(3)::before { top: 0; height: 5rem; }
+.steps .stair li:nth-child(2)::before { background: var(--sun); }
 
 .steps .stair h3 { max-width: 17rem; font-size: clamp(1.5rem, 2.4vw, 2rem); line-height: 1.15; letter-spacing: -.01em; }
 
 .steps .stair p { max-width: 17rem; margin-top: .6rem; font: 400 1rem/1.5 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
 
-.steps .stair h3::before { content: counter(step, decimal-leading-zero); display: block; margin-bottom: .6rem; font: 600 .8125rem/1 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; letter-spacing: .04em; color: #7a5f73; }
+.steps .stair h3::before { content: counter(step, decimal-leading-zero); position: absolute; top: 0; left: 0; display: grid; place-items: center; width: 3rem; height: 3rem; font: 600 .875rem/1 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; letter-spacing: .04em; color: var(--paper); }
+
+.steps .stair li:nth-child(2) h3::before { color: var(--plum); }
 
 /* Under each step, the part of the tool it names, cropped from the tool on the sample. The frames end on one line. */
 .steps .stair picture { display: block; margin-top: auto; padding-top: 1.5rem; }
 
 .steps .stair img { display: block; width: 100%; height: auto; border-radius: 10px; background: #fff; box-shadow: 0 0 0 1px rgba(66, 32, 61, .12), 0 2px 4px rgba(66, 32, 61, .06), 0 16px 32px -14px rgba(66, 32, 61, .3); }
 
-/* Questions: three short answers side by side, each under a rule. */
+/* Questions: a ruled list, each question beside its answer. */
 
-/* Pricing above is white too, so its bottom padding is the gap. */
-.price + .faq { padding-top: 0; }
+.faq .qa { border-bottom: 1px solid var(--blush); }
 
-.faq .qa { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(1.25rem, 3vw, 2.5rem); }
-
-.faq .qa div { padding-top: 1.25rem; border-top: 1px solid var(--blush); }
+.faq .qa div { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: .5rem clamp(1.25rem, 3vw, 2.5rem); padding-block: 1.5rem; border-top: 1px solid var(--blush); }
 
 .faq dt { font-size: 1.375rem; font-weight: 500; line-height: 1.25; }
 
-.faq dd { margin-top: .5rem; font: 400 1rem/1.55 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
+.faq dd { font: 400 1rem/1.55 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
 
 /* Privacy */
 
@@ -434,6 +526,29 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .close a.button.ghost:hover { background: var(--paper); }
 
+/* The hero's bars rise into place once, one after another, when the page opens. */
+@media (prefers-reduced-motion: no-preference) {
+  .hero .wf rect { animation: rise .5s cubic-bezier(.2, .7, .3, 1) both; }
+
+  .hero .wf rect:nth-of-type(n+3) { animation-delay: .06s; }
+
+  .hero .wf rect:nth-of-type(n+4) { animation-delay: .12s; }
+
+  .hero .wf rect:nth-of-type(n+5) { animation-delay: .18s; }
+
+  .hero .wf rect:nth-of-type(n+6) { animation-delay: .24s; }
+
+  .hero .wf rect:nth-of-type(n+7) { animation-delay: .3s; }
+
+  .hero .wf rect:nth-of-type(n+8) { animation-delay: .36s; }
+
+  .hero .wf rect:nth-of-type(n+9) { animation-delay: .42s; }
+
+  .hero .wf rect:nth-of-type(n+10) { animation-delay: .48s; }
+}
+
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+
 @media (prefers-reduced-motion: reduce) {
   .hero .frame, .hero .copy .cta span { transition: none; }
 
@@ -471,13 +586,24 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
 
   .views .card.wide { grid-row: span 2; }
 
-  .faq .qa { grid-template-columns: minmax(0, 1fr); }
+  .views .card:nth-child(n+2) { border-top: 0; border-left: 1px solid var(--blush); }
+
+  .views .card:nth-child(3) { border-top: 1px solid var(--blush); }
+
+  .anatomy .figs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  .anatomy .figs li:nth-child(3) { border-left: 0; }
+
+  .anatomy .figs li:nth-child(n+3) { border-top: 1px solid var(--blush); }
+
+  .faq .qa div { grid-template-columns: minmax(0, 1fr); }
 
   .steps .stair { grid-template-columns: minmax(0, 1fr); gap: 1.75rem; }
 
   .steps .stair li { min-height: 5rem; padding: 0 0 0 4.75rem; }
 
-  .steps .stair li::after { right: auto; width: 3.25rem; }
+  /* In one column the rail runs down from each tile to the next. */
+  .steps .stair li::after { top: 3rem; bottom: -1.75rem; left: 1.5rem; right: auto; border-top: 0; border-left: 1px solid #c9b3c4; }
 
   /* In one column the steps stay short; the pictures show from 56rem up. */
   .steps .stair picture { display: none; }
@@ -504,6 +630,27 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
   .views .gallery { grid-template-columns: minmax(0, 1fr); }
 
   .views .card.wide { grid-row: auto; }
+
+  .views .card:nth-child(n+2) { border-left: 0; border-top: 1px solid var(--blush); }
+
+  /* On a phone each cell puts its drawing beside its text. */
+  .anatomy .figs { grid-template-columns: minmax(0, 1fr); }
+
+  .anatomy .figs li { display: grid; grid-template-columns: 8rem minmax(0, 1fr); grid-template-rows: auto auto 1fr; column-gap: 1rem; align-items: start; padding: 1.25rem 1rem; border-left: 0; }
+
+  .anatomy .figs li:nth-child(n+2) { border-top: 1px solid var(--blush); }
+
+  .anatomy .figs li::before { top: 1.75rem; left: 1.5rem; }
+
+  .anatomy .mini { grid-row: 1 / -1; width: 100%; margin: 0; padding: 1.75rem .5rem .5rem; border: 1px solid var(--blush); border-radius: 8px; }
+
+  .anatomy h3 { margin-top: 0; font-size: 1.25rem; }
+
+  .anatomy .figs p { font-size: .875rem; }
+
+  .anatomy .figs .amt { padding-top: .75rem; }
+
+  .anatomy .amt span:only-child b { font-size: 1.375rem; }
 
   /* The picture runs to the card's edges, so the phone layout draws at nearly its own size. */
   .views .card { padding: 1.25rem 1rem 0; }

@@ -2251,16 +2251,17 @@ const CARD_HEADER = ["Sales bridge", "2025 to 2026", "Model › Finish › Color
 
 /**
  * The parts of the home page the card hides, and the sizes it gives the picture. The hero's own rules do the rest:
- * below the 1240 px breakpoint the picture sits on its sun band, with its corners, shadow, window dots and logo, as
- * a 1200 px visitor sees it. The card alone tilts it. The chart's text grows so its labels still read in a small
- * link preview.
+ * below the 1240 px breakpoint the picture keeps its corners, window dots and logo, as a 1200 px visitor sees it.
+ * The card alone tilts it, and puts it back on the sun band and soft plum shadow it has always had in place of the
+ * page's dark stage. The bars stand still. The chart's text grows so its labels still read in a small link preview.
  */
 const CARD_CSS = `
   .hero { padding: 0; }
   .hero .hero-grid { max-width: none; padding: 0; }
   .hero .copy, .hero .peek, .hero .kpis, .hero .tabs, .hero .legend { display: none; }
-  .hero figure { height: 630px; margin: 0; padding: 0 64px; display: flex; align-items: center; }
-  .hero .frame { width: 100%; max-width: none; transform: rotate(-1.5deg); }
+  .hero figure { height: 630px; margin: 0; padding: 0 64px; display: flex; align-items: center; background: var(--sun); box-shadow: none; }
+  .hero figure::before { display: none; }
+  .hero .frame { width: 100%; max-width: none; transform: rotate(-1.5deg); box-shadow: 0 0 0 1px rgba(66, 32, 61, .10), 0 2px 4px rgba(66, 32, 61, .06), 0 24px 60px -12px rgba(66, 32, 61, .35); }
   .hero .chrome { height: 60px; gap: 1.1rem; padding: 0 1.4rem; }
   .hero .app-name { font-size: 1.25rem; gap: .6rem; }
   .hero .app-name svg { width: 26px; height: 26px; }
@@ -2269,6 +2270,7 @@ const CARD_CSS = `
   .hero .body { padding: 1rem 1.5rem 1.25rem; }
   .hero .wf .ax, .hero .wf .cat { font-size: 12.5px; }
   .hero .wf .val { font-size: 13px; }
+  .hero .wf rect { animation: none; }
 `;
 
 /**
