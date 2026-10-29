@@ -565,23 +565,30 @@ function nameWords(name: string): string[] {
  * values first with ties in file order. Keeps columns that are neither
  * numeric nor dates, which includes text and true/false columns, with 2 to
  * 5000 distinct values, drops the used period and measure columns, names
- * with a customer, region, date or id word, and a column that maps one for
- * one to an earlier column.
+ * with a customer, region, date or id word, and a column marked as an exact
+ * or near duplicate of an earlier column.
  */
 export function suggestAttributes(
   columns: Column[],
   distinct: Map<string, number>,
   used: ReadonlySet<string>,
 ): string[] {
-  const scored: { name: string; n: number; index: number }[] = [];
-  columns.forEach((column, index) => {
+  // Eligibility ignores the duplicate mark, so a pair whose earlier column is
+  // excluded by a name rule keeps the later one.
+  const eligible = new Set<string>();
+  columns.forEach((column) => {
     if (used.has(column.name)) return;
     if (isNumeric(column.type) || isDate(column.type)) return;
-    if (column.duplicateOf !== undefined && column.duplicateOf !== "") return;
     const n = distinct.get(column.name) ?? 0;
     if (n < 2 || n > MAX_DISTINCT) return;
     if (nameWords(column.name).some((word) => NON_ATTRIBUTE_WORDS.has(word))) return;
-    scored.push({ name: column.name, n, index });
+    eligible.add(column.name);
+  });
+  const scored: { name: string; n: number; index: number }[] = [];
+  columns.forEach((column, index) => {
+    if (!eligible.has(column.name)) return;
+    if (column.duplicateOf !== undefined && column.duplicateOf !== "" && eligible.has(column.duplicateOf)) return;
+    scored.push({ name: column.name, n: distinct.get(column.name) ?? 0, index });
   });
   scored.sort((a, b) => (a.n === b.n ? a.index - b.index : a.n - b.n));
   return scored.map((entry) => entry.name);
@@ -602,9 +609,9 @@ export async function findRollups(
 }
 
 /**
- * The roll-up chains plus the columns that map to each other one for one, such
- * as a class name and its code. A pair is one to one when both counts are equal,
- * at least 2, and their joint count is the same, so no value pairs with two.
+ * The roll-up chains plus pairs that are identical or nearly identical on the
+ * sample: every finer value has one broader value, and the broader count is
+ * at least 95% of the finer count, which must be at least 2.
  */
 export async function findRelationships(
   query: Query,
@@ -638,9 +645,8 @@ export async function findRelationships(
     const [finer, broader] = aCount > bCount ? [a, b] : [b, a];
     const finerCount = count.get(finer)!;
     const broaderCount = count.get(broader)!;
-    // A code is the same thing as the name it belongs to: every finer value sits
-    // under one broader value and there are almost as many broader values as
-    // finer ones. A real hierarchy leaves a broader value with several finer.
+    // Treat a nested pair with nearly equal value counts as a name/code pair.
+    // This is a heuristic: a real hierarchy can also have nearly equal counts.
     const same = finerCount >= 2 && together === finerCount && broaderCount >= NEARLY_THE_SAME * finerCount;
     if (same) {
       duplicates.push(earlier(a, b) as [string, string]);
@@ -749,18 +755,20 @@ export function totalRowOffers(found: readonly TotalRow[], filters: readonly Fil
 export interface FeeRows {
   withoutUnits: number;
   named: string[];
+  /** Rows whose name reads like a fee or an adjustment, so repeated names count once each. */
+  namedRows: number;
 }
 
 const FEE_PATTERN = /fee|adjust|postage|shipping|discount|surcharge/i;
 
-/** The first non-numeric, non-date column after the period column, in file order. */
+/** The first non-numeric, non-date column other than the period column, in file order. */
 async function firstTextColumn(query: Query, table: string, periodColumn: string): Promise<string> {
   const [row] = await query(
     `SELECT column_name FROM duckdb_columns()
      WHERE schema_name = current_schema()
        AND table_name = '${table.replaceAll("'", "''")}'
        AND column_name <> '${periodColumn.replaceAll("'", "''")}'
-       AND NOT regexp_matches(column_type, 'INT|DOUBLE|DECIMAL|FLOAT|REAL|DATE|TIMESTAMP')
+       AND NOT regexp_matches(data_type, 'INT|DOUBLE|DECIMAL|FLOAT|REAL|DATE|TIMESTAMP')
      ORDER BY column_index
      LIMIT 1`,
   );
@@ -779,9 +787,9 @@ export async function feeRows(
 ): Promise<FeeRows> {
   const units = setup.unitsColumn;
   const sales = setup.salesColumn;
-  if (units === "" || sales === "") return { withoutUnits: 0, named: [] };
+  if (units === "" || sales === "") return { withoutUnits: 0, named: [], namedRows: 0 };
   const name = setup.levels[0]?.columns[0] ?? (await firstTextColumn(query, table, setup.periodColumn));
-  if (name === "") return { withoutUnits: 0, named: [] };
+  if (name === "") return { withoutUnits: 0, named: [], namedRows: 0 };
   const nameField = `CAST(${quote(name)} AS VARCHAR)`;
   const rows = await query(
     `SELECT ${nameField} AS v, count(*)::DOUBLE AS n
@@ -790,11 +798,11 @@ export async function feeRows(
      GROUP BY 1`,
   );
   const withoutUnits = rows.reduce((total, row) => total + Number(row.n), 0);
-  const named = rows
-    .map((row) => String(row.v))
-    .filter((value) => FEE_PATTERN.test(value))
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return { withoutUnits, named };
+  const matching = rows.filter((row) => FEE_PATTERN.test(String(row.v)));
+  const named = matching.map((row) => String(row.v)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  // Rows group by name, so a repeated fee name counts every one of its rows.
+  const namedRows = matching.reduce((total, row) => total + Number(row.n), 0);
+  return { withoutUnits, named, namedRows };
 }
 
 /** One sentence naming the rows that count like products, or null when there are none. */
@@ -808,9 +816,9 @@ export function feeNote(found: FeeRows): string | null {
   const named =
     found.named.length === 0
       ? "and none of them is named like a fee or an adjustment"
-      : found.named.length === 1
+      : found.namedRows === 1
         ? "and 1 of them is named like a fee or an adjustment"
-        : `and ${found.named.length.toLocaleString("en-US")} of them are named like fees or adjustments`;
+        : `and ${found.namedRows.toLocaleString("en-US")} of them are named like fees or adjustments`;
   const tail = found.withoutUnits === 1 ? "it is counted like a product" : "they are counted like products";
   return `${head}, ${named}; ${tail}.`;
 }

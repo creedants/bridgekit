@@ -307,7 +307,7 @@ test("D143: a full year against a three-month year gets one plain note", () => {
   ];
   assert.equal(
     coverageNote(coverage, "2025", "2026"),
-    '"2025" covers 12 months and "2026" covers 3, so part of this change is the different time covered.',
+    '"2025" has rows in 12 months and "2026" in 3, so check that these periods are comparable.',
   );
 });
 
@@ -335,6 +335,83 @@ test("D143: the coverage query counts the months of each period of a date column
   ]);
   assert.equal(
     coverageNote(coverage, "2025", "2026"),
-    '"2025" covers 3 months and "2026" covers 2, so part of this change is the different time covered.',
+    '"2025" has rows in 3 months and "2026" in 2, so check that these periods are comparable.',
   );
+});
+
+test("D143: a month label with fewer days gets the note, in days", () => {
+  assert.equal(
+    coverageNote(
+      [
+        { period: "2026-01", months: 1, days: 31, rows: 31 },
+        { period: "2026-02", months: 1, days: 20, rows: 20 },
+      ],
+      "2026-01",
+      "2026-02",
+    ),
+    '"2026-01" has rows in 31 days and "2026-02" in 20, so check that these periods are comparable.',
+  );
+});
+
+test("D143: a count of one is written in the singular", () => {
+  assert.equal(
+    coverageNote(
+      [
+        { period: "2026", months: 1, days: 5, rows: 5 },
+        { period: "2025", months: 12, days: 363, rows: 120 },
+      ],
+      "2026",
+      "2025",
+    ),
+    '"2026" has rows in 1 month and "2025" in 12, so check that these periods are comparable.',
+  );
+  assert.equal(
+    coverageNote(
+      [
+        { period: "2026-02", months: 1, days: 1, rows: 1 },
+        { period: "2026-01", months: 1, days: 31, rows: 31 },
+      ],
+      "2026-02",
+      "2026-01",
+    ),
+    '"2026-02" has rows in 1 day and "2026-01" in 31, so check that these periods are comparable.',
+  );
+});
+
+test("D143: the coverage query reads the bridge's filtered rows, so a filtered year gets no false note", async () => {
+  const query = await openDatabase();
+  await query("SET threads = 1");
+  await query("CREATE TABLE data (product VARCHAR, sold_on DATE, units BIGINT, sales DOUBLE)");
+  const rows: string[] = [];
+  for (let month = 1; month <= 10; month++) {
+    const day = String(month).padStart(2, "0");
+    rows.push(`('B-200', '2025-${day}-05', 1, 10)`);
+  }
+  rows.push(`('A-100', '2025-01-09', 1, 10)`);
+  for (let month = 1; month <= 3; month++) {
+    const day = String(month).padStart(2, "0");
+    rows.push(`('B-200', '2026-${day}-05', 1, 10)`);
+  }
+  rows.push(`('A-100', '2026-01-09', 1, 10)`);
+  await query(`INSERT INTO data VALUES ${rows.join(", ")}`);
+  const everything = readCoverage(await query(coverageSql({ table: "data", periodColumn: "sold_on", grain: "year" })));
+  assert.deepEqual(everything.map((entry) => [entry.period, entry.months]), [
+    ["2025", 10],
+    ["2026", 3],
+  ]);
+  const filtered = readCoverage(
+    await query(
+      coverageSql({
+        table: "data",
+        periodColumn: "sold_on",
+        grain: "year",
+        filters: [{ column: "product", mode: "include", values: ["A-100"] }],
+      }),
+    ),
+  );
+  assert.deepEqual(filtered.map((entry) => [entry.period, entry.months]), [
+    ["2025", 1],
+    ["2026", 1],
+  ]);
+  assert.equal(coverageNote(filtered, "2025", "2026"), null);
 });

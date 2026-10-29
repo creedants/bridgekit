@@ -17,6 +17,7 @@ import {
   loadSavedSetup,
   mainView,
   MAX_LEVEL_NAME,
+  measureChange,
   netSalesHeldAsText,
   nextPhase,
   PERIOD,
@@ -1624,33 +1625,67 @@ const headers: { names: string[]; textMeasures: boolean }[] = [
   }
 ];
 
+// The four families the legacy oracle cannot judge, pinned here from the fixed
+// guess so no header row escapes this test. Keys are the header rows joined
+// with ", ", which repeats a row that appears twice in the matrix.
+const pinned = new Map<string, { period: string; units: string; sales: string }>([
+  // German: the oracle knows no German stems, unit prices or tax columns.
+  ["Jahr, Produkt, Menge, Nettoumsatz", { period: "Jahr", units: "Menge", sales: "Nettoumsatz" }],
+  ["Menge, Umsatz", { period: "", units: "Menge", sales: "Umsatz" }],
+  // The wider money words, in French, Spanish and Dutch or the English turnover.
+  ["año, producto, unidades, ventas", { period: "año", units: "", sales: "ventas" }],
+  ["Cantidad, Ventas", { period: "", units: "", sales: "Ventas" }],
+  ["units, Turnover", { period: "", units: "units", sales: "Turnover" }],
+  // A name that says both money and a count, such as "Sales Qty", is a count now.
+  ["year, product, Sales Qty, sales", { period: "year", units: "Sales Qty", sales: "sales" }],
+  ["year, product, Sales Units, sales", { period: "year", units: "Sales Units", sales: "sales" }],
+  ["year, product, total_units, sales", { period: "year", units: "total_units", sales: "sales" }],
+  ["sales, SalesQty", { period: "", units: "SalesQty", sales: "sales" }],
+  ["units, Sales, Sales Qty", { period: "", units: "units", sales: "Sales" }],
+  ["Total Quantity, sales", { period: "", units: "Total Quantity", sales: "sales" }],
+  ["units, Sales (units)", { period: "", units: "units", sales: "" }],
+  ["units, NetSalesQty", { period: "", units: "units", sales: "NetSalesQty" }],
+  ["year, product, units, Business Unit Sales, amount", { period: "year", units: "units", sales: "amount" }],
+  [
+    "year, product, units, Sales (Currency Units), amount",
+    { period: "year", units: "units", sales: "Sales (Currency Units)" },
+  ],
+  ["year, product, units, Sales (units)", { period: "year", units: "units", sales: "" }],
+  ["year, product, units, NetSalesQty", { period: "year", units: "units", sales: "NetSalesQty" }],
+  // A count name beats one that also names a size, such as "Volume (units)".
+  ["Volume (units), sales", { period: "", units: "Volume (units)", sales: "sales" }],
+  ["Volume (units), unit, sales", { period: "", units: "unit", sales: "sales" }],
+]);
+
+/** The four families the legacy oracle cannot judge, kept in one place. */
+const outsideLegacy = (names: string[]) =>
+  names.some((name) => /jahr|menge|umsatz|nettoumsatz|stueck|steuer|erl[öo]s/i.test(name)) ||
+  names.some((name) =>
+    /montant|ventes|vente|recette|valeur|affaires|ventas|importe|ingresos|valor|omzet|bedrag|verkoop|waarde|turnover/i.test(
+      name,
+    ),
+  ) ||
+  names.some((name) => moneyWord(name) && countWord(name)) ||
+  names.some((name) => countWord(name) && /volume|size|ml|litre|liter|kg|weight|gram|amount/i.test(name));
+
 test("oracle headers match the legacy guess outside excluded words", () => {
   for (const row of headers) {
-    // The German picks live outside the legacy oracle: its patterns know no
-    // German stems, unit prices or tax columns. The wider money words, in
-    // French, Spanish and Dutch or the English turnover and total, sit outside
-    // it the same way.
-    if (row.names.some((name) => /jahr|menge|umsatz|nettoumsatz|stueck|steuer|erl[öo]s/i.test(name))) continue;
-    if (
-      row.names.some((name) =>
-        /montant|ventes|vente|recette|valeur|affaires|ventas|importe|ingresos|valor|omzet|bedrag|verkoop|waarde|turnover/i.test(
-          name,
-        ),
-      )
-    )
-      continue;
-    // A name that says both money and a count, such as "Sales Qty", is a count
-    // now, so Sales moves off it; that is the one judgement the oracle predates.
-    if (row.names.some((name) => moneyWord(name) && countWord(name))) continue;
-    // A count name now beats one that also names a size, such as "Volume (units)".
-    if (row.names.some((name) => countWord(name) && /volume|size|ml|litre|liter|kg|weight|gram|amount/i.test(name)))
-      continue;
     const columns: Column[] = row.names.map((name) => ({
       name,
       type: row.textMeasures || textNames.has(name) ? "VARCHAR" : "DOUBLE",
     }));
     const message = row.names.join(", ");
     const actual = guessSetup(columns);
+    if (outsideLegacy(row.names)) {
+      const expected = pinned.get(message);
+      assert.ok(expected !== undefined, `no pin for the skipped row: ${message}`);
+      assert.deepEqual(
+        { period: actual.periodColumn, units: actual.unitsColumn, sales: actual.salesColumn },
+        expected,
+        message,
+      );
+      continue;
+    }
     const legacy = legacyGuess(columns);
     assert.equal(actual.periodColumn, legacy.periodColumn, message);
     assert.equal(actual.grain, legacy.grain, message);
@@ -1663,6 +1698,11 @@ test("oracle headers match the legacy guess outside excluded words", () => {
     assert.equal(actual.salesColumn, salesGuess.salesColumn, message);
     assert.equal(actual.grossColumn, salesGuess.grossColumn, message);
   }
+  // Neither side of the table can drift: every pin belongs to a skipped row and
+  // every skipped row has a pin.
+  const skipped = new Set(headers.filter((row) => outsideLegacy(row.names)).map((row) => row.names.join(", ")));
+  for (const key of pinned.keys()) assert.ok(skipped.has(key), `pinned row is not skipped: ${key}`);
+  for (const key of skipped) assert.ok(pinned.has(key), `skipped row has no pin: ${key}`);
 });
 
 // The remembered and loaded paths read localStorage at call time, so a stub
@@ -1862,6 +1902,7 @@ test("a numeric net_sales_note keeps the base sales guess beside text net_sales"
     grossColumn: undefined,
     levels: [],
     filters: [],
+    fresh: true,
   };
   const forward: Column[] = [
     { name: "period", type: "VARCHAR" },
@@ -1892,6 +1933,7 @@ test("a numeric net_revenue stops text net_sales being held and keeps the base s
     grossColumn: "gross_sales",
     levels: [],
     filters: [],
+    fresh: true,
   };
   const forward: Column[] = [
     { name: "period", type: "VARCHAR" },
@@ -2324,8 +2366,27 @@ test("D143: the one-period gate sentence names the period choice to change", () 
     prior: "",
     current: "2026",
     problem: { kind: "reason", message: 'With these settings "ordered_on" gives only one period, and a bridge compares two periods.' },
+    months: 2,
   });
   assert.deepEqual(gate, {
+    ready: false,
+    reason: 'With these settings "ordered_on" gives only one period, so choose Month in Compare by.',
+  });
+});
+
+test("D143: the gate names Month only when the file has two months to compare", () => {
+  const setup = guessSetup(bottleFile);
+  const message = 'With these settings "ordered_on" gives only one period, and a bridge compares two periods.';
+  const problem = { kind: "reason" as const, message };
+  assert.deepEqual(calculateGate({ setup, prior: "", current: "2026", problem, months: 1 }), {
+    ready: false,
+    reason: message,
+  });
+  assert.deepEqual(calculateGate({ setup, prior: "", current: "2026", problem }), {
+    ready: false,
+    reason: message,
+  });
+  assert.deepEqual(calculateGate({ setup, prior: "", current: "2026", problem, months: 2 }), {
     ready: false,
     reason: 'With these settings "ordered_on" gives only one period, so choose Month in Compare by.',
   });
@@ -2385,4 +2446,77 @@ test("D143: a year column is never guessed as Sales from its values", () => {
   const setup = { ...guess, ...refineGuess(guess, file) };
   assert.equal(setup.periodColumn, "annee");
   assert.notEqual(setup.salesColumn, "annee");
+});
+
+test("D143: a value fallback never picks a price, a cost or a size, and choosing one warns", () => {
+  const file: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "units", type: "BIGINT", facts: fact(20) },
+    { name: "unit_price", type: "DOUBLE", facts: fact(200) },
+    { name: "alpha", type: "DOUBLE", facts: fact(150) },
+  ];
+  const guess = guessSetup(file);
+  assert.equal(guess.salesColumn, "");
+  assert.deepEqual(refineGuess(guess, file), { salesColumn: "alpha", salesFromValues: "alpha" });
+  const chosen = { ...guess, salesColumn: "unit_price" };
+  assert.deepEqual(measureNote(file, chosen), {
+    role: "sales",
+    sentence: 'Sales totals less than Units, so "unit_price" may be a per-unit price rather than the amount sold.',
+  });
+  for (const name of ["cost_per_case", "bottle_size_ml"]) {
+    const withCandidate: Column[] = [...file, { name, type: "DOUBLE", facts: fact(400) }];
+    assert.equal(refineGuess(guessSetup(withCandidate), withCandidate).salesColumn, "alpha", name);
+  }
+});
+
+test("D143: a currency qualifier keeps a money column in Sales, not Units", () => {
+  const file: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "units", type: "BIGINT", facts: fact(1_000) },
+    { name: "Sales (Currency Units)", type: "DOUBLE", facts: fact(500) },
+  ];
+  const setup = guessSetup(file);
+  assert.equal(setup.unitsColumn, "units");
+  assert.equal(setup.salesColumn, "Sales (Currency Units)");
+});
+
+test("D143: the value-fallback hint shows only for a fallback that supplied Sales", () => {
+  const file: Column[] = [
+    { name: "annee", type: "VARCHAR" },
+    { name: "boites", type: "BIGINT", facts: fact(216) },
+    { name: "alpha", type: "DOUBLE", facts: fact(5_600) },
+  ];
+  const guess = guessSetup(file);
+  const refined = { ...guess, ...refineGuess(guess, file) };
+  assert.equal(refined.salesFromValues, "alpha");
+  assert.deepEqual(measureNote(file, refined), {
+    role: "sales",
+    sentence: 'No column name says sales, so Sales is "alpha" because its values look like money.',
+  });
+  assert.equal(measureNote(file, { ...refined, salesFromValues: undefined }), null);
+});
+
+test("D143: picking the other measure's column swaps the two", () => {
+  const setup: Setup = { ...workedSetup, salesColumn: "net_sales" };
+  const afterSales = { ...setup, ...measureChange(setup, "sales", "units") };
+  assert.deepEqual([afterSales.unitsColumn, afterSales.salesColumn], ["net_sales", "units"]);
+  const afterUnits = { ...afterSales, ...measureChange(afterSales, "units", "net_sales") };
+  assert.deepEqual([afterUnits.unitsColumn, afterUnits.salesColumn], ["net_sales", "units"]);
+  const swappedUnits = { ...setup, ...measureChange(setup, "units", "net_sales") };
+  assert.deepEqual([swappedUnits.unitsColumn, swappedUnits.salesColumn], ["net_sales", "units"]);
+  assert.deepEqual(measureChange(setup, "units", "amount"), { unitsColumn: "amount" });
+});
+
+test("D143: only a fresh guess refines, and a fiscal start that already splits the year stays on Year", () => {
+  const file: Column[] = [
+    { name: "ordered_on", type: "DATE", facts: dated("2026-01-05", "2026-03-20", 3) },
+    { name: "units", type: "BIGINT", facts: fact(90) },
+    { name: "sales", type: "DOUBLE", facts: fact(1_200) },
+  ];
+  const guess = guessSetup(file);
+  assert.equal(guess.fresh, true);
+  assert.equal(guess.grain, "year");
+  assert.deepEqual(refineGuess({ ...guess, fresh: undefined }, file), {});
+  assert.deepEqual(refineGuess({ ...guess, fiscalYearStart: 2 }, file), {});
+  assert.deepEqual(refineGuess(guess, file), { grain: "month" });
 });

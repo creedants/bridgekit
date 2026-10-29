@@ -1,4 +1,4 @@
-import { periodExpression, type Grain } from "./setup.ts";
+import { filterCondition, periodExpression, type Filter, type Grain } from "./setup.ts";
 
 export type PeriodSort = "numeric" | "text";
 
@@ -165,23 +165,27 @@ export function trendPeriods(values: readonly string[], max: number): string[] {
 
 /**
  * A statement over the named table that counts, per period, the months and days
- * its rows cover, so a bridge can say when two periods differ in length.
+ * its rows cover, so a bridge can say when two periods differ in length. The
+ * filters make it read the same rows as the bridge's view.
  */
 export function coverageSql(input: {
   table: string;
   periodColumn: string;
   grain: Grain;
   fiscalYearStart?: number;
+  filters?: readonly Filter[];
 }): string {
   const column = `"${input.periodColumn.replaceAll('"', '""')}"`;
   const table = `"${input.table.replaceAll('"', '""')}"`;
   const period = periodExpression(input.periodColumn, input.grain, input.fiscalYearStart, input.table);
+  const conditions = (input.filters ?? []).filter((filter) => filter.values.length > 0).map(filterCondition);
   return `SELECT ${period} AS period,
        count(DISTINCT strftime(${column}, '%Y-%m'))::DOUBLE AS months,
        count(DISTINCT CAST(${column} AS DATE))::DOUBLE AS days,
        count(*)::DOUBLE AS rows
      FROM ${table}
      WHERE ${column} IS NOT NULL
+     ${conditions.length ? "AND " + conditions.join(" AND ") : ""}
      GROUP BY 1
      ORDER BY 1`;
 }
@@ -196,13 +200,16 @@ export function readCoverage(rows: readonly Record<string, unknown>[]): PeriodCo
   }));
 }
 
-/** Below this share of the longer period, the shorter one is said to cover less time. */
+/** Below this share of the longer period, the shorter one is said to have rows in less time. */
 const COVERAGE_FLOOR = 0.9;
 
+/** "1 day" and "2 days", "1 month" and "2 months". */
+const one = (count: number, singular: "day" | "month") => (count === 1 ? singular : `${singular}s`);
+
 /**
- * One plain sentence when the two periods cover different amounts of time, or
- * null. A month grain compares days, which the calendar-month label tells
- * apart from the year, year-to-date and quarter labels.
+ * One plain sentence when the two periods have rows in different amounts of
+ * time, or null. A month grain compares days, which the calendar-month label
+ * tells apart from the year, year-to-date and quarter labels.
  */
 export function coverageNote(
   rows: readonly PeriodCoverage[],
@@ -215,5 +222,6 @@ export function coverageNote(
   const unit = /^\d{4}-\d{2}$/.test(prior) && /^\d{4}-\d{2}$/.test(current) ? "days" : "months";
   const [shorter, longer] = a[unit] <= b[unit] ? [a[unit], b[unit]] : [b[unit], a[unit]];
   if (longer === 0 || shorter >= longer * COVERAGE_FLOOR) return null;
-  return `"${prior}" covers ${a[unit]} ${unit} and "${current}" covers ${b[unit]}, so part of this change is the different time covered.`;
+  const singular = unit === "days" ? "day" : "month";
+  return `"${prior}" has rows in ${a[unit]} ${one(a[unit], singular)} and "${current}" in ${b[unit]}, so check that these periods are comparable.`;
 }

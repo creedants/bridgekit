@@ -21,7 +21,7 @@ export interface Column {
   /** Number of distinct values, once profiled. */
   distinct?: number;
   facts?: ColumnFacts;
-  /** The earlier column this one maps to one for one, when a profile found that. */
+  /** The earlier column this one maps to exactly or nearly, as found by the profile. */
   duplicateOf?: string;
 }
 
@@ -48,6 +48,17 @@ export interface Setup {
   filters: Filter[];
   /** See BridgeConfig.newAndDiscontinued. Absent in setups saved before the option existed. */
   newAndDiscontinued?: "difference" | "full";
+  /**
+   * Set by guessSetup on a setup built from column names alone, and cleared by
+   * any change the visitor makes. In-session only: a restored or saved setup
+   * never carries it, so only an untouched guess is refined.
+   */
+  fresh?: true;
+  /**
+   * The column the value fallback put in Sales, so the panel can say so. Cleared
+   * when the visitor picks a Sales column, and in-session only.
+   */
+  salesFromValues?: string;
 }
 
 /** The most columns a save may carry. */
@@ -78,8 +89,14 @@ const UNITS_PATTERN = /unit|qty|quant|jobs|volume|pieces|menge|stuck|stueck|anza
 const COUNT_PATTERN = /unit|qty|quant|count|job|piece|menge|anzahl|absatz|stuck|stueck|boite|bottl/i;
 /** Names that describe how much one unit holds or weighs, which is not a count of units. */
 const SIZE_PATTERN = /volume|size|ml|litre|liter|kg|weight|gram|amount/i;
-/** A name that says price, cost or rate is never read as sales. */
+/** Price, cost and rate names used to suppress the value-inference hint. */
 const PRICE_PATTERN = /price|cost|rate|preis|kosten/i;
+/** Names that describe how much one unit holds or weighs; none of them is a money total. "amount" is money and stays out. */
+const SIZE_ONLY_PATTERN = /volume|size|ml|litre|liter|kg|\bweight\b|gram/i;
+/** A name written with a currency qualifier still counts money, never quantity. */
+const CURRENCY_PATTERN = /currency|usd|eur|gbp|dollar|euro|cent|pound|yen/i;
+/** A name that says price, cost, rate, a unit price or one unit's size. Never Sales from its values. */
+const notMoney = (name: string) => PRICE_PATTERN.test(fold(name)) || isUnitPrice(name) || SIZE_ONLY_PATTERN.test(fold(name));
 
 /** A German unit price names a price: Stückpreis, Stueckpreis, Mengenpreis, Stückkosten. */
 const PRICE_DE = /preis|kosten/i;
@@ -126,6 +143,8 @@ const isUnitPrice = (name: string) => {
   return PRICE_DE.test(folded) && UNITS_PATTERN.test(folded);
 };
 const isTrailingNote = (name: string) => noteWords.has(words(name).at(-1) ?? "");
+/** A count name, unless a currency word shows it counts money; "Sales (Currency Units)" is money. */
+const countName = (name: string) => COUNT_PATTERN.test(fold(name)) && !CURRENCY_PATTERN.test(fold(name));
 
 /**
  * First non-numeric, non-date column with a whole "net" word and a money word,
@@ -158,7 +177,7 @@ export function netSalesHeldAsText(columns: readonly Column[]): string {
  * name.
  */
 function unitsName(candidates: readonly Column[]): string {
-  const counted = candidates.filter((column) => COUNT_PATTERN.test(fold(column.name)));
+  const counted = candidates.filter((column) => countName(column.name));
   if (counted.length === 0) {
     const plain = candidates.filter(
       (column) => !salesPattern.test(fold(column.name)) && !PRICE_PATTERN.test(fold(column.name)),
@@ -189,7 +208,7 @@ export function guessSetup(columns: Column[]): Setup {
       column.name !== unitsColumn &&
       !TAX_DE.test(fold(column.name)) &&
       !isUnitPrice(column.name) &&
-      !COUNT_PATTERN.test(fold(column.name)),
+      !countName(column.name),
   );
   const byName = find(salesPattern, salesCandidates);
   const salesColumn = net || (held ? "" : byName);
@@ -202,14 +221,15 @@ export function guessSetup(columns: Column[]): Setup {
     grossColumn: held ? undefined : (grossColumn && grossColumn !== salesColumn ? grossColumn : undefined),
     levels: [],
     filters: [],
+    fresh: true,
   };
 }
 
 /**
  * One short sentence about the measure guess, and which picker it sits beside.
- * Null when the guess is sure. At most one sentence, in this order: a second
- * money column, Sales chosen from its values, Sales that totals less than
- * Units. None of them blocks Calculate.
+ * Null when the guess is sure. At most one sentence, in this order: a price-like
+ * Sales column, a second money column, Sales chosen from its values, Sales that
+ * totals less than Units. None of them blocks Calculate.
  */
 export function measureNote(
   columns: readonly Column[],
@@ -218,6 +238,12 @@ export function measureNote(
   const sales = setup.salesColumn;
   if (!sales) return null;
   const numeric = columns.filter((column) => isNumeric(column.type));
+  if (notMoney(sales)) {
+    return {
+      role: "sales",
+      sentence: `Sales totals less than Units, so "${sales}" may be a per-unit price rather than the amount sold.`,
+    };
+  }
   const money = (column: Column) => salesPattern.test(fold(column.name));
   // A gross or list column has the optional Gross sales picker of its own, so it
   // is not offered as the alternative Sales column.
@@ -235,7 +261,7 @@ export function measureNote(
       sentence: `Sales is "${sales}", but "${other.name}" also looks like money; choose it in Sales if you meant that one.`,
     };
   }
-  if (!numeric.some(money) && !PRICE_PATTERN.test(fold(sales))) {
+  if (setup.salesFromValues === sales && !numeric.some(money)) {
     return {
       role: "sales",
       sentence: `No column name says sales, so Sales is "${sales}" because its values look like money.`,
@@ -254,12 +280,14 @@ export function measureNote(
 
 /**
  * The fields a value-based reading of the file would change in a name guess,
- * so a date file inside one year starts on Month and a money column with no
- * common name still becomes Sales. Returns only the fields that differ, and an
- * empty object when there is nothing to change.
+ * so dates covering multiple months inside one calendar year can start on
+ * Month, and a numeric sum can supply an unnamed Sales candidate. Returns only the fields that differ, and an
+ * empty object when there is nothing to change. Only a fresh guess is refined,
+ * so a restored or edited setup keeps the visitor's choices.
  */
 export function refineGuess(setup: Setup, columns: readonly Column[]): Partial<Setup> {
   const patch: Partial<Setup> = {};
+  if (setup.fresh !== true) return patch;
   const period = columns.find((column) => column.name === setup.periodColumn);
   const periodFacts = period?.facts;
   if (
@@ -269,7 +297,7 @@ export function refineGuess(setup: Setup, columns: readonly Column[]): Partial<S
     (periodFacts?.months ?? 0) >= 2 &&
     periodFacts?.first !== undefined &&
     periodFacts.last !== undefined &&
-    periodFacts.first.slice(0, 4) === periodFacts.last.slice(0, 4)
+    fiscalYear(periodFacts.first, setup.fiscalYearStart) === fiscalYear(periodFacts.last, setup.fiscalYearStart)
   ) {
     patch.grain = "month";
   }
@@ -279,14 +307,26 @@ export function refineGuess(setup: Setup, columns: readonly Column[]): Partial<S
       let best: { name: string; sum: number } | undefined;
       for (const column of columns) {
         if (!isNumeric(column.type) || column.name === setup.periodColumn || column.name === setup.unitsColumn) continue;
+        if (notMoney(column.name)) continue;
         const sum = column.facts?.sum;
         if (sum === undefined || sum < unitsSum * 2) continue;
         if (best === undefined || sum > best.sum) best = { name: column.name, sum };
       }
-      if (best !== undefined) patch.salesColumn = best.name;
+      if (best !== undefined) {
+        patch.salesColumn = best.name;
+        patch.salesFromValues = best.name;
+      }
     }
   }
   return patch;
+}
+
+/** The fiscal year a "YYYY-MM-DD" string falls in, so a year grain's period count can be checked. */
+function fiscalYear(date: string, fiscalYearStart: number | undefined): number {
+  const start = fiscalYearStart ?? 1;
+  const year = Number(date.slice(0, 4));
+  const month = Number(date.slice(5, 7));
+  return year + (month >= start ? 1 : 0);
 }
 
 /**
@@ -334,7 +374,8 @@ export function periodExpression(column: string, grain: Grain, fiscalYearStart?:
   }
 }
 
-function filterCondition(filter: Filter): string {
+/** The WHERE condition for one filter, shared by the bridge's view and the coverage query so both read the same rows. */
+export function filterCondition(filter: Filter): string {
   const column = `CAST(${quote(filter.column)} AS VARCHAR)`;
   const list = filter.values.map(text).join(", ");
   return filter.mode === "include"
@@ -415,7 +456,11 @@ export function cleanLevels(levels: readonly Level[]): Level[] {
 /** A setup from storage or a file, with attribute names cut to what the editor takes. */
 export function restoredSetup(setup: Setup): Setup {
   const levels = cleanLevels(setup.levels).map((level) => ({ ...level, name: level.name.slice(0, MAX_LEVEL_NAME) }));
-  return { ...setup, levels, salesColumn: setup.salesColumn === setup.unitsColumn ? "" : setup.salesColumn };
+  const restored: Setup = { ...setup, levels, salesColumn: setup.salesColumn === setup.unitsColumn ? "" : setup.salesColumn };
+  // The guess markers are in-session only, so a restored setup never refines.
+  delete restored.fresh;
+  delete restored.salesFromValues;
+  return restored;
 }
 
 interface ColumnRule {
@@ -491,7 +536,9 @@ export function loadSavedSetup(columns: Column[]): Setup | null {
 export function saveSetup(columns: Column[], setup: Setup): void {
   if (!isRemembering()) return;
   try {
-    localStorage.setItem(storageKey(columns), JSON.stringify({ ...setup, filters: [] }));
+    // The guess markers are in-session only, so a restored setup never refines.
+    const { fresh: _fresh, salesFromValues: _salesFromValues, ...persisted } = setup;
+    localStorage.setItem(storageKey(columns), JSON.stringify({ ...persisted, filters: [] }));
   } catch {
     // Storage can be full or blocked; the setup still works for this session.
   }
@@ -614,6 +661,8 @@ export function calculateGate(input: {
   prior: string;
   current: string;
   problem: FileProblem;
+  /** Months with at least one row in the period column, when a profile has read the file. */
+  months?: number;
 }): CalculateGate {
   const { setup, prior, current, problem } = input;
   const missing = missingParts(setup, prior, current);
@@ -623,6 +672,8 @@ export function calculateGate(input: {
     // so the words are detected here rather than exported from there.
     if (
       setup !== null &&
+      input.months !== undefined &&
+      input.months >= 2 &&
       problem.message.includes("gives only one period") &&
       (setup.grain === "year" || setup.grain === "ytd" || setup.grain === "quarter")
     ) {
@@ -656,6 +707,14 @@ export function carryPeriods(
 /** The columns offered as Units or Sales: numbers, but never the period column. */
 export function measureColumns(columns: readonly Column[], setup: Setup): Column[] {
   return columns.filter((c) => isNumeric(c.type) && c.name !== setup.periodColumn);
+}
+
+/** The measure change for a picker: choosing the column the other measure holds swaps the two. */
+export function measureChange(setup: Setup, role: "units" | "sales", value: string): Partial<Setup> {
+  if (role === "units") {
+    return { unitsColumn: value, ...(setup.salesColumn === value ? { salesColumn: setup.unitsColumn } : {}) };
+  }
+  return { salesColumn: value, ...(setup.unitsColumn === value ? { unitsColumn: setup.salesColumn } : {}) };
 }
 
 /** The address without `sample`, or null when it has none. */

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { distinctCounts, feeNote, feeRows, findRelationships, findRollups, suggestAttributes } from "../src/app/profile.ts";
-import { guessSetup, quote, type Column } from "../src/app/setup.ts";
+import { distinctCounts, feeNote, feeRows, findRelationships, findRollups, profileFile, suggestAttributes } from "../src/app/profile.ts";
+import { guessSetup, quote, refineGuess, type Column } from "../src/app/setup.ts";
 import { openDatabase } from "../src/duckdb.ts";
 import type { Query } from "../src/engine.ts";
 import { createSyntheticSales } from "../src/synth.ts";
@@ -404,9 +404,25 @@ test("D143: a fee row with no units is named in one sentence and kept", async ()
   const found = await feeRows(query, "data", { periodColumn: "period", unitsColumn: "units", salesColumn: "sales", levels: [{ name: "product", columns: ["product"] }] });
   assert.equal(found.withoutUnits, 4);
   assert.deepEqual(found.named, ["Adjustment", "Postage"]);
+  assert.equal(found.namedRows, 4);
   assert.equal(
     feeNote(found),
-    "4 rows have no units but some sales, and 2 of them are named like fees or adjustments; they are counted like products.",
+    "4 rows have no units but some sales, and 4 of them are named like fees or adjustments; they are counted like products.",
+  );
+});
+
+test("D143: before an attribute is chosen, the fee note reads the first text column", async () => {
+  const { query } = await load(`SELECT * FROM (VALUES
+    ('2025', 'A-100', 10, 120.0), ('2026', 'A-100', 11, 132.0),
+    ('2025', 'Postage', 0, 24.0), ('2026', 'Postage', 0, 25.0),
+    ('2025', 'Adjustment', 0, -9.0), ('2026', 'Adjustment', 0, -10.0)) t(period, product, units, sales)`);
+  const found = await feeRows(query, "data", { periodColumn: "period", unitsColumn: "units", salesColumn: "sales", levels: [] });
+  assert.equal(found.withoutUnits, 4);
+  assert.deepEqual(found.named, ["Adjustment", "Postage"]);
+  assert.equal(found.namedRows, 4);
+  assert.equal(
+    feeNote(found),
+    "4 rows have no units but some sales, and 4 of them are named like fees or adjustments; they are counted like products.",
   );
 });
 
@@ -424,4 +440,56 @@ test("D143: a class name whose code splits one class in two is still one thing",
     duplicates.some(([, later]) => later === column.name) ? { ...column, duplicateOf: column.duplicateOf ?? "class_name" } : column,
   );
   assert.deepEqual(suggestAttributes(marked, distinct, new Set()), ["class_name"]);
+});
+
+test("D143: a code column before its name still suggests one attribute", async () => {
+  const { query, columns } = await load(
+    `SELECT * FROM (VALUES ('G01', 'North'), ('G02', 'South'), ('G03', 'Size')) t(group_code, group_label)`,
+  );
+  const distinct = await distinctCounts(query, columns);
+  const { duplicates } = await findRelationships(query, columns, distinct);
+  assert.deepEqual(duplicates, [["group_code", "group_label"]]);
+  const marked = columns.map((column) =>
+    duplicates.some(([, later]) => later === column.name)
+      ? { ...column, duplicateOf: duplicates.find(([, later]) => later === column.name)![0] }
+      : column,
+  );
+  assert.deepEqual(suggestAttributes(marked, distinct, new Set()), ["group_label"]);
+});
+
+test("D143: an alias pair with no id word suggests only the earlier column", async () => {
+  const { query, columns } = await load(
+    `SELECT * FROM (VALUES ('North', 'N1'), ('South', 'S1'), ('Size', 'Z1')) t(tier, tier_name)`,
+  );
+  const distinct = await distinctCounts(query, columns);
+  const { duplicates } = await findRelationships(query, columns, distinct);
+  assert.deepEqual(duplicates, [["tier", "tier_name"]]);
+  const marked = columns.map((column) =>
+    duplicates.some(([, later]) => later === column.name)
+      ? { ...column, duplicateOf: duplicates.find(([, later]) => later === column.name)![0] }
+      : column,
+  );
+  assert.deepEqual(suggestAttributes(marked, distinct, new Set()), ["tier"]);
+});
+
+test("D143: the applied profile carries the date facts that refine the grain", async () => {
+  const query = await openDatabase();
+  await query("CREATE TABLE data (sold_on DATE, product VARCHAR, units BIGINT, sales DOUBLE)");
+  await query(
+    `INSERT INTO data VALUES
+      ('2026-01-05', 'A-100', 10, 120.0), ('2026-02-10', 'B-200', 12, 156.0), ('2026-03-20', 'A-100', 8, 64.0)`,
+  );
+  const columns = await columnsOf(query);
+  let applied: Column[] = columns;
+  await profileFile(query, columns, () => true, (profile) => {
+    applied = profile.columns;
+  });
+  assert.deepEqual(applied.find((column) => column.name === "sold_on")?.facts, {
+    first: "2026-01-05",
+    last: "2026-03-20",
+    months: 3,
+  });
+  const setup = guessSetup(applied);
+  assert.equal(setup.grain, "year");
+  assert.deepEqual(refineGuess(setup, applied), { grain: "month" });
 });

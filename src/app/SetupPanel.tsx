@@ -9,6 +9,7 @@ import {
   isDate,
   isNumeric,
   MAX_LEVEL_NAME,
+  measureChange,
   measureColumns,
   measureNote,
   quote,
@@ -48,6 +49,13 @@ export function SetupPanel(props: {
   onCurrent: (value: string) => void;
 }) {
   const { columns, setup, onChange } = props;
+  // A visitor's own change ends the guess, so no later profile refines over it.
+  const change = (patch: Partial<Setup>) =>
+    onChange({ ...patch, fresh: undefined, ...(patch.salesColumn !== undefined ? { salesFromValues: undefined } : {}) });
+  // App hands a new column list for every load, so a new list is a new source.
+  const source = useRef({ columns, seq: 0 });
+  if (source.current.columns !== columns) source.current = { columns, seq: source.current.seq + 1 };
+  const sourceSeq = source.current.seq;
   const numeric = measureColumns(columns, setup);
   const periodType = columns.find((c) => c.name === setup.periodColumn)?.type ?? "";
   const used = new Set([
@@ -69,10 +77,10 @@ export function SetupPanel(props: {
   // Names made from column headers are capped here, like typed ones. A level
   // with no column never reaches the bridge, the report or the export.
   const setLevels = (levels: Level[]) =>
-    onChange({
+    change({
       levels: cleanLevels(levels).map((level) => ({ ...level, name: level.name.slice(0, MAX_LEVEL_NAME) })),
     });
-  const setFilters = (filters: Filter[]) => onChange({ filters });
+  const setFilters = (filters: Filter[]) => change({ filters });
   const factsSignature = columns
     .map((column) => `${column.name}:${column.facts?.sum ?? ""}:${column.facts?.first ?? ""}:${column.facts?.last ?? ""}:${column.facts?.months ?? ""}`)
     .join("|");
@@ -84,11 +92,18 @@ export function SetupPanel(props: {
     const patch = refineGuess(setup, columns);
     if (Object.keys(patch).length > 0) onChange(patch);
   }, [factsSignature]);
-  const [coverage, setCoverage] = useState<PeriodCoverage[]>([]);
+  const [coverage, setCoverage] = useState<{ key: string; rows: PeriodCoverage[] } | null>(null);
+  const coverageKey = [
+    sourceSeq,
+    setup.periodColumn,
+    setup.grain,
+    setup.fiscalYearStart ?? 1,
+    JSON.stringify(setup.filters),
+  ].join("|");
   useEffect(() => {
     let stale = false;
     if (!isDate(periodType)) {
-      setCoverage([]);
+      setCoverage(null);
       return;
     }
     props
@@ -100,30 +115,37 @@ export function SetupPanel(props: {
             periodColumn: setup.periodColumn,
             grain: setup.grain,
             fiscalYearStart: setup.fiscalYearStart,
+            filters: setup.filters,
           }),
         ),
       )
-      .then((rows) => !stale && setCoverage(readCoverage(rows)))
-      .catch(() => !stale && setCoverage([]));
+      .then((rows) => !stale && setCoverage({ key: coverageKey, rows: readCoverage(rows) }))
+      .catch(() => !stale && setCoverage(null));
     return () => {
       stale = true;
     };
-  }, [periodType, setup.periodColumn, setup.grain, setup.fiscalYearStart, factsSignature]);
-  const partial = coverageNote(coverage, props.prior, props.current);
-  const [fees, setFees] = useState<FeeRows | null>(null);
-  const feeKey = `${factsSignature}|${setup.unitsColumn}|${setup.salesColumn}|${setup.levels[0]?.columns.join("+") ?? ""}`;
+  }, [coverageKey, periodType]);
+  const partial = coverage !== null && coverage.key === coverageKey ? coverageNote(coverage.rows, props.prior, props.current) : null;
+  const [fees, setFees] = useState<{ key: string; found: FeeRows } | null>(null);
+  const feeKey = [
+    sourceSeq,
+    setup.periodColumn,
+    setup.unitsColumn,
+    setup.salesColumn,
+    setup.levels[0]?.columns.join("+") ?? "",
+  ].join("|");
   useEffect(() => {
     let stale = false;
     props
       .query()
       .then((query) => feeRows(query, TABLE, setup))
-      .then((found) => !stale && setFees(found))
+      .then((found) => !stale && setFees({ key: feeKey, found }))
       .catch(() => !stale && setFees(null));
     return () => {
       stale = true;
     };
   }, [feeKey]);
-  const feesSentence = fees === null ? null : feeNote(fees);
+  const feesSentence = fees !== null && fees.key === feeKey ? feeNote(fees.found) : null;
   const measureHint = measureNote(columns, setup);
   const sizeColumn = columns.find(
     (column) => column.name !== setup.periodColumn && SIZE_NAME.test(column.name),
@@ -177,7 +199,7 @@ export function SetupPanel(props: {
             onChange={(e) => {
               const column = columns.find((c) => c.name === e.target.value);
               const name = e.target.value;
-              onChange({
+              change({
                 periodColumn: name,
                 grain: column && isDate(column.type) ? "year" : "value",
                 ...(setup.unitsColumn === name ? { unitsColumn: "" } : {}),
@@ -192,7 +214,7 @@ export function SetupPanel(props: {
         {isDate(periodType) && (
           <label>
             Compare by
-            <select value={setup.grain} onChange={(e) => onChange({ grain: e.target.value as Grain })}>
+            <select value={setup.grain} onChange={(e) => change({ grain: e.target.value as Grain })}>
               <option value="year">Year</option>
               <option value="ytd">Year to date</option>
               <option value="quarter">Quarter</option>
@@ -208,7 +230,7 @@ export function SetupPanel(props: {
                 value={setup.fiscalYearStart ?? 1}
                 onChange={(e) => {
                   const v = Number(e.target.value);
-                  onChange({ fiscalYearStart: v === 1 ? undefined : v });
+                  change({ fiscalYearStart: v === 1 ? undefined : v });
                 }}
               >
                 <option value={1}>January</option>
@@ -262,28 +284,24 @@ export function SetupPanel(props: {
         <div className="pair">
           <label>
             Units
-            <select value={setup.unitsColumn} onChange={(e) => onChange({ unitsColumn: e.target.value })}>
+            <select value={setup.unitsColumn} onChange={(e) => change(measureChange(setup, "units", e.target.value))}>
               <option value="">Choose…</option>
-              {numeric
-                .filter((c) => c.name !== setup.salesColumn)
-                .map((c) => <option key={c.name}>{c.name}</option>)}
+              {numeric.map((c) => <option key={c.name}>{c.name}</option>)}
             </select>
             <span className="hint">Quantity sold, such as pieces or cases.</span>
           </label>
           <label>
             Sales
-            <select value={setup.salesColumn} onChange={(e) => onChange({ salesColumn: e.target.value })}>
+            <select value={setup.salesColumn} onChange={(e) => change(measureChange(setup, "sales", e.target.value))}>
               <option value="">Choose…</option>
-              {numeric
-                .filter((c) => c.name !== setup.unitsColumn)
-                .map((c) => <option key={c.name}>{c.name}</option>)}
+              {numeric.map((c) => <option key={c.name}>{c.name}</option>)}
             </select>
             {measureHint && <span className="hint">{measureHint.sentence}</span>}
           </label>
         </div>
         <label>
           Gross sales (optional)
-          <select value={setup.grossColumn ?? ""} onChange={(e) => onChange({ grossColumn: e.target.value || undefined })}>
+          <select value={setup.grossColumn ?? ""} onChange={(e) => change({ grossColumn: e.target.value || undefined })}>
             <option value="">None</option>
             {numeric.filter((c) => c.name !== setup.salesColumn).map((c) => <option key={c.name}>{c.name}</option>)}
           </select>
@@ -291,7 +309,7 @@ export function SetupPanel(props: {
         {setup.grossColumn && !setup.costColumn && <p className="hint">Price is split into list price and discounts.</p>}
         <label>
           Cost (optional)
-          <select value={setup.costColumn ?? ""} onChange={(e) => onChange({ costColumn: e.target.value || undefined })}>
+          <select value={setup.costColumn ?? ""} onChange={(e) => change({ costColumn: e.target.value || undefined })}>
             <option value="">None</option>
             {numeric
               .filter((c) => c.name !== setup.salesColumn && c.name !== setup.unitsColumn)
@@ -450,7 +468,7 @@ export function SetupPanel(props: {
           New and discontinued
           <select
             value={setup.newAndDiscontinued ?? "difference"}
-            onChange={(e) => onChange({ newAndDiscontinued: e.target.value as Setup["newAndDiscontinued"] })}
+            onChange={(e) => change({ newAndDiscontinued: e.target.value as Setup["newAndDiscontinued"] })}
           >
             <option value="difference">Price difference only</option>
             <option value="full">Full sales</option>
