@@ -175,7 +175,9 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 /* From 1240 px the copy runs in two columns above the picture, which grows to the shell's width on an inset stage. */
 @media (min-width: 1240px) {
-  .hero { padding-block: 3rem 9rem; }
+  .hero { padding-block: 2.25rem 9rem; }
+
+  .hero .hero-grid { gap: 2.25rem; }
 
   .hero .copy { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 27rem); column-gap: 4rem; }
 
@@ -192,13 +194,13 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
   .hero .copy .define { grid-row: 4; max-width: none; }
 
   /* The buttons and their fine print sit under the heading, so the promise and its next step read together. */
-  .hero .copy .actions { grid-area: 5 / 1; margin-top: 2.25rem; }
+  .hero .copy .actions { grid-area: 5 / 1; margin-top: 2rem; }
 
   .hero .copy .fine { grid-area: 6 / 1; }
 
   .hero .copy .fine br { display: none; }
 
-  .hero figure { margin-inline: -2rem; padding: 3rem 4rem 2.5rem; border-radius: 24px; }
+  .hero figure { margin-inline: -2rem; padding: 2.25rem 4rem 2.5rem; border-radius: 24px; }
 
   .hero .frame { max-width: none; }
 
@@ -208,7 +210,7 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
   .hero .dataset { font-size: .8125rem; }
 
-  .hero .body { padding: 1.25rem 1.5rem 1.5rem; }
+  .hero .body { padding: 1rem 1.5rem 1.5rem; }
 
   .hero .kpi { padding: .85rem 1rem .9rem; }
 
@@ -218,9 +220,9 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
   .hero .kpi small { font-size: .75rem; }
 
-  .hero .tabs { gap: 1.5rem; margin-top: 1.1rem; font-size: .8125rem; }
+  .hero .tabs { gap: 1.5rem; margin-top: .9rem; font-size: .8125rem; }
 
-  .hero .legend { margin-top: 1rem; font-size: .75rem; }
+  .hero .legend { margin-top: .75rem; font-size: .75rem; }
 
   /* The wide chart draws at about 1.25 of its 760 units here, so its labels are set to read at 13 to 14 px. */
   .hero .wf .ax { font-size: 10px; }
@@ -340,15 +342,13 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .anatomy { background: #faf6f9; }
 
-.anatomy .figs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; padding: 0; list-style: none; counter-reset: fig; overflow: hidden; background: var(--paper); border: 1px solid var(--blush); border-radius: 14px; }
+.anatomy .figs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; padding: 0; list-style: none; overflow: hidden; background: var(--paper); border: 1px solid var(--blush); border-radius: 14px; }
 
-.anatomy .figs li { position: relative; display: flex; flex-direction: column; padding: 0 1.5rem 1.5rem; border-left: 1px solid var(--blush); counter-increment: fig; }
+.anatomy .figs li { display: flex; flex-direction: column; padding: 0 1.5rem 1.5rem; border-left: 1px solid var(--blush); }
 
 .anatomy .figs li:first-child { border-left: 0; }
 
-.anatomy .figs li::before { content: "Fig. " counter(fig); position: absolute; top: 1rem; left: 1.5rem; font: 500 .6875rem/1 ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; letter-spacing: .08em; text-transform: uppercase; color: #7a5f73; }
-
-.anatomy .mini { display: block; width: calc(100% + 3rem); height: auto; margin: 0 -1.5rem; padding: 2.5rem 1.5rem 1rem; border-bottom: 1px solid var(--blush); background: radial-gradient(rgba(66, 32, 61, .09) 1px, transparent 1.3px) 0 0 / 12px 12px, #fdfafc; }
+.anatomy .mini { display: block; width: calc(100% + 3rem); height: auto; margin: 0 -1.5rem; padding: 1.5rem 1.5rem 1rem; border-bottom: 1px solid var(--blush); background: #fdfafc; }
 
 .anatomy .mini line { stroke: #9c8196; stroke-width: 1; }
 
@@ -356,9 +356,10 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .anatomy .mini rect { stroke-width: 1; }
 
-.anatomy .mini .total, .anatomy .mini .step { fill: var(--paper); stroke: #b9a2b4; }
+/* The other bars stay as quiet outlines, so the filled step leads. */
+.anatomy .mini .total, .anatomy .mini .step { fill: var(--paper); stroke: #d3c2cf; }
 
-.anatomy .mini .lit { fill: rgba(244, 191, 58, .18); }
+.anatomy .mini .lit { fill: rgba(244, 191, 58, .2); }
 
 .anatomy .mini .on { fill: var(--sun); stroke: var(--plum); }
 
@@ -643,9 +644,7 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
 
   .anatomy .figs li:nth-child(n+2) { border-top: 1px solid var(--blush); }
 
-  .anatomy .figs li::before { top: 1.75rem; left: 1.5rem; }
-
-  .anatomy .mini { grid-row: 1 / 3; width: 100%; margin: 0; padding: 1.75rem .5rem .5rem; border: 1px solid var(--blush); border-radius: 8px; }
+  .anatomy .mini { grid-row: 1 / 3; width: 100%; margin: 0; padding: .75rem .5rem .5rem; border: 1px solid var(--blush); border-radius: 8px; }
 
   .anatomy h3 { margin-top: 0; font-size: 1.25rem; }
 
