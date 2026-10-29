@@ -440,12 +440,16 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
 
   .views .card:nth-child(n) { grid-column: auto; }
 
-  /* Below this width a whole table would shrink past reading, so the wide ones keep a readable size and show their left part. */
-  .views .card picture { overflow: hidden; }
+  /* Below this width a whole table would shrink past reading, so each keeps a readable size and scrolls sideways to the card's edge. */
+  .views .card picture { margin-right: -1.25rem; overflow-x: auto; overscroll-behavior-x: contain; }
 
-  .views .card.wide img { width: 46rem; max-width: none; }
+  .views .card img { max-width: none; }
 
-  .views .card:nth-child(2) img { width: 34rem; max-width: none; }
+  .views .card.wide img { width: 46rem; }
+
+  .views .card:nth-child(2) img { width: 40rem; }
+
+  .views .card:nth-child(3) img { width: 30rem; }
 
   .steps .stair { grid-template-columns: minmax(0, 1fr); gap: 1.75rem; }
 
