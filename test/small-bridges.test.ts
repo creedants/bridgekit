@@ -291,8 +291,9 @@ test("a rebuild in flight holds the gate, and a setup with no period column hold
   const rebuilding = reducePeriodViews(installed, { type: "rebuilding" });
   assert.equal(viewsInstalled(rebuilding, view), false);
   assert.equal(viewsInstalled(rebuilding, null), false);
-  const noColumn = reducePeriodViews(installed, { type: "noPeriodColumn", view: `${view}:2` });
-  assert.deepEqual(noColumn.list, { view: `${view}:2`, values: [] });
+  const other = periodView({ load: 1, periodColumn: "period", grain: "quarter", filters: [] });
+  const noColumn = reducePeriodViews(installed, { type: "noPeriodColumn", view: other });
+  assert.deepEqual(noColumn.list, { view: other, values: [] });
   assert.equal(viewsInstalled(noColumn, view), false);
 });
 
