@@ -1193,7 +1193,7 @@ export function checkWarnings(run: Run, fileWarnings: string[] = []): string[] {
 /**
  * Loads the whole-row note for the Data check tab badge. The note lives in
  * the warnings, so the tab count includes it, while the notes list below
- * stays decimal-only. A slow reply from a replaced file changes nothing.
+ * omits this warning. A slow reply from a replaced file changes nothing.
  */
 export function useWholeRowWarning(run: Run, query: () => Promise<Query>): string[] {
   const [fileWarnings, setFileWarnings] = useState<string[]>([]);
