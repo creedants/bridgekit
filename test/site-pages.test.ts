@@ -34,7 +34,7 @@ const PAGES: Page[] = [
 ];
 
 const ROOT_PAGES = PAGES.filter((page) => !page.file.includes("/"));
-const IMAGE_PAGES = ["guide.html"];
+const IMAGE_PAGES = ["guide.html", "index.html"];
 
 function readPage(file: string): string {
   return readFileSync(new URL(`../${file}`, import.meta.url), "utf8");

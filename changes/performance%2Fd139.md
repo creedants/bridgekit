@@ -1,0 +1,9 @@
+- The home page has a new layout. The hero keeps its heading, lead sentence and picture of the tool. It adds a second button, "Load your own file", and a screenshot of the Movers table that overlaps the picture's lower edge.
+- A new section, "Every bar has a table behind it.", shows screenshots of the Price changes, Movers and Accounts views taken on the sample. The images are AVIF with PNG fallbacks in `public/img`.
+- A new "How it works" section lists the three steps from export to bridge.
+- The privacy band adds a "Check it yourself" card that links to the privacy page and the source code.
+- The pricing cards are now two bordered cards of equal height. The free plan card is filled plum, and the divider line between the plans is gone.
+- A closing band repeats the sample button and links to the method page.
+- The "What you get" list is gone. Its views now appear as the screenshots and the row of names under them.
+- `test/site-pages.test.ts` now checks the home page's images the same way it checks the guide's: alt text, `decoding="async"`, the PNG's pixel size, and an AVIF source.
+- The social card in `scripts/smoke.mjs` now hides the new screenshot and tilts the picture itself, because the home page no longer tilts it. The card renders the same pixels as the current `public/img/og-bridge.png`.
