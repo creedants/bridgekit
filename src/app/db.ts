@@ -196,11 +196,8 @@ export async function readCsvTable(
       await query(`COMMENT ON COLUMN ${name}.${field} IS '${order}'`);
     }
   }
-  // After the slash-date pass, so a column whose every value is a month
-  // becomes a date without changing which slash dates were reinterpreted.
-  await convertMonthColumns(query, table).catch(() => {});
-  // After the month pass and before the numbers, so a column of dates in the
-  // file's own text becomes a date instead of staying text.
+  // After the slash-date pass and before the numbers, so a column of dates or
+  // of months in the file's own text becomes a date instead of staying text.
   await convertDateColumns(query, table, order).catch(() => {});
 }
 
@@ -212,29 +209,6 @@ const MONTH_TEXT = [
   "^(19|20)\\d{2}-(0[1-9]|1[0-2])$",
 ].join("|");
 const ISO_MONTH = "^(19|20)\\d{2}-";
-
-async function convertMonthColumns(query: Query, table: string): Promise<void> {
-  const described = await query(`DESCRIBE ${quote(table)}`);
-  const text = described.filter((row) => String(row.column_type) === "VARCHAR").map((row) => String(row.column_name));
-  for (const column of text) {
-    const field = quote(column);
-    const value = `trim(${field})`;
-    const blank = `(${field} IS NULL OR ${value} = '')`;
-    // A VARCHAR column still holds the file's own text, so the month check
-    // reads the loaded table instead of reading the file a second time.
-    const [counts] = await query(
-      `SELECT count(*) FILTER (WHERE NOT ${blank})::DOUBLE AS n,
-              count(*) FILTER (WHERE NOT ${blank} AND NOT regexp_matches(${value}, '${MONTH_TEXT}'))::DOUBLE AS bad
-       FROM ${quote(table)}`,
-    );
-    if (!(Number(counts?.n) > 0) || Number(counts?.bad) > 0) continue;
-    const year = `CASE WHEN regexp_matches(${value}, '${ISO_MONTH}') THEN CAST(substr(${value}, 1, 4) AS INTEGER) ELSE CAST(substr(${value}, length(${value}) - 3, 4) AS INTEGER) END`;
-    const month = `CASE WHEN regexp_matches(${value}, '${ISO_MONTH}') THEN CAST(substr(${value}, 6, 2) AS INTEGER) ELSE CAST(substr(${value}, 1, 2) AS INTEGER) END`;
-    await query(
-      `ALTER TABLE ${quote(table)} ALTER ${field} TYPE DATE USING CASE WHEN ${blank} THEN NULL ELSE make_date(${year}, ${month}, 1) END`,
-    );
-  }
-}
 
 // A slash date or an English month-name date, with an optional time of day.
 // The month-name list is spelled out because try_strptime reads English only.
@@ -251,6 +225,41 @@ const SLASH_TIME = "\\d{1,2}:\\d{2}";
 const MONTH_NAME_FIRST = "^\\s*[A-Za-z]";
 const SHORT_MONTH = "^(?:[A-Za-z]{3}\\b|\\d{1,2}\\s+[A-Za-z]{3}\\b)";
 
+// The shapes above as a reader of the file's own text uses them, to decide
+// whether a column can be one date family at all.
+const SLASH_DATE_VALUE = new RegExp(SLASH_DATE_TEXT);
+const MONTH_NAME_VALUE = new RegExp(MONTH_NAME_TEXT);
+const MONTH_VALUE = new RegExp(MONTH_TEXT);
+
+/** How many non-blank values decide whether a column is worth the whole-table pass. */
+const SHAPE_SAMPLE = 200;
+
+/**
+ * The text columns that can still be one date family, decided from a small
+ * sample. A column whose sampled values include ordinary text cannot be wholly
+ * date-shaped, so it never needs the whole-table pass; a column with no
+ * non-blank value in the sample is left to that pass. This keeps a file of
+ * ordinary text from paying for a date measure over every row.
+ */
+async function dateShapedColumns(query: Query, table: string, columns: string[]): Promise<string[]> {
+  const shaped: string[] = [];
+  for (const column of columns) {
+    const field = quote(column);
+    const value = `trim(${field})`;
+    const rows = await query(
+      `SELECT ${value} AS v FROM ${quote(table)} WHERE ${field} IS NOT NULL AND ${value} <> '' LIMIT ${SHAPE_SAMPLE}`,
+    );
+    if (rows.length === 0) continue;
+    const every = rows.every((row) => {
+      const text = String(row.v);
+      return SLASH_DATE_VALUE.test(text) || MONTH_NAME_VALUE.test(text) || MONTH_VALUE.test(text);
+    });
+    if (every) shaped.push(column);
+  }
+  return shaped;
+}
+
+
 interface DateCounts {
   present: number;
   slash: number;
@@ -262,6 +271,9 @@ interface DateCounts {
   wide: number;
   abbreviated: number;
   monthFirst: number;
+  /** Values in one of the month-with-no-day shapes, and those that are not. */
+  month: number;
+  monthBad: number;
 }
 
 interface DateShape {
@@ -288,6 +300,8 @@ function dateMeasures(column: string, index: number): string {
     `count(*) FILTER (WHERE ${slash} AND regexp_matches(${value}, '${SLASH_FOUR_DIGIT_YEAR}'))::DOUBLE AS w${index}`,
     `count(*) FILTER (WHERE ${named} AND regexp_matches(${value}, '${SHORT_MONTH}'))::DOUBLE AS ab${index}`,
     `count(*) FILTER (WHERE ${named} AND regexp_matches(${value}, '${MONTH_NAME_FIRST}'))::DOUBLE AS mf${index}`,
+    `count(*) FILTER (WHERE NOT ${blank} AND regexp_matches(${value}, '${MONTH_TEXT}'))::DOUBLE AS mo${index}`,
+    `count(*) FILTER (WHERE NOT ${blank} AND NOT regexp_matches(${value}, '${MONTH_TEXT}'))::DOUBLE AS mb${index}`,
   ].join(", ");
 }
 
@@ -303,6 +317,8 @@ function dateCounts(row: Record<string, unknown>, index: number): DateCounts {
     wide: Number(row[`w${index}`]),
     abbreviated: Number(row[`ab${index}`]),
     monthFirst: Number(row[`mf${index}`]),
+    month: Number(row[`mo${index}`]),
+    monthBad: Number(row[`mb${index}`]),
   };
 }
 
@@ -359,11 +375,26 @@ async function convertDateColumns(query: Query, table: string, order: DateOrder)
     .filter((row) => String(row.column_type) === "VARCHAR")
     .map((row) => String(row.column_name));
   if (text.length === 0) return;
-  const [row] = await query(`SELECT ${text.map(dateMeasures).join(", ")} FROM ${name}`);
+  const likely = await dateShapedColumns(query, table, text);
+  if (likely.length === 0) return;
+  const [row] = await query(`SELECT ${likely.map(dateMeasures).join(", ")} FROM ${name}`);
   if (row === undefined) return;
-  for (const [index, column] of text.entries()) {
+  for (const [index, column] of likely.entries()) {
     const counts = dateCounts(row, index);
     if (!(counts.present > 0)) continue;
+    // A column whose every value is a month with no day becomes the first of
+    // that month, before any slash shape is considered.
+    if (counts.month === counts.present && counts.monthBad === 0) {
+      const field = quote(column);
+      const value = `trim(${field})`;
+      const blank = `(${field} IS NULL OR ${value} = '')`;
+      const year = `CASE WHEN regexp_matches(${value}, '${ISO_MONTH}') THEN CAST(substr(${value}, 1, 4) AS INTEGER) ELSE CAST(substr(${value}, length(${value}) - 3, 4) AS INTEGER) END`;
+      const month = `CASE WHEN regexp_matches(${value}, '${ISO_MONTH}') THEN CAST(substr(${value}, 6, 2) AS INTEGER) ELSE CAST(substr(${value}, 1, 2) AS INTEGER) END`;
+      await query(
+        `ALTER TABLE ${name} ALTER ${field} TYPE DATE USING CASE WHEN ${blank} THEN NULL ELSE make_date(${year}, ${month}, 1) END`,
+      );
+      continue;
+    }
     const shape = shapeFor(counts, order);
     if (shape === undefined) {
       if (counts.slash === counts.present && counts.dayProof > 0 && counts.monthProof > 0) {
