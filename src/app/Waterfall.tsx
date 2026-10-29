@@ -1,6 +1,7 @@
 import { BarChart } from "echarts/charts";
 import { GridComponent, TooltipComponent } from "echarts/components";
 import * as echarts from "echarts/core";
+import type { EChartsCoreOption } from "echarts/core";
 import { LegacyGridContainLabel } from "echarts/features";
 import { CanvasRenderer } from "echarts/renderers";
 import { useEffect, useRef, useState } from "react";
@@ -107,6 +108,118 @@ export function labelPlan(
   return { axis, axisRotate: 50, values: [...values], valueRotate, top };
 }
 
+/** The page's colour and font tokens, read once by the chart. */
+export interface ChartTheme {
+  font: string;
+  total: string;
+  up: string;
+  down: string;
+  text: string;
+  text2: string;
+  text3: string;
+  lineStrong: string;
+  grid: string;
+  bg: string;
+}
+
+const valueText = (bar: Step) => (bar.kind === "total" ? compact(bar.value) : signedCompact(bar.value));
+
+/**
+ * The whole chart for one label plan. `touch` and `selectable` are asked again each time a tooltip opens,
+ * because the pointer and the click handler can change after the chart is drawn.
+ */
+export function bridgeOption(input: {
+  bars: Step[];
+  plan: LabelPlan;
+  slim?: boolean;
+  scale?: ValueScale;
+  /** The chart box's width in CSS px. */
+  width: number;
+  theme: ChartTheme;
+  /** The period sales the tooltip's share is of. */
+  priorSales: number;
+  touch: () => boolean;
+  selectable: () => boolean;
+}): EChartsCoreOption {
+  const { bars, plan, slim, scale, width, theme, priorSales, touch, selectable } = input;
+  const colors = { total: theme.total, up: theme.up, down: theme.down };
+  const stack = chartStack(bars);
+  return {
+    animation: false,
+    textStyle: { fontFamily: theme.font },
+    grid: { left: 4, right: 8, top: slim ? 26 : plan.top, bottom: 4, containLabel: true },
+    tooltip: {
+      trigger: "axis",
+      enterable: true,
+      axisPointer: { type: touch() ? "none" : "shadow" },
+      backgroundColor: theme.bg,
+      borderColor: theme.lineStrong,
+      borderRadius: 0,
+      textStyle: { color: theme.text, fontSize: 12 },
+      formatter: (params: { dataIndex: number }[]) => {
+        const bar = bars[params[0].dataIndex];
+        const amount = bar.value.toLocaleString("en-US", { maximumFractionDigits: 0 });
+        if (bar.kind === "total") return `<b>${bar.label}</b><br/>${amount}`;
+        const share = ((bar.value / priorSales) * 100).toFixed(1);
+        const hint = !selectable()
+          ? ""
+          : touch()
+            ? `<br/><button type="button" class="tip-action" data-movers="${params[0].dataIndex}">Show movers</button>`
+            : "<br/><i>Select for movers</i>";
+        return `<b>${bar.label}</b><br/>${bar.value > 0 ? "+" : ""}${amount}<br/>${share}% of prior sales${hint}`;
+      },
+    },
+    xAxis: {
+      type: "category",
+      data: plan.axis,
+      axisTick: { show: false },
+      axisLine: { lineStyle: { color: theme.lineStrong } },
+      axisLabel: slim
+        ? { show: false }
+        : { color: theme.text2, fontSize: width < 560 ? 10 : 11, interval: 0, lineHeight: 14, rotate: plan.axisRotate },
+    },
+    yAxis: {
+      type: "value",
+      min: scale ? scale.min : axisFloor(bars),
+      ...(scale ? { max: scale.max } : {}),
+      axisLabel: { color: theme.text3, fontSize: slim ? 9 : 11, formatter: (v: number) => compact(v) },
+      splitLine: { lineStyle: { color: theme.grid } },
+    },
+    series: [
+      {
+        type: "bar",
+        stack: "bridge",
+        stackStrategy: stack.strategy,
+        silent: true,
+        itemStyle: { color: "transparent" },
+        data: stack.bases,
+      },
+      {
+        type: "bar",
+        stack: "bridge",
+        stackStrategy: stack.strategy,
+        barMaxWidth: 52,
+        // A small panel has no room to plan; its colliding labels are dropped, and its tooltip has every value.
+        labelLayout: slim ? { hideOverlap: true } : undefined,
+        cursor: selectable() ? "pointer" : "default",
+        emphasis: { disabled: touch() },
+        label: {
+          show: true,
+          position: "top",
+          color: theme.text,
+          fontSize: slim ? 9 : 11,
+          ...(!slim && plan.valueRotate === 90 ? { rotate: 90, align: "left", verticalAlign: "middle", distance: 4 } : {}),
+          formatter: (p: { dataIndex: number }) => (slim ? valueText(bars[p.dataIndex]) : plan.values[p.dataIndex]),
+        },
+        data: bars.map((bar, index) => ({
+          value: stack.extents[index],
+          itemStyle: { color: colors[bar.kind], borderRadius: bar.kind === "total" ? [2, 2, 0, 0] : 2 },
+        })),
+      },
+    ],
+  };
+}
+
 function canvasMeasure(font: string): Measure {
   const context = document.createElement("canvas").getContext("2d");
   if (!context) return estimate;
@@ -148,12 +261,20 @@ export function BridgeChart(props: {
     if (!element.current) return;
     const chart = echarts.init(element.current);
     onReady.current?.(chart);
-    const colors = { total: token("--total"), up: token("--up"), down: token("--down") };
-    const ink = token("--text");
-    const stack = chartStack(bars);
-    const valueText = (bar: Step) => (bar.kind === "total" ? compact(bar.value) : signedCompact(bar.value));
+    const theme: ChartTheme = {
+      font: token("--font"),
+      total: token("--total"),
+      up: token("--up"),
+      down: token("--down"),
+      text: token("--text"),
+      text2: token("--text-2"),
+      text3: token("--text-3"),
+      lineStrong: token("--line-strong"),
+      grid: token("--grid"),
+      bg: token("--bg"),
+    };
     const width = element.current.clientWidth;
-    const measure = canvasMeasure(token("--font"));
+    const measure = canvasMeasure(theme.font);
     const planAt = (w: number) => labelPlan(bars.map((b) => b.label), bars.map(valueText), w, measure);
     const plan = planAt(width);
     // A finger has no hover: a tap shows the value, and the tooltip's own button opens Movers.
@@ -164,80 +285,19 @@ export function BridgeChart(props: {
     };
     box.addEventListener("pointerdown", onPointer);
 
-    chart.setOption({
-      animation: false,
-      textStyle: { fontFamily: token("--font") },
-      grid: { left: 4, right: 8, top: slim ? 26 : plan.top, bottom: 4, containLabel: true },
-      tooltip: {
-        trigger: "axis",
-        enterable: true,
-        axisPointer: { type: touch ? "none" : "shadow" },
-        backgroundColor: token("--bg"),
-        borderColor: token("--line-strong"),
-        borderRadius: 0,
-        textStyle: { color: ink, fontSize: 12 },
-        formatter: (params: { dataIndex: number }[]) => {
-          const bar = bars[params[0].dataIndex];
-          const amount = bar.value.toLocaleString("en-US", { maximumFractionDigits: 0 });
-          if (bar.kind === "total") return `<b>${bar.label}</b><br/>${amount}`;
-          const share = ((bar.value / priorSales) * 100).toFixed(1);
-          const hint = !onSelect.current
-            ? ""
-            : touch
-              ? `<br/><button type="button" class="tip-action" data-movers="${params[0].dataIndex}">Show movers</button>`
-              : "<br/><i>Select for movers</i>";
-          return `<b>${bar.label}</b><br/>${bar.value > 0 ? "+" : ""}${amount}<br/>${share}% of prior sales${hint}`;
-        },
-      },
-      xAxis: {
-        type: "category",
-        data: plan.axis,
-        axisTick: { show: false },
-        axisLine: { lineStyle: { color: token("--line-strong") } },
-        axisLabel: slim
-          ? { show: false }
-          : { color: token("--text-2"), fontSize: width < 560 ? 10 : 11, interval: 0, lineHeight: 14, rotate: plan.axisRotate },
-      },
-      yAxis: {
-        type: "value",
-        min: scale ? scale.min : axisFloor(bars),
-        ...(scale ? { max: scale.max } : {}),
-        axisLabel: { color: token("--text-3"), fontSize: slim ? 9 : 11, formatter: (v: number) => compact(v) },
-        splitLine: { lineStyle: { color: token("--grid") } },
-      },
-      series: [
-        {
-          type: "bar",
-          stack: "bridge",
-          stackStrategy: stack.strategy,
-          silent: true,
-          itemStyle: { color: "transparent" },
-          data: stack.bases,
-        },
-        {
-          type: "bar",
-          stack: "bridge",
-          stackStrategy: stack.strategy,
-          barMaxWidth: 52,
-          // A small panel has no room to plan; its colliding labels are dropped, and its tooltip has every value.
-          labelLayout: slim ? { hideOverlap: true } : undefined,
-          cursor: onSelect.current ? "pointer" : "default",
-          emphasis: { disabled: touch },
-          label: {
-            show: true,
-            position: "top",
-            color: ink,
-            fontSize: slim ? 9 : 11,
-            ...(!slim && plan.valueRotate === 90 ? { rotate: 90, align: "left", verticalAlign: "middle", distance: 4 } : {}),
-            formatter: (p: { dataIndex: number }) => (slim ? valueText(bars[p.dataIndex]) : plan.values[p.dataIndex]),
-          },
-          data: bars.map((bar, index) => ({
-            value: stack.extents[index],
-            itemStyle: { color: colors[bar.kind], borderRadius: bar.kind === "total" ? [2, 2, 0, 0] : 2 },
-          })),
-        },
-      ],
-    });
+    chart.setOption(
+      bridgeOption({
+        bars,
+        plan,
+        slim,
+        scale,
+        width,
+        theme,
+        priorSales,
+        touch: () => touch,
+        selectable: () => Boolean(onSelect.current),
+      }),
+    );
 
     const select = (index: number) => {
       const key = bars[index]?.key;
