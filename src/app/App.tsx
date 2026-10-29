@@ -10,12 +10,13 @@ import {
 } from "./db.ts";
 import { exportExcel, lazyChunk, type ChunkSentences } from "./exportExcel.ts";
 import { isPastedTable, makeGuard, saveOnce, shorten } from "./files.ts";
-import { fileProblem, periodView, periodsFor, type FileProblem, type LoadedPeriods, type Periods } from "./fileProblems.ts";
+import { fileProblem, periodView, periodsFor, type FileProblem, type Periods } from "./fileProblems.ts";
 import { whole } from "./format.ts";
 import { findTotalRows, profileFile, type TotalRow } from "./profile.ts";
 import { loadPeriodList } from "./periods.ts";
 import { describeSetup } from "./report.ts";
 import type { Run, Results as ResultsComponent } from "./Results.tsx";
+import { createLatestOnly, NO_PERIOD_VIEWS, reducePeriodViews, viewsInstalled } from "./small-bridges.ts";
 import {
   affectsRemember,
   calculateGate,
@@ -170,7 +171,8 @@ export function App() {
   const [columns, setColumns] = useState<Column[]>([]);
   const [setup, setSetup] = useState<Setup | null>(null);
   const [load, setLoad] = useState(0);
-  const [loadedPeriods, setLoadedPeriods] = useState<LoadedPeriods | null>(null);
+  const [periodViews, dispatchPeriodViews] = useReducer(reducePeriodViews, NO_PERIOD_VIEWS);
+  const [periodReads] = useState(createLatestOnly);
   const [suggestedPeriods, setSuggestedPeriods] = useState<Sample["periods"] | null>(null);
   const [prior, setPrior] = useState("");
   const [current, setCurrent] = useState("");
@@ -244,6 +246,9 @@ export function App() {
   }
 
   async function afterLoad(thisLoad: number, name: string, preset?: Sample) {
+    // The table has already been replaced, so a run from the file before it must
+    // not survive a load that a newer load superseded.
+    setRun(null);
     const q = await query();
     const described = await q(`DESCRIBE ${quote(TABLE)}`);
     const found = described.map((row) => ({ name: String(row.column_name), type: String(row.column_type) }));
@@ -254,7 +259,6 @@ export function App() {
     setRowCount(Number(count.n));
     setSource(name);
     setFromSample(!!preset);
-    setRun(null);
     setLoad(thisLoad);
     setSetup(preset?.setup ?? saved ?? guessSetup(found));
     setSuggestedPeriods(preset?.periods ?? null);
@@ -303,32 +307,30 @@ export function App() {
     : null;
   useEffect(() => {
     if (view === null || !setup) return;
+    const ticket = periodReads.start();
     if (!setup.periodColumn) {
-      setLoadedPeriods({ view, values: [] });
+      dispatchPeriodViews({ type: "noPeriodColumn", view });
       return;
     }
-    let stale = false;
-    const requested = view;
-    task("periods", "Reading periods…", async () => {
-      const q = await query();
-      await buildViews(q, setup);
-      const list = await loadPeriodList(q, quote(PERIOD), quote(VIEW));
-      if (stale) return;
-      const values = [...list.values];
-      setLoadedPeriods({ view: requested, values });
+    dispatchPeriodViews({ type: "rebuilding" });
+    void task("periods", "Reading periods…", async () => {
+      const read = await ticket.run(await query(), async (current) => {
+        await buildViews(current, setup);
+        return loadPeriodList(current, quote(PERIOD), quote(VIEW));
+      });
+      if (read.status === "superseded") return;
+      const values = [...read.value.values];
+      dispatchPeriodViews({ type: "rebuilt", view, values });
       // A sample that compares two named periods says which one is prior.
       const next = carryPeriods(periodsRef.current, values, suggestedPeriods ?? null);
       setPrior(next.prior);
       setCurrent(next.current);
     });
-    return () => {
-      stale = true;
-    };
   }, [view]);
 
-  const offeredPeriods = loadedPeriods ? [...loadedPeriods.values] : [];
-  const problemPeriods = periodsFor(view, loadedPeriods);
-  const periodsCurrent = problemPeriods !== "unknown";
+  const offeredPeriods = periodViews.list ? [...periodViews.list.values] : [];
+  const problemPeriods = periodsFor(view, periodViews.list);
+  const periodsCurrent = viewsInstalled(periodViews, view);
 
   // A total row from a spreadsheet export would count the same amounts twice.
   const totalKey = setup ? JSON.stringify([load, setup.periodColumn, setup.levels.map((level) => level.columns)]) : "";
@@ -351,6 +353,9 @@ export function App() {
 
   const signature = JSON.stringify([setup, prior, current, source]);
   const fresh = run && run.signature === signature ? run : null;
+  // The run on screen, and the period views this setup's SQL holds, so a report
+  // or an export cannot be read off a view that belongs to another setup.
+  const runCurrent = fresh !== null && periodsCurrent;
   const calculating = tasks.has("calc");
   const busy = tasks.size > 0 || phase.kind === "reading" || phase.kind === "autoRun";
   const problem: FileProblem = setup
@@ -509,7 +514,7 @@ export function App() {
   const exportWorkbook = () =>
     exportGuard.run(() =>
       task("export", "Building Excel file…", async () => {
-        if (!fresh) return;
+        if (!fresh || !runCurrent) return;
         await exportExcel(await query(), fresh.config, fresh.result, fresh.check, fresh.tieOut, fresh.description);
       }),
     );
@@ -575,7 +580,7 @@ export function App() {
         <span className="status" aria-live="polite">{status}</span>
         <nav>
           {filePicker}
-          <button disabled={!fresh || busy} onClick={exportWorkbook} aria-label="Export Excel">Export<span className="wide-only"> Excel</span></button>
+          <button disabled={!runCurrent || busy} onClick={exportWorkbook} aria-label="Export Excel">Export<span className="wide-only"> Excel</span></button>
           {setup && (
             <button
               title="Remove the loaded data from this tab"
@@ -728,7 +733,7 @@ export function App() {
             )}
             {run && Results ? (
               <div className="results-anchor" ref={resultsRef}>
-                <Results key={run.id} run={run} query={query} fresh={fresh !== null} omitNames={omitNames} onOmitNames={setOmitNames} />
+                <Results key={run.id} run={run} query={query} fresh={fresh !== null} viewsCurrent={periodsCurrent} omitNames={omitNames} onOmitNames={setOmitNames} />
               </div>
             ) : !run ? (
               <div>

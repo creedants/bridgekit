@@ -1,12 +1,103 @@
-import type { BridgeBy, BridgePanel, BridgeResult, PanelStatus } from "../engine.ts";
+import type { BridgeBy, BridgePanel, BridgeResult, PanelStatus, Query } from "../engine.ts";
+import type { LoadedPeriods, PeriodView } from "./fileProblems.ts";
 import { compact, signedWhole } from "./format.ts";
 
 /**
- * Every rule behind a bridge's bars and behind the small-bridge grid, in one
- * place and free of React, of the document and of the database, so the tests
- * can check them without a browser. `Waterfall.tsx` only draws: it takes the
- * steps this file decides and puts them on a canvas.
+ * The small-bridge rules and the page's read rules, in one place and free of
+ * React, of the document and of the database, so the tests can check them
+ * without a browser. `Waterfall.tsx` only draws: it takes the steps this file
+ * decides and puts them on a canvas.
+ *
+ * The read rules are the latest-only ticket, which stops a superseded read from
+ * installing its SQL over a newer one, and the period views, which say whether
+ * the SQL in the database belongs to the setup on screen.
  */
+
+/**
+ * A read's result, or the fact that a newer read of the same resource started
+ * before this one settled. A statement already issued cannot be recalled, so
+ * the newest read's statements follow it in queue order; what supersession
+ * stops is the older read issuing any more.
+ */
+export type Latest<T> =
+  | { readonly status: "latest"; readonly value: T }
+  | { readonly status: "superseded" };
+
+export interface LatestTicket {
+  /**
+   * Runs `work` with a query that refuses, without calling the database, once a
+   * newer ticket has started. Resolves `superseded` when that happens.
+   */
+  run<T>(query: Query, work: (current: Query) => Promise<T>): Promise<Latest<T>>;
+}
+
+// Thrown by the guarded query and caught by the ticket. No caller sees it.
+const SUPERSEDED = Symbol("superseded");
+
+/** One current read per resource: starting a ticket supersedes every earlier ticket. */
+export function createLatestOnly(): { start(): LatestTicket } {
+  let started = 0;
+  return {
+    start() {
+      const ticket = ++started;
+      const superseded = () => started > ticket;
+      return {
+        async run<T>(query: Query, work: (current: Query) => Promise<T>): Promise<Latest<T>> {
+          const current: Query = async (sql) => {
+            if (superseded()) throw SUPERSEDED;
+            return query(sql);
+          };
+          try {
+            const value = await work(current);
+            return superseded() ? { status: "superseded" } : { status: "latest", value };
+          } catch (error: unknown) {
+            if (error === SUPERSEDED) return { status: "superseded" };
+            throw error;
+          }
+        },
+      };
+    },
+  };
+}
+
+export interface PeriodViews {
+  /** The list on screen. Kept through a rebuild, so the period dropdown never empties. */
+  readonly list: LoadedPeriods | null;
+  /** The view whose SQL the database holds, or null while a rebuild is unfinished or failed. */
+  readonly installed: PeriodView | null;
+}
+
+export const NO_PERIOD_VIEWS: PeriodViews = { list: null, installed: null };
+
+export type PeriodViewsEvent =
+  | { readonly type: "rebuilding" }
+  | { readonly type: "rebuilt"; readonly view: PeriodView; readonly values: readonly string[] }
+  | { readonly type: "noPeriodColumn"; readonly view: PeriodView };
+
+/**
+ * The list and the installed view move together only on `rebuilt`. A rebuild in
+ * flight keeps the list on screen and drops the gate, because the SQL in the
+ * database no longer belongs to any finished read.
+ */
+export function reducePeriodViews(state: PeriodViews, event: PeriodViewsEvent): PeriodViews {
+  switch (event.type) {
+    case "rebuilding":
+      return { list: state.list, installed: null };
+    case "rebuilt":
+      return { list: { view: event.view, values: event.values }, installed: event.view };
+    case "noPeriodColumn":
+      return { list: { view: event.view, values: [] }, installed: state.installed };
+    default: {
+      const _exhaustive: never = event;
+      return _exhaustive;
+    }
+  }
+}
+
+/** True only when the SQL in the database was built for `view` by a finished, newest read. */
+export function viewsInstalled(state: PeriodViews, view: PeriodView | null): boolean {
+  return view !== null && state.installed === view;
+}
 
 /** A panel whose column value is empty or null. The page already writes "(blank)". */
 export const BLANK_TITLE = "(blank)";
@@ -158,14 +249,6 @@ export function chartStack(bars: Step[]): ChartStack {
   };
 }
 
-/** The sentence the page already shows when the calculated bridge is out of date. */
-export const STALE_NOTICE =
-  "The setup changed since this bridge was calculated. Calculate again to update it.";
-
-export function noticesAreStale(texts: readonly string[]): boolean {
-  return texts.includes(STALE_NOTICE);
-}
-
 /** What the grid does for the column the user has chosen. */
 export type GridAction = "clear" | "keep" | "calculate";
 
@@ -183,55 +266,15 @@ export function gridAction(column: string, stale: boolean, shownFor: string): Gr
 /** The one sentence shown when the split cannot be calculated. */
 export const SPLIT_FAILURE_SENTENCE = "The small bridges could not be calculated.";
 
-const stampedGenerationBrand = Symbol("StampedGeneration");
-const liveGenerationBrand = Symbol("LiveGeneration");
-
 /**
- * Queue generation at the first render of a run object.
- * Built only by `noteDisplayedRun`. A live reading does not satisfy this type.
- */
-export interface StampedGeneration {
-  readonly [stampedGenerationBrand]: "StampedGeneration";
-  readonly value: number;
-}
-
-/**
- * `pageQueue.generation()` at a settle or a paint.
- * Built only by `readLiveGeneration`. Never stored on a phase.
- */
-export interface LiveGeneration {
-  readonly [liveGenerationBrand]: "LiveGeneration";
-  readonly value: number;
-}
-
-/** The run on screen, plus the generation stamped the first time that object rendered. */
-export interface RunStamp {
-  /** The same object `Results` passes down. Identity, not `run.id`, is the change. */
-  readonly run: object;
-  /** Increments once per new run object. Starts at 1 for the first run. */
-  readonly calculation: number;
-  readonly stampedGeneration: StampedGeneration;
-}
-
-/**
- * Column plus the displayed run's calculation and stamp.
- * This object has no field for the generation at the start of a split.
- */
-export interface SplitIdentity {
-  readonly column: string;
-  readonly calculation: number;
-  readonly stampedGeneration: StampedGeneration;
-}
-
-/**
- * The grid, the failure, and the column the grid was shown for.
+ * The grid, the failure, and the column each belongs to.
  * One variant is stored. Paint reads it and does not write it.
  */
 export type SplitPhase =
   | { readonly kind: "idle" }
-  | { readonly kind: "calculating"; readonly identity: SplitIdentity }
-  | { readonly kind: "ready"; readonly identity: SplitIdentity; readonly grid: BridgeBy }
-  | { readonly kind: "failed"; readonly identity: SplitIdentity };
+  | { readonly kind: "calculating"; readonly column: string }
+  | { readonly kind: "ready"; readonly column: string; readonly grid: BridgeBy }
+  | { readonly kind: "failed"; readonly column: string };
 
 export const IDLE_SPLIT_PHASE: SplitPhase = { kind: "idle" };
 
@@ -251,56 +294,23 @@ export type SplitOutcome<T> =
   | { readonly status: "fail" };
 
 /**
- * One transition. `inputs` runs from the effect on column, stale, run, and rowsEpoch.
+ * One transition. `inputs` runs from the effect on the column, the notice and the run.
  * `settled` runs from the split runner.
  */
 export type SplitEvent =
   | {
       readonly type: "inputs";
       readonly column: string;
-      readonly displayed: SplitIdentity;
       readonly stale: boolean;
     }
   | {
       readonly type: "settled";
-      /** Copied from the run stamp when the runner took the column. */
-      readonly request: SplitIdentity;
+      /** The column the runner took. */
+      readonly request: string;
       readonly outcome: SplitOutcome<BridgeBy>;
-      readonly displayed: SplitIdentity;
-      readonly liveGeneration: LiveGeneration;
+      readonly displayed: string;
       readonly stale: boolean;
     };
-
-/**
- * Records the queue generation when `run` first differs from `prior.run`.
- * A later call with the same object returns `prior`, whatever `generationAtRender` is.
- */
-export function noteDisplayedRun(
-  prior: RunStamp | null,
-  run: object,
-  generationAtRender: number,
-): RunStamp {
-  if (prior !== null && prior.run === run) return prior;
-  return {
-    run,
-    calculation: (prior?.calculation ?? 0) + 1,
-    stampedGeneration: stampGeneration(generationAtRender),
-  };
-}
-
-/** Call at settle and at paint with `pageQueue.generation()`. */
-export function readLiveGeneration(generation: number): LiveGeneration {
-  return { [liveGenerationBrand]: "LiveGeneration", value: generation };
-}
-
-/** Copies the stamp off the run. The column is the select, or the column the runner took. */
-export function displayedIdentity(stamp: RunStamp, column: string): SplitIdentity {
-  return {
-    column,
-    calculation: stamp.calculation,
-    stampedGeneration: stamp.stampedGeneration,
-  };
-}
 
 /**
  * Stores a grid or a failure only when `splitBelongs` is true.
@@ -310,33 +320,28 @@ export function displayedIdentity(stamp: RunStamp, column: string): SplitIdentit
 export function reduceSplitPhase(phase: SplitPhase, event: SplitEvent): SplitPhase {
   switch (event.type) {
     case "inputs": {
-      const shownFor = phase.kind === "ready" ? phase.identity.column : "";
+      const shownFor = phase.kind === "ready" ? phase.column : "";
       const action = gridAction(event.column, event.stale, shownFor);
       if (action === "keep") return phase;
       if (action === "clear") return phase.kind === "idle" ? phase : IDLE_SPLIT_PHASE;
-      const identity: SplitIdentity = {
-        column: event.column,
-        calculation: event.displayed.calculation,
-        stampedGeneration: event.displayed.stampedGeneration,
-      };
-      if (phase.kind === "calculating" && sameIdentity(phase.identity, identity)) return phase;
-      return { kind: "calculating", identity };
+      if (phase.kind === "calculating" && phase.column === event.column) return phase;
+      return { kind: "calculating", column: event.column };
     }
     case "settled": {
       if (event.outcome.status === "drop") return phase;
-      if (!splitBelongs(event.request, event.displayed, event.liveGeneration, event.stale)) return phase;
+      if (!splitBelongs(event.request, event.displayed, event.stale)) return phase;
       if (event.outcome.status === "fail") {
-        if (phase.kind === "failed" && sameIdentity(phase.identity, event.request)) return phase;
-        return { kind: "failed", identity: event.request };
+        if (phase.kind === "failed" && phase.column === event.request) return phase;
+        return { kind: "failed", column: event.request };
       }
       if (
         phase.kind === "ready"
-        && sameIdentity(phase.identity, event.request)
+        && phase.column === event.request
         && phase.grid === event.outcome.result
       ) {
         return phase;
       }
-      return { kind: "ready", identity: event.request, grid: event.outcome.result };
+      return { kind: "ready", column: event.request, grid: event.outcome.result };
     }
     default: {
       const _exhaustive: never = event;
@@ -347,86 +352,44 @@ export function reduceSplitPhase(phase: SplitPhase, event: SplitEvent): SplitPha
 
 /**
  * Reads the phase and does not write it.
- * An empty column, or a stamp that differs from the live generation, paints nothing.
- * That includes a grid stored while it belonged, and a calculation still in flight.
+ * An empty column paints nothing, and so does a stale run with no grid of its own.
  * A matching ready grid paints while the stale notice is up.
- * A matching failed phase paints the sentence while the notice is absent, and the same inputs paint it again.
+ * A matching failed phase paints the sentence while the notice is absent.
  */
 export function paintSplit(input: {
   phase: SplitPhase;
-  displayed: SplitIdentity;
-  liveGeneration: LiveGeneration;
+  column: string;
   stale: boolean;
 }): SplitPaint {
-  if (input.displayed.column === "") return { view: "nothing" };
-  if (input.displayed.stampedGeneration.value !== input.liveGeneration.value) return { view: "nothing" };
-  if (input.phase.kind === "ready" && sameIdentity(input.phase.identity, input.displayed)) {
+  if (input.column === "") return { view: "nothing" };
+  if (input.phase.kind === "ready" && input.phase.column === input.column) {
     return { view: "grid", grid: input.phase.grid };
   }
-  if (
-    input.phase.kind === "failed"
-    && sameIdentity(input.phase.identity, input.displayed)
-    && !input.stale
-  ) {
+  if (input.phase.kind === "failed" && input.phase.column === input.column && !input.stale) {
     return { view: "failed", sentence: SPLIT_FAILURE_SENTENCE };
   }
   if (input.stale) return { view: "nothing" };
   return { view: "calculating" };
 }
 
-/**
- * True when the request column is non-empty and equals the displayed column,
- * the calculation counters are equal, the request stamp is the displayed stamp,
- * that stamp's value equals the live generation, and the stale notice is absent.
- * Compares the run's stamp with the live generation. Does not compare two live readings.
- */
-function splitBelongs(
-  request: SplitIdentity,
-  displayed: SplitIdentity,
-  liveGeneration: LiveGeneration,
-  stale: boolean,
-): boolean {
-  return !stale
-    && request.column !== ""
-    && request.column === displayed.column
-    && request.calculation === displayed.calculation
-    && request.stampedGeneration === displayed.stampedGeneration
-    && request.stampedGeneration.value === liveGeneration.value;
-}
-
-function sameIdentity(left: SplitIdentity, right: SplitIdentity): boolean {
-  return left.column === right.column
-    && left.calculation === right.calculation
-    && left.stampedGeneration.value === right.stampedGeneration.value;
-}
-
-function stampGeneration(value: number): StampedGeneration {
-  return { [stampedGenerationBrand]: "StampedGeneration", value };
+/** True when the request column is non-empty, equals the displayed column, and the notice is absent. */
+function splitBelongs(request: string, displayed: string, stale: boolean): boolean {
+  return !stale && request !== "" && request === displayed;
 }
 
 /**
  * Runs one split and keeps the result only while `splitBelongs` stays true.
- * A failed install is a failure, not a hang, because the await sits in this try.
  * `fail` is returned only while the split still belongs. A mismatch is a drop.
  */
 export async function attemptSplit<Q, T>(input: {
-  request: SplitIdentity;
-  displayed: () => SplitIdentity;
-  liveGeneration: () => LiveGeneration;
+  request: string;
+  displayed: () => string;
   stale: () => boolean;
-  install: () => Promise<void>;
   prepare: () => Promise<Q>;
   calculate: (prepared: Q) => Promise<T>;
 }): Promise<SplitOutcome<T>> {
-  const belongs = () => splitBelongs(
-    input.request,
-    input.displayed(),
-    input.liveGeneration(),
-    input.stale(),
-  );
+  const belongs = () => splitBelongs(input.request, input.displayed(), input.stale());
   try {
-    await input.install();
-    if (!belongs()) return { status: "drop" };
     const prepared = await input.prepare();
     if (!belongs()) return { status: "drop" };
     const result = await input.calculate(prepared);
@@ -445,29 +408,6 @@ export async function attemptSplit<Q, T>(input: {
  */
 export function statementStartsTurn(sql: string): boolean {
   return /^\s*create\s+or\s+replace\s+table\b/i.test(sql);
-}
-
-/**
- * Remembers a successful attempt and forgets a rejected one, so the next caller
- * tries again instead of awaiting the same failure.
- */
-export function createAttemptCache(): { run(start: () => Promise<void>): Promise<void> } {
-  let pending: Promise<void> | null = null;
-  return {
-    run(start) {
-      if (pending) return pending;
-      let attempt: Promise<void> | null = null;
-      attempt = start().then(
-        () => undefined,
-        (error: unknown) => {
-          if (pending === attempt) pending = null;
-          throw error;
-        },
-      );
-      pending = attempt;
-      return attempt;
-    },
-  };
 }
 
 /** Where keyboard focus goes when a panel opens or closes. */
@@ -491,16 +431,11 @@ interface Session {
  */
 export function createConnectionQueue(): {
   schedule<T>(work: () => Promise<T>): Promise<T>;
-  /** Runs after the current session and never joins it. Bumps the row generation before the work starts. */
+  /** Runs after the current session and never joins it. */
   turn<T>(work: () => Promise<T>): Promise<T>;
-  generation(): number;
-  /** Fires when a rejected turn restores the row generation. Returns the unsubscribe. */
-  whenTurnRejected(listen: () => void): () => void;
 } {
   let current: Session | null = null;
   let tail: Promise<void> = Promise.resolve();
-  let rows = 0;
-  const rejected = new Set<() => void>();
 
   function schedule<T>(work: () => Promise<T>): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -562,17 +497,12 @@ export function createConnectionQueue(): {
   }
 
   function turn<T>(work: () => Promise<T>): Promise<T> {
-    const stamp = ++rows;
     return new Promise<T>((resolve, reject) => {
       const session: Session = { jobs: [], accepting: false };
       session.jobs.push(async () => {
         try {
           resolve(await work());
         } catch (error) {
-          if (rows === stamp) {
-            rows = stamp - 1;
-            for (const listen of [...rejected]) listen();
-          }
           reject(error);
         }
       });
@@ -580,15 +510,7 @@ export function createConnectionQueue(): {
     });
   }
 
-  return {
-    schedule,
-    turn,
-    generation: () => rows,
-    whenTurnRejected(listen) {
-      rejected.add(listen);
-      return () => rejected.delete(listen);
-    },
-  };
+  return { schedule, turn };
 }
 
 /**

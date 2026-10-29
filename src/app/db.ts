@@ -16,8 +16,13 @@ import {
 } from "./numbers.ts";
 import { swapWithSourceRows, type CsvDialect } from "./profile.ts";
 import { firstSheetAsCsv, holeRenames, NO_DATA_ROWS } from "./sheet.ts";
+import { createConnectionQueue, statementStartsTurn } from "./small-bridges.ts";
 
 const IDLE_CAP_MS = 2000;
+
+// The page's one connection gets one queue, so no two statements from this page
+// run at the same time and a caller's consecutive statements stay together.
+const statements = createConnectionQueue();
 
 /**
  * Runs work nobody has asked for yet: after the load event, on an idle
@@ -647,54 +652,68 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
     // DuckDB keeps a registered name until it is dropped and refuses a file
     // handle under a name it still holds as text, so a load drops the last upload first.
     let uploadRegistered = false;
-    const query: Query = async (sql) => {
+    // The raw runner. Only the queue below, and a load's own statements, reach it.
+    const raw: Query = async (sql) => {
       const result = await connection.query(sql);
       return result.toArray().map((row) => row.toJSON() as Record<string, unknown>);
     };
+    /**
+     * Every statement the page issues goes through here, so the one connection
+     * runs one statement at a time. A statement that replaces the loaded table
+     * takes a turn of its own.
+     */
+    const query: Query = (sql) =>
+      statementStartsTurn(sql) ? statements.turn(() => raw(sql)) : statements.schedule(() => raw(sql));
+    /** Loads a file into `table` and returns its data-row formulas with no saved result (zero for a CSV). */
+    const load = async (file: File, table: string): Promise<number> => {
+      try {
+        if (/\.parquet$/i.test(file.name)) {
+          throw new Error(PARQUET_REFUSAL);
+        }
+        const isExcel = /\.xlsx$/i.test(file.name);
+        if (!isExcel && !/\.(csv|tsv|txt)$/i.test(file.name)) {
+          throw new Error("Use a CSV or Excel (.xlsx) file");
+        }
+        const registered = "upload.csv";
+        if (uploadRegistered) {
+          await db.dropFile(registered);
+          uploadRegistered = false;
+        }
+        let excelHoles: readonly number[] = [];
+        let excelRows: readonly number[] = [];
+        let formulaBlanks = 0;
+        if (isExcel) {
+          const sheet = await firstSheetAsCsv(file);
+          excelHoles = sheet.holes;
+          excelRows = sheet.dataRows;
+          formulaBlanks = sheet.formulaBlanks;
+          await db.registerFileText(registered, sheet.csv);
+        } else {
+          const reading = await readCsvFile(file);
+          if (reading.kind === "bytes") {
+            await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+          } else {
+            await db.registerFileText(registered, reading.text);
+          }
+        }
+        uploadRegistered = true;
+        // A refused file must leave the loaded data alone, so the new file
+        // converts on a staging table and only swaps into place once it has
+        // rows. The empty check, the swap and afterLoad all run after this.
+        if (isExcel) await stageExcelAndSwap(raw, table, registered, excelHoles, excelRows);
+        else await stageCsvAndSwap(raw, file, table, registered);
+        return formulaBlanks;
+      } catch (error) {
+        throw loadFailure(error);
+      }
+    };
     return {
       query,
-      async loadFile(file, table) {
-        try {
-          if (/\.parquet$/i.test(file.name)) {
-            throw new Error(PARQUET_REFUSAL);
-          }
-          const isExcel = /\.xlsx$/i.test(file.name);
-          if (!isExcel && !/\.(csv|tsv|txt)$/i.test(file.name)) {
-            throw new Error("Use a CSV or Excel (.xlsx) file");
-          }
-          const registered = "upload.csv";
-          if (uploadRegistered) {
-            await db.dropFile(registered);
-            uploadRegistered = false;
-          }
-          let excelHoles: readonly number[] = [];
-          let excelRows: readonly number[] = [];
-          let formulaBlanks = 0;
-          if (isExcel) {
-            const sheet = await firstSheetAsCsv(file);
-            excelHoles = sheet.holes;
-            excelRows = sheet.dataRows;
-            formulaBlanks = sheet.formulaBlanks;
-            await db.registerFileText(registered, sheet.csv);
-          } else {
-            const reading = await readCsvFile(file);
-            if (reading.kind === "bytes") {
-              await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
-            } else {
-              await db.registerFileText(registered, reading.text);
-            }
-          }
-          uploadRegistered = true;
-          // A refused file must leave the loaded data alone, so the new file
-          // converts on a staging table and only swaps into place once it has
-          // rows. The empty check, the swap and afterLoad all run after this.
-          if (isExcel) await stageExcelAndSwap(query, table, registered, excelHoles, excelRows);
-          else await stageCsvAndSwap(query, file, table, registered);
-          return formulaBlanks;
-        } catch (error) {
-          throw loadFailure(error);
-        }
-      },
+      /**
+       * A load is one turn, and its own statements use the raw runner, so it
+       * never waits behind itself while still waiting out the statement before it.
+       */
+      loadFile: (file: File, table: string) => statements.turn(() => load(file, table)),
     };
   } catch (error) {
     noteWorkerScript(error, workerScriptUrl);

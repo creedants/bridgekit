@@ -1,27 +1,18 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { bridgeBy, measureName, type BridgeBy, type BridgeConfig, type BridgePanel, type Query } from "../engine.ts";
-import { openBrowserDatabase } from "./db.ts";
 import { whole } from "./format.ts";
 import {
   attemptSplit,
   betweenLine,
-  createAttemptCache,
-  createConnectionQueue,
   createSplitRunner,
-  displayedIdentity,
   focusPlace,
   IDLE_SPLIT_PHASE,
-  noteDisplayedRun,
-  noticesAreStale,
   paintSplit,
   panelStatusLabel,
   panelTitle,
-  readLiveGeneration,
   reduceSplitPhase,
   sharedScale,
-  statementStartsTurn,
   steps,
-  type RunStamp,
   type SplitEvent,
   type SplitPhase,
   type Step,
@@ -43,54 +34,15 @@ const LIMIT = 12;
 let chosen = "";
 
 /**
- * The run on screen and the queue generation at its first render.
- * A later render of that same object keeps this stamp. One results view is mounted.
- */
-let runStamp: RunStamp | null = null;
-
-// One queue for the page's one connection. bridgeBy replaces bridge_cells, so
-// a second engine call has to wait until the first has finished every statement.
-// A file load, a paste, and a sample's table replacement take a turn that does
-// not join the running call. The row generation records that the rows changed.
-const pageQueue = createConnectionQueue();
-const installs = createAttemptCache();
-
-function installPageQueue(): Promise<void> {
-  return installs.run(async () => {
-    const database = await openBrowserDatabase();
-    if (Reflect.get(database.query, "pageQueue") === true) return;
-    const inner = database.query;
-    const loadFile = database.loadFile.bind(database);
-    const wrapped: Query = (sql) =>
-      statementStartsTurn(sql) ? pageQueue.turn(() => inner(sql)) : pageQueue.schedule(() => inner(sql));
-    Reflect.set(wrapped, "pageQueue", true);
-    database.query = wrapped;
-    database.loadFile = (file, table) => pageQueue.turn(() => loadFile(file, table));
-  });
-}
-
-void installPageQueue().catch((error: unknown) => {
-  console.error(error);
-});
-
-function noticeTexts(): string[] {
-  const root = document.querySelector("main") ?? document.body;
-  return [...root.querySelectorAll("p.notice")].map((node) => node.textContent ?? "");
-}
-
-function bridgeIsStale(): boolean {
-  return noticesAreStale(noticeTexts());
-}
-
-/**
  * A bridge for every value of one column of the loaded file, drawn as small
  * bridges below the main one. The engine decides the panels, their order, the
  * shared ordering and what a value with nothing to bridge shows; this file only
  * draws what it is given and formats it.
+ *
+ * `fresh` is the page's own verdict on the run, so the grid needs no notice text
+ * to tell that its bridge is out of date.
  */
-export function SmallBridges(props: { run: Run; query: () => Promise<Query> }) {
-  const stamp = noteDisplayedRun(runStamp, props.run, pageQueue.generation());
-  runStamp = stamp;
+export function SmallBridges(props: { run: Run; query: () => Promise<Query>; fresh: boolean }) {
   const { config, textColumns } = props.run;
   // A file loaded later can have other columns, so a choice that names a column
   // this file has not got is dropped rather than run against it.
@@ -98,23 +50,20 @@ export function SmallBridges(props: { run: Run; query: () => Promise<Query> }) {
   const [phase, setPhase] = useState<SplitPhase>(IDLE_SPLIT_PHASE);
   /** The panel shown at full size, or null while the grid is on screen. */
   const [open, setOpen] = useState<number | null>(null);
-  const [stale, setStale] = useState(false);
-  const [rowsEpoch, setRowsEpoch] = useState(0);
   /** Latest phase, so the inputs effect can reduce without listing the phase. */
   const phaseRef = useRef<SplitPhase>(IDLE_SPLIT_PHASE);
-  /** Lets the runner, created once, read the module stamp after later renders. */
-  const stampRef = useRef(stamp);
-  stampRef.current = stamp;
   const wanted = useRef(column);
   const openRef = useRef<number | null>(null);
   const configRef = useRef(config);
   const queryRef = useRef(props.query);
+  const freshRef = useRef(props.fresh);
   const selectRef = useRef<HTMLSelectElement>(null);
   const backRef = useRef<HTMLButtonElement>(null);
   const triggers = useRef(new Map<number, HTMLButtonElement>());
   const pendingFocus = useRef<"back" | "select" | number | null>(null);
   configRef.current = config;
   queryRef.current = props.query;
+  freshRef.current = props.fresh;
   openRef.current = open;
 
   const applyPhase = useCallback((event: SplitEvent): SplitPhase => {
@@ -127,56 +76,33 @@ export function SmallBridges(props: { run: Run; query: () => Promise<Query> }) {
   const runner = useRef<ReturnType<typeof createSplitRunner> | null>(null);
   if (runner.current === null) {
     runner.current = createSplitRunner(async (next) => {
-      const request = displayedIdentity(stampRef.current, next);
       const outcome = await attemptSplit({
-        request,
-        displayed: () => displayedIdentity(stampRef.current, wanted.current),
-        liveGeneration: () => readLiveGeneration(pageQueue.generation()),
-        stale: bridgeIsStale,
-        install: installPageQueue,
+        request: next,
+        displayed: () => wanted.current,
+        stale: () => !freshRef.current,
         prepare: () => queryRef.current(),
         calculate: (query) => bridgeBy(query, configRef.current, next, LIMIT),
       });
       applyPhase({
         type: "settled",
-        request,
+        request: next,
         outcome,
-        displayed: displayedIdentity(stampRef.current, wanted.current),
-        liveGeneration: readLiveGeneration(pageQueue.generation()),
-        stale: bridgeIsStale(),
+        displayed: wanted.current,
+        stale: !freshRef.current,
       });
     });
   }
 
-  useEffect(() => pageQueue.whenTurnRejected(() => setRowsEpoch((n) => n + 1)), []);
-
-  useEffect(() => {
-    const root = document.querySelector("main") ?? document.body;
-    const read = () => {
-      const next = bridgeIsStale();
-      setStale((prev) => (prev === next ? prev : next));
-    };
-    read();
-    const observer = new MutationObserver(read);
-    observer.observe(root, { subtree: true, childList: true, characterData: true });
-    return () => observer.disconnect();
-  }, []);
-
   useEffect(() => {
     wanted.current = column;
     chosen = column;
-    const next = applyPhase({
-      type: "inputs",
-      column,
-      displayed: displayedIdentity(stampRef.current, column),
-      stale: stale || bridgeIsStale(),
-    });
+    const next = applyPhase({ type: "inputs", column, stale: !props.fresh });
     if (next.kind !== "ready" && openRef.current !== null) {
       pendingFocus.current = "select";
       setOpen(null);
     }
     if (next.kind === "calculating") runner.current?.request(column);
-  }, [column, stale, props.run, rowsEpoch]);
+  }, [column, props.fresh, props.run]);
 
   useEffect(() => {
     return () => {
@@ -211,12 +137,7 @@ export function SmallBridges(props: { run: Run; query: () => Promise<Query> }) {
     setOpen(null);
   }, []);
 
-  const painted = paintSplit({
-    phase,
-    displayed: displayedIdentity(stamp, column),
-    liveGeneration: readLiveGeneration(pageQueue.generation()),
-    stale: stale || bridgeIsStale(),
-  });
+  const painted = paintSplit({ phase, column, stale: !props.fresh });
 
   return (
     <section className="split">
