@@ -348,7 +348,7 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .anatomy .figs li::before { content: "Fig. " counter(fig); position: absolute; top: 1rem; left: 1.5rem; font: 500 .6875rem/1 ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; letter-spacing: .08em; text-transform: uppercase; color: #7a5f73; }
 
-.anatomy .mini { display: block; width: calc(100% + 3rem); height: auto; margin: 0 -1.5rem; padding: 2.5rem 1.5rem 1rem; border-bottom: 1px solid var(--blush); background: radial-gradient(rgba(66, 32, 61, .13) 1px, transparent 1.3px) 0 0 / 12px 12px, #fdfafc; }
+.anatomy .mini { display: block; width: calc(100% + 3rem); height: auto; margin: 0 -1.5rem; padding: 2.5rem 1.5rem 1rem; border-bottom: 1px solid var(--blush); background: radial-gradient(rgba(66, 32, 61, .09) 1px, transparent 1.3px) 0 0 / 12px 12px, #fdfafc; }
 
 .anatomy .mini line { stroke: #9c8196; stroke-width: 1; }
 
@@ -357,6 +357,8 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 .anatomy .mini rect { stroke-width: 1; }
 
 .anatomy .mini .total, .anatomy .mini .step { fill: var(--paper); stroke: #b9a2b4; }
+
+.anatomy .mini .lit { fill: rgba(244, 191, 58, .18); }
 
 .anatomy .mini .on { fill: var(--sun); stroke: var(--plum); }
 
