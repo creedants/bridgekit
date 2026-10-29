@@ -83,6 +83,40 @@ test("D141: one price line prints the amount the table shows, with the exact sha
   assert.ok(text[2].startsWith("Like-for-like price added 1, +0.2% of prior sales."), text[2]);
 });
 
+test("D141: a money word follows the shown amount it prints", () => {
+  // The review's helper probe: the exact price sum is +0.1 and the shown price
+  // lines total +1, so the word and the amount agree.
+  const probe: BridgeResult = {
+    ...result,
+    priorSales: 100.45,
+    currentSales: 100.55,
+    effects: [
+      { key: "price_list", label: "List price", value: 0.2 },
+      { key: "price_discount", label: "Discounts", value: 0.45 },
+      { key: "price", label: "Price (like-for-like)", value: -0.55 },
+    ],
+  };
+  const probeText = commentary(probe, config)[2];
+  assert.ok(probeText.startsWith("Like-for-like price added 1, +0.1% of prior sales."), probeText);
+
+  // The review's split-price CSV: the exact price sum is -0.095 and the shown
+  // lines are +1 and 0, so the word follows the shown +1 while the share keeps
+  // the exact sign.
+  const split: BridgeResult = {
+    ...result,
+    priorSales: 100.45,
+    currentSales: 150.58,
+    effects: [
+      { key: "volume", label: "Volume", value: 50.225 },
+      { key: "price_list", label: "List price", value: 0.447459 },
+      { key: "price_discount", label: "Discounts", value: -0.542459 },
+    ],
+  };
+  const text = commentary(split, config)[2];
+  assert.ok(text.startsWith("Like-for-like price added 1, -0.1% of prior sales."), text);
+  assert.ok(text.includes("list price changes were +1 and discount changes were 0"), text);
+});
+
 test("F9: every unnamed line joins the leftover sum, including one below the threshold", () => {
   const five = ["Product", "Size", "Colour", "Finish", "Material"];
   const f9: BridgeResult = {

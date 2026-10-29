@@ -8,6 +8,7 @@ import type { BridgeConfig, Query } from "../src/engine.ts";
 import { accountBridge, drill, priceDistribution, runBridge } from "../src/engine.ts";
 import { buildReport, moverHeader, terms } from "../src/app/report.ts";
 import { signedWhole, whole } from "../src/app/format.ts";
+import { roundBridge, shownTotal } from "../src/summary.ts";
 import { PERIOD, VIEW, viewSql, type Setup } from "../src/app/setup.ts";
 
 // Results lives in a .tsx file, so the D141 end-to-end test loads it the way
@@ -124,6 +125,26 @@ const tableRows = (html: string, heading: string): string[][] => {
   return [...section.slice(start, end).matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)].map(([, row]) =>
     [...row.matchAll(/<t[hd]\b[^>]*>([\s\S]*?)<\/t[hd]>/g)].map(([, text]) => text.trim()),
   );
+};
+
+const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** One KPI's value and note, read from the rendered page. */
+const kpiOf = (html: string, label: string) => {
+  const match = html.match(
+    new RegExp(`<div class="kpi-label">${escaped(label)}</div><div class="kpi-value">([^<]*)</div>(?:<div class="kpi-note">([^<]*)</div>)?`),
+  );
+  assert.ok(match, `the page has no ${label} KPI`);
+  return { value: match[1], note: match[2] ?? "" };
+};
+
+/** One bridge row's amount and share, read from the rendered page. */
+const screenRowOf = (html: string, label: string) => {
+  const match = html.match(
+    new RegExp(`<tr><td>${escaped(label)}</td><td class="num">([^<]*)</td><td class="num">([^<]*)</td></tr>`),
+  );
+  assert.ok(match, `the page bridge table has no ${label} row`);
+  return [match[1], match[2]];
 };
 
 test("a mover name that begins with a formula character takes a leading apostrophe", () => {
@@ -702,28 +723,14 @@ const reproQuery = (): Promise<Query> =>
       ? Promise.resolve([{ sales: 0, price_effect: 0 }])
       : Promise.resolve([])) as Query);
 
-const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
 test("D141: the price KPI, its table line and the summary print one amount, and the report keeps the exact share", async () => {
   const React = await import("react");
   const { renderToStaticMarkup } = await import("react-dom/server");
   const { Results, summaryReport } = await import("../src/app/Results.tsx");
   const html = renderToStaticMarkup(React.createElement(Results, { run: reproRun() as never, query: reproQuery }));
 
-  const kpi = (label: string) => {
-    const match = html.match(
-      new RegExp(`<div class="kpi-label">${escaped(label)}</div><div class="kpi-value">([^<]*)</div>(?:<div class="kpi-note">([^<]*)</div>)?`),
-    );
-    assert.ok(match, `the page has no ${label} KPI`);
-    return { value: match[1], note: match[2] ?? "" };
-  };
-  const screenRow = (label: string) => {
-    const match = html.match(
-      new RegExp(`<tr><td>${escaped(label)}</td><td class="num">([^<]*)</td><td class="num">([^<]*)</td></tr>`),
-    );
-    assert.ok(match, `the page bridge table has no ${label} row`);
-    return [match[1], match[2]];
-  };
+  const kpi = (label: string) => kpiOf(html, label);
+  const screenRow = (label: string) => screenRowOf(html, label);
 
   const summarySentence = "Sales rose 0.2%, from 100 in 2025 to 101 in 2026 (+1).";
   assert.deepEqual(kpi("Like-for-like price"), { value: "+1", note: "+0.2%" });
@@ -762,4 +769,100 @@ test("D141: the price KPI, its table line and the summary print one amount, and 
   assert.equal(amount(kpi("Like-for-like price").value), 1, "the price KPI is not the shown price line");
   assert.equal(amount(screenRow("Price (like-for-like)")[0]), 1, "the table's price line is not the shown price line");
   assert.equal(amount(summaryMatch[1]), 1, "the summary's price amount is not the shown price line");
+});
+
+test("D141: a split price sentence follows the shown price total on the page and in the report", async () => {
+  const React = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { Results, summaryReport } = await import("../src/app/Results.tsx");
+  const query = await openDatabase();
+  await query(`DROP TABLE IF EXISTS data`);
+  await query(`CREATE TABLE data (year VARCHAR, model VARCHAR, units INTEGER, sales DOUBLE, gross DOUBLE)`);
+  await query(`INSERT INTO data VALUES ('2025', 'A-100', 2, 100.45, 110), ('2026', 'A-100', 3, 150.58, 165.49)`);
+  const engineConfig: BridgeConfig = {
+    table: "data",
+    periodColumn: "year",
+    prior: "2025",
+    current: "2026",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    grossColumn: "gross",
+    levels: [{ name: "Model", columns: ["model"] }],
+    newAndDiscontinued: "difference",
+  };
+  const engineResult = await runBridge(query, engineConfig);
+  assert.equal(engineResult.priorSales, 100.45, "the repro's prior total changed");
+  assert.equal(engineResult.currentSales, 150.58, "the repro's current total changed");
+  const shown = roundBridge(engineResult.priorSales, engineResult.currentSales, engineResult.effects.map((e) => e.value));
+  const list = engineResult.effects.find((e) => e.key === "price_list");
+  const discount = engineResult.effects.find((e) => e.key === "price_discount");
+  assert.ok(list && discount, "the gross column did not split price into list price and discounts");
+  assert.ok(list.value + discount.value < 0, "the exact price sum is not negative");
+  assert.equal(shownTotal(shown, engineResult.effects, "price"), 1, "the shown price lines no longer total +1");
+
+  const run = {
+    textColumns: ["model"],
+    periods: ["2025", "2026"],
+    description: ["Source: A-100.csv", "Periods: 2025 to 2026 (year)"],
+    setup: {
+      periodColumn: "year",
+      grain: "value" as const,
+      unitsColumn: "units",
+      salesColumn: "sales",
+      grossColumn: "gross",
+      levels: [{ name: "Model", columns: ["model"] }],
+      filters: [],
+      newAndDiscontinued: "difference" as const,
+    },
+    source: "A-100.csv",
+    sample: false,
+    formulaBlanks: 0,
+    amounts: null,
+    config: engineConfig,
+    result: engineResult,
+    check: {
+      rows: 2, priorRows: 1, currentRows: 1, otherPeriodRows: 0, blankPeriodRows: 0,
+      blankMeasureRows: 0, negativeUnitRows: 0, negativeSalesRows: 0, zeroUnitSalesRows: 0,
+    },
+    tieOut: {
+      prior: { period: "2025", inFile: 100.45, afterFilters: 100.45 },
+      current: { period: "2026", inFile: 150.58, afterFilters: 150.58 },
+    },
+    ms: 1,
+  };
+  const html = renderToStaticMarkup(React.createElement(Results, { run: run as never, query: () => Promise.resolve(query) }));
+
+  assert.deepEqual(kpiOf(html, "Like-for-like price"), { value: "+1", note: "-0.1%" });
+  assert.deepEqual(screenRowOf(html, "List price"), ["+1", "+0.4%"]);
+  assert.deepEqual(screenRowOf(html, "Discounts"), ["0", "-0.5%"]);
+  const sentence =
+    "Like-for-like price added 1, -0.1% of prior sales. Of that, list price changes were +1 and discount changes were 0.";
+  assert.equal(html.includes(sentence), true, "the page summary's price word does not follow the shown +1");
+  assert.equal(html.includes("Like-for-like price took away 1"), false, "the page summary still says took away 1");
+
+  const footer = (globalThis as unknown as { __d141Footer?: { props: Parameters<typeof summaryReport>[0] } }).__d141Footer;
+  assert.ok(footer, "the waterfall did not hand back the summary element");
+  const desk = globalThis as unknown as { document?: unknown };
+  const before = desk.document;
+  desk.document = { querySelector: () => null };
+  let report: string;
+  try {
+    report = await summaryReport(footer.props, []);
+  } finally {
+    if (before === undefined) delete desk.document;
+    else desk.document = before;
+  }
+
+  assert.equal(report.includes(sentence), true, "the downloaded report's price word does not follow the shown +1");
+  assert.equal(report.includes("Like-for-like price took away 1"), false, "the downloaded report still says took away 1");
+  assert.deepEqual(
+    tableRows(report, "Bridge").find(([label]) => label === "List price"),
+    ["List price", "+1", "+0.4%"],
+    "the downloaded report's list price line changed",
+  );
+  assert.deepEqual(
+    tableRows(report, "Bridge").find(([label]) => label === "Discounts"),
+    ["Discounts", "0", "-0.5%"],
+    "the downloaded report's discount line changed",
+  );
 });
