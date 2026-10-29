@@ -242,7 +242,7 @@ export function measureNote(
   if (notMoney(sales)) {
     return {
       role: "sales",
-      sentence: `Sales totals less than Units, so "${sales}" may be a per-unit price rather than the amount sold.`,
+      sentence: `Sales is "${sales}", whose name suggests a price, so check that it is the total amount sold.`,
     };
   }
   const money = (column: Column) => salesPattern.test(fold(column.name));
@@ -265,7 +265,7 @@ export function measureNote(
   if (setup.salesFromValues === sales && !numeric.some(money)) {
     return {
       role: "sales",
-      sentence: `No column name says sales, so Sales is "${sales}" because its values look like money.`,
+      sentence: `No column of numbers is named like sales, so Sales is "${sales}" because its values look like money.`,
     };
   }
   const unitsSum = columns.find((column) => column.name === setup.unitsColumn)?.facts?.sum;
