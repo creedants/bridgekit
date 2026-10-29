@@ -5,4 +5,4 @@ Three defects had one cause, a read that could not be told apart from the read i
 - `src/app/App.tsx` reads periods through the ticket and gates Calculate on the installed view. A load that replaced the table clears the old run first, even when a newer load superseded it; a refused load keeps the run and the old data.
 - `src/app/Results.tsx` hands a null query to the three tabs that read the mutable view while the run or its views are out of date, and holds the report for the same reason, because its account section reads that view. Accounts keeps its figures with the column they were fetched for, and the toolbar stays usable with no figures below it.
 - `src/app/SmallBridges.tsx` takes the page's freshness as a prop instead of reading the stale notice out of the document.
-- `test/small-bridges.test.ts` covers the superseded read, the newest read publishing, the A to B to A gate, the failed rebuild, and the split rules with no stamps.
+- `test/small-bridges.test.ts` covers the superseded read, the newest read publishing, a replaced read's error, the A to B to A gate, a rebuild in flight, a setup with no period column, and the split rules with no stamps.
