@@ -2251,15 +2251,16 @@ const CARD_HEADER = ["Sales bridge", "2025 to 2026", "Model › Finish › Color
 
 /**
  * The parts of the home page the card hides, and the sizes it gives the picture. The hero's own rules do the rest:
- * below the 1240 px breakpoint the picture sits tilted on its sun band, with its corners, shadow, window dots and
- * logo, as a 1200 px visitor sees it. The chart's text grows so its labels still read in a small link preview.
+ * below the 1240 px breakpoint the picture sits on its sun band, with its corners, shadow, window dots and logo, as
+ * a 1200 px visitor sees it. The card alone tilts it. The chart's text grows so its labels still read in a small
+ * link preview.
  */
 const CARD_CSS = `
   .hero { padding: 0; }
   .hero .hero-grid { max-width: none; padding: 0; }
-  .hero .copy, .hero .kpis, .hero .tabs, .hero .legend { display: none; }
+  .hero .copy, .hero .peek, .hero .kpis, .hero .tabs, .hero .legend { display: none; }
   .hero figure { height: 630px; margin: 0; padding: 0 64px; display: flex; align-items: center; }
-  .hero .frame { width: 100%; max-width: none; }
+  .hero .frame { width: 100%; max-width: none; transform: rotate(-1.5deg); }
   .hero .chrome { height: 60px; gap: 1.1rem; padding: 0 1.4rem; }
   .hero .app-name { font-size: 1.25rem; gap: .6rem; }
   .hero .app-name svg { width: 26px; height: 26px; }

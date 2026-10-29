@@ -41,8 +41,11 @@
           <h1>See why sales moved.</h1>
           <p class="lead">Price, volume, and a mix step for every product attribute, in one bridge.</p>
           <p class="define">A bridge is a chart that starts at last period's sales, adds or subtracts each cause, and ends at this period's sales.</p>
-          <a class="button cta" href="/app/?sample">Try it with sample data <span aria-hidden="true">→</span></a>
-          <p class="fine">Free. No account. CSV or Excel.<br />Your file stays in your browser.</p>
+          <div class="actions">
+            <a class="button cta" href="/app/?sample">Try it with sample data <span aria-hidden="true">→</span></a>
+            <a class="button ghost" href="/app/">Load your own file</a>
+          </div>
+          <p class="fine">Free. No account.<br />Your file stays in your browser.</p>
         </div>
 
         <figure>
@@ -172,45 +175,81 @@
 
             </div>
           </a>
+          <div class="peek">
+            <p class="peek-head">Movers</p>
+            <picture>
+              <source type="image/avif" srcset="/img/home-movers-top.avif" />
+              <img src="/img/home-movers-top.png" width="698" height="396" loading="lazy" decoding="async" alt="The Movers table on the sample, by model: MD56 +1,163,390, MD59 +1,151,677, MD57 +1,142,737, MD58 +1,142,603, MD55 +1,126,165 and MD00 +469,366." />
+            </picture>
+          </div>
         </figure>
       </div>
     </section>
 
-    <section class="get" id="how">
-      <div class="shell get-grid">
-        <h2>What you get</h2>
-        <div class="get-body">
-          <p class="lead">For the analyst who has to explain a change in sales or margin. Load a CSV or Excel export, rank your attributes, and read the bridge.</p>
-          <dl>
-            <dt>Bridge</dt>
-            <dd>The bridge chart, a mix line for each attribute, a written summary, and an Excel export.</dd>
-            <dt>Movers</dt>
-            <dd>What sits behind each bar, drilled down by attribute.</dd>
-            <dt>Accounts</dt>
-            <dd>New, lost, growing and shrinking customers.</dd>
-            <dt>Price changes</dt>
-            <dd>How widely a price change landed.</dd>
-            <dt>Setup check</dt>
-            <dd>With multiple attributes, the bridge rerun with each one left out.</dd>
-          </dl>
-          <p class="more"><a href="/guide.html">Read the guide</a> <a href="/method.html">Read the method</a></p>
+    <section class="views" id="how">
+      <div class="shell">
+        <div class="sec-head">
+          <h2>Every bar has a table behind it.</h2>
         </div>
+        <div class="gallery">
+          <figure class="card wide">
+            <figcaption><b>Price changes</b> How widely a price change landed.</figcaption>
+            <picture>
+              <source type="image/avif" srcset="/img/home-price.avif" />
+              <img src="/img/home-price.png" width="2048" height="580" loading="lazy" decoding="async" alt="The Price changes table on the sample: sales grouped by how much their average price moved, from down more than 10% (2.2% of matched sales) to up more than 10% (5.1%). The largest group, up 2% to 5%, holds 30.8%." />
+            </picture>
+          </figure>
+          <figure class="card">
+            <figcaption><b>Movers</b> What changed most, by product.</figcaption>
+            <picture>
+              <source type="image/avif" srcset="/img/home-movers.avif" />
+              <img src="/img/home-movers.png" width="1464" height="582" loading="lazy" decoding="async" alt="The Movers table on the sample, grouped by model and sorted by change, with each model's change split into volume, mix, price and new configurations." />
+            </picture>
+          </figure>
+          <figure class="card">
+            <figcaption><b>Accounts</b> New, lost, growing and shrinking customers.</figcaption>
+            <picture>
+              <source type="image/avif" srcset="/img/home-accounts.avif" />
+              <img src="/img/home-accounts.png" width="1142" height="662" loading="lazy" decoding="async" alt="The Accounts view on the sample: no new or lost customers, 399 growing customers adding 12,543,428, and the largest growers listed with prior and current sales." />
+            </picture>
+          </figure>
+        </div>
+        <p class="also"><b>Also</b> <span>Price gaps</span> <span>Trend</span> <span>Unmatched</span> <span>Setup check</span> <span>Small bridges</span> <span>Report download</span></p>
+      </div>
+    </section>
+
+    <section class="steps">
+      <div class="shell">
+        <div class="sec-head">
+          <h2>How it works</h2>
+        </div>
+        <ol class="stair">
+          <li><h3>Load a CSV or Excel export.</h3></li>
+          <li><h3>Put your attributes in order.</h3></li>
+          <li><h3>Read the bridge, then the rows behind it.</h3></li>
+        </ol>
       </div>
     </section>
 
     <section class="keeps">
-      <div class="shell">
+      <div class="shell keeps-grid">
         <div class="keeps-inner">
           <h2>Your sales file never leaves your computer</h2>
           <p>The bridge is calculated inside the browser tab. The file itself is never uploaded. <!-- feature:!workspaces -->No cookies, no accounts.<!-- /feature:!workspaces --><!-- feature:workspaces -->Cookies are used for sign-in.<!-- /feature:workspaces --> <!-- feature:!counts -->No analytics.<!-- /feature:!counts --><!-- feature:counts -->No tracking scripts.<!-- /feature:counts --> The code is open source under the MIT license.</p>
-          <p><a href="/privacy.html">Read the privacy page</a></p>
+        </div>
+        <div class="check">
+          <h3>Check it yourself</h3>
+          <p>Load a file with your browser's network panel open. No request carries your data.</p>
+          <p class="links"><a href="/privacy.html">Privacy page</a> <a href="https://github.com/creedants/bridgekit">Source code</a></p>
         </div>
       </div>
     </section>
 
     <section class="price" id="pricing">
       <div class="shell">
-        <h2>Pricing</h2>
+        <div class="sec-head">
+          <h2>Free to use. <span>Pro is planned.</span></h2>
+        </div>
         <div class="plans">
           <div class="plan">
             <span class="tag">Available now</span>
@@ -232,6 +271,16 @@
             </ul>
             <a class="button ghost" href="https://github.com/creedants/bridgekit">Follow on GitHub</a>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="close">
+      <div class="shell close-inner">
+        <h2>Try the sample. <span>Then bring your own file.</span></h2>
+        <div class="actions">
+          <a class="button cta" href="/app/?sample">Try it with sample data <span aria-hidden="true">→</span></a>
+          <a class="button ghost" href="/method.html">Read the method</a>
         </div>
       </div>
     </section>
