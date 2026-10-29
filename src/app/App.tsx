@@ -10,7 +10,7 @@ import {
 } from "./db.ts";
 import { exportExcel, lazyChunk, type ChunkSentences } from "./exportExcel.ts";
 import { isPastedTable, makeGuard, saveOnce, shorten } from "./files.ts";
-import { fileProblem, periodView, periodsFor, type FileProblem, type LoadedPeriods } from "./fileProblems.ts";
+import { fileProblem, periodView, periodsFor, type FileProblem, type LoadedPeriods, type Periods } from "./fileProblems.ts";
 import { whole } from "./format.ts";
 import { findTotalRows, profileFile, type TotalRow } from "./profile.ts";
 import { loadPeriodList } from "./periods.ts";
@@ -328,6 +328,7 @@ export function App() {
 
   const offeredPeriods = loadedPeriods ? [...loadedPeriods.values] : [];
   const problemPeriods = periodsFor(view, loadedPeriods);
+  const periodsCurrent = problemPeriods !== "unknown";
 
   // A total row from a spreadsheet export would count the same amounts twice.
   const totalKey = setup ? JSON.stringify([load, setup.periodColumn, setup.levels.map((level) => level.columns)]) : "";
@@ -364,56 +365,59 @@ export function App() {
     : { kind: "none" };
   const gate = calculateGate({ setup, prior, current, problem });
   const ready = gate.ready;
+  const canCalculate = ready && !busy && periodsCurrent;
 
   /** `sampleLoad` names the sample load whose first bridge this is. */
-  const calculate = (sampleLoad?: number) =>
-    task("calc", "Calculating…", async () => {
-      if (!setup) return;
-      try {
-        const [q] = await Promise.all([query(), resultsChunk.load()]);
-        const config: BridgeConfig = {
-          table: VIEW,
-          periodColumn: PERIOD,
-          prior,
-          current,
-          unitsColumn: setup.unitsColumn,
-          salesColumn: setup.salesColumn,
-          grossColumn: setup.grossColumn || undefined,
-          costColumn: setup.costColumn || undefined,
-          levels: setup.levels,
-          newAndDiscontinued: setup.newAndDiscontinued ?? "difference",
-        };
-        const start = performance.now();
-        const result = await runBridge(q, config);
-        const ms = performance.now() - start;
-        // Read now: a later calculation on another tab replaces the cells this note looks at.
-        const amounts = await amountsNote(q);
-        const check = await dataCheck(q, config);
-        const tieOut = await periodMoney(q, config, { table: FILE_VIEW, periodColumn: PERIOD });
-        setRun({
-          config,
-          result,
-          check,
-          tieOut,
-          ms,
-          periods: offeredPeriods,
-          textColumns: columns.filter((c) => !/INT|DOUBLE|DECIMAL|FLOAT|REAL|DATE|TIMESTAMP/i.test(c.type)).map((c) => c.name),
-          description: describeSetup(setup, prior, current, source),
-          setup,
-          source,
-          sample: fromSample,
-          formulaBlanks,
-          amounts,
-          id: Date.now(),
-          signature,
+  const calculate = (periods: Periods, sampleLoad?: number): Promise<boolean> =>
+    periods === "unknown"
+      ? Promise.resolve(false)
+      : task("calc", "Calculating…", async () => {
+          if (!setup) return;
+          try {
+            const [q] = await Promise.all([query(), resultsChunk.load()]);
+            const config: BridgeConfig = {
+              table: VIEW,
+              periodColumn: PERIOD,
+              prior,
+              current,
+              unitsColumn: setup.unitsColumn,
+              salesColumn: setup.salesColumn,
+              grossColumn: setup.grossColumn || undefined,
+              costColumn: setup.costColumn || undefined,
+              levels: setup.levels,
+              newAndDiscontinued: setup.newAndDiscontinued ?? "difference",
+            };
+            const start = performance.now();
+            const result = await runBridge(q, config);
+            const ms = performance.now() - start;
+            // Read now: a later calculation on another tab replaces the cells this note looks at.
+            const amounts = await amountsNote(q);
+            const check = await dataCheck(q, config);
+            const tieOut = await periodMoney(q, config, { table: FILE_VIEW, periodColumn: PERIOD });
+            setRun({
+              config,
+              result,
+              check,
+              tieOut,
+              ms,
+              periods: [...periods.values],
+              textColumns: columns.filter((c) => !/INT|DOUBLE|DECIMAL|FLOAT|REAL|DATE|TIMESTAMP/i.test(c.type)).map((c) => c.name),
+              description: describeSetup(setup, prior, current, source),
+              setup,
+              source,
+              sample: fromSample,
+              formulaBlanks,
+              amounts,
+              id: Date.now(),
+              signature,
+            });
+            if (sampleLoad !== undefined) dispatch({ type: "ran", load: sampleLoad });
+          } finally {
+            scrollAfterRun.current = true;
+          }
+          if (writesSetup.current) saveSetup(columns, setup);
+          setNotice("");
         });
-        if (sampleLoad !== undefined) dispatch({ type: "ran", load: sampleLoad });
-      } finally {
-        scrollAfterRun.current = true;
-      }
-      if (writesSetup.current) saveSetup(columns, setup);
-      setNotice("");
-    });
 
   // After a calculation, bring its result or its error into view and hand it focus.
   useEffect(() => {
@@ -447,18 +451,18 @@ export function App() {
   }, []);
   const autoRanFor = useRef(-1);
   useEffect(() => {
-    if (!shouldAutoRun(phase, ready, view !== null && loadedPeriods?.view === view)) return;
+    if (!shouldAutoRun(phase, ready, periodsCurrent)) return;
     if (phase.kind !== "autoRun" || autoRanFor.current === phase.load) return;
     const sampleLoad = phase.load;
     autoRanFor.current = sampleLoad;
-    void calculate(sampleLoad).then((ran) => {
+    void calculate(problemPeriods, sampleLoad).then((ran) => {
       if (!ran) dispatch({ type: "failed", load: sampleLoad });
     });
   });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && ready && !busy) calculate();
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && canCalculate) calculate(problemPeriods);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -655,7 +659,7 @@ export function App() {
               onCurrent={setCurrent}
             />
             <div className="run">
-              <button className="primary" disabled={!ready || busy} onClick={() => calculate()}>
+              <button className="primary" disabled={!canCalculate} onClick={() => calculate(problemPeriods)}>
                 {calculating ? "Calculating…" : "Calculate bridge"}
               </button>
               {problem.kind === "note" && <p className="hint">{problem.message}</p>}
@@ -724,7 +728,7 @@ export function App() {
             )}
             {run && Results ? (
               <div className="results-anchor" ref={resultsRef}>
-                <Results key={run.id} run={run} query={query} omitNames={omitNames} onOmitNames={setOmitNames} />
+                <Results key={run.id} run={run} query={query} fresh={fresh !== null} omitNames={omitNames} onOmitNames={setOmitNames} />
               </div>
             ) : !run ? (
               <div>
