@@ -15,8 +15,10 @@ function driverLabel(effect: { key: string; label: string }, config: BridgeConfi
 /**
  * A written summary of the bridge. It is assembled from fixed sentence
  * patterns, so the same bridge always produces the same words. The exact
- * result decides every word, percentage and ratio; the rounded copy supplies
- * every amount, so a sentence quotes the figures the table shows.
+ * result decides every percentage and ratio; the rounded copy supplies every
+ * amount, so a sentence quotes the figures the table shows. A money word's
+ * direction follows the shown amount it prints, with the exact sign used only
+ * when that shown amount is zero.
  */
 export function commentary(
   result: BridgeResult,
@@ -24,6 +26,11 @@ export function commentary(
   shown: RoundedBridge = roundBridge(result.priorSales, result.currentSales, result.effects.map((e) => e.value)),
 ): string[] {
   const change = result.currentSales - result.priorSales;
+  const shownChange = shown.current - shown.prior;
+  // The word follows the shown amount, because that is the figure the sentence
+  // prints; a shown zero falls back to the exact sign, so a tiny change is not
+  // called no change.
+  const changeSign = shownChange !== 0 ? Math.sign(shownChange) : Math.sign(change);
   // A percentage of a zero or negative base misleads, so it is left out.
   const hasBase = result.priorSales > 0;
   const ofPrior = (n: number) => signedShare(n, result.priorSales);
@@ -33,9 +40,9 @@ export function commentary(
   const amount = (effect: BridgeResult["effects"][number]) => shown.values[result.effects.indexOf(effect)] ?? 0;
 
   paragraphs.push(
-    change === 0
+    changeSign === 0
       ? `${measureName(config)} was unchanged at ${whole(shown.current)} between ${config.prior} and ${config.current}.`
-      : `${measureName(config)} ${change > 0 ? "rose" : "fell"}${hasBase ? " " + percent(Math.abs(change / result.priorSales)) + "," : ""} from ${whole(shown.prior)} in ${config.prior} to ${whole(shown.current)} in ${config.current} (${signedWhole(shown.current - shown.prior)}).`,
+      : `${measureName(config)} ${changeSign > 0 ? "rose" : "fell"}${hasBase ? " " + percent(Math.abs(change / result.priorSales)) + "," : ""} from ${whole(shown.prior)} in ${config.prior} to ${whole(shown.current)} in ${config.current} (${signedWhole(shownChange)}).`,
   );
 
   // The threshold only picks the four named drivers and decides whether this
@@ -61,11 +68,16 @@ export function commentary(
   }
 
   const priceEffect = result.effects.filter((e) => e.key.startsWith("price")).reduce((sum, e) => sum + e.value, 0);
+  const shownPrice = shownTotal(shown, result.effects, "price");
+  // The word follows the shown price total, which is the amount printed and the
+  // KPI's amount, so a split price cannot read "took away +1"; the share below
+  // keeps the exact sign.
+  const priceSign = shownPrice !== 0 ? Math.sign(shownPrice) : Math.sign(priceEffect);
   const exact = result.coverage.find((c) => c.level === config.levels.length)?.share ?? 0;
   const list = result.effects.find((e) => e.key === "price_list");
   const discount = result.effects.find((e) => e.key === "price_discount");
   paragraphs.push(
-    `Like-for-like price ${priceEffect >= 0 ? "added" : "took away"} ${whole(Math.abs(shownTotal(shown, result.effects, "price")))}${hasBase ? `, ${ofPrior(priceEffect)} of prior ${measure}` : ""}. ` +
+    `Like-for-like price ${priceSign >= 0 ? "added" : "took away"} ${whole(Math.abs(shownPrice))}${hasBase ? `, ${ofPrior(priceEffect)} of prior ${measure}` : ""}. ` +
       (list && discount
         ? `Of that, list price changes were ${signedWhole(amount(list))} and discount changes were ${signedWhole(amount(discount))}. `
         : "") +
