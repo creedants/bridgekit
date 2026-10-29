@@ -566,7 +566,7 @@ function nameWords(name: string): string[] {
  * numeric nor dates, which includes text and true/false columns, with 2 to
  * 5000 distinct values, drops the used period and measure columns, names
  * with a customer, region, date or id word, and a column marked as an exact
- * or near duplicate of an earlier column.
+ * or near duplicate of another suggested column.
  */
 export function suggestAttributes(
   columns: Column[],
@@ -755,7 +755,7 @@ export function totalRowOffers(found: readonly TotalRow[], filters: readonly Fil
 export interface FeeRows {
   withoutUnits: number;
   named: string[];
-  /** Rows whose name reads like a fee or an adjustment, so repeated names count once each. */
+  /** Rows whose name reads like a fee or an adjustment; a repeated name counts each of its rows. */
   namedRows: number;
 }
 

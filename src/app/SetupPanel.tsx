@@ -49,10 +49,10 @@ export function SetupPanel(props: {
   onCurrent: (value: string) => void;
 }) {
   const { columns, setup, onChange } = props;
-  // A visitor's own change ends the guess, so no later profile refines over it.
+  // A visitor's own setup change ends the guess, so no later profile refines over it.
   const change = (patch: Partial<Setup>) =>
     onChange({ ...patch, fresh: undefined, ...(patch.salesColumn !== undefined ? { salesFromValues: undefined } : {}) });
-  // App hands a new column list for every load, so a new list is a new source.
+  // App hands a fresh column list for a load and again when the profile lands, so a new list clears both hints.
   const source = useRef({ columns, seq: 0 });
   if (source.current.columns !== columns) source.current = { columns, seq: source.current.seq + 1 };
   const sourceSeq = source.current.seq;

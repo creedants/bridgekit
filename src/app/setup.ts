@@ -50,13 +50,14 @@ export interface Setup {
   newAndDiscontinued?: "difference" | "full";
   /**
    * Set by guessSetup on a setup built from column names alone, and cleared by
-   * any change the visitor makes. In-session only: a restored or saved setup
-   * never carries it, so only an untouched guess is refined.
+   * any change the visitor makes. Not written to storage, and dropped by
+   * restoredSetup, so only an untouched guess is refined.
    */
   fresh?: true;
   /**
    * The column the value fallback put in Sales, so the panel can say so. Cleared
-   * when the visitor picks a Sales column, and in-session only.
+   * when the visitor picks a Sales column. Not written to storage, and dropped
+   * by restoredSetup.
    */
   salesFromValues?: string;
 }
@@ -91,9 +92,9 @@ const COUNT_PATTERN = /unit|qty|quant|count|job|piece|menge|anzahl|absatz|stuck|
 const SIZE_PATTERN = /volume|size|ml|litre|liter|kg|weight|gram|amount/i;
 /** Price, cost and rate names used to suppress the value-inference hint. */
 const PRICE_PATTERN = /price|cost|rate|preis|kosten/i;
-/** Names that describe how much one unit holds or weighs; none of them is a money total. "amount" is money and stays out. */
+/** Names that describe how much one unit holds or weighs rather than the money taken; "amount" is money and stays out. */
 const SIZE_ONLY_PATTERN = /volume|size|ml|litre|liter|kg|\bweight\b|gram/i;
-/** A name written with a currency qualifier still counts money, never quantity. */
+/** A currency word that qualifies a unit name as money, such as "currency units". */
 const CURRENCY_PATTERN = /currency|usd|eur|gbp|dollar|euro|cent|pound|yen/i;
 /** A name that says price, cost, rate, a unit price or one unit's size. Never Sales from its values. */
 const notMoney = (name: string) => PRICE_PATTERN.test(fold(name)) || isUnitPrice(name) || SIZE_ONLY_PATTERN.test(fold(name));
@@ -143,7 +144,7 @@ const isUnitPrice = (name: string) => {
   return PRICE_DE.test(folded) && UNITS_PATTERN.test(folded);
 };
 const isTrailingNote = (name: string) => noteWords.has(words(name).at(-1) ?? "");
-/** A count name, unless a currency word shows it counts money; "Sales (Currency Units)" is money. */
+/** A count name, unless a currency word shows the column counts money; "Sales (Currency Units)" is money. */
 const countName = (name: string) => COUNT_PATTERN.test(fold(name)) && !CURRENCY_PATTERN.test(fold(name));
 
 /**
@@ -280,7 +281,7 @@ export function measureNote(
 
 /**
  * The fields a value-based reading of the file would change in a name guess,
- * so dates covering multiple months inside one calendar year can start on
+ * so dates covering multiple months inside one fiscal year can start on
  * Month, and a numeric sum can supply an unnamed Sales candidate. Returns only the fields that differ, and an
  * empty object when there is nothing to change. Only a fresh guess is refined,
  * so a restored or edited setup keeps the visitor's choices.
@@ -321,7 +322,7 @@ export function refineGuess(setup: Setup, columns: readonly Column[]): Partial<S
   return patch;
 }
 
-/** The fiscal year a "YYYY-MM-DD" string falls in, so a year grain's period count can be checked. */
+/** A fiscal-year bucket for a "YYYY-MM-DD" string: two dates share it exactly when the year grain puts them in one period. */
 function fiscalYear(date: string, fiscalYearStart: number | undefined): number {
   const start = fiscalYearStart ?? 1;
   const year = Number(date.slice(0, 4));
@@ -457,7 +458,7 @@ export function cleanLevels(levels: readonly Level[]): Level[] {
 export function restoredSetup(setup: Setup): Setup {
   const levels = cleanLevels(setup.levels).map((level) => ({ ...level, name: level.name.slice(0, MAX_LEVEL_NAME) }));
   const restored: Setup = { ...setup, levels, salesColumn: setup.salesColumn === setup.unitsColumn ? "" : setup.salesColumn };
-  // The guess markers are in-session only, so a restored setup never refines.
+  // A restored setup drops the guess markers, so it is never refined.
   delete restored.fresh;
   delete restored.salesFromValues;
   return restored;
@@ -536,7 +537,7 @@ export function loadSavedSetup(columns: Column[]): Setup | null {
 export function saveSetup(columns: Column[], setup: Setup): void {
   if (!isRemembering()) return;
   try {
-    // The guess markers are in-session only, so a restored setup never refines.
+    // Neither marker is stored, so a setup restored from storage never refines.
     const { fresh: _fresh, salesFromValues: _salesFromValues, ...persisted } = setup;
     localStorage.setItem(storageKey(columns), JSON.stringify({ ...persisted, filters: [] }));
   } catch {
