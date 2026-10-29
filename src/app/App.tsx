@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { amountsNote, dataCheck, periodMoney, runBridge, type BridgeConfig, type Query } from "../engine.ts";
 import { summarize } from "../summary.ts";
 import { resolveSample, type Sample } from "../synth.ts";
@@ -44,6 +44,7 @@ import {
   type Column,
   type EngineState,
   type LoadSource,
+  type Phase,
   type Setup,
 } from "./setup.ts";
 import { agree, SetupPanel } from "./SetupPanel.tsx";
@@ -174,6 +175,17 @@ export function pasteIntent(text: string, displayedLoad: number): "refuse" | "lo
   return displayedLoad === 0 ? "load" : "ask";
 }
 
+/**
+ * The load whose data the visitor has been shown. It moves only when the page
+ * commits to the workspace phase, the render that draws a load's name, columns
+ * and rows; publishing metadata in afterLoad and the sample's auto-run loading
+ * view do not count. A newer reading load, a refused load's fallback and a
+ * superseded load keep the earlier value.
+ */
+export function visibleLoad(shown: number, phase: Phase): number {
+  return phase.kind === "workspace" ? phase.load : shown;
+}
+
 /** Opens the page's database. db.ts caches the open and forgets a failed one, so a later call retries. */
 function startEngine(): Promise<BrowserDatabase> {
   const opening = openBrowserDatabase();
@@ -246,7 +258,9 @@ export function App() {
   const [tables] = useState(createTableOwner);
   // What each table number holds, so the page can name the rows that are in the table.
   const loads = useRef(new Map<number, { name: string; preset?: Sample; blanks: number }>());
-  // The load the page is showing, which is the one whose name and setup are on screen.
+  // The load whose name, columns and setup afterLoad last put in state, for the refused-load fallback.
+  const published = useRef(0);
+  // The load the visitor has actually been shown, which the paste question reads.
   const displayed = useRef(0);
   const taskRef = useRef(0);
   const scrollAfterRun = useRef(false);
@@ -309,7 +323,7 @@ export function App() {
         // landed while this one waited is the one the page has to name.
         const held = tables.owner();
         const shown =
-          held && displayed.current !== 0 && held.n !== claim.n && held.n !== displayed.current
+          held && published.current !== 0 && held.n !== claim.n && held.n !== published.current
             ? loads.current.get(held.n)
             : undefined;
         if (held && shown) {
@@ -337,7 +351,7 @@ export function App() {
     setSource(name);
     setFromSample(!!preset);
     setLoad(load);
-    displayed.current = load;
+    published.current = load;
     setSetup(preset?.setup ?? saved ?? guessSetup(found));
     setSuggestedPeriods(preset?.periods ?? null);
     writesSetup.current = preset?.savesSetup ?? true;
@@ -551,6 +565,13 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+
+  // The workspace phase is the first render that shows this load's data, so the
+  // marker advances on that commit and not when a load publishes its metadata. A
+  // layout effect records it before paint, so a paste in the same frame still asks.
+  useLayoutEffect(() => {
+    displayed.current = visibleLoad(displayed.current, phase);
+  }, [phase]);
 
   // Cells copied from a spreadsheet arrive as tab-separated text; load them like a file.
   useEffect(() => {
