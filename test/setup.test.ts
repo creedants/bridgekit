@@ -2324,7 +2324,26 @@ test("D143: with no name that says sales, the money column is guessed from its v
   assert.equal(setup.salesColumn, "alpha");
   assert.deepEqual(measureNote(file, setup), {
     role: "sales",
-    sentence: 'No column name says sales, so Sales is "alpha" because its values look like money.',
+    sentence: 'No column of numbers is named like sales, so Sales is "alpha" because its values look like money.',
+  });
+});
+
+test("D143: a text column named sales leaves the value fallback and says so", () => {
+  const file: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "units", type: "BIGINT", facts: fact(20) },
+    { name: "sales", type: "VARCHAR" },
+    { name: "alpha", type: "DOUBLE", facts: fact(150) },
+    { name: "beta", type: "DOUBLE", facts: fact(130) },
+  ];
+  const guess = guessSetup(file);
+  assert.equal(guess.salesColumn, "");
+  const setup = { ...guess, ...refineGuess(guess, file) };
+  assert.equal(setup.salesColumn, "alpha");
+  assert.deepEqual(measureNote(file, setup), {
+    role: "sales",
+    sentence: 'No column of numbers is named like sales, so Sales is "alpha" because its values look like money.',
   });
 });
 
@@ -2337,7 +2356,7 @@ test("D143: a per-unit price picked as Sales gets one hint and is never blocked"
   assert.equal(setup.unitsColumn, "Quantity");
   assert.deepEqual(measureNote(file, setup), {
     role: "sales",
-    sentence: 'Sales totals less than Units, so "Price" may be a per-unit price rather than the amount sold.',
+    sentence: 'Sales is "Price", whose name suggests a price, so check that it is the total amount sold.',
   });
 });
 
@@ -2461,7 +2480,7 @@ test("D143: a value fallback never picks a price, a cost or a size, and choosing
   const chosen = { ...guess, salesColumn: "unit_price" };
   assert.deepEqual(measureNote(file, chosen), {
     role: "sales",
-    sentence: 'Sales totals less than Units, so "unit_price" may be a per-unit price rather than the amount sold.',
+    sentence: 'Sales is "unit_price", whose name suggests a price, so check that it is the total amount sold.',
   });
   for (const name of ["cost_per_case", "bottle_size_ml"]) {
     const withCandidate: Column[] = [...file, { name, type: "DOUBLE", facts: fact(400) }];
@@ -2478,6 +2497,10 @@ test("D143: a currency qualifier keeps a money column in Sales, not Units", () =
   const setup = guessSetup(file);
   assert.equal(setup.unitsColumn, "units");
   assert.equal(setup.salesColumn, "Sales (Currency Units)");
+  assert.deepEqual(measureNote(file, setup), {
+    role: "sales",
+    sentence: 'Sales totals less than Units, so "Sales (Currency Units)" may be a per-unit price rather than the amount sold.',
+  });
 });
 
 test("D143: the value-fallback hint shows only for a fallback that supplied Sales", () => {
@@ -2491,7 +2514,7 @@ test("D143: the value-fallback hint shows only for a fallback that supplied Sale
   assert.equal(refined.salesFromValues, "alpha");
   assert.deepEqual(measureNote(file, refined), {
     role: "sales",
-    sentence: 'No column name says sales, so Sales is "alpha" because its values look like money.',
+    sentence: 'No column of numbers is named like sales, so Sales is "alpha" because its values look like money.',
   });
   assert.equal(measureNote(file, { ...refined, salesFromValues: undefined }), null);
 });
