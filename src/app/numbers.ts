@@ -46,8 +46,16 @@ const FIRST_ROWS = 2000;
 const northAmerican = (value: string) =>
   `try_cast(regexp_replace(regexp_replace(trim(${value}), '[,$\\s]', '', 'g'), '^\\((.*)\\)$', '-\\1') AS DOUBLE)`;
 
-/** True when a cell's text is a number under the loader's own reading, so a currency sign or brackets do not make it text. */
-export const readsAsNumber = (value: string) => `(${northAmerican(`(${money(value)}).text`)} IS NOT NULL)`;
+/** The number a cell's text reads as under the loader's own parse, or NULL. */
+const parsedNumber = (value: string) => northAmerican(`(${money(value)}).text`);
+
+/**
+ * True when a cell's text is a number under the loader's own reading, so a
+ * currency sign or brackets do not make it text. NaN and the infinities read
+ * as DOUBLE but are not numbers, so a bridge never receives one.
+ */
+export const readsAsNumber = (value: string) =>
+  `(${parsedNumber(value)} IS NOT NULL AND isfinite(${parsedNumber(value)}))`;
 
 const decimalComma = (value: string) =>
   `try_cast(replace(replace(trim(${value}), '.', ''), ',', '.') AS DOUBLE)`;
@@ -89,6 +97,13 @@ const NORTH_AMERICAN_NUMBER = shapeNumber(",", "\\.");
 
 const wellFormed = (value: string) =>
   `(regexp_matches(${decorationValue(value)}, '${DECIMAL_COMMA_NUMBER}') OR regexp_matches(${decorationValue(value)}, '${NORTH_AMERICAN_NUMBER}'))`;
+
+/**
+ * A value the conversion gate counts as a number: a money shape under either
+ * convention, so `1.979.849,56` reaches the whole-column decision, or today's
+ * reading. Only the gate uses it; the conversion branches keep their own tests.
+ */
+const gateNumber = (column: string) => `(${wellFormed(column)} OR ${readsAsNumber(column)})`;
 
 interface ColumnCounts {
   nonBlank: number;
@@ -149,7 +164,7 @@ function provesBothStyles(counts: ColumnCounts): boolean {
 function formattingMeasures(column: string, index: number): string {
   return [
     `count(${column})::DOUBLE AS n${index}`,
-    `count(*) FILTER (WHERE ${readsAsNumber(column)})::DOUBLE AS ok${index}`,
+    `count(*) FILTER (WHERE ${gateNumber(column)})::DOUBLE AS ok${index}`,
     `count(*) FILTER (WHERE ${formatted(column, index)})::DOUBLE AS f${index}`,
   ].join(", ");
 }
@@ -246,7 +261,12 @@ async function alterableColumns(query: Query, table: string, columns: string[]):
   return columns.filter((column) => !pinned.has(column.toLowerCase()));
 }
 
-export async function convertFormattedNumbers(query: Query, table: string): Promise<void> {
+/** Where a loaded table's rows sit in the file it came from, when the loader knew for free. */
+export type FileRows =
+  | { readonly kind: "sheet"; readonly rows: readonly number[] }
+  | { readonly kind: "csv"; readonly file: Blob };
+
+export async function convertFormattedNumbers(query: Query, table: string, rows?: FileRows): Promise<void> {
   const tableName = quotedName(table);
   const columns = varcharColumns(await query(`DESCRIBE ${tableName}`));
   if (columns.length === 0) return;
@@ -258,6 +278,7 @@ export async function convertFormattedNumbers(query: Query, table: string): Prom
   const existing = new Set((await query(`DESCRIBE ${tableName}`)).map((row) => String(row.column_name).toLowerCase()));
   const temporary: string[] = [];
   const parsed = likely.map(() => "");
+  const rowOf = locateRows(query, tableName, rows);
   let failure: { error: unknown } | undefined;
   try {
     for (const [index, column] of likely.entries()) {
@@ -276,7 +297,7 @@ export async function convertFormattedNumbers(query: Query, table: string): Prom
       const counts = full[index];
       if (counts.currencies > 1) {
         if (counts.present > 0 && counts.wellFormed === counts.nonBlank) {
-          await query(`COMMENT ON COLUMN ${tableName}.${column} IS 'mixed number styles'`);
+          await query(`COMMENT ON COLUMN ${tableName}.${column} IS ${literal(MIXED_STYLES_MARK)}`);
         }
         continue;
       }
@@ -293,7 +314,8 @@ export async function convertFormattedNumbers(query: Query, table: string): Prom
         await query(`ALTER TABLE ${tableName} ALTER ${column} TYPE DOUBLE USING ${northAmerican(canonical)}`);
         if (mark !== undefined) await query(`COMMENT ON COLUMN ${tableName}.${column} IS ${literal(mark)}`);
       } else if (counts.present > 0 && counts.wellFormed === counts.nonBlank && provesBothStyles(counts)) {
-        await query(`COMMENT ON COLUMN ${tableName}.${column} IS 'mixed number styles'`);
+        const comment = await mixedStyleComment(query, tableName, column, rowOf);
+        await query(`COMMENT ON COLUMN ${tableName}.${column} IS ${literal(comment)}`);
       }
     }
   } catch (error) {
@@ -309,6 +331,77 @@ export async function convertFormattedNumbers(query: Query, table: string): Prom
   if (failure) throw failure.error;
 }
 
+/** The file row of a table row, or undefined where the file cannot prove one. */
+type RowOf = (at: number) => Promise<number | undefined>;
+
+/**
+ * A row lookup that reads the CSV only when a sentence is about to name a row.
+ * A sheet already knows its rows. A CSV names one only when its line breaks
+ * match the table's row count plus its header line.
+ */
+function locateRows(query: Query, tableName: string, rows: FileRows | undefined): RowOf {
+  if (rows === undefined) return async () => undefined;
+  if (rows.kind === "sheet") return async (at) => rows.rows[at];
+  let first: Promise<number | undefined> | undefined;
+  return async (at) => {
+    first ??= csvFirstRow(query, tableName, rows.file);
+    const offset = await first;
+    return offset === undefined ? undefined : offset + at;
+  };
+}
+
+async function csvFirstRow(query: Query, tableName: string, file: Blob): Promise<number | undefined> {
+  const [row] = await query(`SELECT count(*)::DOUBLE AS n FROM ${tableName}`);
+  return (await countLineBreaks(file)) === Number(row?.n) + 1 ? 2 : undefined;
+}
+
+/** Line breaks in a file, counted a CRLF pair as one, without holding the whole file. */
+async function countLineBreaks(file: Blob): Promise<number> {
+  const reader = file.stream().getReader();
+  let breaks = 0;
+  let previous = -1;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      for (const byte of value as Uint8Array) {
+        if (byte === 0x0a) {
+          if (previous !== 0x0d) breaks += 1;
+        } else if (byte === 0x0d) {
+          breaks += 1;
+        }
+        previous = byte;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return breaks;
+}
+
+/**
+ * The mixed-style mark for a column that proves both money styles: the first
+ * value of the style the column's first value is not, with its row when the
+ * file proves one. The sentence quotes both, so the value is kept as written.
+ */
+async function mixedStyleComment(query: Query, tableName: string, column: string, rowOf: RowOf): Promise<string> {
+  const value = `trim(${column})`;
+  const decoration = decorationValue(`trim(${column})`);
+  const [row] = await query(
+    `SELECT arg_min(regexp_matches(${decoration}, '${US_PROOF}'), rowid) AS is_us,
+            arg_min(${value}, rowid) FILTER (WHERE regexp_matches(${decoration}, '${US_PROOF}')) AS us,
+            arg_min(rowid, rowid) FILTER (WHERE regexp_matches(${decoration}, '${US_PROOF}'))::DOUBLE AS us_at,
+            arg_min(${value}, rowid) FILTER (WHERE regexp_matches(${decoration}, '${COMMA_PROOF}')) AS eu,
+            arg_min(rowid, rowid) FILTER (WHERE regexp_matches(${decoration}, '${COMMA_PROOF}'))::DOUBLE AS eu_at
+     FROM ${tableName}`,
+  );
+  const losing = row?.is_us === true ? { value: row?.eu, at: row?.eu_at } : { value: row?.us, at: row?.us_at };
+  if (losing.value == null || losing.at == null) return MIXED_STYLES_MARK;
+  const located = await rowOf(Number(losing.at));
+  const example = String(losing.value);
+  return located === undefined ? MIXED_STYLES_MARK : `${MIXED_STYLES_MARK}:${example}|${located}`;
+}
+
 // Marks for the data-check sentences below. The dots marks carry the column's
 // first dotted value after a colon, because the sentence quotes it.
 const THOUSANDS_DOTS = "thousands dots";
@@ -318,6 +411,10 @@ const DECIMAL_DOTS = "decimal dots";
 // read as, because the sentence quotes both.
 const CURRENCY_SIGN = "currency sign";
 const GROUPED_COMMA = "grouped comma";
+// A column that proves two money styles stays text. The mark keeps the first
+// value of the style the column's first value is not, with its row when the
+// file proves one, because the sentence quotes both.
+const MIXED_STYLES_MARK = "mixed number styles";
 
 const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
 
@@ -443,14 +540,27 @@ export async function decimalCommaNote(query: Query, table: string, includeWhole
   );
   const columns = rows.map((row) => ({ name: String(row.column_name), marks: marksOf(String(row.comment ?? "")) }));
   const decimal = columns.filter((column) => column.marks.includes("decimal comma")).map((column) => column.name);
-  const mixed = columns.filter((column) => column.marks.includes("mixed number styles")).map((column) => column.name);
+  const mixed = columns.filter((column) => column.marks.some((mark) => mixedMark(mark)));
+  const named = mixed.filter((column) => column.marks.includes(MIXED_STYLES_MARK)).map((column) => column.name);
   const sentences: string[] = [];
   if (decimal.length === 1) sentences.push("1 column was read as numbers written with a decimal comma.");
   if (decimal.length > 1) sentences.push(`${decimal.length} columns were read as numbers written with a decimal comma.`);
-  if (mixed.length === 1) sentences.push(`${mixed[0]} mixes number styles, so it was read as text.`);
-  if (mixed.length > 1) {
-    sentences.push(`${mixed.slice(0, -1).join(", ")} and ${mixed[mixed.length - 1]} mix number styles, so they were read as text.`);
+  if (named.length === 1) sentences.push(`${named[0]} mixes number styles, so it was read as text.`);
+  if (named.length > 1) {
+    sentences.push(`${named.slice(0, -1).join(", ")} and ${named[named.length - 1]} mix number styles, so they were read as text.`);
   }
+  for (const column of mixed) {
+    const mark = column.marks.find((candidate) => candidate.startsWith(`${MIXED_STYLES_MARK}:`));
+    if (mark === undefined) continue;
+    const body = mark.slice(MIXED_STYLES_MARK.length + 1);
+    const cut = body.lastIndexOf("|");
+    if (cut < 0) continue;
+    sentences.push(
+      `${column.name} mixes number styles, such as ${body.slice(0, cut)} in row ${body.slice(cut + 1)}, so it was read as text.`,
+    );
+  }
+  const sheet = await sheetNote(query, table);
+  if (sheet !== null) sentences.push(sheet);
   for (const column of columns) {
     for (const mark of column.marks) {
       if (mark.startsWith(`${CURRENCY_SIGN}:`)) {
@@ -490,6 +600,32 @@ export async function decimalCommaNote(query: Query, table: string, includeWhole
 /** A dotted example as the decimal number it was read as. */
 function dotExampleValue(example: string): string {
   return String(Number(example));
+}
+
+/** True for the mixed-style mark, with or without the value and row it quotes. */
+function mixedMark(mark: string): boolean {
+  return mark === MIXED_STYLES_MARK || mark.startsWith(`${MIXED_STYLES_MARK}:`);
+}
+
+// The staging table of a workbook carries the sheet it loaded and how many
+// later sheets it left out. The app shows no load-area note for it yet.
+const SHEET_MARK = "sheet:";
+
+/** The sentence naming the sheet a workbook loaded, when more than one survives. */
+async function sheetNote(query: Query, table: string): Promise<string | null> {
+  const [row] = await query(
+    `SELECT comment FROM duckdb_tables() WHERE schema_name = current_schema() AND table_name = '${table.replaceAll("'", "''")}'`,
+  );
+  const comment = row?.comment == null ? "" : String(row.comment);
+  if (!comment.startsWith(SHEET_MARK)) return null;
+  const body = comment.slice(SHEET_MARK.length);
+  const cut = body.lastIndexOf("|");
+  if (cut < 0) return null;
+  const name = body.slice(0, cut);
+  const others = Number(body.slice(cut + 1));
+  if (name === "" || !(others > 0)) return null;
+  const rest = others === 1 ? "the other sheet was not" : `the other ${others} sheets were not`;
+  return `The workbook's first sheet, "${name}", was loaded; ${rest}.`;
 }
 
 const DOTTED = "^-?\\d{1,3}(\\.\\d{3})+$";
@@ -550,7 +686,7 @@ export async function planDotColumns(query: Query, path: string, delimiter: stri
  * Converts thousands-dotted columns to whole numbers and marks every dot
  * column for its data-check sentence. Thousands columns convert here rather
  * than in convertFormattedNumbers because that pass only touches VARCHAR, and
- * the loader reads them as VARCHAR on purpose (see typesForDotColumns).
+ * the loader reads them as VARCHAR on purpose (see typeOverrides).
  */
 export async function applyDotColumns(query: Query, table: string, readings: DotReading[]): Promise<void> {
   const name = quotedName(table);
@@ -567,9 +703,88 @@ export async function applyDotColumns(query: Query, table: string, readings: Dot
   }
 }
 
-/** read_csv type overrides that keep thousands-dotted columns as text, so applyDotColumns can convert them from the raw figures. */
-export function typesForDotColumns(readings: DotReading[]): string | null {
-  const thousands = readings.filter((reading) => reading.thousands);
-  if (thousands.length === 0) return null;
-  return `, types={${thousands.map((reading) => `'${reading.column.replaceAll("'", "''")}': 'VARCHAR'`).join(", ")}}`;
+/** read_csv type overrides that keep named columns as text, or "" when none are named. */
+export function typeOverrides(columns: readonly string[]): string {
+  if (columns.length === 0) return "";
+  return `, types={${columns.map((column) => `'${column.replaceAll("'", "''")}': 'VARCHAR'`).join(", ")}}`;
+}
+
+/** The one sentence shown when a file's rows do not all use the same separator. */
+export const MIXED_SEPARATOR_SENTENCE = 'This file mixes ";" and "," as separators, so save it again with one separator.';
+
+const OTHER_SEPARATOR: Record<string, string> = { ",": ";", ";": "," };
+const WIDEST_SHARE = 0.6;
+const FEWEST_MIXED_LINES = 3;
+const FEWEST_INLINE_MIXED = 2;
+
+/** One line split by a separator outside double quotes, and how many separators it held there. */
+function splitOutsideQuotes(line: string, separator: string): { fields: string[]; marks: number } {
+  const fields: string[] = [];
+  let field = "";
+  let marks = 0;
+  let quoted = false;
+  for (let index = 0; index < line.length; index++) {
+    const char = line[index];
+    if (char === '"') {
+      if (quoted && line[index + 1] === '"') {
+        field += '"';
+        index += 1;
+        continue;
+      }
+      quoted = !quoted;
+      continue;
+    }
+    if (!quoted && char === separator) {
+      fields.push(field);
+      field = "";
+      marks += 1;
+      continue;
+    }
+    field += char;
+  }
+  fields.push(field);
+  return { fields, marks };
+}
+
+/**
+ * The sentence for a file whose rows use the sniffed separator and the other
+ * one, decided from its first 64 KB. A row opened with the other separator is
+ * foreign when it splits into the file's own width there. A row that keeps the
+ * width but carries the other separator at least as often as the sniffed one is
+ * mixed inline. One stray cell or a short footer row stays silent.
+ */
+export function mixedSeparatorSentence(prefix: string, delimiter: string): string | null {
+  const other = OTHER_SEPARATOR[delimiter];
+  if (other === undefined) return null;
+  const lines = prefix
+    .split(/\r\n|\n|\r/)
+    .filter((line) => line.trim() !== "")
+    .map((line) => ({
+      sniffed: splitOutsideQuotes(line, delimiter),
+      foreign: splitOutsideQuotes(line, other),
+    }));
+  const widths = lines.map((line) => line.sniffed.fields.length).filter((width) => width >= 2);
+  if (widths.length < FEWEST_MIXED_LINES) return null;
+  const counts = new Map<number, number>();
+  for (const width of widths) counts.set(width, (counts.get(width) ?? 0) + 1);
+  let widest = 0;
+  let frequency = 0;
+  for (const [width, count] of counts) {
+    if (count > frequency || (count === frequency && width > widest)) {
+      widest = width;
+      frequency = count;
+    }
+  }
+  if (frequency < WIDEST_SHARE * widths.length) return null;
+  let foreign = 0;
+  let inline = 0;
+  for (const line of lines) {
+    const width = line.sniffed.fields.length;
+    if (width !== widest) {
+      if (line.foreign.fields.length === widest && line.foreign.fields.every((field) => field.trim() !== "")) foreign += 1;
+      continue;
+    }
+    if (widest >= 3 && line.foreign.marks >= line.sniffed.marks) inline += 1;
+  }
+  return foreign > 0 || inline >= FEWEST_INLINE_MIXED ? MIXED_SEPARATOR_SENTENCE : null;
 }
