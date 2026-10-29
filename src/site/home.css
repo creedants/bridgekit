@@ -437,6 +437,23 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
 
 .home .ledger .amt span b { font-size: 1.25rem; }
 
+/* Each step carries the sample bridge with its own bars lit, drawn under its name. */
+.home .ledger .mini { display: block; width: 100%; max-width: 13rem; height: auto; margin-top: 1.25rem; padding: .75rem .75rem .5rem; border: 1px solid var(--rule); background: var(--paper-2); box-sizing: border-box; }
+
+.home .ledger .mini line { stroke: var(--rule-strong); stroke-width: 1; }
+
+.home .ledger .mini .link { stroke-dasharray: 2 2; }
+
+.home .ledger .mini rect { stroke-width: 1; }
+
+.home .ledger .mini .total, .home .ledger .mini .step { fill: var(--paper); stroke: var(--rule-strong); }
+
+.home .ledger .mini .lit { fill: rgba(244, 191, 58, .22); stroke: none; }
+
+.home .ledger .mini .on { fill: var(--sun); stroke: var(--ink); }
+
+.home .ledger .mini .on.down { fill: var(--ink); }
+
 /* 02 The views: one full-width plate of the Movers table, then two plates beside their captions. */
 
 .home .views .plate.full { grid-column: 1 / -1; }
@@ -594,6 +611,11 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
   .home .ledger td.amt { margin-top: 1rem; }
 
   .home .ledger .amt b { text-align: left; }
+
+  /* On narrow screens the drawing sits at the right of the step name, so each row grows only a little. */
+  .home .ledger th { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+
+  .home .ledger .mini { flex: none; width: 6.5rem; margin-top: 0; padding: .4rem .4rem .25rem; }
 
   .home .views .plate.side { display: block; margin-top: 3rem; }
 
