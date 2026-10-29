@@ -50,8 +50,8 @@ export interface Setup {
   newAndDiscontinued?: "difference" | "full";
   /**
    * Set by guessSetup on a setup built from column names alone, and cleared by
-   * any change the visitor makes. Not written to storage, and dropped by
-   * restoredSetup, so only an untouched guess is refined.
+   * any setup change the visitor makes in the panel. Not written to storage,
+   * and dropped by restoredSetup, so only an untouched guess is refined.
    */
   fresh?: true;
   /**
@@ -92,9 +92,9 @@ const COUNT_PATTERN = /unit|qty|quant|count|job|piece|menge|anzahl|absatz|stuck|
 const SIZE_PATTERN = /volume|size|ml|litre|liter|kg|weight|gram|amount/i;
 /** Price, cost and rate names used to suppress the value-inference hint. */
 const PRICE_PATTERN = /price|cost|rate|preis|kosten/i;
-/** Names that describe how much one unit holds or weighs rather than the money taken; "amount" is money and stays out. */
+/** Size-like name parts the value fallback refuses as Sales; "amount" is money and stays out. */
 const SIZE_ONLY_PATTERN = /volume|size|ml|litre|liter|kg|\bweight\b|gram/i;
-/** A currency word that qualifies a unit name as money, such as "currency units". */
+/** A currency word that takes a unit name out of the count-name rule, such as "currency units". */
 const CURRENCY_PATTERN = /currency|usd|eur|gbp|dollar|euro|cent|pound|yen/i;
 /** A name that says price, cost, rate, a unit price or one unit's size. Never Sales from its values. */
 const notMoney = (name: string) => PRICE_PATTERN.test(fold(name)) || isUnitPrice(name) || SIZE_ONLY_PATTERN.test(fold(name));
@@ -144,7 +144,7 @@ const isUnitPrice = (name: string) => {
   return PRICE_DE.test(folded) && UNITS_PATTERN.test(folded);
 };
 const isTrailingNote = (name: string) => noteWords.has(words(name).at(-1) ?? "");
-/** A count name, unless a currency word shows the column counts money; "Sales (Currency Units)" is money. */
+/** A count name, unless a currency word takes it out; "Sales (Currency Units)" reads as money. */
 const countName = (name: string) => COUNT_PATTERN.test(fold(name)) && !CURRENCY_PATTERN.test(fold(name));
 
 /**

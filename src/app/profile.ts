@@ -566,7 +566,7 @@ function nameWords(name: string): string[] {
  * numeric nor dates, which includes text and true/false columns, with 2 to
  * 5000 distinct values, drops the used period and measure columns, names
  * with a customer, region, date or id word, and a column marked as an exact
- * or near duplicate of another suggested column.
+ * or near duplicate of a column that would otherwise be suggested.
  */
 export function suggestAttributes(
   columns: Column[],
