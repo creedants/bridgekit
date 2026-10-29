@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { amountsNote, dataCheck, periodMoney, runBridge, type BridgeConfig, type Query } from "../engine.ts";
 import { summarize } from "../summary.ts";
 import { resolveSample, type Sample } from "../synth.ts";
@@ -15,7 +15,7 @@ import { whole } from "./format.ts";
 import { findTotalRows, profileFile, type TotalRow } from "./profile.ts";
 import { loadPeriodList } from "./periods.ts";
 import { describeSetup } from "./report.ts";
-import type { Run } from "./Results.tsx";
+import type { Run, Results as ResultsComponent } from "./Results.tsx";
 import {
   affectsRemember,
   calculateGate,
@@ -50,10 +50,7 @@ import { agree, SetupPanel } from "./SetupPanel.tsx";
 // Pro workspaces exist only in builds with VITE_WORKSPACES=1; elsewhere the code is left out.
 const WorkspacePanel = import.meta.env.VITE_WORKSPACES === "1" ? lazy(() => import("./Workspace.tsx")) : null;
 
-type ResultsView = (props: {
-  run: Run;
-  query: () => Promise<BrowserDatabase["query"]>;
-}) => ReactNode;
+type ResultsView = typeof ResultsComponent;
 
 const RESULTS_FAILURE: ChunkSentences = {
   network: "Could not load the results view. Check your connection, then choose Calculate bridge again.",
@@ -184,6 +181,9 @@ export function App() {
   const [rollups, setRollups] = useState<string[][]>([]);
   const [detected, setDetected] = useState<{ key: string; rows: TotalRow[] } | null>(null);
   const [run, setRun] = useState<(Run & { id: number; signature: string }) | null>(null);
+  // The report's names choice outlives a calculation on purpose. Results is keyed by run.id, so
+  // anything kept inside it resets on every run. Only the user unticks this.
+  const [omitNames, setOmitNames] = useState(false);
   const [formulaBlanks, setFormulaBlanks] = useState(0);
   const [setupError, setSetupError] = useState("");
   // exportExcel saves its file itself, so the Excel export keeps a guard of its own.
@@ -724,7 +724,7 @@ export function App() {
             )}
             {run && Results ? (
               <div className="results-anchor" ref={resultsRef}>
-                <Results key={run.id} run={run} query={query} />
+                <Results key={run.id} run={run} query={query} omitNames={omitNames} onOmitNames={setOmitNames} />
               </div>
             ) : !run ? (
               <div>

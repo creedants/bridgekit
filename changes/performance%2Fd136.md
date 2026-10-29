@@ -1,0 +1,1 @@
+- The "Leave the file name, filter values and mover names out of the report" tick in the Bridge tab now stays ticked across recalculations until unticked, so recalculating no longer names movers in the next download. Loading a new file keeps the tick.
