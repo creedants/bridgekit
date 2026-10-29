@@ -237,9 +237,9 @@ const SHAPE_SAMPLE = 200;
 /**
  * The text columns that can still be one date family, decided from a small
  * sample. A column whose sampled values include ordinary text cannot be wholly
- * date-shaped, so it never needs the whole-table pass; a column with no
- * non-blank value in the sample is left to that pass. This keeps a file of
- * ordinary text from paying for a date measure over every row.
+ * date-shaped, so it never needs the whole-table pass, and a column with no
+ * non-blank value has nothing to convert. This keeps a file of ordinary text
+ * from paying for a date measure over every row.
  */
 async function dateShapedColumns(query: Query, table: string, columns: string[]): Promise<string[]> {
   const shaped: string[] = [];
