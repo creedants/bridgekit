@@ -5,7 +5,8 @@ import { registerHooks } from "node:module";
 import path from "node:path";
 import { test } from "node:test";
 import { transformSync } from "esbuild";
-import { convertFormattedNumbers } from "../src/app/numbers.ts";
+import { convertFormattedNumbers, decimalCommaNote } from "../src/app/numbers.ts";
+import { PERIOD, VIEW } from "../src/app/setup.ts";
 import { openDatabase } from "../src/duckdb.ts";
 import type { Query } from "../src/engine.ts";
 
@@ -133,4 +134,25 @@ test("the Data check shows no formula sentence at zero", async () => {
   const query = await loaded("zero", NEITHER_FILE);
   assert.deepEqual(await notes(query, "zero", 0), []);
   assert.deepEqual(await notes(query, "zero"), []);
+});
+
+/** A file with decimal commas and one period that holds a whole semicolon row. */
+async function mixedLoaded(): Promise<{ query: Query; table: string }> {
+  const query = await openDatabase();
+  const table = "mixed";
+  await query(`CREATE TABLE ${table} (period VARCHAR, units DOUBLE, amount VARCHAR)`);
+  await query(
+    `INSERT INTO ${table} VALUES ('2024', 3, '1.234,56'), ('2025', 4, '12,50'), ('2024;7;99', 5, '7,25')`,
+  );
+  await convertFormattedNumbers(query, table);
+  await query(`CREATE VIEW ${VIEW} AS SELECT CAST(period AS VARCHAR) AS ${PERIOD} FROM ${table}`);
+  return { query, table };
+}
+
+test("the whole-row note loads as a warning, not a decimal comma note", async () => {
+  const { query, table } = await mixedLoaded();
+  const whole = `1 row has a period such as "2024;7;99" that looks like a whole row. The file may mix separators. Save it again with one separator.`;
+  assert.equal(await decimalCommaNote(query, table), `${DECIMAL} ${whole}`);
+  assert.equal(await decimalCommaNote(query, table, false), DECIMAL);
+  assert.deepEqual(await notes(query, table), [DECIMAL]);
 });

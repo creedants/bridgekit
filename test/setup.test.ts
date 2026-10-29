@@ -325,6 +325,47 @@ test("pattern value selects value", () => {
   assert.equal(measures("value").salesColumn, "value");
 });
 
+test("German Menge guesses units", () => {
+  assert.equal(measures("Menge", "DOUBLE").unitsColumn, "Menge");
+});
+
+test("German Stueck, Anzahl and Absatz guess units", () => {
+  for (const name of ["Stück", "Stueck", "Anzahl", "Absatz"]) {
+    assert.equal(measures(name, "DOUBLE").unitsColumn, name, name);
+  }
+});
+
+test("German Umsatz and Erloese guess sales", () => {
+  assert.equal(measures("Umsatz", "DOUBLE").salesColumn, "Umsatz");
+  assert.equal(measures("Erlöse", "DOUBLE").salesColumn, "Erlöse");
+});
+
+test("German Stueckpreis and Kosten compounds leave units empty", () => {
+  for (const name of ["Stückpreis", "Stueckpreis", "Stückkosten", "Mengenpreis"]) {
+    const setup = measures(name, "DOUBLE");
+    assert.equal(setup.unitsColumn, "", name);
+    assert.equal(setup.salesColumn, "", name);
+  }
+});
+
+test("German Umsatzsteuer is a tax and guesses no sales", () => {
+  assert.equal(measures("Umsatzsteuer", "DOUBLE").salesColumn, "");
+});
+
+test("pin: Invoiced Amount guesses sales", () => {
+  assert.equal(measures("Invoiced Amount", "DOUBLE").salesColumn, "Invoiced Amount");
+});
+
+test("pin: Total Quantity guesses units", () => {
+  assert.equal(measures("Total Quantity", "DOUBLE").unitsColumn, "Total Quantity");
+});
+
+test("pin: Turnover stays out of sales and units", () => {
+  const setup = measures("Turnover", "DOUBLE");
+  assert.equal(setup.salesColumn, "");
+  assert.equal(setup.unitsColumn, "");
+});
+
 test("pattern gross selects gross", () => {
   const setup = guessSetup([
     { name: "sales", type: "DOUBLE" },
@@ -1569,6 +1610,9 @@ const headers: { names: string[]; textMeasures: boolean }[] = [
 
 test("oracle headers match the legacy guess outside excluded words", () => {
   for (const row of headers) {
+    // The German picks live outside the legacy oracle: its patterns know no
+    // German stems, unit prices or tax columns.
+    if (row.names.some((name) => /jahr|menge|umsatz|nettoumsatz|stueck|steuer|erl[öo]s/i.test(name))) continue;
     const columns: Column[] = row.names.map((name) => ({
       name,
       type: row.textMeasures || textNames.has(name) ? "VARCHAR" : "DOUBLE",
