@@ -1,0 +1,3 @@
+- The smoke recorder now settles the commands it has already sent to a CDP session the browser detaches, so a worker whose document goes away while the recorder is probing it no longer leaves a reply timer running that fails a run which passed every check. A session that stops answering without a detach still fails the run.
+- A command sent to a session the browser has already detached is refused at once with an error naming the method, instead of waiting for a reply that cannot come.
+- Commands in a browser opened without `record` now time out, and are rejected when the debugging socket closes, with an error naming the method. Before, only the recorder timed a reply, so a non-record caller waited forever.

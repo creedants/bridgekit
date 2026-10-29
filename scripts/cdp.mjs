@@ -149,6 +149,14 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
     // The first recorder fault. Once set, every command and finish() throw it.
     let broken = null;
     let closing = false;
+    /**
+     * Sessions the browser detached. A session id is never reused, so an entry stays true for the life of the browser
+     * and a late send to it is still refused.
+     * @type {Set<string>}
+     */
+    const detached = new Set();
+    // A reply to this cannot arrive. The flag separates it from a hang, which the caller must still treat as a fault.
+    const sessionDetached = (method) => Object.assign(new Error(`the browser detached the session during ${method}, so the target was closing`), { detached: true });
     const closedSocket = (method) => {
       if (closing) return new Error("the browser closed its debugging socket");
       const status = browserExit ? browserExit.signal ?? browserExit.code : "not exited";
@@ -158,6 +166,8 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
     const command = (method, params, sessionId, strict = false) => new Promise((resolve, reject) => {
       if (record && broken) return reject(broken);
       if (record && ws.readyState !== WebSocket.OPEN) return reject(broken ??= closedSocket(method));
+      // The browser answers nothing sent to a session it detached, so sending there would only wait out REPLY_MS.
+      if (record && sessionId && detached.has(sessionId)) return reject(sessionDetached(method));
       const current = ++id;
       let timer;
       let settled = false;
@@ -169,15 +179,15 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
         if (error) reject(error);
         else resolve(result);
       };
-      if (record) {
-        timer = setTimeout(() => {
-          const asker = sessionId ? reporters.get(sessionId) : null;
-          const where = asker ? `the ${asker.kind} at ${asker.url}` : sessionId ? "a session with no asker" : "the browser";
-          finish(broken ??= new Error(`${method} got no reply in ${REPLY_MS / 1000} s from ${where}, so it crashed or hung and was not recorded`));
-        }, REPLY_MS);
-      }
+      timer = setTimeout(() => {
+        const asker = sessionId ? reporters.get(sessionId) : null;
+        const where = asker ? `the ${asker.kind} at ${asker.url}` : sessionId ? "a session with no asker" : "the browser";
+        if (!record) return finish(new Error(`${method} got no reply in ${REPLY_MS / 1000} s from ${where}`));
+        finish(broken ??= new Error(`${method} got no reply in ${REPLY_MS / 1000} s from ${where}, so it crashed or hung and was not recorded`));
+      }, REPLY_MS);
       pending.set(current, {
         method,
+        sessionId,
         reply: (d) => finish((record || strict) && d.error ? new Error(`${method} failed: ${d.error.message}`) : null, d.result),
         fail: (error) => finish(error),
       });
@@ -188,10 +198,14 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
     const announced = new Promise((resolve) => (announce = resolve));
     // Chrome sends one detach for a worker that finished and for a session lost while its target runs.
     const detach = ({ sessionId }) => {
+      detached.add(sessionId);
+      for (const waiter of [...pending.values()]) if (waiter.sessionId === sessionId) waiter.fail(sessionDetached(waiter.method));
       for (const [targetId, session] of watched) if (session === sessionId) watched.delete(targetId);
     };
     const attach = ({ sessionId, targetInfo: { targetId, type: kind, url } }) => {
-      const tell = (method, params = {}) => command(method, params, sessionId).catch((error) => { broken ??= new Error(`${error.message}, so the ${kind} at ${url} was not recorded`); });
+      const tell = (method, params = {}) => command(method, params, sessionId).catch((error) => {
+        if (!error.detached) broken ??= new Error(`${error.message}, so the ${kind} at ${url} was not recorded`);
+      });
       if (probing.has(targetId) || stopped.has(targetId)) reporters.set(sessionId, null);
       else if (OWN.test(url) || watched.has(targetId)) {
         reporters.set(sessionId, null);
@@ -271,7 +285,8 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
         return probe.result?.value === 1;
       } catch (error) {
         if (broken) throw error;
-        if (/No target with given id|Target closed/.test(error.message)) return false;
+        // The target closed before it answered: nothing is left to ask, which is what a missing target means too.
+        if (error.detached || /No target with given id|Target closed/.test(error.message)) return false;
         throw (broken ??= new Error(`${error.message}, so the ${target.type} at ${target.url} was not recorded`));
       } finally {
         if (sessionId) await command("Target.detachFromTarget", { sessionId }).catch(() => {});
@@ -340,10 +355,10 @@ export async function open(port = 9340, { chromium = "chromium", record = false 
       const rejectWaiters = () => {
         if (settled) return;
         settled = true;
-        if (record) {
-          const error = closedSocket(method);
-          for (const waiter of [...pending.values()]) waiter.fail(error);
-        }
+        // A recorder reports its browser's exit status and output. A plain browser has no record to blame, and the
+        // caller still needs to know which command was in flight.
+        const error = record ? closedSocket(method) : new Error(`the browser closed its debugging socket during ${method}`);
+        for (const waiter of [...pending.values()]) waiter.fail(error);
         markClosed();
       };
       if (record && !closing && !browserExit) {
