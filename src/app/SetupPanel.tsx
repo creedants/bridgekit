@@ -499,11 +499,14 @@ function NameInput(props: { level: Level; onCommit: (name: string) => void }) {
       aria-label="Attribute name"
       value={value}
       maxLength={MAX_LEVEL_NAME}
-      onChange={(e) => setText(e.target.value.slice(0, MAX_LEVEL_NAME))}
-      onBlur={() => {
-        props.onCommit(text ?? props.level.name);
-        setText(null);
+      onChange={(e) => {
+        const next = e.target.value.slice(0, MAX_LEVEL_NAME);
+        setText(next);
+        // An emptied name goes to the setup as the column's own name at once, so
+        // the bridge, the report and the export never see a blank one.
+        props.onCommit(next);
       }}
+      onBlur={() => setText(null)}
       onKeyDown={(e) => {
         if (e.key === "Enter") e.currentTarget.blur();
       }}
