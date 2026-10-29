@@ -449,8 +449,6 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
 
 .home .views .plate.side figcaption b { margin: 0; font-size: 1.75rem; }
 
-.home .views .plate.side img { width: auto; max-width: 100%; }
-
 .home .views .plate.gaps img { max-width: 30.625rem; }
 
 .home .views .also { grid-column: 3 / -1; display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; max-width: none; margin-top: 3.5rem; padding-top: 1rem; border-top: 1px solid var(--rule); font: 500 .875rem/1.4 var(--sans); color: var(--ink-2); }
