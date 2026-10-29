@@ -1166,6 +1166,10 @@ async function drive(browser, origin, rows) {
       await browser.waitFor("!!document.querySelector('.kpis')");
       await browser.waitFor("!!document.querySelector('.bridge table')");
     };
+    const STALE_NOTICE = "The setup changed since this bridge was calculated";
+    const staleNoticeShown = `document.body.innerText.includes(${JSON.stringify(STALE_NOTICE)})`;
+    const omitNamesBox = `[...document.querySelectorAll('.summary label.check input')].find((i) => i.closest('label').textContent.includes('Leave the file name'))`;
+    const reactProp = (el, prop) => `(() => { const node = ${el}; if (!node) return undefined; const key = Object.keys(node).find((k) => k.startsWith('__reactProps$')); return key ? node[key][${JSON.stringify(prop)}] : undefined; })()`;
     const readBridge = async (step) => {
       const rows = JSON.parse(await browser.evalJs(bridgeRowsJs));
       return rows.map((row) => parseBridgeAmount(row.amount, `${step}: ${row.label || "row"}`));
@@ -1408,11 +1412,13 @@ async function drive(browser, origin, rows) {
     const customLabel = "MD0 assortment";
     await browser.evalJs(`T.input(document.querySelectorAll('.levels input[aria-label="Attribute name"]')[0], ${JSON.stringify(customLabel)})`);
     await browser.waitFor(`document.querySelectorAll('.levels input[aria-label="Attribute name"]')[0].value === ${JSON.stringify(customLabel)}`);
+    await browser.waitFor(staleNoticeShown);
     await calculate();
+    await browser.waitFor(`!(${staleNoticeShown}) && !!document.querySelector('.kpis') && !!document.querySelector('.bridge table')`);
     await browser.evalJs(`T.tab("Bridge")`);
     await browser.sleep(800);
-    await browser.evalJs(`([...document.querySelectorAll('.summary label.check input')].find((i) => i.closest('label').textContent.includes('Leave the file name'))).click()`);
-    await browser.waitFor(`[...document.querySelectorAll('.summary label.check input')].some((i) => i.closest('label').textContent.includes('Leave the file name') && i.checked)`);
+    await browser.evalJs(`(${omitNamesBox}).click()`);
+    await browser.waitFor(`${omitNamesBox} && ${omitNamesBox}.checked && ${reactProp(omitNamesBox, "checked")} === true`);
     const tickedReport = await downloadReport();
     if (!tickedReport) fail("omit names: no ticked report was downloaded");
     for (const absent of [...moverValues, "C0", "C1", "C2", "C3", "C4", "smoke.csv", customLabel]) {
@@ -1679,7 +1685,7 @@ async function drive(browser, origin, rows) {
     await calculate();
     const exportButton = `[...document.querySelectorAll('header nav button')].find((b) => b.textContent.trim() === 'Export Excel')`;
     await browser.evalJs(`document.querySelector('button[aria-label="Remove attribute"]').click()`);
-    await browser.waitFor("document.body.innerText.includes('The setup changed since this bridge was calculated')");
+    await browser.waitFor(`document.body.innerText.includes(${JSON.stringify(STALE_NOTICE)})`);
     if (!(await browser.evalJs(`${exportButton}.disabled`))) {
       fail("stale bridge: Export Excel stays on while the notice says the setup changed");
     }
