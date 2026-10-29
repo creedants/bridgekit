@@ -286,3 +286,21 @@ test("without an owner, a sample that hops before writing lands over the newer f
   assert.ok(names.includes("units"), `the sample's columns landed last, but the table held ${names.join(", ")}`);
 });
 
+const PASTED = "period\tunits\n2025\t10\n";
+
+test("a paste with nothing displayed loads the pasted cells at once", async () => {
+  const { pasteIntent } = await import("../src/app/App.tsx");
+  assert.equal(pasteIntent(PASTED, 0), "load");
+});
+
+test("a paste over displayed data asks before replacing it", async () => {
+  const { pasteIntent } = await import("../src/app/App.tsx");
+  assert.equal(pasteIntent(PASTED, 3), "ask");
+});
+
+test("text that is not a table is refused, displayed data or not", async () => {
+  const { pasteIntent } = await import("../src/app/App.tsx");
+  assert.equal(pasteIntent("just a sentence", 0), "refuse");
+  assert.equal(pasteIntent("just a sentence", 3), "refuse");
+});
+

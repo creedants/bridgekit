@@ -168,6 +168,12 @@ export function createTableOwner(): { claim(): Claim; owner(): Claim | null } {
   };
 }
 
+/** What a paste does. Wrong shape is refused; nothing displayed loads at once; displayed data asks first. */
+export function pasteIntent(text: string, displayedLoad: number): "refuse" | "load" | "ask" {
+  if (!isPastedTable(text)) return "refuse";
+  return displayedLoad === 0 ? "load" : "ask";
+}
+
 /** Opens the page's database. db.ts caches the open and forgets a failed one, so a later call retries. */
 function startEngine(): Promise<BrowserDatabase> {
   const opening = openBrowserDatabase();
@@ -554,11 +560,12 @@ export function App() {
       const text = e.clipboardData?.getData("text/plain") ?? "";
       if (text === "") return;
       e.preventDefault();
-      if (!isPastedTable(text)) {
+      const intent = pasteIntent(text, displayed.current);
+      if (intent === "refuse") {
         setError(NOT_A_TABLE);
         return;
       }
-      if (hasData(phase) && !confirm("Replace the loaded data with the pasted cells?")) return;
+      if (intent === "ask" && !confirm("Replace the loaded data with the pasted cells?")) return;
       loadFile(new File([text], "Pasted cells.tsv", { type: "text/tab-separated-values" }));
     };
     window.addEventListener("paste", onPaste);
