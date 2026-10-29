@@ -103,6 +103,11 @@ export interface NamesChoice {
  */
 export interface Freshness {
   fresh?: boolean;
+  /**
+   * Whether the period views in the database belong to this setup, so a live read
+   * is this run's input. A missing value reads as belonging.
+   */
+  viewsCurrent?: boolean;
 }
 
 export function Results(props: { run: Run; query: () => Promise<Query> } & NamesChoice & Freshness) {
@@ -114,6 +119,9 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
     ...run.result,
     effects: run.result.effects.filter((e) => e.key !== "no_units" || e.value !== 0),
   };
+  // The tabs that re-query the mutable view read it only while the run and its
+  // views are current; a temp table fixed at calculation time needs no such guard.
+  const viewQuery = props.fresh === false || props.viewsCurrent === false ? null : props.query;
   const [tab, setTab] = useState<Tab>("bridge");
   const [sortBy, setSortBy] = useState("change");
   const mixCount = run.result.effects.filter((e) => e.key.startsWith("mix_")).length;
@@ -179,7 +187,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
               }
               priorLabel={String(config.prior)}
               currentLabel={String(config.current)}
-              footer={<Summary run={run} result={result} query={props.query} fresh={props.fresh} omitNames={props.omitNames} onOmitNames={props.onOmitNames} />}
+              footer={<Summary run={run} result={result} query={props.query} fresh={props.fresh !== false && props.viewsCurrent !== false} omitNames={props.omitNames} onOmitNames={props.onOmitNames} />}
               onSelect={(key) => {
                 setSortBy(key.startsWith("mix_") ? "mix" : key.startsWith("price") || key === "cost_rate" ? "price" : key);
                 setTab("movers");
@@ -230,13 +238,13 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
               </p>
             </div>
           </div>
-          <SmallBridges run={run} query={props.query} />
+          <SmallBridges run={run} query={props.query} fresh={props.fresh !== false && props.viewsCurrent !== false} />
         </>
       )}
-      {tab === "accounts" && <Accounts run={run} query={props.query} />}
+      {tab === "accounts" && <Accounts run={run} query={viewQuery} />}
       {tab === "gaps" && <PriceGaps run={run} query={props.query} />}
-      {tab === "trend" && <Trend run={run} query={props.query} />}
-      {tab === "setup" && <SetupCheck run={run} query={props.query} />}
+      {tab === "trend" && <Trend run={run} query={viewQuery} />}
+      {tab === "setup" && <SetupCheck run={run} query={viewQuery} />}
       {tab === "price" && <PriceChanges run={run} query={props.query} />}
       {tab === "movers" && <Movers run={run} query={props.query} sortBy={sortBy} onSortBy={setSortBy} />}
       {tab === "unmatched" && <Unmatched run={run} query={props.query} />}
@@ -414,41 +422,49 @@ const ACCOUNT_LABELS: Record<AccountGroup["status"], string> = {
   shrinking: "Shrinking",
 };
 
-function Accounts(props: { run: Run; query: () => Promise<Query> }) {
+function Accounts(props: { run: Run; query: (() => Promise<Query>) | null }) {
   const { config, textColumns } = props.run;
   const guess =
     textColumns.find((c) => /customer|account|client|parent|sold.?to|buyer/i.test(c)) ?? textColumns[0] ?? "";
   const [column, setColumn] = useState(guess);
-  const [groups, setGroups] = useState<AccountGroup[] | null>(null);
+  // The figures are kept with the column they were fetched for, so the four
+  // groups can never appear under another column's name.
+  const [fetched, setFetched] = useState<{ column: string; groups: AccountGroup[] } | null>(null);
+  const live = props.query !== null;
   useEffect(() => {
     if (!column) return;
+    const run = props.query;
+    if (run === null) return;
     let stale = false;
-    props
-      .query()
+    run()
       .then((query) => accountBridge(query, config, column))
-      .then((result) => !stale && setGroups(result));
+      .then((result) => !stale && setFetched({ column, groups: result }));
     return () => {
       stale = true;
     };
-  }, [props.run, column]);
+  }, [props.run, column, live]);
+  const toolbar = (
+    <div className="toolbar">
+      <label>
+        Account column
+        <select value={column} onChange={(e) => setColumn(e.target.value)}>
+          {textColumns.map((c) => <option key={c}>{c}</option>)}
+        </select>
+      </label>
+      <span className="hint">
+        Any column works: customer, region, sales rep. It does not have to be an attribute of the bridge.
+      </span>
+    </div>
+  );
   if (!column) return <p className="hint">This view needs a text column such as customer.</p>;
-  if (!groups) return null;
+  const groups = fetched !== null && fetched.column === column ? fetched.groups : null;
+  if (!groups) return <div>{toolbar}</div>;
   const by = Object.fromEntries(groups.map((g) => [g.status, g])) as Record<AccountGroup["status"], AccountGroup>;
   const existingPrior = by.lost.prior + by.growing.prior + by.shrinking.prior;
   const measure = measureName(config).toLowerCase();
   return (
     <div>
-      <div className="toolbar">
-        <label>
-          Account column
-          <select value={column} onChange={(e) => setColumn(e.target.value)}>
-            {textColumns.map((c) => <option key={c}>{c}</option>)}
-          </select>
-        </label>
-        <span className="hint">
-          Any column works: customer, region, sales rep. It does not have to be an attribute of the bridge.
-        </span>
-      </div>
+      {toolbar}
       <div className="kpis" style={{ marginBottom: 12 }}>
         {groups.map((g) => (
           <Kpi key={g.status} label={ACCOUNT_LABELS[g.status]} value={signedWhole(g.change)} note={accountNote(g.count, column)} />
@@ -496,20 +512,22 @@ function Accounts(props: { run: Run; query: () => Promise<Query> }) {
 
 const MAX_TREND_PERIODS = 13;
 
-function Trend(props: { run: Run; query: () => Promise<Query> }) {
+function Trend(props: { run: Run; query: (() => Promise<Query>) | null }) {
   const periods = trendPeriods(props.run.periods, MAX_TREND_PERIODS);
   const [steps, setSteps] = useState<TrendStep[] | null>(null);
+  const live = props.query !== null;
   useEffect(() => {
     if (periods.length < 3) return;
+    const run = props.query;
+    if (run === null) return;
     let stale = false;
-    props
-      .query()
+    run()
       .then((query) => trend(query, props.run.config, periods))
       .then((result) => !stale && setSteps(result));
     return () => {
       stale = true;
     };
-  }, [props.run]);
+  }, [props.run, live]);
   if (periods.length < 3) {
     return (
       <p className="hint">
@@ -518,7 +536,11 @@ function Trend(props: { run: Run; query: () => Promise<Query> }) {
       </p>
     );
   }
-  if (!steps) return <p className="hint">Calculating a bridge for each pair of periods…</p>;
+  if (!steps) {
+    // A held read has no query to finish, so its sentence would never clear.
+    if (!live) return null;
+    return <p className="hint">Calculating a bridge for each pair of periods…</p>;
+  }
   const widest = Math.max(...steps.map((s) => Math.abs(shareOfPrior(s.price, s.priorSales))), 0.0001);
   const header = trendHeader(props.run.config);
   return (
@@ -601,19 +623,25 @@ export function setupCheckHint(prices: number[], rowCount: number): string {
   return `Across these setups the price effect ranges from ${signedWhole(Math.min(...prices))} to ${signedWhole(Math.max(...prices))}. When leaving out an attribute moves price a lot, the bridge depends on that attribute. Keep it if it describes the product itself; a label that changed between periods can hide a real price change. An attribute that describes the customer, such as region or channel, can also move price a lot. It belongs last in the order, or it can be left out. One that barely moves price and lowers the match rate can be dropped.`;
 }
 
-function SetupCheck(props: { run: Run; query: () => Promise<Query> }) {
+function SetupCheck(props: { run: Run; query: (() => Promise<Query>) | null }) {
   const [rows, setRows] = useState<Alternative[] | null>(null);
+  const live = props.query !== null;
   useEffect(() => {
+    const run = props.query;
+    if (run === null) return;
     let stale = false;
-    props
-      .query()
+    run()
       .then((query) => sensitivity(query, props.run.config))
       .then((result) => !stale && setRows(result));
     return () => {
       stale = true;
     };
-  }, [props.run]);
-  if (!rows) return <p className="hint">Recalculating with each attribute left out…</p>;
+  }, [props.run, live]);
+  if (!rows) {
+    // A held read has no query to finish, so its sentence would never clear.
+    if (!live) return null;
+    return <p className="hint">Recalculating with each attribute left out…</p>;
+  }
   const prices = rows.map((r) => r.price);
   return (
     <div>

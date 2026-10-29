@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { BridgeBy, BridgePanel, BridgeResult } from "../src/engine.ts";
+import type { BridgeBy, BridgePanel, BridgeResult, Query } from "../src/engine.ts";
+import { periodView } from "../src/app/fileProblems.ts";
 import {
   BETWEEN_SENTENCE,
   BLANK_TITLE,
@@ -10,25 +11,23 @@ import {
   axisFloor,
   betweenLine,
   chartStack,
-  createAttemptCache,
   createConnectionQueue,
+  createLatestOnly,
   createSplitRunner,
-  displayedIdentity,
   focusPlace,
   gridAction,
   IDLE_SPLIT_PHASE,
-  noteDisplayedRun,
-  noticesAreStale,
+  NO_PERIOD_VIEWS,
   paintSplit,
   panelStatusLabel,
   panelTitle,
-  readLiveGeneration,
+  reducePeriodViews,
   reduceSplitPhase,
   sharedScale,
   SPLIT_FAILURE_SENTENCE,
   statementStartsTurn,
   steps,
-  type SplitIdentity,
+  viewsInstalled,
   type Step,
 } from "../src/app/small-bridges.ts";
 import { compact } from "../src/app/format.ts";
@@ -197,15 +196,6 @@ test("a bar above zero keeps the same base and height", () => {
   });
 });
 
-test("the setup notice is the only text that makes a result stale", () => {
-  assert.equal(noticesAreStale(["Restored the setup you last used with these columns."]), false);
-  assert.equal(
-    noticesAreStale(["The setup changed since this bridge was calculated. Calculate again to update it.", "Reading periods…"]),
-    true,
-  );
-  assert.equal(noticesAreStale([]), false);
-});
-
 test("a stale split calculates nothing, and the grid for that same column stays", () => {
   assert.equal(gridAction("", false, ""), "clear");
   assert.equal(gridAction("design", false, ""), "calculate");
@@ -221,6 +211,189 @@ test("opening a panel focuses the way back, and closing focuses the panel or the
 });
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("a superseded read issues no further statement and reports superseded", async () => {
+  const issued: string[] = [];
+  const query: Query = async (sql) => {
+    issued.push(sql);
+    return [];
+  };
+  const reads = createLatestOnly();
+  const newerStarted: ReturnType<typeof reads.start>[] = [];
+  const older = reads.start();
+  const olderRead = await older.run(query, async (current) => {
+    await current("SELECT 1");
+    newerStarted.push(reads.start());
+    // The ticket has been superseded, so this statement never reaches the database.
+    await current("SELECT 2");
+    return "older";
+  });
+  assert.deepEqual(olderRead, { status: "superseded" });
+  assert.deepEqual(issued, ["SELECT 1"]);
+  const newest = await newerStarted[0].run(query, async (current) => {
+    await current("SELECT 3");
+    return "newer";
+  });
+  assert.deepEqual(newest, { status: "latest", value: "newer" });
+  assert.deepEqual(issued, ["SELECT 1", "SELECT 3"]);
+});
+
+test("only the newest read publishes, even when the older one settles last", async () => {
+  const reads = createLatestOnly();
+  const older = reads.start();
+  const olderRead = older.run(async () => [], async () => {
+    await delay(20);
+    return "older";
+  });
+  const newer = reads.start();
+  const newerRead = await newer.run(async () => [], async () => "newer");
+  assert.deepEqual(newerRead, { status: "latest", value: "newer" });
+  assert.deepEqual(await olderRead, { status: "superseded" });
+});
+
+test("a read that fails keeps its own error, unless a newer read replaced it", async () => {
+  const reads = createLatestOnly();
+  const ticket = reads.start();
+  await assert.rejects(
+    ticket.run(async () => [], async () => {
+      throw new Error("the view would not build");
+    }),
+    /the view would not build/,
+  );
+  const replaced = reads.start();
+  const newer = reads.start();
+  assert.deepEqual(
+    await replaced.run(async () => [], async () => {
+      throw new Error("the replaced read failed after the newer one started");
+    }),
+    { status: "superseded" },
+  );
+  assert.deepEqual(await newer.run(async () => [], async () => "newer"), { status: "latest", value: "newer" });
+});
+
+test("A to B to A keeps the list on screen but holds the gate until the newest read finishes", () => {
+  const view = periodView({ load: 1, periodColumn: "period", grain: "month", filters: [] });
+  const values = ["2025", "2026"];
+  let state = reducePeriodViews(NO_PERIOD_VIEWS, { type: "rebuilt", view, values });
+  assert.equal(viewsInstalled(state, view), true);
+  const rebuilt = state;
+  state = reducePeriodViews(state, { type: "rebuilding" });
+  assert.equal(state.list, rebuilt.list);
+  assert.deepEqual(state.list?.values, values);
+  assert.equal(viewsInstalled(state, view), false);
+  state = reducePeriodViews(state, { type: "rebuilt", view, values });
+  assert.equal(viewsInstalled(state, view), true);
+});
+
+test("a rebuild in flight holds the gate, and a setup with no period column holds it too", () => {
+  const view = periodView({ load: 1, periodColumn: "period", grain: "month", filters: [] });
+  const installed = reducePeriodViews(NO_PERIOD_VIEWS, { type: "rebuilt", view, values: ["2025", "2026"] });
+  const rebuilding = reducePeriodViews(installed, { type: "rebuilding" });
+  assert.equal(viewsInstalled(rebuilding, view), false);
+  assert.equal(viewsInstalled(rebuilding, null), false);
+  const other = periodView({ load: 1, periodColumn: "period", grain: "quarter", filters: [] });
+  const noColumn = reducePeriodViews(installed, { type: "noPeriodColumn", view: other });
+  assert.deepEqual(noColumn.list, { view: other, values: [] });
+  assert.equal(viewsInstalled(noColumn, view), false);
+});
+
+test("a split belongs only to the displayed column while the run is fresh", async () => {
+  const grid: BridgeBy = { column: "finish", total: bridge(0, []), panels: [], between: [] };
+  const column = "finish";
+  const calculating = reduceSplitPhase(IDLE_SPLIT_PHASE, { type: "inputs", column, stale: false });
+  assert.deepEqual(calculating, { kind: "calculating", column });
+
+  const ready = reduceSplitPhase(calculating, {
+    type: "settled",
+    request: column,
+    outcome: { status: "grid", result: grid },
+    displayed: column,
+    stale: false,
+  });
+  assert.deepEqual(ready, { kind: "ready", column, grid });
+  assert.deepEqual(paintSplit({ phase: ready, column, stale: false }), { view: "grid", grid });
+  // The grid stays on screen while the notice is up.
+  assert.deepEqual(paintSplit({ phase: ready, column, stale: true }), { view: "grid", grid });
+
+  // A stale settle is dropped, and so is one for a column nobody is showing.
+  const staleSettle = reduceSplitPhase(calculating, {
+    type: "settled",
+    request: column,
+    outcome: { status: "grid", result: grid },
+    displayed: column,
+    stale: true,
+  });
+  assert.equal(staleSettle, calculating);
+  const elsewhere = reduceSplitPhase(calculating, {
+    type: "settled",
+    request: "design",
+    outcome: { status: "grid", result: grid },
+    displayed: column,
+    stale: false,
+  });
+  assert.equal(elsewhere, calculating);
+
+  // A failure paints the existing sentence only while its column is displayed and fresh.
+  const failed = reduceSplitPhase(calculating, {
+    type: "settled",
+    request: column,
+    outcome: { status: "fail" },
+    displayed: column,
+    stale: false,
+  });
+  assert.deepEqual(failed, { kind: "failed", column });
+  assert.deepEqual(
+    paintSplit({ phase: failed, column, stale: false }),
+    { view: "failed", sentence: SPLIT_FAILURE_SENTENCE },
+  );
+  assert.deepEqual(paintSplit({ phase: failed, column, stale: true }), { view: "nothing" });
+  assert.deepEqual(paintSplit({ phase: failed, column: "design", stale: false }), { view: "calculating" });
+  assert.deepEqual(paintSplit({ phase: failed, column: "", stale: false }), { view: "nothing" });
+});
+
+test("a split drops when its column is replaced or the notice appears", async () => {
+  let shown = "finish";
+  let stale = false;
+  const split = (request = "finish") =>
+    attemptSplit({
+      request,
+      displayed: () => shown,
+      stale: () => stale,
+      prepare: async () => "query",
+      calculate: async () => "grid",
+    });
+  assert.deepEqual(await split(), { status: "grid", result: "grid" });
+  shown = "design";
+  assert.deepEqual(await split(), { status: "drop" });
+  shown = "finish";
+  stale = true;
+  assert.deepEqual(await split(), { status: "drop" });
+  stale = false;
+  assert.deepEqual(await split(""), { status: "drop" });
+});
+
+test("a split that throws still ends on the existing sentence", async () => {
+  const logged = console.error;
+  const errors: unknown[] = [];
+  console.error = (...args: unknown[]) => {
+    errors.push(args[0]);
+  };
+  try {
+    const outcome = await attemptSplit({
+      request: "finish",
+      displayed: () => "finish",
+      stale: () => false,
+      prepare: async () => "query",
+      calculate: async () => {
+        throw new Error("worker did not start");
+      },
+    });
+    assert.deepEqual(outcome, { status: "fail" });
+    assert.equal(errors.length, 1);
+  } finally {
+    console.error = logged;
+  }
+});
 
 test("statements from one engine call stay together and a later call waits", async () => {
   const queue = createConnectionQueue();
@@ -299,110 +472,6 @@ test("a split replaced before it starts never runs, and only the latest follows 
   assert.deepEqual(followed, ["design:start", "design:end", "customer:start", "customer:end"]);
 });
 
-function sampleGrid(): BridgeBy {
-  return { column: "finish", total: bridge(0, []), panels: [], between: [] };
-}
-
-test("a split is shown only while the generation stamped on the run is still live", () => {
-  // Equal live readings do not belong. The stamp is the first render of the run object.
-  const run = {};
-  const stamp = noteDisplayedRun(null, run, 0);
-  const again = noteDisplayedRun(stamp, run, 1);
-  assert.equal(again, stamp);
-  assert.equal(again.calculation, 1);
-  assert.equal(again.stampedGeneration.value, 0);
-
-  const displayed = displayedIdentity(again, "finish");
-  const calculating = reduceSplitPhase(IDLE_SPLIT_PHASE, {
-    type: "inputs",
-    column: "finish",
-    displayed,
-    stale: false,
-  });
-  assert.equal(calculating.kind, "calculating");
-
-  const grid = sampleGrid();
-  const refused = reduceSplitPhase(calculating, {
-    type: "settled",
-    request: displayed,
-    outcome: { status: "grid", result: grid },
-    displayed,
-    liveGeneration: readLiveGeneration(1),
-    stale: false,
-  });
-  assert.equal(refused, calculating);
-  assert.deepEqual(
-    paintSplit({ phase: refused, displayed, liveGeneration: readLiveGeneration(1), stale: false }),
-    { view: "nothing" },
-  );
-
-  const ready = reduceSplitPhase(calculating, {
-    type: "settled",
-    request: displayed,
-    outcome: { status: "grid", result: grid },
-    displayed,
-    liveGeneration: readLiveGeneration(0),
-    stale: false,
-  });
-  assert.equal(ready.kind, "ready");
-  if (ready.kind === "ready") assert.equal(ready.grid, grid);
-  assert.deepEqual(
-    paintSplit({ phase: ready, displayed, liveGeneration: readLiveGeneration(1), stale: false }),
-    { view: "nothing" },
-  );
-  assert.deepEqual(
-    paintSplit({ phase: ready, displayed, liveGeneration: readLiveGeneration(0), stale: true }),
-    { view: "grid", grid },
-  );
-
-  const failed = reduceSplitPhase(calculating, {
-    type: "settled",
-    request: displayed,
-    outcome: { status: "fail" },
-    displayed,
-    liveGeneration: readLiveGeneration(0),
-    stale: false,
-  });
-  const failedPaint = {
-    phase: failed,
-    displayed,
-    liveGeneration: readLiveGeneration(0),
-    stale: false,
-  };
-  const sentence = "The small bridges could not be calculated.";
-  assert.deepEqual(paintSplit(failedPaint), { view: "failed", sentence });
-  assert.deepEqual(paintSplit(failedPaint), { view: "failed", sentence });
-  assert.equal(failed.kind, "failed");
-});
-
-test("a split is dropped when the column, the calculation, or the notice does not match", async () => {
-  const run = {};
-  const stamp = noteDisplayedRun(null, run, 4);
-  const request = displayedIdentity(stamp, "finish");
-  const live = () => readLiveGeneration(4);
-  const runSplit = (wanted: SplitIdentity, shown: SplitIdentity, stale: boolean) =>
-    attemptSplit({
-      request: wanted,
-      displayed: () => shown,
-      liveGeneration: live,
-      stale: () => stale,
-      install: async () => {},
-      prepare: async () => "query",
-      calculate: async () => "grid",
-    });
-
-  assert.deepEqual(await runSplit(request, displayedIdentity(stamp, "design"), false), { status: "drop" });
-
-  const nextRun = noteDisplayedRun(stamp, {}, 4);
-  assert.equal(nextRun.calculation, stamp.calculation + 1);
-  assert.deepEqual(await runSplit(request, displayedIdentity(nextRun, "finish"), false), { status: "drop" });
-
-  assert.deepEqual(await runSplit(request, request, true), { status: "drop" });
-
-  const empty = displayedIdentity(stamp, "");
-  assert.deepEqual(await runSplit(empty, empty, false), { status: "drop" });
-});
-
 test("replacing the loaded table takes its own turn, and a temporary table does not", () => {
   assert.equal(statementStartsTurn('\nCREATE OR REPLACE TABLE "sales" AS'), true);
   assert.equal(statementStartsTurn('CREATE OR REPLACE TEMP TABLE bridge_cells'), false);
@@ -432,76 +501,4 @@ test("a load waits out the engine call instead of joining it", async () => {
   await engine;
   assert.equal(maxActive, 1);
   assert.deepEqual(order, ["prior:start", "prior:end", "panel:start", "panel:end", "load:start", "load:end"]);
-});
-
-test("a rejected load restores the row generation and the next load is a new one", async () => {
-  const queue = createConnectionQueue();
-  let notices = 0;
-  const stop = queue.whenTurnRejected(() => {
-    notices += 1;
-  });
-  const started = queue.turn(async () => {
-    assert.equal(queue.generation(), 1);
-    throw new Error("load failed");
-  });
-  assert.equal(queue.generation(), 1);
-  await assert.rejects(started, /load failed/);
-  assert.equal(queue.generation(), 0);
-  assert.equal(notices, 1);
-  await queue.turn(async () => {
-    assert.equal(queue.generation(), 1);
-  });
-  assert.equal(queue.generation(), 1);
-  assert.equal(notices, 1);
-  stop();
-});
-
-test("a failed queue install is forgotten, and the split ends on the existing sentence", async () => {
-  assert.equal(SPLIT_FAILURE_SENTENCE, "The small bridges could not be calculated.");
-  const cache = createAttemptCache();
-  let opens = 0;
-  const run = {};
-  const stamp = noteDisplayedRun(null, run, 0);
-  const request = displayedIdentity(stamp, "finish");
-  const displayed = () => displayedIdentity(stamp, "finish");
-  const live = () => readLiveGeneration(0);
-  const fail = await attemptSplit({
-    request,
-    displayed,
-    liveGeneration: live,
-    stale: () => false,
-    install: () => cache.run(async () => {
-      opens += 1;
-      throw new Error("worker did not start");
-    }),
-    prepare: async () => "query",
-    calculate: async () => "grid",
-  });
-  assert.deepEqual(fail, { status: "fail" });
-  const again = await attemptSplit({
-    request,
-    displayed,
-    liveGeneration: live,
-    stale: () => false,
-    install: () => cache.run(async () => {
-      opens += 1;
-    }),
-    prepare: async () => "query",
-    calculate: async (prepared) => prepared,
-  });
-  assert.deepEqual(again, { status: "grid", result: "query" });
-  assert.equal(opens, 2);
-
-  const dropped = await attemptSplit({
-    request,
-    displayed,
-    liveGeneration: () => readLiveGeneration(1),
-    stale: () => false,
-    install: async () => {
-      throw new Error("worker did not start");
-    },
-    prepare: async () => "query",
-    calculate: async () => "grid",
-  });
-  assert.deepEqual(dropped, { status: "drop" });
 });
