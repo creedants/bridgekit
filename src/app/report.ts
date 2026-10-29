@@ -184,20 +184,19 @@ export function buildReport(input: {
   });
   const viewEffects = omit ? safeEffects : result.effects;
   const rounded = roundBridge(result.priorSales, result.currentSales, viewEffects.map((e) => e.value));
-  const shownEffects = viewEffects.map((e, i) => ({ ...e, value: rounded.values[i] }));
-  const shownResult = { ...result, priorSales: rounded.prior, currentSales: rounded.current, effects: shownEffects };
+  const viewResult = { ...result, effects: viewEffects };
   const viewCoverage = omit
     ? result.coverage.map((c) => ({ ...c, label: coverageLabel(safeConfig, c.level) }))
     : result.coverage;
-  const paragraphs = omit ? commentary(shownResult, safeConfig) : commentary(shownResult, config);
+  const paragraphs = commentary(viewResult, omit ? safeConfig : config, rounded);
   const safeMoversLabel = safeLevels[0]?.name ?? input.movers.label;
   const viewMoversLabel = omit ? safeMoversLabel : input.movers.label;
   const row = (cells: string[], tag = "td") =>
     `<tr>${cells.map((c, i) => `<${tag}${i > 0 ? ' class="n"' : ""}>${c}</${tag}>`).join("")}</tr>`;
   const bridge = [
     row([cell(`${measureName(config)} ${config.prior}`), whole(rounded.prior), ""]),
-    ...shownEffects.map((e, i) =>
-      row([cell(e.label), signedWhole(e.value), signedPercent(shareOfPrior(viewEffects[i].value, result.priorSales))]),
+    ...viewEffects.map((e, i) =>
+      row([cell(e.label), signedWhole(rounded.values[i]), signedPercent(shareOfPrior(e.value, result.priorSales))]),
     ),
     row([cell(`${measureName(config)} ${config.current}`), whole(rounded.current), ""]),
   ];

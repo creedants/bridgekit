@@ -1,11 +1,50 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
+import { registerHooks } from "node:module";
+import { transformSync } from "esbuild";
 import { openDatabase } from "../src/duckdb.ts";
-import type { BridgeConfig } from "../src/engine.ts";
+import type { BridgeConfig, Query } from "../src/engine.ts";
 import { accountBridge, drill, priceDistribution, runBridge } from "../src/engine.ts";
 import { buildReport, moverHeader, terms } from "../src/app/report.ts";
 import { signedWhole, whole } from "../src/app/format.ts";
 import { PERIOD, VIEW, viewSql, type Setup } from "../src/app/setup.ts";
+
+// Results lives in a .tsx file, so the D141 end-to-end test loads it the way
+// test/commentary-panel.test.ts does: esbuild transforms it, the browser
+// database's `?url` imports are stubbed, and the two components that open that
+// database on load are replaced. The Waterfall stub records the footer, which
+// is the Summary element whose props the download path receives.
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.includes("?url")) {
+      return { url: 'data:text/javascript,export default "stub"', shortCircuit: true };
+    }
+    if (specifier.endsWith("SmallBridges.tsx")) {
+      return { url: "data:text/javascript,export const SmallBridges = () => null", shortCircuit: true };
+    }
+    if (specifier.endsWith("Waterfall.tsx")) {
+      return {
+        url: "data:text/javascript,export const Waterfall = (props) => { globalThis.__d141Footer = props.footer; return props.footer ?? null }",
+        shortCircuit: true,
+      };
+    }
+    return nextResolve(specifier, context);
+  },
+  load(url, context, nextLoad) {
+    if (url.endsWith(".tsx")) {
+      const source = readFileSync(new URL(url), "utf8");
+      const { code } = transformSync(source, {
+        loader: "tsx",
+        format: "esm",
+        jsx: "automatic",
+        define: { "import.meta.env": "{}" },
+      });
+      return { format: "module", source: code, shortCircuit: true };
+    }
+    return nextLoad(url, context);
+  },
+});
 
 const config: BridgeConfig = {
   table: "sales",
@@ -600,4 +639,127 @@ test("R141: the report's bridge lines foot to its totals and its summary quotes 
   assert.equal(prior + lines.reduce((sum, value) => sum + value, 0), current, `the shown lines do not add up: ${amounts.join(", ")}`);
   const summary = html.match(/<p>([^<]*)<\/p>/)?.[1] ?? "";
   assert.ok(summary.includes(`+${(current - prior).toLocaleString("en-US")}`), `the first sentence does not quote the change: ${summary}`);
+});
+
+/**
+ * The review's reproduction: prior 100.4, current 100.6, one price effect of
+ * 0.2, so the rounded bridge shows 100, 101 and a price line of +1.
+ */
+const reproRun = () => ({
+  check: {
+    rows: 2,
+    priorRows: 1,
+    currentRows: 1,
+    otherPeriodRows: 0,
+    blankPeriodRows: 0,
+    blankMeasureRows: 0,
+    negativeUnitRows: 0,
+    negativeSalesRows: 0,
+    zeroUnitSalesRows: 0,
+  },
+  config: {
+    table: "data",
+    periodColumn: "period",
+    prior: "2025",
+    current: "2026",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+  },
+  result: {
+    priorSales: 100.4,
+    currentSales: 100.6,
+    effects: [{ key: "price", label: "Price (like-for-like)", value: 0.2 }],
+    coverage: [{ level: 1, label: "Exact configuration", cells: 1, sales: 100.6, share: 1 }],
+    cellsTable: "bridge_cells",
+  },
+  tieOut: {
+    prior: { period: "2025", inFile: 100.4, afterFilters: 100.4 },
+    current: { period: "2026", inFile: 100.6, afterFilters: 100.6 },
+  },
+  ms: 1,
+  textColumns: ["product"],
+  periods: ["2025", "2026"],
+  description: ["Source: A-100.csv", "Periods: 2025 to 2026 (period)"],
+  setup: {
+    periodColumn: "period",
+    grain: "value" as const,
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+    filters: [],
+  },
+  source: "A-100.csv",
+  sample: false,
+  formulaBlanks: 0,
+  amounts: null,
+});
+
+/** An empty read, except the price distribution's totals statement, which answers one zero row. */
+const reproQuery = (): Promise<Query> =>
+  Promise.resolve(((sql: string) =>
+    sql.includes("sum(s1) AS sales") && !sql.includes("GROUP BY")
+      ? Promise.resolve([{ sales: 0, price_effect: 0 }])
+      : Promise.resolve([])) as Query);
+
+const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+test("D141: the price KPI, its table line and the summary print one amount, and the report keeps the exact share", async () => {
+  const React = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { Results, summaryReport } = await import("../src/app/Results.tsx");
+  const html = renderToStaticMarkup(React.createElement(Results, { run: reproRun() as never, query: reproQuery }));
+
+  const kpi = (label: string) => {
+    const match = html.match(
+      new RegExp(`<div class="kpi-label">${escaped(label)}</div><div class="kpi-value">([^<]*)</div>(?:<div class="kpi-note">([^<]*)</div>)?`),
+    );
+    assert.ok(match, `the page has no ${label} KPI`);
+    return { value: match[1], note: match[2] ?? "" };
+  };
+  const screenRow = (label: string) => {
+    const match = html.match(
+      new RegExp(`<tr><td>${escaped(label)}</td><td class="num">([^<]*)</td><td class="num">([^<]*)</td></tr>`),
+    );
+    assert.ok(match, `the page bridge table has no ${label} row`);
+    return [match[1], match[2]];
+  };
+
+  const summarySentence = "Sales rose 0.2%, from 100 in 2025 to 101 in 2026 (+1).";
+  assert.deepEqual(kpi("Like-for-like price"), { value: "+1", note: "+0.2%" });
+  assert.deepEqual(screenRow("Price (like-for-like)"), ["+1", "+0.2%"]);
+  assert.equal(html.includes(summarySentence), true, "the summary does not quote the shown totals and the exact change");
+  assert.equal(
+    html.includes("Like-for-like price added 1, +0.2% of prior sales."),
+    true,
+    "the summary's price paragraph does not quote the shown amount and the exact share",
+  );
+
+  const footer = (globalThis as unknown as { __d141Footer?: { props: Parameters<typeof summaryReport>[0] } }).__d141Footer;
+  assert.ok(footer, "the waterfall did not hand back the summary element");
+  const desk = globalThis as unknown as { document?: unknown };
+  const before = desk.document;
+  desk.document = { querySelector: () => null };
+  let report: string;
+  try {
+    report = await summaryReport(footer.props, null);
+  } finally {
+    if (before === undefined) delete desk.document;
+    else desk.document = before;
+  }
+
+  assert.equal(report.includes(summarySentence), true, "the downloaded report does not hold the same summary sentence");
+  assert.deepEqual(
+    tableRows(report, "Bridge").find(([label]) => label === "Price (like-for-like)"),
+    ["Price (like-for-like)", "+1", "+0.2%"],
+    "the downloaded report's price line changed amount or share",
+  );
+  assert.equal(report.includes("Sales rose 1.0%"), false, "the downloaded report still derives the share from rounded totals");
+
+  const amount = (text: string) => Number(text.replaceAll(",", "").replace("+", ""));
+  const summaryMatch = html.match(/Like-for-like price added ([0-9][0-9,]*)/);
+  assert.ok(summaryMatch, "the summary has no price amount");
+  assert.equal(amount(kpi("Like-for-like price").value), 1, "the price KPI is not the shown price line");
+  assert.equal(amount(screenRow("Price (like-for-like)")[0]), 1, "the table's price line is not the shown price line");
+  assert.equal(amount(summaryMatch[1]), 1, "the summary's price amount is not the shown price line");
 });

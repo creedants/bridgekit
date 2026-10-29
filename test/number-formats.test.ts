@@ -6,7 +6,7 @@ import { convertFormattedNumbers, decimalCommaNote } from "../src/app/numbers.ts
 import { openDatabase } from "../src/duckdb.ts";
 import type { Query } from "../src/engine.ts";
 import * as format from "../src/app/format.ts";
-import { roundBridge } from "../src/summary.ts";
+import { roundBridge, shownTotal } from "../src/summary.ts";
 
 const DECIMAL_COMMA = "1 column was read as numbers written with a decimal comma.";
 const MIXED = "amount mixes number styles, so it was read as text.";
@@ -616,4 +616,19 @@ test("R141: the budget sample's lines foot to its shown totals", () => {
   assert.equal(shown.prior, 50756);
   assert.equal(shown.current, 52142);
   assert.deepEqual(shown.values, [611, 475, 414, 443, -557]);
+});
+
+test("shownTotal adds only the shown lines whose key starts with the prefix", () => {
+  const effects = [
+    { key: "volume" },
+    { key: "price_list" },
+    { key: "price_discount" },
+    { key: "price" },
+    { key: "mix_1" },
+    { key: "mix_2" },
+  ];
+  const shown = { prior: 0, current: 0, values: [10, 2, -1, 4, 5, -3] };
+  assert.equal(shownTotal(shown, effects, "price"), 5, "the price lines did not add up to their one KPI figure");
+  assert.equal(shownTotal(shown, effects, "mix_"), 2, "the mix lines did not add up to their one figure");
+  assert.equal(shownTotal(shown, effects, "cost"), 0, "a prefix with no lines did not add up to zero");
 });

@@ -57,6 +57,14 @@ export function roundBridge(prior: number, current: number, values: readonly num
   };
 }
 
+/**
+ * The rounded total of the effect lines whose key starts with `prefix`. A KPI,
+ * the table lines it sums and the written summary print this one figure.
+ */
+export function shownTotal(shown: RoundedBridge, effects: readonly { key: string }[], prefix: string): number {
+  return effects.reduce((sum, effect, index) => (effect.key.startsWith(prefix) ? sum + (shown.values[index] ?? 0) : sum), 0);
+}
+
 export function summarize(result: BridgeResult, config: BridgeConfig): BridgeSummary {
   const shown = roundBridge(
     result.priorSales,

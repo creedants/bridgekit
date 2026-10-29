@@ -26,7 +26,7 @@ import {
   type Query,
 } from "../engine.ts";
 import { commentary } from "../commentary.ts";
-import { roundBridge, summarize, type BridgeSummary } from "../summary.ts";
+import { roundBridge, shownTotal, summarize, type BridgeSummary, type RoundedBridge } from "../summary.ts";
 import { parsePlannedIncrease, saveOnce, shorten, toExportCsv, toExportTsv } from "./files.ts";
 import { finiteOrBlank } from "./exportExcel.ts";
 import { percent, price, shareOfPrior, signedPercent, signedWhole, whole } from "./format.ts";
@@ -122,12 +122,6 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
     effects: run.result.effects.filter((e) => e.key !== "no_units" || e.value !== 0),
   };
   const shown = roundBridge(result.priorSales, result.currentSales, result.effects.map((e) => e.value));
-  const shownResult = {
-    ...result,
-    priorSales: shown.prior,
-    currentSales: shown.current,
-    effects: result.effects.map((e, i) => ({ ...e, value: shown.values[i] })),
-  };
   // The tabs that re-query the mutable view read it only while the run and its
   // views are current; a temp table fixed at calculation time needs no such guard.
   const viewQuery = props.fresh === false || props.viewsCurrent === false ? null : props.query;
@@ -162,7 +156,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
         <Kpi label={`${measureName(config)} ${config.prior}`} value={whole(shown.prior)} />
         <Kpi label={`${measureName(config)} ${config.current}`} value={whole(shown.current)} />
         <Kpi label="Change" value={signedWhole(shown.current - shown.prior)} note={signedPercent(shareOfPrior(change, result.priorSales))} />
-        <Kpi label="Like-for-like price" value={signedWhole(priceEffect)} note={signedPercent(shareOfPrior(priceEffect, result.priorSales))} />
+        <Kpi label="Like-for-like price" value={signedWhole(shownTotal(shown, result.effects, "price"))} note={signedPercent(shareOfPrior(priceEffect, result.priorSales))} />
         <Kpi label="Matched exactly" value={percent(exact)} note={t.exactNote} />
       </div>
       <p className="hint">
@@ -196,7 +190,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
               }
               priorLabel={String(config.prior)}
               currentLabel={String(config.current)}
-              footer={<Summary run={run} result={shownResult} query={props.query} fresh={props.fresh !== false && props.viewsCurrent !== false} omitNames={props.omitNames} onOmitNames={props.onOmitNames} />}
+              footer={<Summary run={run} result={result} shown={shown} query={props.query} fresh={props.fresh !== false && props.viewsCurrent !== false} omitNames={props.omitNames} onOmitNames={props.onOmitNames} />}
               onSelect={(key) => {
                 setSortBy(key.startsWith("mix_") ? "mix" : key.startsWith("price") || key === "cost_rate" ? "price" : key);
                 setTab("movers");
@@ -264,14 +258,55 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
 
 type MoverRows = Awaited<ReturnType<typeof drill>>;
 
-function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<Query> } & NamesChoice & Freshness) {
+/**
+ * The downloaded report. It takes the exact result and rounds it once in
+ * buildReport, so the file shows the same amounts and exact percentages as the
+ * page. Exported so a test can drive the path the Download button uses.
+ */
+export async function summaryReport(
+  props: { run: Run; result: Run["result"]; query: () => Promise<Query> } & NamesChoice,
+  movers: MoverRows | null,
+): Promise<string> {
+  const { config, setup } = props.run;
+  const first = config.levels[0];
+  // A render without the choice reads unticked and ignores ticks; App always passes both.
+  const omitNames = props.omitNames ?? false;
+  const query = await props.query();
+  const rows = movers ?? (await drill(query, config, { columns: first.columns, limit: 15 }));
+  const accountColumn = props.run.textColumns.find((c) => /customer|account|client|parent|sold.?to|buyer/i.test(c));
+  const canvas = document.querySelector<HTMLCanvasElement>(".waterfall canvas");
+  // Offered only when the report would carry a name that leaving out removes.
+  const hasNames =
+    !props.run.sample ||
+    setup.filters.some((filter) => filter.values.length > 0) ||
+    (movers?.length ?? 0) > 0 ||
+    config.levels.some((level) => level.name !== level.columns.join(" + "));
+  return buildReport({
+    config,
+    result: props.result,
+    chartUrl: canvas?.toDataURL("image/png"),
+    description: props.run.description,
+    setup: props.run.setup,
+    source: props.run.source,
+    movers: { label: first.name, rows, columns: first.columns },
+    priceBands: (await priceDistribution(query, config)).buckets,
+    accounts: accountColumn
+      ? { column: accountColumn, groups: await accountBridge(query, config, accountColumn) }
+      : undefined,
+    omitNames: hasNames && omitNames,
+  });
+}
+
+function Summary(
+  props: { run: Run; result: Run["result"]; shown: RoundedBridge; query: () => Promise<Query> } & NamesChoice & Freshness,
+) {
   const [movers, setMovers] = useState<MoverRows | null>(null);
   const [building, setBuilding] = useState(false);
   // A render without the choice reads unticked and ignores ticks; App always passes both.
   const omitNames = props.omitNames ?? false;
   const fresh = props.fresh === true;
-  const paragraphs = commentary(props.result, props.run.config);
-  const { config, setup } = props.run;
+  const paragraphs = commentary(props.result, props.run.config, props.shown);
+  const { config } = props.run;
   const first = config.levels[0];
   useEffect(() => {
     let stale = false;
@@ -287,29 +322,10 @@ function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<
   // Offered only when the report would carry a name that leaving out removes.
   const hasNames =
     !props.run.sample ||
-    setup.filters.some((filter) => filter.values.length > 0) ||
+    props.run.setup.filters.some((filter) => filter.values.length > 0) ||
     (movers?.length ?? 0) > 0 ||
     config.levels.some((level) => level.name !== level.columns.join(" + "));
-  const buildHtml = async () => {
-    const query = await props.query();
-    const rows = movers ?? (await drill(query, config, { columns: first.columns, limit: 15 }));
-    const accountColumn = props.run.textColumns.find((c) => /customer|account|client|parent|sold.?to|buyer/i.test(c));
-    const canvas = document.querySelector<HTMLCanvasElement>(".waterfall canvas");
-    return buildReport({
-      config,
-      result: props.result,
-      chartUrl: canvas?.toDataURL("image/png"),
-      description: props.run.description,
-      setup: props.run.setup,
-      source: props.run.source,
-      movers: { label: first.name, rows, columns: first.columns },
-      priceBands: (await priceDistribution(query, config)).buckets,
-      accounts: accountColumn
-        ? { column: accountColumn, groups: await accountBridge(query, config, accountColumn) }
-        : undefined,
-      omitNames: hasNames && omitNames,
-    });
-  };
+  const buildHtml = async () => summaryReport(props, movers);
   const saveReport = () => {
     if (!fresh) return;
     return saveOnce(
