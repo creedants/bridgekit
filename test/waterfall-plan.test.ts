@@ -176,6 +176,7 @@ for (const [name, bars] of [
       assert.equal(drawn.yAxis.type, "category");
       assert.equal(drawn.yAxis.inverse, true);
       assert.deepEqual(drawn.yAxis.data, plan.axis);
+      assert.equal(drawn.yAxis.axisLabel.fontFamily, THEME.font, "row names are sized in the font they are drawn in");
       assert.equal(drawn.xAxis.type, "value");
       assert.equal(drawn.grid.right, 8 + plan.valueRoom);
       assert.equal(drawn.series[1].label.position, "right");

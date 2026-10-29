@@ -171,10 +171,12 @@ export function bridgeOption(input: {
     data: plan.axis,
     axisTick: { show: false },
     axisLine: { lineStyle: { color: theme.lineStrong } },
+    // containLabel sizes axis labels in their own font, which does not inherit textStyle, so a row name drawn
+    // in the page font would run past the chart's left edge.
     axisLabel: slim
       ? { show: false }
       : rows
-        ? { color: theme.text2, fontSize: 11, interval: 0 }
+        ? { color: theme.text2, fontFamily: theme.font, fontSize: 11, interval: 0 }
         : { color: theme.text2, fontSize: width < 560 ? 10 : 11, interval: 0, lineHeight: 14, rotate: 0 },
   };
   const valueAxis = {
