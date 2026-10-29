@@ -96,7 +96,16 @@ export interface NamesChoice {
   onOmitNames?: (next: boolean) => void;
 }
 
-export function Results(props: { run: Run; query: () => Promise<Query> } & NamesChoice) {
+/**
+ * Whether App still finds the run current. Results is keyed by run.id and never sees the
+ * current setup, so App decides; a missing value reads stale, which keeps a report from
+ * being saved for a run nobody has checked.
+ */
+export interface Freshness {
+  fresh?: boolean;
+}
+
+export function Results(props: { run: Run; query: () => Promise<Query> } & NamesChoice & Freshness) {
   const { run } = props;
   const { config } = run;
   const t = terms(config);
@@ -170,7 +179,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
               }
               priorLabel={String(config.prior)}
               currentLabel={String(config.current)}
-              footer={<Summary run={run} result={result} query={props.query} omitNames={props.omitNames} onOmitNames={props.onOmitNames} />}
+              footer={<Summary run={run} result={result} query={props.query} fresh={props.fresh} omitNames={props.omitNames} onOmitNames={props.onOmitNames} />}
               onSelect={(key) => {
                 setSortBy(key.startsWith("mix_") ? "mix" : key.startsWith("price") || key === "cost_rate" ? "price" : key);
                 setTab("movers");
@@ -238,11 +247,12 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
 
 type MoverRows = Awaited<ReturnType<typeof drill>>;
 
-function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<Query> } & NamesChoice) {
+function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<Query> } & NamesChoice & Freshness) {
   const [movers, setMovers] = useState<MoverRows | null>(null);
   const [building, setBuilding] = useState(false);
   // A render without the choice reads unticked and ignores ticks; App always passes both.
   const omitNames = props.omitNames ?? false;
+  const fresh = props.fresh === true;
   const paragraphs = commentary(props.result, props.run.config);
   const { config, setup } = props.run;
   const first = config.levels[0];
@@ -283,8 +293,9 @@ function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<
       omitNames: hasNames && omitNames,
     });
   };
-  const saveReport = () =>
-    saveOnce(
+  const saveReport = () => {
+    if (!fresh) return;
+    return saveOnce(
       `bridge-${config.prior}-to-${config.current}.html`,
       async () => {
         setBuilding(true);
@@ -296,6 +307,7 @@ function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<
       },
       "text/html",
     );
+  };
   return (
     <div className="summary">
       <div className="toolbar">
@@ -308,7 +320,7 @@ function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<
               Leave the file name, filter values and mover names out of the report
             </label>
           )}
-          <button onClick={saveReport} disabled={building}>Download report</button>
+          <button onClick={saveReport} disabled={building || !fresh}>Download report</button>
         </span>
       </div>
       {paragraphs.map((p) => <p key={p}>{p}</p>)}

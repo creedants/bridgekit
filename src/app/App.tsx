@@ -724,7 +724,7 @@ export function App() {
             )}
             {run && Results ? (
               <div className="results-anchor" ref={resultsRef}>
-                <Results key={run.id} run={run} query={query} omitNames={omitNames} onOmitNames={setOmitNames} />
+                <Results key={run.id} run={run} query={query} fresh={fresh !== null} omitNames={omitNames} onOmitNames={setOmitNames} />
               </div>
             ) : !run ? (
               <div>
