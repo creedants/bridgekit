@@ -1,0 +1,1 @@
+- The period view identity now includes the fiscal start month, where missing and January are the same, so choosing `Year starts in` rebuilds the Prior and Current period lists before a calculation.

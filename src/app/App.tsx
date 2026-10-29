@@ -299,7 +299,7 @@ export function App() {
   // Rebuild the filtered view and the period list whenever they could change.
   // The load count stands in for the file name, so a second file with the same name still re-reads.
   const view = setup
-    ? periodView({ load, periodColumn: setup.periodColumn, grain: setup.grain, filters: setup.filters })
+    ? periodView({ load, periodColumn: setup.periodColumn, grain: setup.grain, fiscalYearStart: setup.fiscalYearStart, filters: setup.filters })
     : null;
   useEffect(() => {
     if (view === null || !setup) return;

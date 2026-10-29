@@ -237,6 +237,19 @@ test("a period list from other settings is not the current list", () => {
   });
 });
 
+test("the fiscal start month is part of the period view", () => {
+  const calendar = periodView({ load: 2, periodColumn: "period", grain: "month", filters: [] });
+  const january = periodView({ load: 2, periodColumn: "period", grain: "month", filters: [], fiscalYearStart: 1 });
+  const june = periodView({ load: 2, periodColumn: "period", grain: "month", filters: [], fiscalYearStart: 6 });
+  const july = periodView({ load: 2, periodColumn: "period", grain: "month", filters: [], fiscalYearStart: 7 });
+  assert.equal(calendar, JSON.stringify([2, "period", "month", []]));
+  assert.equal(january, calendar);
+  assert.notEqual(july, calendar);
+  assert.notEqual(june, july);
+  assert.equal(periodsFor(july, { view: calendar, values: ["2025"] }), "unknown");
+  assert.notEqual(periodsFor(calendar, { view: calendar, values: ["2025"] }), "unknown");
+});
+
 test("no message without a period column picked", () => {
   const unpicked = input({ ...HEALTHY, periodColumn: "", periods: [] });
   assert.deepEqual(fileProblem(unpicked), { kind: "none" });

@@ -14,16 +14,21 @@ import {
   MAX_LEVEL_NAME,
   netSalesHeldAsText,
   nextPhase,
+  PERIOD,
   rememberFrom,
   saveSetup,
   setRemembering,
   shouldAutoRun,
   shouldWarn,
+  TABLE,
+  VIEW,
+  viewSql,
   type Column,
   type EngineState,
   type Phase,
   type Setup,
 } from "../src/app/setup.ts";
+import { openDatabase } from "../src/duckdb.ts";
 
 function legacyGuess(columns: Column[]): Setup {
   const find = (pattern: RegExp, among: Column[]) => among.find((c) => pattern.test(c.name))?.name ?? "";
@@ -2007,4 +2012,175 @@ test("leaving the page warns only while data is loaded or loading", () => {
   assert.equal(shouldWarn({ kind: "autoRun", load: 1 }, false), true);
   assert.equal(shouldWarn({ kind: "workspace", load: 1 }, false), true);
   assert.equal(shouldWarn({ kind: "workspace", load: 1 }, true), false);
+});
+
+const fiscalBase: Setup = {
+  periodColumn: "order_date",
+  grain: "year",
+  unitsColumn: "units",
+  salesColumn: "sales",
+  levels: [],
+  filters: [],
+};
+
+test("a setup with missing or 1 gives the same SQL text as today", () => {
+  const missing = viewSql(fiscalBase);
+  const one = viewSql({ ...fiscalBase, fiscalYearStart: 1 });
+  const undef = viewSql({ ...fiscalBase, fiscalYearStart: undefined });
+  assert.equal(one, missing);
+  assert.equal(undef, missing);
+  assert.ok(missing.includes(`strftime("order_date", '%Y')`));
+  assert.equal(missing.includes("FY"), false);
+  for (const grain of ["ytd", "quarter", "month", "value"] as const) {
+    const a = viewSql({ ...fiscalBase, grain });
+    const b = viewSql({ ...fiscalBase, grain, fiscalYearStart: 1 });
+    const c = viewSql({ ...fiscalBase, grain, fiscalYearStart: undefined });
+    assert.equal(b, a, grain);
+    assert.equal(c, a, grain);
+  }
+  const ytd = viewSql({ ...fiscalBase, grain: "ytd" });
+  assert.ok(ytd.includes(`strftime("order_date", '%m%d')`));
+  const quarter = viewSql({ ...fiscalBase, grain: "quarter" });
+  assert.ok(quarter.includes(`quarter("order_date")`));
+});
+
+test("isValidSetup accepts missing and 1..12 and rejects the rest", () => {
+  const dated: Column[] = [
+    { name: "order_date", type: "DATE" },
+    { name: "units", type: "INTEGER" },
+    { name: "sales", type: "DOUBLE" },
+  ];
+  assert.equal(isValidSetup(fiscalBase, dated), true);
+  for (let m = 1; m <= 12; m++) {
+    assert.equal(isValidSetup({ ...fiscalBase, fiscalYearStart: m }, dated), true, `M=${m}`);
+  }
+  for (const bad of [0, 13, 1.5, NaN, "7", null, true, {}]) {
+    assert.equal(isValidSetup({ ...fiscalBase, fiscalYearStart: bad as never }, dated), false, `${String(bad)}`);
+  }
+  assert.equal(isValidSetup({ ...fiscalBase, grain: "year", fiscalYearStart: 7 }, dated), true);
+  assert.equal(isValidSetup({ ...fiscalBase, grain: "year", fiscalYearStart: 0 }, dated), false);
+  const noTypes = dated.map((c) => ({ name: c.name, type: "" }));
+  assert.equal(isValidSetup({ ...fiscalBase, fiscalYearStart: 7 }, noTypes), true);
+  assert.equal(isValidSetup({ ...fiscalBase, fiscalYearStart: 13 }, noTypes), false);
+});
+
+test("guessSetup leaves the fiscal year at calendar", () => {
+  const setup = guessSetup([
+    { name: "order_date", type: "DATE" },
+    { name: "units", type: "DOUBLE" },
+    { name: "sales", type: "DOUBLE" },
+  ]);
+  assert.equal(setup.fiscalYearStart, undefined);
+  assert.equal("fiscalYearStart" in setup, false);
+});
+
+async function fiscalLabels(dates: string[], grain: Setup["grain"], fiscalYearStart?: number): Promise<Map<string, string | null>> {
+  const query = await openDatabase();
+  await query(`CREATE TABLE data (order_date DATE, product VARCHAR, units INTEGER, sales DOUBLE)`);
+  const rows = dates.map((d, i) => `(DATE '${d}', 'A-100', ${i + 1}, ${(i + 1) * 10.0})`).join(", ");
+  await query(`INSERT INTO data VALUES ${rows}`);
+  const setup: Setup = {
+    periodColumn: "order_date",
+    grain,
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: [],
+    filters: [],
+    ...(fiscalYearStart === undefined ? {} : { fiscalYearStart }),
+  };
+  await query(viewSql(setup));
+  const out = await query(`SELECT CAST("order_date" AS VARCHAR) AS d, "${PERIOD}" AS p FROM "${VIEW}" ORDER BY "order_date"`);
+  return new Map(out.map((row) => [String(row.d), row.p === null ? null : String(row.p)]));
+}
+
+test("M=7 year labels name the year they end in", async () => {
+  const dates = ["2024-02-29", "2025-06-30", "2025-07-01", "2025-12-31", "2026-01-01", "2026-06-30"];
+  const labels = await fiscalLabels(dates, "year", 7);
+  assert.equal(labels.get("2025-07-01"), "FY2026");
+  assert.equal(labels.get("2026-06-30"), "FY2026");
+  assert.equal(labels.get("2025-06-30"), "FY2025");
+  assert.equal(labels.get("2024-02-29"), "FY2024");
+  assert.equal(labels.get("2025-12-31"), "FY2026");
+  assert.equal(labels.get("2026-01-01"), "FY2026");
+});
+
+test("M=7 quarter labels start Q1 at the start month", async () => {
+  const dates = ["2024-02-29", "2025-06-30", "2025-07-01", "2025-12-31", "2026-01-01", "2026-06-30"];
+  const labels = await fiscalLabels(dates, "quarter", 7);
+  assert.equal(labels.get("2025-07-01"), "FY2026-Q1");
+  assert.equal(labels.get("2026-06-30"), "FY2026-Q4");
+  assert.equal(labels.get("2025-06-30"), "FY2025-Q4");
+  assert.equal(labels.get("2024-02-29"), "FY2024-Q3");
+  assert.equal(labels.get("2025-12-31"), "FY2026-Q2");
+  assert.equal(labels.get("2026-01-01"), "FY2026-Q3");
+});
+
+test("M=7 YTD labels cut each year at the same fiscal offset", async () => {
+  const dates = [
+    "2024-02-29",
+    "2024-07-01",
+    "2025-02-15",
+    "2025-03-10",
+    "2025-06-30",
+    "2025-07-01",
+    "2025-12-31",
+    "2026-01-01",
+    "2026-02-15",
+    "2026-03-10",
+  ];
+  const labels = await fiscalLabels(dates, "ytd", 7);
+  assert.equal(labels.get("2024-07-01"), "FY2025 YTD");
+  assert.equal(labels.get("2025-02-15"), "FY2025 YTD");
+  assert.equal(labels.get("2025-03-10"), "FY2025 YTD");
+  assert.equal(labels.get("2025-06-30"), null);
+  assert.equal(labels.get("2025-07-01"), "FY2026 YTD");
+  assert.equal(labels.get("2025-12-31"), "FY2026 YTD");
+  assert.equal(labels.get("2026-01-01"), "FY2026 YTD");
+  assert.equal(labels.get("2026-02-15"), "FY2026 YTD");
+  assert.equal(labels.get("2026-03-10"), "FY2026 YTD");
+  assert.equal(labels.get("2024-02-29"), "FY2024 YTD");
+});
+
+test("M=1 year, quarter and YTD labels match the calendar", async () => {
+  const dates = ["2024-02-29", "2025-06-30", "2025-07-01", "2025-12-31", "2026-01-01", "2026-06-30"];
+  const year = await fiscalLabels(dates, "year", 1);
+  assert.equal(year.get("2025-07-01"), "2025");
+  assert.equal(year.get("2026-06-30"), "2026");
+  assert.equal(year.get("2024-02-29"), "2024");
+  const quarter = await fiscalLabels(dates, "quarter", 1);
+  assert.equal(quarter.get("2025-07-01"), "2025-Q3");
+  assert.equal(quarter.get("2026-06-30"), "2026-Q2");
+  assert.equal(quarter.get("2024-02-29"), "2024-Q1");
+  const missingYear = await fiscalLabels(dates, "year");
+  assert.deepEqual([...missingYear.entries()], [...year.entries()]);
+  const ytdDates = ["2025-03-10", "2025-03-11", "2025-06-30", "2026-03-10"];
+  const ytd = await fiscalLabels(ytdDates, "ytd", 1);
+  assert.equal(ytd.get("2025-03-10"), "2025 YTD");
+  assert.equal(ytd.get("2025-03-11"), null);
+  assert.equal(ytd.get("2025-06-30"), null);
+  assert.equal(ytd.get("2026-03-10"), "2026 YTD");
+});
+
+test("fiscal month labels do not change", async () => {
+  const dates = ["2025-12-31", "2026-01-01", "2026-06-30"];
+  const fiscal = await fiscalLabels(dates, "month", 7);
+  const calendar = await fiscalLabels(dates, "month", 1);
+  assert.deepEqual([...fiscal.entries()], [["2025-12-31", "2025-12"], ["2026-01-01", "2026-01"], ["2026-06-30", "2026-06"]]);
+  assert.deepEqual([...calendar.entries()], [...fiscal.entries()]);
+});
+
+test("fiscal SQL uses integer month arithmetic only", () => {
+  const sql = viewSql({ ...fiscalBase, grain: "quarter", fiscalYearStart: 7 });
+  assert.ok(sql.includes("month("));
+  assert.ok(sql.includes("% 12"));
+  assert.ok(sql.includes("// 3"));
+  for (const banned of ["INTERVAL", "interval", "make_date", "make_timestamp", "to_date", "strptime", "date_trunc"]) {
+    assert.equal(sql.includes(banned), false, banned);
+  }
+  const ytd = viewSql({ ...fiscalBase, grain: "ytd", fiscalYearStart: 7 });
+  assert.ok(ytd.includes("month("));
+  assert.ok(ytd.includes("day("));
+  for (const banned of ["INTERVAL", "make_date", "to_date", "strptime"]) {
+    assert.equal(ytd.includes(banned), false, banned);
+  }
 });

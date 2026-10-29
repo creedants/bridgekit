@@ -33,11 +33,17 @@ export interface PeriodViewParts {
   readonly periodColumn: string;
   readonly grain: Grain;
   readonly filters: readonly Filter[];
+  /** First month of the fiscal year. Missing and 1 both mean January. */
+  readonly fiscalYearStart?: number;
 }
 
 /** Same parts always return the same view. The file name is not part of it. */
 export function periodView(parts: PeriodViewParts): PeriodView {
-  return JSON.stringify([parts.load, parts.periodColumn, parts.grain, parts.filters]) as PeriodView;
+  const fiscalYearStart = parts.fiscalYearStart ?? 1;
+  const key: unknown[] = [parts.load, parts.periodColumn, parts.grain, parts.filters];
+  // A period list stored under the calendar setup keeps the four element key it was written with.
+  if (fiscalYearStart !== 1) key.push(fiscalYearStart);
+  return JSON.stringify(key) as PeriodView;
 }
 
 /** A period list stored with the view that produced it. */

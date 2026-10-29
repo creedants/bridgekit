@@ -173,6 +173,18 @@ test("fiscal-year labels are read in either case and order by year", async () =>
   assert.deepEqual(list.values, ["FY2023", "fy2024", "Fy2025"]);
 });
 
+test("fiscal quarter labels order across a fiscal year boundary", async () => {
+  const list = await loadOnly(["FY2026-Q1", "FY2025-Q3", "FY2025-Q4"]);
+  assert.equal(list.sort, "text");
+  assert.deepEqual(list.values, ["FY2025-Q3", "FY2025-Q4", "FY2026-Q1"]);
+});
+
+test("fiscal year-to-date labels order across a fiscal year boundary", async () => {
+  const list = await loadOnly(["FY2025 YTD", "FY2024 YTD", "FY2026 YTD"]);
+  assert.equal(list.sort, "text");
+  assert.deepEqual(list.values, ["FY2024 YTD", "FY2025 YTD", "FY2026 YTD"]);
+});
+
 test("ISO quarter labels are read in either case and order by the quarter they name", async () => {
   const list = await loadOnly(["2024-q3", "2024-Q4", "2025-q1"]);
   assert.equal(list.sort, "text");
