@@ -1,4 +1,20 @@
 import { guessSetup, isNumeric, netSalesHeldAsText, type Column, type Filter, type Grain } from "./setup.ts";
+import { shortened } from "./numbers.ts";
+
+/** The first cell of a measure column that does not read as a number, with its spreadsheet row when the file proves one. */
+export interface UnreadCell {
+  readonly value: string;
+  readonly row?: number;
+}
+
+/** A column as the profile hands it to the file problems list. */
+export type ProfiledColumn = Column & { firstUnread?: UnreadCell };
+
+/** The first unread cell a profile found, when there is one. */
+export function firstUnreadOf(column: Column): UnreadCell | undefined {
+  return (column as ProfiledColumn).firstUnread;
+}
+
 
 /**
  * A long period list draws a hint. Eight years of months are 96 labels, and
@@ -111,18 +127,22 @@ function numericAvailable(input: FileProblemInput, role: Role): boolean {
   );
 }
 
+interface MeasureCandidate {
+  column: Column;
+  role: Role;
+  text: boolean;
+  index: number;
+}
+
 /**
- * A non-numeric candidate for a missing measure, ordered by its file position.
- * An empty Sales choice first uses netSalesHeldAsText, which is empty when any
- * numeric column has "net" in its name, so a numeric net keeps the promoted
- * guess. Otherwise the candidate comes from guessSetup with every non-period,
- * non-numeric column promoted to a number.
- * A column is described as text only when its recorded type is VARCHAR.
+ * The measure columns the file problems list could name, in file order. One
+ * probe, so the message and the profile never carry a second list of measure
+ * words.
  */
-function soundMeasure(input: FileProblemInput): { name: string; role: Role; text: boolean } | undefined {
+function measureCandidates(input: FileProblemInput): MeasureCandidate[] {
   const probed = guessSetup(promoted(input.columns, input.periodColumn));
   const held = netSalesHeldAsText(input.columns);
-  const found: { name: string; role: Role; text: boolean; index: number }[] = [];
+  const found: MeasureCandidate[] = [];
   for (const role of ["sales", "units"] as const) {
     const chosen = chosenName(input, role);
     const withheld = role === "sales" && chosen === "" && held !== "" && held !== input.periodColumn;
@@ -132,17 +152,33 @@ function soundMeasure(input: FileProblemInput): { name: string; role: Role; text
     if (name === "" || name === input.periodColumn) continue;
     const column = columnNamed(input.columns, name);
     if (!column || isNumeric(column.type)) continue;
-    found.push({ name, role, text: isText(column.type), index: input.columns.indexOf(column) });
+    found.push({ column, role, text: isText(column.type), index: input.columns.indexOf(column) });
   }
   found.sort((a, b) => a.index - b.index);
-  const first = found[0];
-  return first === undefined ? undefined : { name: first.name, role: first.role, text: first.text };
+  return found;
 }
 
-function measureMessage(role: Role, name: string, text: boolean): string {
+function soundMeasure(input: FileProblemInput): MeasureCandidate | undefined {
+  return measureCandidates(input)[0];
+}
+
+/** The columns a measure word names, by the setup module's own word lists. */
+export function measureColumns(columns: readonly Column[]): string[] {
+  return columns
+    .filter((column) => {
+      const probe = guessSetup([{ name: column.name, type: "DOUBLE" }]);
+      return probe.salesColumn === column.name || probe.unitsColumn === column.name;
+    })
+    .map((column) => column.name);
+}
+
+function measureMessage(role: Role, column: Column, text: boolean): string {
   const measure = role === "sales" ? "Sales" : "Units";
-  if (text) return `${measure} must be a column of numbers, and "${name}" holds text.`;
-  return `"${name}" cannot be used for ${measure} because it is not a column of numbers.`;
+  if (!text) return `"${column.name}" cannot be used for ${measure} because it is not a column of numbers.`;
+  const unread = firstUnreadOf(column);
+  const where = unread === undefined || unread.row === undefined ? "" : ` in row ${unread.row}`;
+  const such = unread === undefined ? "" : `, such as "${shortened(unread.value)}"${where}`;
+  return `${measure} must be a column of numbers, and "${column.name}" holds text${such}.`;
 }
 
 function periodCount(periods: Periods): number | undefined {
@@ -179,7 +215,7 @@ export function fileProblem(input: FileProblemInput): FileProblem {
   }
   const missing = soundMeasure(input);
   if (missing) {
-    return { kind: "reason", message: measureMessage(missing.role, missing.name, missing.text) };
+    return { kind: "reason", message: measureMessage(missing.role, missing.column, missing.text) };
   }
   if (input.columns.every((column) => !isNumeric(column.type))) {
     return { kind: "reason", message: "Sales and Units must be columns of numbers, and this file has none." };

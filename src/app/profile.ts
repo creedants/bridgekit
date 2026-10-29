@@ -1,5 +1,8 @@
 import type { Query } from "../engine.ts";
 import { isDate, isNumeric, quote, TABLE, type Column, type Filter, type Setup } from "./setup.ts";
+import { measureColumns, type UnreadCell } from "./fileProblems.ts";
+import { readsAsNumber } from "./numbers.ts";
+import { readCsvFile } from "./encoding.ts";
 
 const SAMPLE_ROWS = 200_000;
 const MAX_CANDIDATES = 14;
@@ -61,6 +64,339 @@ export interface FileProfile {
 }
 
 /**
+ * How DuckDB's sniffer read a CSV, which read_csv then used. `quote` and
+ * `escape` are one character, or "" for none.
+ */
+export interface CsvDialect {
+  readonly delimiter: string;
+  /** "" means the file uses no quotes. */
+  readonly quote: string;
+  /** "" means a doubled quote stands for one quote. */
+  readonly escape: string;
+  readonly header: boolean;
+  readonly skipRows: number;
+  readonly comment: string;
+}
+
+/**
+ * Where each loaded record sits in the file it came from, as the load knew it
+ * for free. A sheet already knows its rows. A CSV keeps the file and the
+ * dialect the reader used, and is read again only when a sentence is about to
+ * name a row.
+ */
+export type SourceRows =
+  | { readonly kind: "sheet"; readonly rows: readonly number[] }
+  | { readonly kind: "csv"; readonly file: Blob; readonly dialect: CsvDialect | undefined };
+
+/** A load's private stamp, written on the connection for its table. */
+const STAMP_PAGE = Math.random().toString(36).slice(2, 10);
+let stampsIssued = 0;
+
+/**
+ * The last upload into each table name: its stamp and where its rows came from.
+ * The loader is the only writer, and it writes only after the staged table has
+ * been accepted, so a refused file keeps the last load's entry. The key is the
+ * connection's own stamp for the table, never the query callable: the app
+ * profiles through a forwarding wrapper of the loader's query, and a wrapper
+ * keeps no link back, so a callable key named a good cell. A table created only
+ * through SQL has no entry; replacing a loaded table through SQL keeps its
+ * existing entry.
+ */
+const uploadsByTable = new Map<string, { readonly stamp: string; readonly rows: SourceRows }>();
+
+/** The connection variable that names `table`'s current upload stamp. */
+function stampVariable(table: string): string {
+  return `bridgekit_upload_${table.replaceAll(/[^A-Za-z0-9_]/g, "_")}`;
+}
+
+/**
+ * Swaps a staged upload into place and records where its rows came from. Sets
+ * the table's slot and its connection stamp before the swap, and restores both
+ * when the swap refuses the file, so a refused file keeps the last load's source
+ * and its diagnostic. Reads no source row and no table row.
+ */
+export async function swapWithSourceRows(
+  query: Query,
+  table: string,
+  rows: SourceRows,
+  swap: () => Promise<void>,
+): Promise<void> {
+  const previous = uploadsByTable.get(table);
+  const stamp = `bridgekit-source-${STAMP_PAGE}-${(stampsIssued += 1)}`;
+  uploadsByTable.set(table, { stamp, rows });
+  try {
+    await query(`SET VARIABLE ${stampVariable(table)} = '${stamp}'`);
+    await swap();
+  } catch (error) {
+    if (previous === undefined) uploadsByTable.delete(table);
+    else uploadsByTable.set(table, previous);
+    const restore = previous === undefined ? "NULL" : `'${previous.stamp}'`;
+    await query(`SET VARIABLE ${stampVariable(table)} = ${restore}`).catch(() => {});
+    throw error;
+  }
+}
+
+/** A first unread cell before the file's own row is known. */
+interface UnreadCandidate {
+  readonly column: string;
+  readonly value: string;
+  /** 0-based position among the loaded records, as rowid counts. */
+  readonly ordinal: number;
+  /** 0-based position of the column, which is its field in the file. */
+  readonly field: number;
+  /** Loaded records in the table: the count the locator's proof must match. */
+  readonly records: number;
+}
+
+interface FieldAsk {
+  readonly ordinal: number;
+  readonly field: number;
+}
+
+interface FoundField {
+  readonly row: number;
+  readonly text: string;
+}
+
+interface RecordScan {
+  /** Loaded records after the header. */
+  readonly dataRecords: number;
+  /** Per ask, in order: the spreadsheet row of that record and that field's text. */
+  readonly found: readonly (FoundField | undefined)[];
+}
+
+/**
+ * The first cell of a measure column that does not read as a number, when more
+ * than half of the column's filled cells do. An upload names a source row
+ * only when the locator can prove one. A table created only through SQL
+ * counts loaded records with the header as row 1.
+ */
+async function firstUnreadIn(query: Query, column: string): Promise<UnreadCandidate | undefined> {
+  const field = quote(column);
+  const text = `CAST(${field} AS VARCHAR)`;
+  const blank = `(${field} IS NULL OR trim(${text}) = '')`;
+  const unread = `NOT ${blank} AND NOT ${readsAsNumber(field)}`;
+  // The column's field position rides along in the same statement, so naming a
+  // row never costs a second pass over the table.
+  const position = `(SELECT column_index - 1 FROM duckdb_columns()
+    WHERE schema_name = current_schema() AND table_name = '${TABLE.replaceAll("'", "''")}'
+      AND column_name = '${column.replaceAll("'", "''")}')::DOUBLE`;
+  const [row] = await query(
+    `SELECT count(*) FILTER (WHERE NOT ${blank})::DOUBLE AS present,
+            count(*) FILTER (WHERE NOT ${blank} AND ${readsAsNumber(field)})::DOUBLE AS parsed,
+            count(*)::DOUBLE AS records,
+            arg_min(${text}, rowid) FILTER (WHERE ${unread}) AS value,
+            min(rowid) FILTER (WHERE ${unread}) AS at,
+            ${position} AS field
+     FROM ${quote(TABLE)}`,
+  );
+  const present = Number(row?.present);
+  const parsed = Number(row?.parsed);
+  if (!(present > 0) || parsed * 2 <= present) return undefined;
+  if (row?.value == null || row?.at == null || row?.field == null) return undefined;
+  const ordinal = Number(row.at);
+  const at = Number(row.field);
+  if (!Number.isFinite(ordinal) || !Number.isFinite(at)) return undefined;
+  return { column, value: String(row.value), ordinal, field: at, records: Number(row.records) };
+}
+
+type FieldMode = "start" | "unquoted" | "quoted" | "escaped" | "quoteSeen";
+
+/**
+ * Reads a CSV the way the loader did and counts record slots, which are the
+ * spreadsheet's rows: a line break outside a quoted field ends one slot, a
+ * completely empty slot is a row the loader skips, and a break inside quotes
+ * belongs to its record. Undefined when the text ends inside a quoted field,
+ * or when a closing quote is followed by something the reader would refuse.
+ */
+async function scanCsvRecords(
+  file: Blob,
+  dialect: CsvDialect,
+  asks: readonly FieldAsk[],
+): Promise<RecordScan | undefined> {
+  const asked = new Map<number, Map<number, number>>();
+  asks.forEach((ask, index) => {
+    const fields = asked.get(ask.ordinal) ?? new Map<number, number>();
+    fields.set(ask.field, index);
+    asked.set(ask.ordinal, fields);
+  });
+  const found: (FoundField | undefined)[] = asks.map(() => undefined);
+  const delimiter = dialect.delimiter;
+  const quoteChar = dialect.quote;
+  // The reader treats a doubled quote as one quote, and the sniffer reports that
+  // convention as either an empty escape or the quote itself.
+  const escapeChar = dialect.escape === quoteChar ? "" : dialect.escape;
+  const headerOffset = dialect.header ? 1 : 0;
+
+  let slot = 1;
+  let loaded = 0;
+  let empty = true;
+  let field = 0;
+  let mode: FieldMode = "start";
+  let carryCR = false;
+  let recordRow = 1;
+  let wanted: Map<number, number> | undefined;
+  let captured: string[] = [];
+
+  const capture = (char: string) => {
+    if (wanted === undefined || !wanted.has(field)) return;
+    captured[field] = (captured[field] ?? "") + char;
+  };
+
+  const endSlot = () => {
+    if (!empty) {
+      if (wanted !== undefined) {
+        for (const [fieldIndex, ask] of wanted) {
+          found[ask] = { row: recordRow, text: captured[fieldIndex] ?? "" };
+        }
+      }
+      loaded += 1;
+    }
+    empty = true;
+    field = 0;
+    mode = "start";
+    wanted = undefined;
+    slot += 1;
+  };
+
+  const nextField = () => {
+    field += 1;
+    mode = "start";
+  };
+
+  // Read inside a closure, because the state changes only in `feed`.
+  const insideQuotes = () => mode === "quoted" || mode === "escaped";
+
+  const feed = (text: string): boolean => {
+    for (const char of text) {
+      if (carryCR) {
+        carryCR = false;
+        if (char === "\n") continue;
+      }
+      if (!insideQuotes() && (char === "\r" || char === "\n")) {
+        endSlot();
+        carryCR = char === "\r";
+        continue;
+      }
+      if (empty) {
+        empty = false;
+        recordRow = slot;
+        wanted = asked.get(loaded - headerOffset);
+        captured = [];
+      }
+      switch (mode) {
+        case "start":
+          if (char === delimiter) nextField();
+          // A space before an opening quote keeps the quote eligible, and a
+          // tab does too unless the file separates fields with it.
+          else if (char === " " || (char === "\t" && delimiter !== "\t")) break;
+          else if (quoteChar !== "" && char === quoteChar) mode = "quoted";
+          else {
+            mode = "unquoted";
+            capture(char);
+          }
+          break;
+        case "unquoted":
+          if (char === delimiter) nextField();
+          else capture(char);
+          break;
+        case "quoted":
+          if (escapeChar !== "" && char === escapeChar) mode = "escaped";
+          else if (char === quoteChar) mode = "quoteSeen";
+          else capture(char);
+          break;
+        case "escaped":
+          capture(char);
+          mode = "quoted";
+          break;
+        case "quoteSeen":
+          if (char === quoteChar) {
+            capture(char);
+            mode = "quoted";
+          } else if (char === delimiter) nextField();
+          else if (char !== " " && char !== "\t") return false;
+          break;
+      }
+    }
+    return true;
+  };
+
+  const reading = await readCsvFile(file);
+  if (reading.kind === "text") {
+    if (!feed(reading.text)) return undefined;
+  } else {
+    const decoder = new TextDecoder("utf-8");
+    const reader = file.stream().getReader();
+    try {
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        if (!feed(decoder.decode(chunk.value, { stream: true }))) return undefined;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    if (!feed(decoder.decode())) return undefined;
+  }
+  if (insideQuotes()) return undefined;
+  if (!empty) endSlot();
+  return { dataRecords: loaded - headerOffset, found };
+}
+
+/** Where the loaded table's row numbers may come from. */
+type RowOrigin =
+  | { readonly kind: "counted" }
+  | { readonly kind: "unavailable" }
+  | { readonly kind: "file"; readonly rows: SourceRows };
+
+/**
+ * The table's origin, read only when a sentence is about to name a row. A
+ * missing stamp means this connection never loaded a file into the table, so
+ * the loaded ordinals are the only numbering there is. A stamp with no matching
+ * entry means an upload whose source is gone, which names no row.
+ */
+async function rowOrigin(query: Query, table: string): Promise<RowOrigin> {
+  const [row] = await query(`SELECT getvariable('${stampVariable(table)}') AS stamp`);
+  const stamp = row?.stamp;
+  if (stamp == null) return { kind: "counted" };
+  const entry = uploadsByTable.get(table);
+  return entry !== undefined && typeof stamp === "string" && entry.stamp === stamp
+    ? { kind: "file", rows: entry.rows }
+    : { kind: "unavailable" };
+}
+
+/**
+ * The spreadsheet row of each candidate, or undefined where the file cannot
+ * prove one. A sheet already knows its rows. A CSV is read once, and only a
+ * record count that matches the table, with the named row holding the named
+ * text, proves a row.
+ */
+async function locateRows(
+  origin: RowOrigin,
+  cells: readonly UnreadCandidate[],
+): Promise<readonly (number | undefined)[]> {
+  if (origin.kind === "counted") return cells.map((cell) => cell.ordinal + 2);
+  if (origin.kind === "unavailable") return cells.map(() => undefined);
+  const source = origin.rows;
+  if (source.kind === "sheet") {
+    return cells.map((cell) =>
+      source.rows.length === cell.records && cell.ordinal < source.rows.length ? source.rows[cell.ordinal] : undefined,
+    );
+  }
+  const dialect = source.dialect;
+  if (dialect === undefined || dialect.delimiter.length !== 1 || dialect.skipRows !== 0 || dialect.comment !== "") {
+    return cells.map(() => undefined);
+  }
+  const scan = await scanCsvRecords(source.file, dialect, cells);
+  if (scan === undefined) return cells.map(() => undefined);
+  return cells.map((cell, index) => {
+    const found = scan.found[index];
+    if (scan.dataRecords !== cell.records || found === undefined) return undefined;
+    return found.text.trim() === cell.value.trim() ? found.row : undefined;
+  });
+}
+
+/**
  * Profiles the loaded file: distinct counts for every column, then the roll-up
  * chains. `apply` runs only while `isCurrent()` still holds, so a profile that
  * finishes after a later file has loaded is dropped instead of overwriting it.
@@ -72,10 +408,37 @@ export async function profileFile(
   apply: (profile: FileProfile) => void,
 ): Promise<void> {
   const distinct = await distinctCounts(query, columns);
+  const measures = new Set(measureColumns(columns));
+  const candidates: UnreadCandidate[] = [];
+  for (const column of columns) {
+    if (!measures.has(column.name) || isNumeric(column.type) || isDate(column.type)) continue;
+    const cell = await firstUnreadIn(query, column.name).catch(() => undefined);
+    if (cell !== undefined) candidates.push(cell);
+  }
+  if (!isCurrent()) return;
+  const located =
+    candidates.length === 0
+      ? []
+      : await rowOrigin(query, TABLE)
+          .then((origin) => locateRows(origin, candidates))
+          .catch(() => candidates.map(() => undefined));
+  const unread = new Map<string, UnreadCell>();
+  candidates.forEach((cell, index) => {
+    const row = located[index];
+    unread.set(cell.column, row === undefined ? { value: cell.value } : { value: cell.value, row });
+  });
   const rollups = await findRollups(query, columns, distinct);
   if (!isCurrent()) return;
-  apply({ columns: columns.map((column) => ({ ...column, distinct: distinct.get(column.name) })), rollups });
+  apply({
+    columns: columns.map((column) => ({
+      ...column,
+      distinct: distinct.get(column.name),
+      ...(unread.has(column.name) ? { firstUnread: unread.get(column.name) } : {}),
+    })),
+    rollups,
+  });
 }
+
 
 // A column name looks like a customer, region, date or id column when any
 // word in it is one of these, where a word is a part split on
@@ -85,6 +448,10 @@ const NON_ATTRIBUTE_WORDS = new Set([
   "customers",
   "client",
   "clients",
+  "kunde",
+  "kunden",
+  "kundennummer",
+  "kundennr",
   "account",
   "accounts",
   "region",

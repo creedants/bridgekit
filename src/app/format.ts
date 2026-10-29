@@ -2,13 +2,30 @@ const compactFormat = new Intl.NumberFormat("en-US", { notation: "compact", maxi
 const wholeFormat = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const priceFormat = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-export const compact = (n: number) => compactFormat.format(n);
-export const signedCompact = (n: number) => (n > 0 ? "+" : "") + compactFormat.format(n);
+// No formatter prints exponent notation. A figure past what the short units
+// can show is capped, and the table's own whole figures print in full.
+const AMOUNT_CAP = 1e18;
+const HUGE_AMOUNT = "1,000,000T+";
+const PERCENT_CAP = 1_000_000;
+
+export const compact = (n: number) =>
+  Math.abs(n) >= AMOUNT_CAP ? (n < 0 ? "-" : "") + HUGE_AMOUNT : compactFormat.format(n);
+export const signedCompact = (n: number) => (n > 0 ? "+" : "") + compact(n);
 export const whole = (n: number) => wholeFormat.format(n);
 export const signedWhole = (n: number) => (n > 0 ? "+" : "") + wholeFormat.format(n);
 export const price = (n: number) => (Number.isFinite(n) ? priceFormat.format(n) : "");
-export const percent = (n: number) => (Number.isFinite(n) ? (n * 100).toFixed(1) + "%" : "");
-export const signedPercent = (n: number) => (Number.isFinite(n) ? (n > 0 ? "+" : "") + (n * 100).toFixed(1) + "%" : "");
+export const percent = (n: number) => {
+  if (!Number.isFinite(n)) return "";
+  const value = n * 100;
+  if (Math.abs(value) > PERCENT_CAP) return value < 0 ? "<-1,000,000%" : ">1,000,000%";
+  return value.toFixed(1) + "%";
+};
+export const signedPercent = (n: number) => {
+  if (!Number.isFinite(n)) return "";
+  const value = n * 100;
+  if (Math.abs(value) > PERCENT_CAP) return value < 0 ? "<-1,000,000%" : ">1,000,000%";
+  return (n > 0 ? "+" : "") + value.toFixed(1) + "%";
+};
 
 /** A value as a share of the prior total. Dividing by the absolute prior keeps the value's sign when the prior total is negative, and a zero prior gives a number the formatters print as blank. */
 export const shareOfPrior = (value: number, prior: number) => value / Math.abs(prior);
@@ -17,23 +34,21 @@ export const shareOfPrior = (value: number, prior: number) => value / Math.abs(p
 export const signedShare = (value: number, prior: number) => signedPercent(shareOfPrior(value, prior));
 
 /**
- * Tries increasing compact precision, then ordinary notation with up to ten
- * fractional digits. If the totals still print alike, returns whole figures.
+ * Starts with whole figures. When distinct finite totals print alike, tries up
+ * to ten fractional digits. Falls back to the whole figures if they still
+ * print alike.
  */
 export function distinctPair(prior: number, current: number): [string, string] {
-  for (let digits = 1; digits <= 3; digits += 1) {
-    const format = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: digits });
-    const pair: [string, string] = [format.format(prior), format.format(current)];
-    if (pair[0] !== pair[1]) return pair;
-  }
-  if (!Number.isFinite(prior) || !Number.isFinite(current)) return [whole(prior), whole(current)];
-  if (prior === current) return [whole(prior), whole(current)];
-  for (let digits = 0; digits <= 10; digits += 1) {
+  const pair: [string, string] = [whole(prior), whole(current)];
+  if (pair[0] !== pair[1]) return pair;
+  if (!Number.isFinite(prior) || !Number.isFinite(current)) return pair;
+  if (prior === current) return pair;
+  for (let digits = 1; digits <= 10; digits += 1) {
     const format = new Intl.NumberFormat("en-US", { maximumFractionDigits: digits });
-    const pair: [string, string] = [format.format(prior), format.format(current)];
-    if (pair[0] !== pair[1]) return pair;
+    const finer: [string, string] = [format.format(prior), format.format(current)];
+    if (finer[0] !== finer[1]) return finer;
   }
-  return [whole(prior), whole(current)];
+  return pair;
 }
 
 /** A count with its noun, singular only for exactly one. */

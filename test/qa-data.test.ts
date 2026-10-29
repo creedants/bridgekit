@@ -126,26 +126,39 @@ test("Q28: an empty table is refused and the loaded data stays loaded", async ()
   assert.deepEqual(await query(`SELECT * FROM t`), [{ a: 2 }]);
 });
 
-test("Q30: no file gets a mixed-separator warning", async () => {
+test("Q30: a file with one separator gets no mixed-separator warning", async () => {
   const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { viewSql } = await import("../src/app/setup.ts");
   const query = await openDatabase();
   const directory = await mkdtemp("/tmp/bridgekit-qa-");
   const loaded = async (
     name: string,
     text: string,
-    table: string,
   ): Promise<{ columns: string[]; rows: number; comments: (string | null)[]; note: string | null }> => {
     const source = path.join(directory, name);
     await writeFile(source, text);
-    await stageCsvAndSwap(query, new File([text], name), table, source);
-    const columns = (await query(`DESCRIBE ${table}`)).map((row) => String(row.column_name));
-    const [count] = await query(`SELECT count(*)::DOUBLE AS n FROM ${table}`);
-    const comments = await query(`SELECT comment FROM duckdb_tables() WHERE table_name = '${table}'`);
+    await stageCsvAndSwap(query, new File([text], name), "data", source);
+    const columns = (await query(`DESCRIBE data`)).map((row) => String(row.column_name));
+    const [count] = await query(`SELECT count(*)::DOUBLE AS n FROM data`);
+    const comments = await query(`SELECT comment FROM duckdb_tables() WHERE table_name = 'data'`);
+    // The app reads the note against the period view its settings build. With
+    // no view the note returns null before the check runs, which hides a wrong
+    // warning on a valid file.
+    await query(
+      viewSql({
+        periodColumn: columns[0],
+        grain: "value",
+        unitsColumn: "",
+        salesColumn: "",
+        levels: [],
+        filters: [],
+      }),
+    );
     return {
       columns,
       rows: Number(count.n),
       comments: comments.map((row) => (row.comment == null ? null : String(row.comment))),
-      note: await decimalCommaNote(query, table),
+      note: await decimalCommaNote(query, "data"),
     };
   };
   const decimalComma = "1 column was read as numbers written with a decimal comma.";
@@ -210,7 +223,7 @@ test("Q30: no file gets a mixed-separator warning", async () => {
       "period\tProduct\tunits\tsales\n2025\tA-100\t10\t1,234.50\n2026\tA-100\t10\t1,234.60\n",
       ["period", "Product", "units", "sales"],
       2,
-      null,
+      "Numbers in sales such as 1,234.50 were read with the comma between thousands, as 1234.5.",
     ],
     [
       "blank-lines.csv",
@@ -254,26 +267,28 @@ test("Q30: no file gets a mixed-separator warning", async () => {
       2,
       null,
     ],
+    // These three files use one separator in the header and another in their own
+    // rows, so the mixed-separator sentence is true of them.
     [
       "three-separators.csv",
       "period,units,sales\n2025,10,100\n2026;20;200\n2025\t30\t300\n",
       ["column0", "column1", "column2"],
       4,
-      null,
+      '2 rows have a period such as "2025,10,100" that looks like a whole row. The file may mix separators. Save it again with one separator.',
     ],
     [
       "tab-row.csv",
       "period,units,sales\n2025,10,100\n2026\t20\t200\n",
       ["column0", "column1", "column2"],
       3,
-      null,
+      '1 row has a period such as "2025,10,100" that looks like a whole row. The file may mix separators. Save it again with one separator.',
     ],
     [
       "tab-header.csv",
       "period\tunits\tsales\n2025\t10\t100\n2026;20;200\n",
       ["column0", "column1", "column2"],
       3,
-      null,
+      '1 row has a period such as "2025\t10\t100" that looks like a whole row. The file may mix separators. Save it again with one separator.',
     ],
     [
       "footer-total-semicolons.csv",
@@ -312,12 +327,75 @@ test("Q30: no file gets a mixed-separator warning", async () => {
     ],
   ];
   for (const [name, text, columns, rows, note] of shapes) {
-    const table = `q30_${name.replace(/\W/g, "_")}`;
-    const result = await loaded(name, text, table);
+    const result = await loaded(name, text);
     assert.deepEqual(result.columns, columns, `${name}: columns`);
     assert.equal(result.rows, rows, `${name}: rows`);
     assert.ok(result.comments.every((comment) => comment == null || comment === ""), `${name}: no table comment`);
     assert.equal(result.note, note, `${name}: note`);
+  }
+});
+
+test("R6: the mixed file's whole-row period is named", async () => {
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { viewSql } = await import("../src/app/setup.ts");
+  const query = await openDatabase();
+  const directory = await mkdtemp("/tmp/bridgekit-qa-");
+  const rows = Array.from({ length: 36 }, (_, index) =>
+    index % 2 === 0 ? "2025;North;A-100;S;10;897" : "2025,North,A-100,S,10,897",
+  );
+  const text = `PERIOD;REGION;MODEL;SIZE;UNITS;NET_SALES\n${rows.join("\n")}\n`;
+  const source = path.join(directory, "mixed.csv");
+  await writeFile(source, text);
+  await stageCsvAndSwap(query, new File([text], "mixed.csv"), "data", source);
+  assert.equal((await query(`DESCRIBE data`)).length, 6);
+  assert.equal(Number((await query(`SELECT count(*)::DOUBLE AS n FROM data`))[0].n), 37);
+  // The user picks the only column that holds a period value, as the app does.
+  await query(
+    viewSql({ periodColumn: "column0", grain: "value", unitsColumn: "column4", salesColumn: "column5", levels: [], filters: [] }),
+  );
+  assert.equal(
+    await decimalCommaNote(query, "data"),
+    '18 rows have a period such as "2025;North;A-100;S;10;897" that looks like a whole row. The file may mix separators. Save it again with one separator.',
+  );
+});
+
+test("R6: one whole-row period reads as one row", async () => {
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { viewSql } = await import("../src/app/setup.ts");
+  const query = await openDatabase();
+  const directory = await mkdtemp("/tmp/bridgekit-qa-");
+  const text = "PERIOD;REGION;MODEL;SIZE;UNITS;NET_SALES\n2025;North;A-100;S;10;897\n2025,North,A-100,S,10,897\n";
+  const source = path.join(directory, "one.csv");
+  await writeFile(source, text);
+  await stageCsvAndSwap(query, new File([text], "one.csv"), "data", source);
+  await query(
+    viewSql({ periodColumn: "column0", grain: "value", unitsColumn: "column4", salesColumn: "column5", levels: [], filters: [] }),
+  );
+  assert.equal(
+    await decimalCommaNote(query, "data"),
+    '1 row has a period such as "2025;North;A-100;S;10;897" that looks like a whole row. The file may mix separators. Save it again with one separator.',
+  );
+});
+
+test("R6: the four footer files say nothing about whole rows", async () => {
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { viewSql } = await import("../src/app/setup.ts");
+  const shapes: readonly (readonly [name: string, text: string])[] = [
+    ["footer-total-semicolons.csv", '"period","Product","units","sales"\n2025,A-100,10,100\n2026,A-100,10,120\nTotal;;;\n'],
+    ["footer-total-quoted-comma-product.csv", 'period,Product,units,sales\n2025,"A,100",10,100\n2026,"A,100",10,120\nTotal;;;\n'],
+    ["footer-total-fully-quoted.csv", '"period","Product","units","sales"\n"2025","A-100","10","100"\n"2026","A-100","10","120"\nTotal;;;\n'],
+    ["footer-note-fully-quoted.csv", '"period","Product","units","sales"\n"2025","A-100","10","100"\n"2026","A-100","10","120"\nsee;notes;here;please\n'],
+  ];
+  for (const [name, text] of shapes) {
+    const query = await openDatabase();
+    const directory = await mkdtemp("/tmp/bridgekit-qa-");
+    const source = path.join(directory, name);
+    await writeFile(source, text);
+    await stageCsvAndSwap(query, new File([text], name), "data", source);
+    await query(
+      viewSql({ periodColumn: "period", grain: "value", unitsColumn: "units", salesColumn: "sales", levels: [], filters: [] }),
+    );
+    assert.equal(await decimalCommaNote(query, "data"), null, name);
   }
 });
 
@@ -406,10 +484,78 @@ test("counts and pairs read correctly for 0, 1 and many", async () => {
   assert.equal(counted(2, "line"), "2 lines");
   assert.equal(counted(0, "row"), "0 rows");
   assert.equal(counted(1, "product value"), "1 product value");
-  assert.deepEqual(distinctPair(2400, 2440), ["2.4K", "2.44K"]);
-  assert.deepEqual(distinctPair(1_000_000, 1_100_000), ["1M", "1.1M"]);
+  assert.deepEqual(distinctPair(2400, 2440), ["2,400", "2,440"]);
+  assert.deepEqual(distinctPair(1_000_000, 1_100_000), ["1,000,000", "1,100,000"]);
   assert.deepEqual(distinctPair(2400.1, 2400.2), ["2,400.1", "2,400.2"]);
   assert.deepEqual(distinctPair(2400, 2400), ["2,400", "2,400"]);
   assert.equal(signedShare(-72, 1000), "-7.2%");
   assert.equal(signedShare(100, 1000), "+10.0%");
+});
+
+test("R9: MM.YYYY months load as a date and bridge by year", async () => {
+  const { readCsvTable } = await import("../src/app/db.ts");
+  const { guessSetup, viewSql, PERIOD, VIEW, quote } = await import("../src/app/setup.ts");
+  const { loadPeriodList } = await import("../src/app/periods.ts");
+  const { runBridge } = await import("../src/engine.ts");
+  const directory = await mkdtemp("/tmp/bridgekit-qa-");
+  const source = path.join(directory, "monat-de.csv");
+  await writeFile(
+    source,
+    "Monat;Produkt;Menge;Umsatz\n01.2025;A-100;10;100\n02.2025;A-100;10;120\n01.2026;A-100;10;130\n02.2026;A-100;10;150\n",
+  );
+  const query = await openDatabase();
+  await readCsvTable(query, "data", source);
+  await convertFormattedNumbers(query, "data");
+  const columns = (await query(`DESCRIBE data`)).map((row) => ({
+    name: String(row.column_name),
+    type: String(row.column_type),
+  }));
+  assert.equal(columns.find((column) => column.name === "Monat")?.type, "DATE");
+  const setup = guessSetup(columns);
+  assert.equal(setup.periodColumn, "Monat");
+  assert.equal(setup.grain, "year");
+  await query(viewSql(setup));
+  const list = await loadPeriodList(query, quote(PERIOD), quote(VIEW));
+  assert.deepEqual(list.values, ["2025", "2026"]);
+  const result = await runBridge(query, {
+    table: VIEW,
+    periodColumn: PERIOD,
+    prior: "2025",
+    current: "2026",
+    unitsColumn: "Menge",
+    salesColumn: "Umsatz",
+    levels: [{ name: "Produkt", columns: ["Produkt"] }],
+  });
+  assert.equal(result.priorSales, 220);
+  assert.equal(result.currentSales, 280);
+});
+
+test("R18: an Excel header with a trailing carriage return names the same column as its CSV twin", async () => {
+  const { default: ExcelJS } = await import("exceljs");
+  const { firstSheetAsCsv } = await import("../src/app/sheet.ts");
+  const { guessSetup } = await import("../src/app/setup.ts");
+  const { readCsvTable } = await import("../src/app/db.ts");
+  const header = ["Product", "Region", "Size", "Colour", "Year", "Units", "Sales\r"];
+  const rows: (string | number)[][] = [
+    ["A-100", "North", "S", "red", "2025", 10, 120],
+    ["A-100", "North", "S", "red", "2026", 11, 132],
+  ];
+  const directory = await mkdtemp("/tmp/bridgekit-qa-");
+  const csvFile = path.join(directory, "twin.csv");
+  await writeFile(csvFile, `${header.map((name) => name.trim()).join(",")}\n${rows.map((row) => row.join(",")).join("\n")}\n`);
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("sales");
+  sheet.addRow(header);
+  for (const row of rows) sheet.addRow(row);
+  const flat = await firstSheetAsCsv(new File([await workbook.xlsx.writeBuffer()], "twin.xlsx"));
+  const xlsxFile = path.join(directory, "twin-flat.csv");
+  await writeFile(xlsxFile, flat.csv);
+  const query = await openDatabase();
+  await readCsvTable(query, "csvdata", csvFile);
+  await readCsvTable(query, "xlsxdata", xlsxFile);
+  const described = async (table: string) =>
+    (await query(`DESCRIBE "${table}"`)).map((row) => ({ name: String(row.column_name), type: String(row.column_type) }));
+  assert.deepEqual(await described("xlsxdata"), await described("csvdata"));
+  assert.equal((await described("xlsxdata")).at(-1)?.name, "Sales");
+  assert.equal(guessSetup(await described("xlsxdata")).salesColumn, "Sales");
 });

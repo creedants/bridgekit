@@ -3,15 +3,18 @@ import mvpWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url
 import ehWasm from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
 import mvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import type { Query } from "../engine.ts";
-import { decodeCsvBuffer, ENCODING_SENTENCE, isUtf8Prefix, looksBinary, NOT_TEXT_FILE } from "./encoding.ts";
+import { CSV_PREFIX_BYTES, ENCODING_SENTENCE, readCsvFile } from "./encoding.ts";
 import { ChunkUnavailable, lazyChunk, type ChunkSentences } from "./exportExcel.ts";
 import {
   applyDotColumns,
   convertFormattedNumbers,
   CSV_OPTIONS,
+  MAX_COLUMNS_READ,
   planDotColumns,
+  TOO_MANY_COLUMNS_SENTENCE,
   typesForDotColumns,
 } from "./numbers.ts";
+import { swapWithSourceRows, type CsvDialect } from "./profile.ts";
 import { firstSheetAsCsv, holeRenames, NO_DATA_ROWS } from "./sheet.ts";
 
 const IDLE_CAP_MS = 2000;
@@ -64,23 +67,39 @@ export interface BrowserDatabase {
   loadFile(file: File, table: string): Promise<number>;
 }
 
-// A UTF-8 file is handed to the database as its own bytes, so this is the most
-// that is read up front, and a prefix may stop between two bytes of one
-// character. A prefix that fails the prefix check is read in full, to tell its
-// encoding from its whole text.
-const CSV_PREFIX_BYTES = 65536;
+/** One character the sniffer reported, or "" for a character the file does not use. */
+function sniffedChar(value: unknown): string {
+  const text = String(value ?? "");
+  return text.length === 1 && text !== "\0" ? text : "";
+}
 
-// Detects the file's separator for the thousands-dots decision: a semicolon
-// file reads dots as thousands. A sniff failure reads as a comma file, which
-// only skips the semicolon rule; a value with more than one dot still reads
-// as thousands.
-async function sniffDelimiter(query: Query, path: string): Promise<string> {
+// A missing column keeps the reader's own default, because the wasm build may
+// report fewer columns than the Node one.
+function currentColumn(row: Record<string, unknown>, key: string, fallback: string): string {
+  return row[key] == null ? fallback : sniffedChar(row[key]);
+}
+
+/**
+ * How DuckDB's sniffer read the file, from the one query the load already ran.
+ * `quote` and `escape` are one character, or "" for none. Undefined when the
+ * sniff fails, and then no row is named.
+ */
+async function sniffDialect(query: Query, path: string): Promise<CsvDialect | undefined> {
   try {
-    const [row] = await query(`SELECT Delimiter AS d FROM sniff_csv('${path.replaceAll("'", "''")}')`);
-    const delimiter = row === undefined ? "" : String(row.d);
-    return delimiter === "" ? "," : delimiter;
+    const [row] = await query(
+      `SELECT Delimiter AS d, Quote AS q, Escape AS e, HasHeader AS h, SkipRows AS s, Comment AS c FROM sniff_csv('${path.replaceAll("'", "''")}')`,
+    );
+    if (row === undefined) return undefined;
+    return {
+      delimiter: sniffedChar(row.d),
+      quote: currentColumn(row, "q", '"'),
+      escape: currentColumn(row, "e", '"'),
+      header: row.h == null ? true : Boolean(row.h),
+      skipRows: row.s == null ? 0 : Number(row.s) || 0,
+      comment: currentColumn(row, "c", ""),
+    };
   } catch {
-    return ",";
+    return undefined;
   }
 }
 
@@ -98,24 +117,60 @@ export async function readCsvTable(
   skipMonthFirst = false,
 ): Promise<void> {
   const escaped = path.replaceAll("'", "''");
-  const delimiter = await sniffDelimiter(query, path);
+  const delimiter = (await sniffDialect(query, path))?.delimiter || ",";
   // Raw text decides the dots before the database types them: an all-dotted
   // column would otherwise load as decimals (9.600 as 9.6).
   const dots = await planDotColumns(query, path, delimiter).catch(() => []);
   const types = typesForDotColumns(dots);
   await query(`CREATE OR REPLACE TABLE ${quote(table)} AS SELECT * FROM read_csv('${escaped}', ${CSV_OPTIONS}${types ?? ""})`);
   await applyDotColumns(query, table, dots);
-  if (skipMonthFirst) return;
-  const { ambiguous, monthFirst } = await ambiguousDateColumns(query, table, path);
-  for (const column of ambiguous) {
-    const name = quote(table);
-    const field = quote(column);
-    if (!monthFirst) {
-      await query(
-        `UPDATE ${name} SET ${field} = make_date(year(${field})::INTEGER, day(${field})::INTEGER, month(${field})::INTEGER) WHERE ${field} IS NOT NULL`,
-      );
+  if (!skipMonthFirst) {
+    const { ambiguous, monthFirst } = await ambiguousDateColumns(query, table, path);
+    for (const column of ambiguous) {
+      const name = quote(table);
+      const field = quote(column);
+      if (!monthFirst) {
+        await query(
+          `UPDATE ${name} SET ${field} = make_date(year(${field})::INTEGER, day(${field})::INTEGER, month(${field})::INTEGER) WHERE ${field} IS NOT NULL`,
+        );
+      }
+      await query(`COMMENT ON COLUMN ${name}.${field} IS '${MONTH_FIRST_MARK}'`);
     }
-    await query(`COMMENT ON COLUMN ${name}.${field} IS '${MONTH_FIRST_MARK}'`);
+  }
+  // After the slash-date pass, so a column whose every value is a month
+  // becomes a date without changing which slash dates were reinterpreted.
+  await convertMonthColumns(query, table).catch(() => {});
+}
+
+// A month with no day, in the three shapes the tool reads as the first of that
+// month. Every non-blank value must be one of them.
+const MONTH_TEXT = [
+  "^(0[1-9]|1[0-2])\\.(19|20)\\d{2}$",
+  "^(0[1-9]|1[0-2])/(19|20)\\d{2}$",
+  "^(19|20)\\d{2}-(0[1-9]|1[0-2])$",
+].join("|");
+const ISO_MONTH = "^(19|20)\\d{2}-";
+
+async function convertMonthColumns(query: Query, table: string): Promise<void> {
+  const described = await query(`DESCRIBE ${quote(table)}`);
+  const text = described.filter((row) => String(row.column_type) === "VARCHAR").map((row) => String(row.column_name));
+  for (const column of text) {
+    const field = quote(column);
+    const value = `trim(${field})`;
+    const blank = `(${field} IS NULL OR ${value} = '')`;
+    // A VARCHAR column still holds the file's own text, so the month check
+    // reads the loaded table instead of reading the file a second time.
+    const [counts] = await query(
+      `SELECT count(*) FILTER (WHERE NOT ${blank})::DOUBLE AS n,
+              count(*) FILTER (WHERE NOT ${blank} AND NOT regexp_matches(${value}, '${MONTH_TEXT}'))::DOUBLE AS bad
+       FROM ${quote(table)}`,
+    );
+    if (!(Number(counts?.n) > 0) || Number(counts?.bad) > 0) continue;
+    const year = `CASE WHEN regexp_matches(${value}, '${ISO_MONTH}') THEN CAST(substr(${value}, 1, 4) AS INTEGER) ELSE CAST(substr(${value}, length(${value}) - 3, 4) AS INTEGER) END`;
+    const month = `CASE WHEN regexp_matches(${value}, '${ISO_MONTH}') THEN CAST(substr(${value}, 6, 2) AS INTEGER) ELSE CAST(substr(${value}, 1, 2) AS INTEGER) END`;
+    await query(
+      `ALTER TABLE ${quote(table)} ALTER ${field} TYPE DATE USING CASE WHEN ${blank} THEN NULL ELSE make_date(${year}, ${month}, 1) END`,
+    );
   }
 }
 
@@ -146,9 +201,23 @@ export async function requireDataRows(query: Query, table: string): Promise<void
 }
 
 /**
+ * Checks the first physical line in the prefix by counting delimiter characters
+ * plus one. Quoted delimiters are counted too; characters past the end of the
+ * prefix are not inspected.
+ */
+function headerTooWide(prefix: string, delimiter: string): boolean {
+  if (delimiter === "") return false;
+  const end = prefix.search(/[\r\n]/);
+  let fields = 1;
+  for (const char of end < 0 ? prefix : prefix.slice(0, end)) if (char === delimiter) fields += 1;
+  return fields > MAX_COLUMNS_READ;
+}
+
+/**
  * Stages a CSV file's readable path and swaps it into place. The file's own
- * byte length refuses an empty file, and the staged table's row count refuses
- * a header-only file, so a refused file leaves the loaded table alone.
+ * byte length refuses an empty file, its header width refuses a file with too
+ * many columns, and the staged table's row count refuses a header-only file,
+ * so a refused file leaves the loaded table alone.
  */
 export async function stageCsvAndSwap(
   query: Query,
@@ -157,12 +226,51 @@ export async function stageCsvAndSwap(
   readablePath: string,
 ): Promise<void> {
   if (file.size === 0) throw new Error(NO_DATA_ROWS);
+  const prefix = new TextDecoder().decode(new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer()));
+  const dialect = await sniffDialect(query, readablePath);
+  if (headerTooWide(prefix, dialect?.delimiter || ",")) {
+    throw new Error(TOO_MANY_COLUMNS_SENTENCE);
+  }
   const staging = `${table}__staging`;
   await readLoadedTable(query, staging, readablePath, false);
   await convertFormattedNumbers(query, staging);
   // No mixed-separator check: a record split by another separator can match a valid sparse record byte for byte.
   await requireDataRows(query, staging);
-  await swapLoadedTable(query, staging, table);
+  // The source is recorded with the swap, so a refused file keeps the last
+  // load's rows beside the last load's table. Nothing is read and nothing is
+  // counted here.
+  await swapWithSourceRows(query, table, { kind: "csv", file, dialect }, () =>
+    swapLoadedTable(query, staging, table),
+  );
+}
+
+/**
+ * Stages an Excel workbook's flattened sheet and swaps it into place, as
+ * `loadFile` does. `dataRows` is the spreadsheet row of each data row, which
+ * the sheet reader already knows.
+ */
+export async function stageExcelAndSwap(
+  query: Query,
+  table: string,
+  readablePath: string,
+  holes: readonly number[],
+  dataRows: readonly number[],
+): Promise<void> {
+  const staging = `${table}__staging`;
+  await readLoadedTable(query, staging, readablePath, true);
+  if (holes.length > 0) {
+    const described = await query(`DESCRIBE ${quote(staging)}`);
+    const names = described.map((row) => String(row.column_name));
+    for (const rename of holeRenames(names, holes)) {
+      if (rename.from === rename.to) continue;
+      await query(`ALTER TABLE ${quote(staging)} RENAME COLUMN ${quote(rename.from)} TO ${quote(rename.to)}`);
+    }
+  }
+  await convertFormattedNumbers(query, staging);
+  await requireDataRows(query, staging);
+  await swapWithSourceRows(query, table, { kind: "sheet", rows: dataRows }, () =>
+    swapLoadedTable(query, staging, table),
+  );
 }
 
 /**
@@ -172,12 +280,19 @@ export async function stageCsvAndSwap(
 export async function swapLoadedTable(query: Query, staging: string, table: string): Promise<void> {
   const previous = `${table}__previous`;
   await query(`DROP TABLE IF EXISTS ${quote(previous)}`);
+  // Asking first keeps a first load from running a rename that must fail, which
+  // the database worker logs as a console error.
+  const [existing] = await query(
+    `SELECT count(*)::DOUBLE AS n FROM duckdb_tables() WHERE schema_name = current_schema() AND table_name = '${table.replaceAll("'", "''")}'`,
+  );
   let renamed = false;
-  try {
-    await query(`ALTER TABLE ${quote(table)} RENAME TO ${quote(previous)}`);
-    renamed = true;
-  } catch {
-    // A first load has no table to keep.
+  if (Number(existing?.n) > 0) {
+    try {
+      await query(`ALTER TABLE ${quote(table)} RENAME TO ${quote(previous)}`);
+      renamed = true;
+    } catch {
+      // A table the catalog names but the rename cannot move stays as it is.
+    }
   }
   try {
     await query(`ALTER TABLE ${quote(staging)} RENAME TO ${quote(table)}`);
@@ -553,45 +668,28 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
             uploadRegistered = false;
           }
           let excelHoles: readonly number[] = [];
+          let excelRows: readonly number[] = [];
           let formulaBlanks = 0;
           if (isExcel) {
             const sheet = await firstSheetAsCsv(file);
             excelHoles = sheet.holes;
+            excelRows = sheet.dataRows;
             formulaBlanks = sheet.formulaBlanks;
             await db.registerFileText(registered, sheet.csv);
           } else {
-            const prefix = new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer());
-            if (looksBinary(prefix)) throw new Error(NOT_TEXT_FILE);
-            const continues = prefix.byteLength < file.size;
-            if (continues && isUtf8Prefix(prefix)) {
+            const reading = await readCsvFile(file);
+            if (reading.kind === "bytes") {
               await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
             } else {
-              const decision = decodeCsvBuffer(continues ? new Uint8Array(await file.arrayBuffer()) : prefix);
-              if (decision.kind === "utf8") await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
-              else await db.registerFileText(registered, decision.text);
+              await db.registerFileText(registered, reading.text);
             }
           }
           uploadRegistered = true;
           // A refused file must leave the loaded data alone, so the new file
           // converts on a staging table and only swaps into place once it has
           // rows. The empty check, the swap and afterLoad all run after this.
-          if (isExcel) {
-            const staging = `${table}__staging`;
-            await readLoadedTable(query, staging, registered, isExcel);
-            if (excelHoles.length > 0) {
-              const described = await query(`DESCRIBE ${quote(staging)}`);
-              const names = described.map((row) => String(row.column_name));
-              for (const rename of holeRenames(names, excelHoles)) {
-                if (rename.from === rename.to) continue;
-                await query(`ALTER TABLE ${quote(staging)} RENAME COLUMN ${quote(rename.from)} TO ${quote(rename.to)}`);
-              }
-            }
-            await convertFormattedNumbers(query, staging);
-            await requireDataRows(query, staging);
-            await swapLoadedTable(query, staging, table);
-          } else {
-            await stageCsvAndSwap(query, file, table, registered);
-          }
+          if (isExcel) await stageExcelAndSwap(query, table, registered, excelHoles, excelRows);
+          else await stageCsvAndSwap(query, file, table, registered);
           return formulaBlanks;
         } catch (error) {
           throw loadFailure(error);
