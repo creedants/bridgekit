@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { distinctCounts, findRollups, suggestAttributes } from "../src/app/profile.ts";
+import { distinctCounts, feeNote, feeRows, findRelationships, findRollups, suggestAttributes } from "../src/app/profile.ts";
 import { guessSetup, quote, type Column } from "../src/app/setup.ts";
 import { openDatabase } from "../src/duckdb.ts";
 import type { Query } from "../src/engine.ts";
@@ -367,4 +367,45 @@ test("R8: German customer names are left out and the other attributes are sugges
     "Farbe",
     "Produkt",
   ]);
+});
+
+// D143. A class name and its code are the same thing, so a suggestion keeps
+// only one of them, and fee-like rows are named rather than dropped.
+
+test("D143: a name column and its code are found one to one, and only the name is suggested", async () => {
+  const { query, columns } = await load(
+    `SELECT * FROM (VALUES ('Spirits', 'S01'), ('Wine', 'W01'), ('Beer', 'B01')) t(class_name, class_code)`,
+  );
+  const distinct = await distinctCounts(query, columns);
+  const { chains, duplicates } = await findRelationships(query, columns, distinct);
+  assert.deepEqual(chains, []);
+  assert.deepEqual(duplicates, [["class_name", "class_code"]]);
+  const marked = columns.map((column) =>
+    duplicates.some(([, later]) => later === column.name) ? { ...column, duplicateOf: duplicates.find(([, l]) => l === column.name)![0] } : column,
+  );
+  assert.deepEqual(suggestAttributes(marked, distinct, new Set()), ["class_name"]);
+});
+
+test("D143: a real hierarchy is still a chain and is not called one to one", async () => {
+  const { query, columns } = await load(`SELECT * FROM (VALUES
+    ('Spirits', 'A-100'), ('Spirits', 'A-101'), ('Wine', 'B-200'), ('Beer', 'C-300')) t(category_name, model)`,
+  );
+  const distinct = await distinctCounts(query, columns);
+  const { chains, duplicates } = await findRelationships(query, columns, distinct);
+  assert.deepEqual(chains, [["category_name", "model"]]);
+  assert.deepEqual(duplicates, []);
+});
+
+test("D143: a fee row with no units is named in one sentence and kept", async () => {
+  const { query, columns } = await load(`SELECT * FROM (VALUES
+    ('2025', 'A-100', 10, 120.0), ('2026', 'A-100', 11, 132.0),
+    ('2025', 'Postage', 0, 24.0), ('2026', 'Postage', 0, 25.0),
+    ('2025', 'Adjustment', 0, -9.0), ('2026', 'Adjustment', 0, -10.0)) t(period, product, units, sales)`);
+  const found = await feeRows(query, "data", { periodColumn: "period", unitsColumn: "units", salesColumn: "sales", levels: [{ name: "product", columns: ["product"] }] });
+  assert.equal(found.withoutUnits, 4);
+  assert.deepEqual(found.named, ["Adjustment", "Postage"]);
+  assert.equal(
+    feeNote(found),
+    "4 rows have no units but some sales, and 2 of them are named like fees or adjustments; they are counted like products.",
+  );
 });

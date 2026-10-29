@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { loadPeriodList, trendPeriods } from "../src/app/periods.ts";
+import { coverageNote, coverageSql, loadPeriodList, readCoverage, trendPeriods } from "../src/app/periods.ts";
 import { openDatabase } from "../src/duckdb.ts";
 import { trend, type BridgeConfig } from "../src/engine.ts";
 
@@ -295,4 +295,46 @@ test("a capped window keeps the text decision made over the values it dropped", 
 test("R9: month-first month labels order by the month they name", async () => {
   assert.deepEqual((await loadOnly(["12.2024", "01.2025", "03.2024"])).values, ["03.2024", "12.2024", "01.2025"]);
   assert.deepEqual((await loadOnly(["12/2024", "01/2025", "03/2024"])).values, ["03/2024", "12/2024", "01/2025"]);
+});
+
+// D143. The note a setup shows before Calculate when the two default periods
+// cover different amounts of time.
+
+test("D143: a full year against a three-month year gets one plain note", () => {
+  const coverage = [
+    { period: "2025", months: 12, days: 363, rows: 120 },
+    { period: "2026", months: 3, days: 63, rows: 30 },
+  ];
+  assert.equal(
+    coverageNote(coverage, "2025", "2026"),
+    '"2025" covers 12 months and "2026" covers 3, so part of this change is the different time covered.',
+  );
+});
+
+test("D143: periods of about the same length get no note", () => {
+  assert.equal(coverageNote([{ period: "2025", months: 12, days: 363, rows: 1 }, { period: "2026", months: 12, days: 360, rows: 1 }], "2025", "2026"), null);
+  assert.equal(coverageNote([{ period: "2026-08", months: 1, days: 31, rows: 1 }, { period: "2026-09", months: 1, days: 30, rows: 1 }], "2026-08", "2026-09"), null);
+});
+
+test("D143: a month grain compares days, and a short month gets no note", () => {
+  assert.equal(coverageNote([{ period: "2026-02", months: 1, days: 28, rows: 1 }, { period: "2026-03", months: 1, days: 31, rows: 1 }], "2026-02", "2026-03"), null);
+});
+
+test("D143: the coverage query counts the months of each period of a date column", async () => {
+  const query = await openDatabase();
+  await query("SET threads = 1");
+  await query("CREATE TABLE data (sold_on DATE, units BIGINT, sales DOUBLE)");
+  await query(`INSERT INTO data VALUES
+    ('2025-01-05', 1, 10), ('2025-06-05', 1, 10), ('2025-12-05', 1, 10),
+    ('2026-02-05', 1, 10), ('2026-03-05', 1, 10)`);
+  const rows = await query(coverageSql({ table: "data", periodColumn: "sold_on", grain: "year" }));
+  const coverage = readCoverage(rows);
+  assert.deepEqual(coverage.map((entry) => [entry.period, entry.months, entry.rows]), [
+    ["2025", 3, 3],
+    ["2026", 2, 2],
+  ]);
+  assert.equal(
+    coverageNote(coverage, "2025", "2026"),
+    '"2025" covers 3 months and "2026" covers 2, so part of this change is the different time covered.',
+  );
 });

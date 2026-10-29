@@ -2,8 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   affectsRemember,
+  calculateGate,
+  cleanLevels,
+  effectiveName,
   ENGINE_LOADING_TEXT,
   guessSetup,
+  measureNote,
+  refineGuess,
   initialPhase,
   isDate,
   isNumeric,
@@ -78,6 +83,12 @@ function trailingNote(name: string): boolean {
 function measures(name: string, type = "DOUBLE"): Setup {
   return guessSetup([{ name, type }]);
 }
+
+const moneyWord = (name: string) =>
+  /sales|revenue|amount|value|turnover|total|umsatz|erlos|betrag|montant|ventes|vente|recette|valeur|affaires|ventas|importe|ingresos|valor|omzet|bedrag|verkoop|waarde/i.test(
+    name,
+  );
+const countWord = (name: string) => /unit|qty|quant|count|job|piece|menge|anzahl|absatz|stueck|stuck|boite|bottl/i.test(name);
 
 test("audit columns guess units and sales", () => {
   const setup = guessSetup([
@@ -229,13 +240,13 @@ test("kept Rate Card Sales", () => {
 test("kept Business Unit Sales", () => {
   const setup = measures("Business Unit Sales");
   assert.equal(setup.unitsColumn, "Business Unit Sales");
-  assert.equal(setup.salesColumn, "Business Unit Sales");
+  assert.equal(setup.salesColumn, "");
   assert.equal(setup.grossColumn, undefined);
 });
 
 test("kept Sales Volume (USD)", () => {
   const setup = measures("Sales Volume (USD)");
-  assert.equal(setup.unitsColumn, "Sales Volume (USD)");
+  assert.equal(setup.unitsColumn, "");
   assert.equal(setup.salesColumn, "Sales Volume (USD)");
   assert.equal(setup.grossColumn, undefined);
 });
@@ -365,9 +376,9 @@ test("pin: Total Quantity guesses units", () => {
   assert.equal(measures("Total Quantity", "DOUBLE").unitsColumn, "Total Quantity");
 });
 
-test("pin: Turnover stays out of sales and units", () => {
+test("pin: Turnover is read as sales", () => {
   const setup = measures("Turnover", "DOUBLE");
-  assert.equal(setup.salesColumn, "");
+  assert.equal(setup.salesColumn, "Turnover");
   assert.equal(setup.unitsColumn, "");
 });
 
@@ -1616,8 +1627,24 @@ const headers: { names: string[]; textMeasures: boolean }[] = [
 test("oracle headers match the legacy guess outside excluded words", () => {
   for (const row of headers) {
     // The German picks live outside the legacy oracle: its patterns know no
-    // German stems, unit prices or tax columns.
+    // German stems, unit prices or tax columns. The wider money words, in
+    // French, Spanish and Dutch or the English turnover and total, sit outside
+    // it the same way.
     if (row.names.some((name) => /jahr|menge|umsatz|nettoumsatz|stueck|steuer|erl[öo]s/i.test(name))) continue;
+    if (
+      row.names.some((name) =>
+        /montant|ventes|vente|recette|valeur|affaires|ventas|importe|ingresos|valor|omzet|bedrag|verkoop|waarde|turnover/i.test(
+          name,
+        ),
+      )
+    )
+      continue;
+    // A name that says both money and a count, such as "Sales Qty", is a count
+    // now, so Sales moves off it; that is the one judgement the oracle predates.
+    if (row.names.some((name) => moneyWord(name) && countWord(name))) continue;
+    // A count name now beats one that also names a size, such as "Volume (units)".
+    if (row.names.some((name) => countWord(name) && /volume|size|ml|litre|liter|kg|weight|gram|amount/i.test(name)))
+      continue;
     const columns: Column[] = row.names.map((name) => ({
       name,
       type: row.textMeasures || textNames.has(name) ? "VARCHAR" : "DOUBLE",
@@ -2183,4 +2210,179 @@ test("fiscal SQL uses integer month arithmetic only", () => {
   for (const banned of ["INTERVAL", "make_date", "to_date", "strptime"]) {
     assert.equal(ytd.includes(banned), false, banned);
   }
+});
+
+// D143. The guesses a loaded sales file gets, and the one sentence each hint
+// carries. Dollar amounts are made up and the products are neutral codes.
+
+const fact = (sum: number) => ({ sum });
+const dated = (first: string, last: string, months: number) => ({ first, last, months });
+
+const bottleFile: Column[] = [
+  { name: "ordered_on", type: "DATE", facts: dated("2026-08-01", "2026-09-30", 2) },
+  { name: "category_name", type: "VARCHAR" },
+  { name: "im_desc", type: "VARCHAR" },
+  { name: "sales_bottles", type: "BIGINT", facts: fact(1_075_135) },
+  { name: "bottle_volume_ml", type: "BIGINT", facts: fact(806_351_250) },
+  { name: "sales_dollars", type: "DOUBLE", facts: fact(15_514_108) },
+];
+
+test("D143: a bottle count is Units, the money column is Sales, and the bottle size is not Units", () => {
+  const setup = guessSetup(bottleFile);
+  assert.equal(setup.unitsColumn, "sales_bottles");
+  assert.equal(setup.salesColumn, "sales_dollars");
+  assert.notEqual(setup.unitsColumn, setup.salesColumn);
+  assert.equal(measureNote(bottleFile, setup), null);
+});
+
+test("D143: Units and Sales are never the same column", () => {
+  const setup = guessSetup([
+    { name: "Business Unit Sales", type: "DOUBLE", facts: fact(900) },
+    { name: "units", type: "BIGINT", facts: fact(90) },
+  ]);
+  assert.equal(setup.unitsColumn, "units");
+  assert.equal(setup.salesColumn, "");
+});
+
+test("D143: French money names are guessed, and two money columns get one hint", () => {
+  const file: Column[] = [
+    { name: "annee", type: "VARCHAR" },
+    { name: "classe", type: "VARCHAR" },
+    { name: "boites", type: "BIGINT", facts: fact(216) },
+    { name: "montant", type: "DOUBLE", facts: fact(5_600) },
+    { name: "chiffre_affaires", type: "DOUBLE", facts: fact(5_500) },
+  ];
+  const setup = guessSetup(file);
+  assert.equal(setup.unitsColumn, "boites");
+  assert.equal(setup.salesColumn, "montant");
+  assert.deepEqual(measureNote(file, setup), {
+    role: "sales",
+    sentence: 'Sales is "montant", but "chiffre_affaires" also looks like money; choose it in Sales if you meant that one.',
+  });
+});
+
+test("D143: Spanish and Dutch money names are guessed", () => {
+  assert.equal(measures("importe").salesColumn, "importe");
+  assert.equal(measures("omzet").salesColumn, "omzet");
+  assert.equal(measures("ventas").salesColumn, "ventas");
+  assert.equal(measures("bedrag").salesColumn, "bedrag");
+});
+
+test("D143: with no name that says sales, the money column is guessed from its values and said so", () => {
+  const file: Column[] = [
+    { name: "annee", type: "VARCHAR" },
+    { name: "classe", type: "VARCHAR" },
+    { name: "boites", type: "BIGINT", facts: fact(216) },
+    { name: "alpha", type: "DOUBLE", facts: fact(5_600) },
+    { name: "beta", type: "DOUBLE", facts: fact(5_040) },
+  ];
+  const guess = guessSetup(file);
+  assert.equal(guess.salesColumn, "");
+  const setup = { ...guess, ...refineGuess(guess, file) };
+  assert.equal(setup.salesColumn, "alpha");
+  assert.deepEqual(measureNote(file, setup), {
+    role: "sales",
+    sentence: 'No column name says sales, so Sales is "alpha" because its values look like money.',
+  });
+});
+
+test("D143: a per-unit price picked as Sales gets one hint and is never blocked", () => {
+  const file: Column[] = [
+    { name: "Quantity", type: "BIGINT", facts: fact(10_000) },
+    { name: "Price", type: "DOUBLE", facts: fact(2_000) },
+  ];
+  const setup = { ...guessSetup(file), salesColumn: "Price" };
+  assert.equal(setup.unitsColumn, "Quantity");
+  assert.deepEqual(measureNote(file, setup), {
+    role: "sales",
+    sentence: 'Sales totals less than Units, so "Price" may be a per-unit price rather than the amount sold.',
+  });
+});
+
+test("D143: a date file inside one year refines Year to Month", () => {
+  const setup = guessSetup(bottleFile);
+  assert.equal(setup.grain, "year");
+  assert.deepEqual(refineGuess(setup, bottleFile), { grain: "month" });
+});
+
+test("D143: dates that span two years keep the Year default", () => {
+  const file: Column[] = [
+    { name: "sold_on", type: "DATE", facts: dated("2025-01-02", "2026-03-28", 15) },
+    { name: "product", type: "VARCHAR" },
+    { name: "units", type: "BIGINT", facts: fact(900) },
+    { name: "sales", type: "DOUBLE", facts: fact(10_800) },
+  ];
+  const setup = guessSetup(file);
+  assert.equal(setup.grain, "year");
+  assert.deepEqual(refineGuess(setup, file), {});
+});
+
+test("D143: the one-period gate sentence names the period choice to change", () => {
+  const setup = guessSetup(bottleFile);
+  const gate = calculateGate({
+    setup,
+    prior: "",
+    current: "2026",
+    problem: { kind: "reason", message: 'With these settings "ordered_on" gives only one period, and a bridge compares two periods.' },
+  });
+  assert.deepEqual(gate, {
+    ready: false,
+    reason: 'With these settings "ordered_on" gives only one period, so choose Month in Compare by.',
+  });
+});
+
+test("D143: a month grain keeps its one-period sentence as it is", () => {
+  const setup = { ...guessSetup(bottleFile), grain: "month" as const };
+  const message = 'With these settings "ordered_on" gives only one period, and a bridge compares two periods.';
+  assert.equal(calculateGate({ setup, prior: "2026-08", current: "2026-08", problem: { kind: "reason", message } }).ready, false);
+  assert.equal(
+    (calculateGate({ setup, prior: "", current: "2026-08", problem: { kind: "reason", message } }) as { reason: string }).reason,
+    message,
+  );
+});
+
+test("D143: an empty attribute name falls back to its column, and a row with no column is dropped", () => {
+  assert.equal(effectiveName({ name: "", columns: ["model"] }), "model");
+  assert.equal(effectiveName({ name: "  ", columns: ["size", "colour"] }), "size + colour");
+  assert.equal(effectiveName({ name: "Family", columns: ["model"] }), "Family");
+  assert.deepEqual(
+    cleanLevels([
+      { name: "model", columns: ["model"] },
+      { name: "", columns: [] },
+      { name: "size", columns: [""] },
+    ]).map((level) => level.columns.join("+")),
+    ["model"],
+  );
+});
+
+test("D143: a gross column is for the Gross picker, not a second Sales hint", () => {
+  const file: Column[] = [
+    { name: "units", type: "BIGINT", facts: fact(90) },
+    { name: "gross_sales", type: "DOUBLE", facts: fact(1_200) },
+    { name: "net_sales", type: "DOUBLE", facts: fact(900) },
+  ];
+  const setup = guessSetup(file);
+  assert.equal(setup.salesColumn, "net_sales");
+  assert.equal(setup.grossColumn, "gross_sales");
+  assert.equal(measureNote(file, setup), null);
+});
+
+test("D143: a French, German, Spanish or Dutch year column is the period column", () => {
+  for (const name of ["annee", "Annee", "Jahr", "Jaar", "Año"]) {
+    assert.equal(guessSetup([{ name, type: "BIGINT" }, { name: "boites", type: "BIGINT" }]).periodColumn, name, name);
+  }
+});
+
+test("D143: a year column is never guessed as Sales from its values", () => {
+  const file: Column[] = [
+    { name: "annee", type: "BIGINT", facts: fact(8_094) },
+    { name: "boites", type: "BIGINT", facts: fact(432) },
+    { name: "alpha", type: "DOUBLE", facts: fact(5_600) },
+    { name: "beta", type: "DOUBLE", facts: fact(5_040) },
+  ];
+  const guess = guessSetup(file);
+  assert.equal(guess.periodColumn, "annee");
+  const setup = { ...guess, ...refineGuess(guess, file) };
+  assert.equal(setup.periodColumn, "annee");
+  assert.notEqual(setup.salesColumn, "annee");
 });
