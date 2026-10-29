@@ -473,9 +473,14 @@ async function refuseMixedSeparators(query: Query, file: File, reading: CsvReadi
       ? reading.text.slice(0, CSV_PREFIX_BYTES)
       : new TextDecoder().decode(new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer()));
   if (!prefix.includes(",") || !prefix.includes(";")) return;
-  const delimiter = (await sniffDialect(query, path))?.delimiter || ",";
-  const sentence = mixedSeparatorSentence(prefix, delimiter);
-  if (sentence !== null) throw new Error(sentence);
+  // A file with no single separator sniffs as some third character, or as
+  // nothing, so both marks are tried when the sniff names neither of them.
+  const sniffed = (await sniffDialect(query, path))?.delimiter || ",";
+  const tried = sniffed === ";" || sniffed === "," ? [sniffed] : [",", ";"];
+  for (const delimiter of tried) {
+    const sentence = mixedSeparatorSentence(prefix, delimiter);
+    if (sentence !== null) throw new Error(sentence);
+  }
 }
 
 /**
