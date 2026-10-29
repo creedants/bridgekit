@@ -26,17 +26,30 @@ export function Legend(props: { controls?: React.ReactNode; actions?: React.Reac
   );
 }
 
-export interface LabelPlan {
-  /** Category labels, wrapped onto at most two lines and cut with "…" when even that is too long. */
-  axis: string[];
-  axisRotate: 0 | 50;
-  /** Value labels, every one shown with its sign. */
-  values: string[];
-  /** Upright value labels when they are wider than a bar's slot. */
-  valueRotate: 0 | 90;
-  /** Room above the bars for the value labels. */
-  top: number;
-}
+/** Where a waterfall's labels go. Every label is level, so neither layout has a way to turn one. */
+export type LabelPlan =
+  | {
+      /** A bar per step across the chart, with its name below and its value above. */
+      layout: "columns";
+      /** Category labels, wrapped onto at most two lines and cut with "…" when even that is too long. */
+      axis: string[];
+      /** Value labels, every one shown with its sign. */
+      values: string[];
+    }
+  | {
+      /** A row per step down the chart, with its name at the left and its value after the bar. */
+      layout: "rows";
+      /** One line each, cut with "…" when too long. */
+      axis: string[];
+      values: string[];
+      /** Room right of the longest bar for its value label. */
+      valueRoom: number;
+      /** The chart's height in CSS px, which grows with the steps. */
+      height: number;
+    };
+
+/** The height of one row: an 11 px line and its bar. */
+const ROW = 28;
 
 type Measure = (text: string, fontSize: number) => number;
 
@@ -70,9 +83,9 @@ function cut(text: string, fits: (line: string) => boolean): string {
 }
 
 /**
- * Where a waterfall's labels go, decided before drawing so none overlaps another or loses its sign. Labels
- * that fit stay level; a bar slot too narrow for its words angles every category label instead; a long
- * attribute name is cut, and the tooltip keeps it whole.
+ * Where a waterfall's labels go, decided before drawing so none overlaps another or loses its sign. Columns
+ * are kept while every label fits level in a bar's slot; a chart too narrow for that draws rows instead. A
+ * long attribute name is cut, and the tooltip keeps it whole.
  */
 export function labelPlan(
   labels: readonly string[],
@@ -82,18 +95,15 @@ export function labelPlan(
 ): LabelPlan {
   const valueSize = 11;
   const axisSize = widthPx < 560 ? 10 : 11;
-  const widest = (texts: readonly string[], size: number) => Math.max(0, ...texts.map((t) => measure(t, size)));
+  const valueWidth = Math.max(0, ...values.map((value) => measure(value, valueSize)));
   // The value axis takes about the width of the widest value; the rest is shared by the bars.
-  const slot = (widthPx - widest(values, valueSize) - 20) / Math.max(labels.length, 1);
-  const valueWidth = widest(values, valueSize);
-  const valueRotate = valueWidth <= slot - 4 ? 0 : 90;
-  const top = valueRotate === 0 ? 26 : Math.ceil(valueWidth) + 12;
+  const slot = (widthPx - valueWidth - 20) / Math.max(labels.length, 1);
 
   const lineFits = (line: string) => measure(line, axisSize) <= slot - 6;
   const shorter = (label: string) =>
     SHORT_TERMS.reduce((text, [long, brief]) => text.replace(long, brief), label.replace(" (like-for-like)", ""));
-  // Seven characters a line is the least a level label can say; below that every label is angled.
-  if (lineFits("Volume.")) {
+  // Seven characters a line is the least a level label can say.
+  if (valueWidth <= slot - 4 && lineFits("Volume.")) {
     const axis = labels.map((label) => {
       for (const candidate of [label.replace(" (like-for-like)", ""), shorter(label)]) {
         const lines = wrap(candidate, lineFits);
@@ -102,10 +112,20 @@ export function labelPlan(
       const [first, ...rest] = wrap(shorter(label), lineFits, true) ?? [];
       return rest.length === 0 ? first : `${first}\n${cut(rest.join(" "), lineFits)}`;
     });
-    return { axis, axisRotate: 0, values: [...values], valueRotate, top };
+    return { layout: "columns", axis, values: [...values] };
   }
-  const axis = labels.map((label) => cut(shorter(label), (line) => measure(line, axisSize) <= 110));
-  return { axis, axisRotate: 50, values: [...values], valueRotate, top };
+  const nameFits = (line: string) => measure(line, valueSize) <= widthPx * 0.4;
+  const axis = labels.map((label) => {
+    const candidate = [label.replace(" (like-for-like)", ""), shorter(label)].find(nameFits);
+    return candidate ?? cut(shorter(label), nameFits);
+  });
+  return {
+    layout: "rows",
+    axis,
+    values: [...values],
+    valueRoom: Math.ceil(valueWidth) + 6,
+    height: labels.length * ROW + 40,
+  };
 }
 
 /** The page's colour and font tokens, read once by the chart. */
@@ -144,10 +164,37 @@ export function bridgeOption(input: {
   const { bars, plan, slim, scale, width, theme, priorSales, touch, selectable } = input;
   const colors = { total: theme.total, up: theme.up, down: theme.down };
   const stack = chartStack(bars);
+  const rows = !slim && plan.layout === "rows" ? plan : null;
+  const categoryAxis = {
+    type: "category",
+    ...(rows ? { inverse: true } : {}),
+    data: plan.axis,
+    axisTick: { show: false },
+    axisLine: { lineStyle: { color: theme.lineStrong } },
+    axisLabel: slim
+      ? { show: false }
+      : rows
+        ? { color: theme.text2, fontSize: 11, interval: 0 }
+        : { color: theme.text2, fontSize: width < 560 ? 10 : 11, interval: 0, lineHeight: 14, rotate: 0 },
+  };
+  const valueAxis = {
+    type: "value",
+    min: scale ? scale.min : axisFloor(bars),
+    ...(scale ? { max: scale.max } : {}),
+    ...(rows ? { splitNumber: 3 } : {}),
+    axisLabel: {
+      color: theme.text3,
+      fontSize: slim ? 9 : 11,
+      ...(rows ? { hideOverlap: true } : {}),
+      formatter: (v: number) => compact(v),
+    },
+    splitLine: { lineStyle: { color: theme.grid } },
+  };
   return {
     animation: false,
     textStyle: { fontFamily: theme.font },
-    grid: { left: 4, right: 8, top: slim ? 26 : plan.top, bottom: 4, containLabel: true },
+    // The value labels after the bars are series labels, which containLabel leaves out.
+    grid: { left: 4, right: rows ? 8 + rows.valueRoom : 8, top: rows ? 8 : 26, bottom: 4, containLabel: true },
     tooltip: {
       trigger: "axis",
       enterable: true,
@@ -169,22 +216,8 @@ export function bridgeOption(input: {
         return `<b>${bar.label}</b><br/>${bar.value > 0 ? "+" : ""}${amount}<br/>${share}% of prior sales${hint}`;
       },
     },
-    xAxis: {
-      type: "category",
-      data: plan.axis,
-      axisTick: { show: false },
-      axisLine: { lineStyle: { color: theme.lineStrong } },
-      axisLabel: slim
-        ? { show: false }
-        : { color: theme.text2, fontSize: width < 560 ? 10 : 11, interval: 0, lineHeight: 14, rotate: plan.axisRotate },
-    },
-    yAxis: {
-      type: "value",
-      min: scale ? scale.min : axisFloor(bars),
-      ...(scale ? { max: scale.max } : {}),
-      axisLabel: { color: theme.text3, fontSize: slim ? 9 : 11, formatter: (v: number) => compact(v) },
-      splitLine: { lineStyle: { color: theme.grid } },
-    },
+    xAxis: rows ? valueAxis : categoryAxis,
+    yAxis: rows ? categoryAxis : valueAxis,
     series: [
       {
         type: "bar",
@@ -205,15 +238,15 @@ export function bridgeOption(input: {
         emphasis: { disabled: touch() },
         label: {
           show: true,
-          position: "top",
+          position: rows ? "right" : "top",
+          ...(rows ? { distance: 4 } : {}),
           color: theme.text,
           fontSize: slim ? 9 : 11,
-          ...(!slim && plan.valueRotate === 90 ? { rotate: 90, align: "left", verticalAlign: "middle", distance: 4 } : {}),
           formatter: (p: { dataIndex: number }) => (slim ? valueText(bars[p.dataIndex]) : plan.values[p.dataIndex]),
         },
         data: bars.map((bar, index) => ({
           value: stack.extents[index],
-          itemStyle: { color: colors[bar.kind], borderRadius: bar.kind === "total" ? [2, 2, 0, 0] : 2 },
+          itemStyle: { color: colors[bar.kind], borderRadius: bar.kind !== "total" ? 2 : rows ? [0, 2, 2, 0] : [2, 2, 0, 0] },
         })),
       },
     ],
@@ -259,8 +292,6 @@ export function BridgeChart(props: {
 
   useEffect(() => {
     if (!element.current) return;
-    const chart = echarts.init(element.current);
-    onReady.current?.(chart);
     const theme: ChartTheme = {
       font: token("--font"),
       total: token("--total"),
@@ -277,8 +308,12 @@ export function BridgeChart(props: {
     const measure = canvasMeasure(theme.font);
     const planAt = (w: number) => labelPlan(bars.map((b) => b.label), bars.map(valueText), w, measure);
     const plan = planAt(width);
-    // A finger has no hover: a tap shows the value, and the tooltip's own button opens Movers.
     const box = element.current;
+    // Rows grow with the steps; columns keep the stylesheet's height.
+    box.style.height = !slim && plan.layout === "rows" ? `${plan.height}px` : "";
+    const chart = echarts.init(box);
+    onReady.current?.(chart);
+    // A finger has no hover: a tap shows the value, and the tooltip's own button opens Movers.
     let touch = matchMedia("(pointer: coarse)").matches;
     const onPointer = (event: PointerEvent) => {
       touch = event.pointerType === "touch";
