@@ -1,4 +1,14 @@
+import { periodExpression, type Grain } from "./setup.ts";
+
 export type PeriodSort = "numeric" | "text";
+
+/** How much time one period's rows cover. */
+export interface PeriodCoverage {
+  period: string;
+  months: number;
+  days: number;
+  rows: number;
+}
 
 /**
  * Caps the number of period values the list keeps. A file with more keeps the
@@ -151,4 +161,59 @@ export async function loadPeriodList(
  */
 export function trendPeriods(values: readonly string[], max: number): string[] {
   return values.slice(-max);
+}
+
+/**
+ * A statement over the named table that counts, per period, the months and days
+ * its rows cover, so a bridge can say when two periods differ in length.
+ */
+export function coverageSql(input: {
+  table: string;
+  periodColumn: string;
+  grain: Grain;
+  fiscalYearStart?: number;
+}): string {
+  const column = `"${input.periodColumn.replaceAll('"', '""')}"`;
+  const table = `"${input.table.replaceAll('"', '""')}"`;
+  const period = periodExpression(input.periodColumn, input.grain, input.fiscalYearStart, input.table);
+  return `SELECT ${period} AS period,
+       count(DISTINCT strftime(${column}, '%Y-%m'))::DOUBLE AS months,
+       count(DISTINCT CAST(${column} AS DATE))::DOUBLE AS days,
+       count(*)::DOUBLE AS rows
+     FROM ${table}
+     WHERE ${column} IS NOT NULL
+     GROUP BY 1
+     ORDER BY 1`;
+}
+
+/** The coverage rows as read, so a caller and a test share one shape. */
+export function readCoverage(rows: readonly Record<string, unknown>[]): PeriodCoverage[] {
+  return rows.map((row) => ({
+    period: String(row.period),
+    months: Number(row.months),
+    days: Number(row.days),
+    rows: Number(row.rows),
+  }));
+}
+
+/** Below this share of the longer period, the shorter one is said to cover less time. */
+const COVERAGE_FLOOR = 0.9;
+
+/**
+ * One plain sentence when the two periods cover different amounts of time, or
+ * null. A month grain compares days, which the calendar-month label tells
+ * apart from the year, year-to-date and quarter labels.
+ */
+export function coverageNote(
+  rows: readonly PeriodCoverage[],
+  prior: string,
+  current: string,
+): string | null {
+  const a = rows.find((row) => row.period === prior);
+  const b = rows.find((row) => row.period === current);
+  if (a === undefined || b === undefined) return null;
+  const unit = /^\d{4}-\d{2}$/.test(prior) && /^\d{4}-\d{2}$/.test(current) ? "days" : "months";
+  const [shorter, longer] = a[unit] <= b[unit] ? [a[unit], b[unit]] : [b[unit], a[unit]];
+  if (longer === 0 || shorter >= longer * COVERAGE_FLOOR) return null;
+  return `"${prior}" covers ${a[unit]} ${unit} and "${current}" covers ${b[unit]}, so part of this change is the different time covered.`;
 }

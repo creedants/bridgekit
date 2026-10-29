@@ -1,8 +1,27 @@
 import { useEffect, useRef, useState } from "react";
 import type { Level, Query } from "../engine.ts";
 import { sameSuggestedLevels } from "./fileProblems.ts";
-import { suggestAttributes, totalRowOffers, type TotalRow } from "./profile.ts";
-import { isDate, isNumeric, MAX_LEVEL_NAME, measureColumns, quote, TABLE, type Column, type Filter, type Grain, type Setup } from "./setup.ts";
+import { coverageNote, coverageSql, readCoverage, type PeriodCoverage } from "./periods.ts";
+import { feeNote, feeRows, suggestAttributes, totalRowOffers, type FeeRows, type TotalRow } from "./profile.ts";
+import {
+  cleanLevels,
+  effectiveName,
+  isDate,
+  isNumeric,
+  MAX_LEVEL_NAME,
+  measureColumns,
+  measureNote,
+  quote,
+  refineGuess,
+  TABLE,
+  type Column,
+  type Filter,
+  type Grain,
+  type Setup,
+} from "./setup.ts";
+
+/** Names that say how much one unit holds, so a shift in one can read as a price change. */
+const SIZE_NAME = /volume|size|ml|litre|liter/i;
 
 /** Count agreement lives here because this module loads eagerly and the lazily loaded results view can import it. */
 export function agree(count: number, one: string, many = one + "s"): string {
@@ -47,9 +66,68 @@ export function SetupPanel(props: {
   );
   const distinctByName = new Map(columns.map((column) => [column.name, column.distinct ?? 0]));
   const suggested = suggestAttributes(columns, distinctByName, usedNames);
-  // Names made from column headers are capped here, like typed ones.
-  const setLevels = (levels: Level[]) => onChange({ levels: levels.map((level) => ({ ...level, name: level.name.slice(0, MAX_LEVEL_NAME) })) });
+  // Names made from column headers are capped here, like typed ones. A level
+  // with no column never reaches the bridge, the report or the export.
+  const setLevels = (levels: Level[]) =>
+    onChange({
+      levels: cleanLevels(levels).map((level) => ({ ...level, name: level.name.slice(0, MAX_LEVEL_NAME) })),
+    });
   const setFilters = (filters: Filter[]) => onChange({ filters });
+  const factsSignature = columns
+    .map((column) => `${column.name}:${column.facts?.sum ?? ""}:${column.facts?.first ?? ""}:${column.facts?.last ?? ""}:${column.facts?.months ?? ""}`)
+    .join("|");
+  // A value-based refinement lands once per set of column facts, so a later choice by the visitor stands.
+  const refined = useRef("");
+  useEffect(() => {
+    if (refined.current === factsSignature) return;
+    refined.current = factsSignature;
+    const patch = refineGuess(setup, columns);
+    if (Object.keys(patch).length > 0) onChange(patch);
+  }, [factsSignature]);
+  const [coverage, setCoverage] = useState<PeriodCoverage[]>([]);
+  useEffect(() => {
+    let stale = false;
+    if (!isDate(periodType)) {
+      setCoverage([]);
+      return;
+    }
+    props
+      .query()
+      .then((query) =>
+        query(
+          coverageSql({
+            table: TABLE,
+            periodColumn: setup.periodColumn,
+            grain: setup.grain,
+            fiscalYearStart: setup.fiscalYearStart,
+          }),
+        ),
+      )
+      .then((rows) => !stale && setCoverage(readCoverage(rows)))
+      .catch(() => !stale && setCoverage([]));
+    return () => {
+      stale = true;
+    };
+  }, [periodType, setup.periodColumn, setup.grain, setup.fiscalYearStart, factsSignature]);
+  const partial = coverageNote(coverage, props.prior, props.current);
+  const [fees, setFees] = useState<FeeRows | null>(null);
+  const feeKey = `${factsSignature}|${setup.unitsColumn}|${setup.salesColumn}|${setup.levels[0]?.columns.join("+") ?? ""}`;
+  useEffect(() => {
+    let stale = false;
+    props
+      .query()
+      .then((query) => feeRows(query, TABLE, setup))
+      .then((found) => !stale && setFees(found))
+      .catch(() => !stale && setFees(null));
+    return () => {
+      stale = true;
+    };
+  }, [feeKey]);
+  const feesSentence = fees === null ? null : feeNote(fees);
+  const measureHint = measureNote(columns, setup);
+  const sizeColumn = columns.find(
+    (column) => column.name !== setup.periodColumn && SIZE_NAME.test(column.name),
+  );
   const suggestRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const [asking, setAsking] = useState(false);
@@ -176,6 +254,7 @@ export function SetupPanel(props: {
             </select>
           </label>
         </div>
+        {partial && <p className="hint">{partial}</p>}
       </fieldset>
 
       <fieldset>
@@ -185,7 +264,9 @@ export function SetupPanel(props: {
             Units
             <select value={setup.unitsColumn} onChange={(e) => onChange({ unitsColumn: e.target.value })}>
               <option value="">Choose…</option>
-              {numeric.map((c) => <option key={c.name}>{c.name}</option>)}
+              {numeric
+                .filter((c) => c.name !== setup.salesColumn)
+                .map((c) => <option key={c.name}>{c.name}</option>)}
             </select>
             <span className="hint">Quantity sold, such as pieces or cases.</span>
           </label>
@@ -193,8 +274,11 @@ export function SetupPanel(props: {
             Sales
             <select value={setup.salesColumn} onChange={(e) => onChange({ salesColumn: e.target.value })}>
               <option value="">Choose…</option>
-              {numeric.map((c) => <option key={c.name}>{c.name}</option>)}
+              {numeric
+                .filter((c) => c.name !== setup.unitsColumn)
+                .map((c) => <option key={c.name}>{c.name}</option>)}
             </select>
+            {measureHint && <span className="hint">{measureHint.sentence}</span>}
           </label>
         </div>
         <label>
@@ -254,11 +338,13 @@ export function SetupPanel(props: {
             <li key={level.columns.join("|")}>
               <div className="level-head">
                 <span className="rank">{i + 1}</span>
-                <input
-                  aria-label="Attribute name"
-                  value={level.name}
-                  maxLength={MAX_LEVEL_NAME}
-                  onChange={(e) => setLevels(setup.levels.with(i, { ...level, name: e.target.value }))}
+                <NameInput
+                  level={level}
+                  onCommit={(name) =>
+                    setLevels(
+                      setup.levels.with(i, { ...level, name: name.trim() === "" ? effectiveName(level) : name }),
+                    )
+                  }
                 />
                 <button className="icon" aria-label="Move up" title="Move up" disabled={i === 0} onClick={() => move(i, i - 1)}>↑</button>
                 <button className="icon" aria-label="Move down" title="Move down" disabled={i === setup.levels.length - 1} onClick={() => move(i, i + 1)}>↓</button>
@@ -285,9 +371,10 @@ export function SetupPanel(props: {
                     className="quiet"
                     aria-label="Combine another column into this attribute"
                     value=""
-                    onChange={(e) =>
-                      setLevels(setup.levels.with(i, { ...level, columns: [...level.columns, e.target.value] }))
-                    }
+                    onChange={(e) => {
+                      if (e.target.value === "") return;
+                      setLevels(setup.levels.with(i, { ...level, columns: [...level.columns, e.target.value] }));
+                    }}
                   >
                     <option value="">+ combine</option>
                     {free.map((c) => <option key={c.name}>{c.name}</option>)}
@@ -304,7 +391,10 @@ export function SetupPanel(props: {
           <select
             value=""
             aria-label="Add attribute"
-            onChange={(e) => setLevels([...setup.levels, { name: e.target.value, columns: [e.target.value] }])}
+            onChange={(e) => {
+              if (e.target.value === "") return;
+              setLevels([...setup.levels, { name: e.target.value, columns: [e.target.value] }]);
+            }}
           >
             <option value="">Add attribute…</option>
             {free.map((c) => (
@@ -320,8 +410,13 @@ export function SetupPanel(props: {
           .map((chain) => (
             <div className="rollup" key={chain.join(">")}>
               <span className="hint">
-                Roll-up found: {chain.join(" › ")}. Using every level splits mix by level.
+                These columns nest: {chain[0]} is broader than {chain.at(-1)}.
               </span>
+              {sizeColumn && !chain.includes(sizeColumn.name) && (
+                <span className="hint">
+                  "{sizeColumn.name}" is not in this roll-up, and a shift in it can show up as a price change.
+                </span>
+              )}
               <button
                 className="quiet"
                 onClick={() =>
@@ -342,6 +437,7 @@ export function SetupPanel(props: {
           </div>
         ))}
       </fieldset>
+      {feesSentence && <p className="hint">{feesSentence}</p>}
 
       <fieldset>
         <legend>Options</legend>
@@ -389,6 +485,31 @@ export function SetupPanel(props: {
 }
 
 const MAX_FILTER_VALUES = 500;
+
+/**
+ * The attribute name, which keeps its own text while focused. An empty or blank
+ * name falls back to the column's name when focus leaves, so a cleared name
+ * can never reach the bridge, the report or the Excel export.
+ */
+function NameInput(props: { level: Level; onCommit: (name: string) => void }) {
+  const [text, setText] = useState<string | null>(null);
+  const value = text ?? props.level.name;
+  return (
+    <input
+      aria-label="Attribute name"
+      value={value}
+      maxLength={MAX_LEVEL_NAME}
+      onChange={(e) => setText(e.target.value.slice(0, MAX_LEVEL_NAME))}
+      onBlur={() => {
+        props.onCommit(text ?? props.level.name);
+        setText(null);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+      }}
+    />
+  );
+}
 
 function FilterEditor(props: {
   filter: Filter;
