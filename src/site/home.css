@@ -120,11 +120,6 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
 
 .home .nav { background: var(--sheet); border-bottom-color: var(--rule); }
 
-/* The header's button is outlined here, so the hero's sample button is the one filled button on the first screen. */
-.home .nav nav a.button { background: transparent; color: var(--plum); }
-
-.home .nav nav a.button:hover { background: var(--plum); color: #fff; }
-
 .home section:not(.hero) { padding-block: clamp(3.5rem, 7vw, 6.5rem); }
 
 .home .anatomy, .home .views, .home .steps, .home section.price, .home .faq { border-top: 1px solid var(--rule-strong); }
