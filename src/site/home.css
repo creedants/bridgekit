@@ -77,13 +77,19 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .hero a.button:hover { border-color: var(--plum); background: var(--plum); }
 
-.hero { position: relative; overflow: hidden; padding-block: 4.5rem 4rem; }
+.hero .button.ghost { background: transparent; color: var(--plum); }
+
+.hero a.button.ghost:hover { background: var(--blush); }
+
+.hero { position: relative; overflow: hidden; padding-block: 4.5rem 4.5rem; }
 
 .hero::before { /* In the side-by-side layout, the sun slab bleeds off the right edge and starts inside the picture, beyond the copy column and gap. */
-  content: ""; position: absolute; top: 2.5rem; bottom: 0; left: calc(var(--gutter) + var(--pad) + 32rem); right: 0; background: var(--sun); border-top-left-radius: 28px;
+  content: ""; position: absolute; top: 2.5rem; bottom: 0; left: calc(var(--gutter) + var(--pad) + 33.5rem); right: 0; background: var(--sun); border-top-left-radius: 28px;
 }
 
-.hero .hero-grid { position: relative; display: grid; grid-template-columns: minmax(0, 23rem) minmax(0, 1fr); gap: 4rem; align-items: center; }
+.hero .hero-grid { position: relative; display: grid; grid-template-columns: minmax(0, 25rem) minmax(0, 1fr); gap: 3.5rem; align-items: start; }
+
+.hero .copy { padding-top: 2.5rem; }
 
 .hero .copy h1 { font-size: 4.25rem; font-weight: 500; line-height: 1; letter-spacing: -.025em; }
 
@@ -93,9 +99,11 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .hero .copy .lead { margin-top: 1.5rem; font-size: 1.3125rem; line-height: 1.45; color: var(--plum-2); max-width: 21rem; }
 
+.hero .copy .for { margin-top: .75rem; font: 600 .875rem/1.4 var(--sans); color: var(--plum); }
+
 .hero .copy .define { margin-top: .75rem; max-width: 21rem; font: 400 .9375rem/1.5 var(--sans); color: var(--plum-2); }
 
-.hero .copy .cta { margin-top: 2.25rem; padding: .95rem 1.35rem; font-size: .9375rem; }
+.hero .actions { margin-top: 2.25rem; }
 
 .hero .copy .cta span { transition: transform .15s; }
 
@@ -150,13 +158,21 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .hero .wf { display: block; width: 100%; height: auto; font-family: var(--sans); }
 
-.hero .wf .ax { font-size: 10.5px; fill: var(--t-text-3); }
+/* The wide chart draws at about 0.85 of its 760 units beside the copy, so its labels are set to read at 11 px there. */
+.hero .wf .ax { font-size: 12.5px; fill: var(--t-text-3); }
 
-.hero .wf .val { font-size: 11px; font-weight: 500; fill: var(--t-text); }
+.hero .wf .val { font-size: 13.5px; font-weight: 500; fill: var(--t-text); }
 
-.hero .wf .cat { font-size: 10.5px; fill: var(--t-text-2); }
+.hero .wf .cat { font-size: 13.5px; fill: var(--t-text-2); }
 
 .hero .wf-narrow { display: none; }
+
+/* A second real view, the Movers table, laps the picture's lower edge below the chart's labels. */
+.hero .peek { position: relative; z-index: 1; width: min(21rem, 64%); margin: -1.25rem 0 0 -3rem; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 0 0 1px rgba(66, 32, 61, .12), 0 2px 4px rgba(66, 32, 61, .06), 0 20px 44px -14px rgba(66, 32, 61, .4); }
+
+.hero .peek-head { padding: .6rem .9rem; border-bottom: 1px solid var(--t-line); font: 600 .75rem/1.2 var(--sans); color: var(--t-text); }
+
+.hero .peek img { display: block; width: 100%; height: auto; }
 
 @media (max-width: 1239px) {
   .hero { padding-block: 3.5rem 0; }
@@ -165,23 +181,20 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
   .hero .hero-grid { grid-template-columns: minmax(0, 1fr); gap: 3rem; }
 
+  .hero .copy { padding-top: 0; }
+
   .hero figure { margin-inline: calc(-1 * (var(--pad) + var(--gutter))); padding: 2.5rem calc(var(--pad) + var(--gutter)); background: var(--sun); }
 
-  .hero .frame { max-width: 48rem; transform: rotate(-1.5deg); }
+  .hero .frame { max-width: 48rem; margin-inline: auto; }
+
+  /* The table's right edge lines up with the picture's right edge, or the band's when the picture fills it. */
+  .hero .peek { margin: -1.25rem max(0px, (100% - 48rem) / 2) 0 auto; }
 }
 
 @media (hover: hover) {
   .hero a.frame:hover { transform: translateY(-4px); box-shadow: 0 0 0 1px rgba(66, 32, 61, .16), 0 4px 8px rgba(66, 32, 61, .08), 0 32px 72px -12px rgba(66, 32, 61, .45); }
 
   .hero-grid:has(a.frame:hover) .cta span { transform: translateX(3px); }
-}
-
-@media (max-width: 1239px) and (hover: hover) {
-  .hero a.frame:hover { transform: rotate(-1.5deg) translateY(-4px); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .hero .frame, .hero .copy .cta span { transition: none; }
 }
 
 @media (max-width: 800px) {
@@ -196,20 +209,31 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
   .hero .kpi:last-child { grid-column: span 2; }
 }
 
+/* On a phone the copy tightens and the picture drops its KPI tiles, so the chart starts within the first screen. */
 @media (max-width: 760px) {
-  .hero { padding-block: 2.5rem 0; }
+  .hero { padding-block: 1.5rem 0; }
 
-  .hero figure { padding: 1.75rem .75rem 1.5rem; }
+  .hero figure { padding: 1rem .75rem 1.5rem; }
 
-  .hero .hero-grid { gap: 2.25rem; }
+  .hero .hero-grid { gap: 1.5rem; }
 
-  .hero .copy h1 { font-size: 3rem; }
+  .hero .copy h1 { font-size: 2.75rem; }
 
-  .hero .copy .eyebrow { margin-bottom: 1rem; font-size: .8125rem; }
+  .hero .copy .eyebrow { margin-bottom: .75rem; font-size: .8125rem; }
 
-  .hero .copy .lead { font-size: 1.1875rem; margin-top: 1.1rem; }
+  .hero .copy .lead { font-size: 1.125rem; margin-top: .75rem; }
 
-  .hero .copy .cta { margin-top: 1.6rem; }
+  .hero .copy .define { font-size: .875rem; }
+
+  .hero .actions { margin-top: 1.25rem; }
+
+  .hero .copy .fine { margin-top: .75rem; }
+
+  .hero .copy .fine br { display: none; }
+
+  .hero .kpis { display: none; }
+
+  .hero .tabs { margin-top: 0; }
 
   .hero .frame { border-radius: 10px; }
 
@@ -231,37 +255,110 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
   .hero .wf-narrow { display: block; }
 
-  .hero .wf .ax, .hero .wf .cat { font-size: 9px; }
+  /* The narrow chart is the tool's phone layout, one row per step, drawn at about its 330 units on a 375 px screen. */
+  .hero .wf .ax { font-size: 10.5px; }
 
-  .hero .wf .val { font-size: 8px; letter-spacing: -.01em; }
+  .hero .wf .cat, .hero .wf .val { font-size: 11px; }
+
+  .hero .peek { width: 88%; margin-top: -.25rem; }
 }
 
-@media (max-width: 389px) {
-  /* the narrow chart draws below its 390 px size here, so its values grow to stay at 8 px or more */
-  .hero .wf .val { font-size: 8.75px; }
-}
+/* Calls to action: a filled and an outlined button side by side, each at least 44 px tall. */
 
-/* What you get */
+.actions { display: flex; flex-wrap: wrap; gap: .75rem; }
 
-.get-grid { display: grid; grid-template-columns: 4fr 8fr; gap: clamp(2rem, 4vw, 3.5rem); align-items: start; }
+.actions .button { gap: .6rem; min-height: 3rem; padding: .9rem 1.15rem; font-size: .9375rem; }
 
-.get-body .lead { margin-bottom: 2rem; }
+/* Section headings: a short sun rule, then a large two-tone heading. */
 
-.get dl { display: grid; grid-template-columns: minmax(7rem, auto) 1fr; gap: 0.9rem 1.5rem; max-width: 38rem; }
+.sec-head { margin-bottom: clamp(2rem, 4vw, 3rem); }
 
-.get dt { padding-top: 0.15rem; font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; font-size: 0.8125rem; font-weight: 600; color: var(--plum); }
+.sec-head::before { content: ""; display: block; width: 3rem; height: .375rem; margin-bottom: 1.25rem; background: var(--sun); }
 
-.get dd { font-size: 1.0625rem; line-height: 1.5; }
+.sec-head h2,
+.close h2 { max-width: 22ch; font-size: clamp(2rem, 3.6vw, 3rem); line-height: 1.06; letter-spacing: -.022em; }
 
-.more { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; margin-top: 1.75rem; }
+.sec-head h2 span { color: #7a5f73; }
+
+/* Views: real screenshots of the tool on the sample, each on a tinted card with a caption. */
+
+.views .gallery { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 1.25rem; }
+
+.views .card { display: flex; flex-direction: column; padding: 1.25rem 1.25rem 0; overflow: hidden; background: #faf6f9; border: 1px solid var(--blush); border-radius: 14px; }
+
+.views .card:nth-child(2), .views .card:nth-child(3) { grid-column: span 6; }
+
+.views .card.wide { grid-column: 1 / -1; }
+
+.views figcaption { max-width: 36rem; font: 400 .9375rem/1.45 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
+
+.views figcaption b { display: block; margin-bottom: .2rem; font-family: Newsreader, Georgia, "Times New Roman", serif; font-size: 1.375rem; font-weight: 500; line-height: 1.2; color: var(--plum); }
+
+/* The screenshot rises from the card's lower edge, so cards of unequal height keep their pictures aligned at the bottom. */
+.views .card picture { display: block; margin-top: auto; padding-top: 1.25rem; }
+
+.views .card img { display: block; width: 100%; height: auto; border: 1px solid var(--blush); border-bottom: 0; border-radius: 8px 8px 0 0; background: #fff; }
+
+.views .also { display: flex; flex-wrap: wrap; gap: .5rem; max-width: none; margin-top: 1.5rem; }
+
+.views .also b { align-self: center; margin-right: .25rem; font: 600 .8125rem/1.3 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum); }
+
+.views .also span { padding: .4rem .8rem; border: 1px solid var(--blush); border-radius: 999px; font: 500 .8125rem/1.3 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
+
+/* Steps: three columns on a shared baseline, each topped by one bar of the wordmark. */
+
+.steps { background: #faf6f9; }
+
+.steps .stair { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(1.25rem, 3vw, 2.5rem); margin: 0; padding: 0; list-style: none; counter-reset: step; }
+
+.steps .stair li { position: relative; display: flex; flex-direction: column; padding-top: 6.25rem; counter-increment: step; }
+
+/* The baseline the bars stand on. */
+.steps .stair li::after { content: ""; position: absolute; top: 5rem; left: 0; right: calc(-1 * clamp(1.25rem, 3vw, 2.5rem)); border-top: 1px solid var(--blush); }
+
+.steps .stair li:last-child::after { right: 0; }
+
+.steps .stair li::before { content: ""; position: absolute; left: 0; width: 3.25rem; background: var(--plum); }
+
+.steps .stair li:nth-child(1)::before { top: 2.75rem; height: 2.25rem; }
+
+.steps .stair li:nth-child(2)::before { top: 1.5rem; height: 1.25rem; background: var(--sun); }
+
+.steps .stair li:nth-child(3)::before { top: 0; height: 5rem; }
+
+.steps .stair h3 { max-width: 17rem; font-size: clamp(1.5rem, 2.4vw, 2rem); line-height: 1.15; letter-spacing: -.01em; }
+
+.steps .stair p { max-width: 17rem; margin-top: .6rem; font: 400 1rem/1.5 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
+
+.steps .stair h3::before { content: counter(step, decimal-leading-zero); display: block; margin-bottom: .6rem; font: 600 .8125rem/1 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; letter-spacing: .04em; color: #7a5f73; }
+
+/* Under each step, the part of the tool it names, cropped from the tool on the sample. The frames end on one line. */
+.steps .stair picture { display: block; margin-top: auto; padding-top: 1.5rem; }
+
+.steps .stair img { display: block; width: 100%; height: auto; border-radius: 10px; background: #fff; box-shadow: 0 0 0 1px rgba(66, 32, 61, .12), 0 2px 4px rgba(66, 32, 61, .06), 0 16px 32px -14px rgba(66, 32, 61, .3); }
+
+/* Questions: three short answers side by side, each under a rule. */
+
+/* Pricing above is white too, so its bottom padding is the gap. */
+.price + .faq { padding-top: 0; }
+
+.faq .qa { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(1.25rem, 3vw, 2.5rem); }
+
+.faq .qa div { padding-top: 1.25rem; border-top: 1px solid var(--blush); }
+
+.faq dt { font-size: 1.375rem; font-weight: 500; line-height: 1.25; }
+
+.faq dd { margin-top: .5rem; font: 400 1rem/1.55 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
 
 /* Privacy */
 
 .keeps { background: var(--plum); color: var(--blush); }
 
+.keeps-grid { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: clamp(2rem, 5vw, 4.5rem); align-items: center; }
+
 .keeps-inner { max-width: 38rem; }
 
-.keeps h2 { margin-bottom: 1rem; color: var(--sun); }
+.keeps h2 { margin-bottom: 1rem; color: var(--sun); font-size: clamp(2rem, 3.6vw, 3rem); line-height: 1.06; letter-spacing: -.022em; }
 
 .keeps p + p { margin-top: 1rem; }
 
@@ -269,19 +366,37 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .keeps a:hover { /* plum-2 fails contrast on the plum band */ color: var(--sun); }
 
+.keeps .check { padding: clamp(1.5rem, 3vw, 2rem); border: 1px solid rgba(231, 211, 226, .28); border-radius: 14px; background: rgba(255, 255, 255, .04); }
+
+.keeps .check h3 { margin-bottom: .5rem; font-size: 1.375rem; color: var(--paper); }
+
+.keeps .check p { font-size: 1.0625rem; line-height: 1.5; }
+
+.keeps .check .links { display: flex; flex-wrap: wrap; gap: 0 1.5rem; margin-top: .5rem; }
+
+.keeps .check .links a { display: inline-flex; align-items: center; min-height: 44px; font: 600 .9375rem/1.2 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; }
+
 /* Pricing */
 
-.price h2 { margin-bottom: clamp(1.5rem, 3vw, 2.5rem); }
+.plans { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; align-items: stretch; }
 
-.plans { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
+.plan { position: relative; display: flex; flex-direction: column; align-items: flex-start; padding: clamp(1.5rem, 3vw, 2.25rem); border: 1px solid var(--blush); border-radius: 14px; overflow: hidden; }
 
-.plan { position: relative; }
+/* The free plan is the one on offer: a filled plum card with the wordmark's three bars drawn large in its corner. */
+.plan:first-child { border-color: var(--plum); background: var(--plum); color: var(--blush); }
 
-.plan:first-child { padding-right: clamp(1.5rem, 3vw, 2.5rem); }
+.plan:first-child::after { content: ""; position: absolute; right: clamp(1.5rem, 3vw, 2.25rem); bottom: clamp(1.5rem, 3vw, 2.25rem); width: 7.5rem; height: 7rem;
+  background: linear-gradient(#5c3a56, #5c3a56) 0 100% / 2rem 3.15rem no-repeat, linear-gradient(var(--sun), var(--sun)) 2.75rem calc(100% - 3.15rem) / 2rem 1.75rem no-repeat, linear-gradient(#5c3a56, #5c3a56) 100% 100% / 2rem 7rem no-repeat; }
 
-.plan + .plan { padding-left: clamp(1.5rem, 3vw, 2.5rem); }
+.plan:first-child h3, .plan:first-child .price { color: var(--paper); }
 
-.plan + .plan::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; border-left: 1px solid var(--blush); }
+.plan:first-child .tag { background: var(--sun); color: var(--plum); }
+
+.plan:first-child .button { border-color: var(--sun); background: var(--sun); color: var(--plum); }
+
+.plan:first-child a.button:hover { border-color: var(--paper); background: var(--paper); color: var(--plum); }
+
+.plan:first-child .button:focus-visible { outline-color: var(--sun); }
 
 .tag { display: inline-block; padding: 0.2rem 0.5rem; background: var(--plum); color: var(--paper); font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; font-size: 0.8125rem; font-weight: 500; }
 
@@ -289,7 +404,7 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .plan h3 { margin: 0.75rem 0 0.25rem; font-size: 1.375rem; }
 
-.plan .price { font-size: clamp(2rem, 3vw, 2.5rem); font-weight: 500; line-height: 1.1; }
+.plan .price { font-size: clamp(2.25rem, 3.4vw, 2.75rem); font-weight: 500; line-height: 1.1; }
 
 .plan .price span { font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; font-size: 0.8125rem; font-weight: 500; color: var(--plum-2); }
 
@@ -302,6 +417,28 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 .plan li { font-size: 1.0625rem; line-height: 1.45; }
 
 .plan li small { display: block; margin-top: 0.15rem; font: 400 0.8125rem/1.5 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
+
+.plan .button { min-height: 44px; margin-top: 1.5rem; }
+
+.plan ul + .button { margin-top: auto; }
+
+/* Closing band */
+
+.close { background: var(--sun); }
+
+.close-inner { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 2rem 3rem; }
+
+.close h2 span { color: var(--plum-2); }
+
+.close .button.ghost { border-color: var(--plum); }
+
+.close a.button.ghost:hover { background: var(--paper); }
+
+@media (prefers-reduced-motion: reduce) {
+  .hero .frame, .hero .copy .cta span { transition: none; }
+
+  .hero a.frame:hover, .hero .copy .cta:hover span, .hero-grid:has(a.frame:hover) .cta span { transform: none; }
+}
 
 /* Footer */
 
@@ -327,21 +464,60 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
 /* Narrow screens */
 
 @media (max-width: 56rem) {
-  .get-grid { grid-template-columns: 1fr; gap: 1.25rem; }
+  /* Below this width each card shows the tool's own phone layout of its view, whole, so nothing scrolls sideways. */
+  .views .gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  .views .card:nth-child(n) { grid-column: auto; }
+
+  .views .card.wide { grid-row: span 2; }
+
+  .faq .qa { grid-template-columns: minmax(0, 1fr); }
+
+  .steps .stair { grid-template-columns: minmax(0, 1fr); gap: 1.75rem; }
+
+  .steps .stair li { min-height: 5rem; padding: 0 0 0 4.75rem; }
+
+  .steps .stair li::after { right: auto; width: 3.25rem; }
+
+  /* In one column the steps stay short; the pictures show from 56rem up. */
+  .steps .stair picture { display: none; }
+
+  .keeps-grid { grid-template-columns: minmax(0, 1fr); }
 
   .plans { grid-template-columns: 1fr; }
 
-  .plan:first-child { padding-right: 0; }
-
-  .plan + .plan { padding-left: 0; padding-top: 2.5rem; }
-
-  .plan + .plan::before { right: 0; bottom: auto; height: 0; border-left: 0; border-top: 1px solid var(--blush); }
+  .close-inner { flex-direction: column; align-items: flex-start; }
 }
 
 @media (max-width: 40rem) {
   .nav-inner { flex-wrap: wrap; height: auto; gap: 0.75rem; padding-block: 0.75rem; }
 
   .nav nav { width: 100%; justify-content: space-between; gap: 0.5rem; }
+
+  /* On the home page the nav keeps one row: Guide and Method stay in the footer. */
+  .home .nav-inner { flex-wrap: nowrap; height: 3.75rem; padding-block: 0; gap: 0.75rem; }
+
+  .home .nav nav { width: auto; gap: 0.75rem; }
+
+  .home .nav nav .wide { display: none; }
+
+  .views .gallery { grid-template-columns: minmax(0, 1fr); }
+
+  .views .card.wide { grid-row: auto; }
+
+  /* The picture runs to the card's edges, so the phone layout draws at nearly its own size. */
+  .views .card { padding: 1.25rem 1rem 0; }
+
+  .views .card picture { margin-inline: -1rem; }
+
+  .views .card img { max-width: 24rem; margin-inline: auto; border-width: 1px 0 0; border-radius: 0; }
+
+  /* The free card's bars at 0.6 scale, low enough to sit beside its button, clear of the line above it. */
+  .plan:first-child::after { width: 4.5rem; height: 4.2rem; background-size: 1.2rem 1.89rem, 1.2rem 1.05rem, 1.2rem 4.2rem; background-position: 0 100%, 1.65rem calc(100% - 1.89rem), 100% 100%; }
+}
+
+@media (max-width: 22.4375rem) {
+  .home .nav nav a[href="#pricing"] { display: none; }
 }
 
 @media (pointer: coarse), (max-width: 480px) {
@@ -350,10 +526,4 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
   .nav nav a:not(.button), .footer-inner a { display: inline-flex; align-items: center; }
 
   .footer-inner { row-gap: 0; }
-}
-
-@media (max-width: 34rem) {
-  .get dl { grid-template-columns: 1fr; gap: 0.15rem; }
-
-  .get dd { margin-bottom: 1rem; }
 }

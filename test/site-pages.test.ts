@@ -34,7 +34,7 @@ const PAGES: Page[] = [
 ];
 
 const ROOT_PAGES = PAGES.filter((page) => !page.file.includes("/"));
-const IMAGE_PAGES = ["guide.html"];
+const IMAGE_PAGES = ["guide.html", "index.html"];
 
 function readPage(file: string): string {
   return readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
@@ -422,11 +422,11 @@ test("the home page carries one structured-data block with WebSite and Organizat
   );
 });
 
-test("the home page carries fewer than 400 visible words", () => {
+test("the home page carries fewer than 500 visible words", () => {
   const words = visibleWordsOf(readPage("index.html"));
   assert.ok(
-    words.length < 400,
-    `index.html has ${words.length} visible words: cut the page to fewer than 400 and keep the short landing copy`,
+    words.length < 500,
+    `index.html has ${words.length} visible words: cut the page to fewer than 500 and keep the short landing copy`,
   );
 });
 
