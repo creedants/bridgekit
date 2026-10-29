@@ -109,9 +109,10 @@ async function sniffDialect(query: Query, path: string): Promise<CsvDialect | un
   }
 }
 
-// How the loader read each column of slash dates. The first two marks name an
-// order the file's own values proved; the last two name one the browser's
-// language decided.
+// How the loader read each column of slash dates. The first two marks are the
+// ones the typed read already carried, including a four-digit column whose own
+// values proved neither order and which this pass then put in the browser's
+// order; the last two are the new text columns, whose sentence says why.
 const MONTH_FIRST_MARK = "month first";
 const DAY_FIRST_MARK = "day first";
 // A VARCHAR slash column the loader read in the browser's own order, with no
