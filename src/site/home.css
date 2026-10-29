@@ -99,6 +99,8 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .hero .copy .lead { margin-top: 1.5rem; font-size: 1.3125rem; line-height: 1.45; color: var(--plum-2); max-width: 21rem; }
 
+.hero .copy .for { margin-top: .75rem; font: 600 .875rem/1.4 var(--sans); color: var(--plum); }
+
 .hero .copy .define { margin-top: .75rem; max-width: 21rem; font: 400 .9375rem/1.5 var(--sans); color: var(--plum-2); }
 
 .hero .actions { margin-top: 2.25rem; }
@@ -156,16 +158,17 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .hero .wf { display: block; width: 100%; height: auto; font-family: var(--sans); }
 
-.hero .wf .ax { font-size: 10.5px; fill: var(--t-text-3); }
+/* The wide chart draws at about 0.85 of its 760 units beside the copy, so its labels are set to read at 11 px there. */
+.hero .wf .ax { font-size: 12.5px; fill: var(--t-text-3); }
 
-.hero .wf .val { font-size: 11px; font-weight: 500; fill: var(--t-text); }
+.hero .wf .val { font-size: 13.5px; font-weight: 500; fill: var(--t-text); }
 
-.hero .wf .cat { font-size: 10.5px; fill: var(--t-text-2); }
+.hero .wf .cat { font-size: 13.5px; fill: var(--t-text-2); }
 
 .hero .wf-narrow { display: none; }
 
 /* A second real view, the Movers table, laps the picture's lower edge below the chart's labels. */
-.hero .peek { position: relative; z-index: 1; width: min(21rem, 64%); margin: -1.75rem 0 0 -3rem; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 0 0 1px rgba(66, 32, 61, .12), 0 2px 4px rgba(66, 32, 61, .06), 0 20px 44px -14px rgba(66, 32, 61, .4); }
+.hero .peek { position: relative; z-index: 1; width: min(21rem, 64%); margin: -1.25rem 0 0 -3rem; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 0 0 1px rgba(66, 32, 61, .12), 0 2px 4px rgba(66, 32, 61, .06), 0 20px 44px -14px rgba(66, 32, 61, .4); }
 
 .hero .peek-head { padding: .6rem .9rem; border-bottom: 1px solid var(--t-line); font: 600 .75rem/1.2 var(--sans); color: var(--t-text); }
 
@@ -185,7 +188,7 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
   .hero .frame { max-width: 48rem; margin-inline: auto; }
 
   /* The table's right edge lines up with the picture's right edge, or the band's when the picture fills it. */
-  .hero .peek { margin: -1.75rem max(0px, (100% - 48rem) / 2) 0 auto; }
+  .hero .peek { margin: -1.25rem max(0px, (100% - 48rem) / 2) 0 auto; }
 }
 
 @media (hover: hover) {
@@ -206,20 +209,31 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
   .hero .kpi:last-child { grid-column: span 2; }
 }
 
+/* On a phone the copy tightens and the picture drops its KPI tiles, so the chart starts within the first screen. */
 @media (max-width: 760px) {
-  .hero { padding-block: 2.5rem 0; }
+  .hero { padding-block: 1.5rem 0; }
 
-  .hero figure { padding: 1.75rem .75rem 1.5rem; }
+  .hero figure { padding: 1rem .75rem 1.5rem; }
 
-  .hero .hero-grid { gap: 2.25rem; }
+  .hero .hero-grid { gap: 1.5rem; }
 
-  .hero .copy h1 { font-size: 3rem; }
+  .hero .copy h1 { font-size: 2.75rem; }
 
-  .hero .copy .eyebrow { margin-bottom: 1rem; font-size: .8125rem; }
+  .hero .copy .eyebrow { margin-bottom: .75rem; font-size: .8125rem; }
 
-  .hero .copy .lead { font-size: 1.1875rem; margin-top: 1.1rem; }
+  .hero .copy .lead { font-size: 1.125rem; margin-top: .75rem; }
 
-  .hero .actions { margin-top: 1.6rem; }
+  .hero .copy .define { font-size: .875rem; }
+
+  .hero .actions { margin-top: 1.25rem; }
+
+  .hero .copy .fine { margin-top: .75rem; }
+
+  .hero .copy .fine br { display: none; }
+
+  .hero .kpis { display: none; }
+
+  .hero .tabs { margin-top: 0; }
 
   .hero .frame { border-radius: 10px; }
 
@@ -241,16 +255,12 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
   .hero .wf-narrow { display: block; }
 
-  .hero .wf .ax, .hero .wf .cat { font-size: 9px; }
+  /* The narrow chart is the tool's phone layout, one row per step, drawn at about its 330 units on a 375 px screen. */
+  .hero .wf .ax { font-size: 10.5px; }
 
-  .hero .wf .val { font-size: 8px; letter-spacing: -.01em; }
+  .hero .wf .cat, .hero .wf .val { font-size: 11px; }
 
   .hero .peek { width: 88%; margin-top: -.25rem; }
-}
-
-@media (max-width: 389px) {
-  /* the narrow chart draws below its 390 px size here, so its values grow to stay at 8 px or more */
-  .hero .wf .val { font-size: 8.75px; }
 }
 
 /* Calls to action: a filled and an outlined button side by side, each at least 44 px tall. */
@@ -276,9 +286,7 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .views .card { display: flex; flex-direction: column; padding: 1.25rem 1.25rem 0; overflow: hidden; background: #faf6f9; border: 1px solid var(--blush); border-radius: 14px; }
 
-.views .card:nth-child(2) { grid-column: span 7; }
-
-.views .card:nth-child(3) { grid-column: span 5; }
+.views .card:nth-child(2), .views .card:nth-child(3) { grid-column: span 6; }
 
 .views .card.wide { grid-column: 1 / -1; }
 
@@ -320,7 +328,19 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .steps .stair h3 { max-width: 17rem; font-size: clamp(1.5rem, 2.4vw, 2rem); line-height: 1.15; letter-spacing: -.01em; }
 
+.steps .stair p { max-width: 17rem; margin-top: .6rem; font: 400 1rem/1.5 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
+
 .steps .stair h3::before { content: counter(step, decimal-leading-zero); display: block; margin-bottom: .6rem; font: 600 .8125rem/1 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; letter-spacing: .04em; color: #7a5f73; }
+
+/* Questions: three short answers side by side, each under a rule. */
+
+.faq .qa { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(1.25rem, 3vw, 2.5rem); }
+
+.faq .qa div { padding-top: 1.25rem; border-top: 1px solid var(--blush); }
+
+.faq dt { font-size: 1.375rem; font-weight: 500; line-height: 1.25; }
+
+.faq dd { margin-top: .5rem; font: 400 1rem/1.55 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
 
 /* Privacy */
 
@@ -436,20 +456,14 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
 /* Narrow screens */
 
 @media (max-width: 56rem) {
-  .views .gallery { grid-template-columns: minmax(0, 1fr); }
+  /* Below this width each card shows the tool's own phone layout of its view, whole, so nothing scrolls sideways. */
+  .views .gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
   .views .card:nth-child(n) { grid-column: auto; }
 
-  /* Below this width a whole table would shrink past reading, so each keeps a readable size and scrolls sideways to the card's edge. */
-  .views .card picture { margin-right: -1.25rem; overflow-x: auto; overscroll-behavior-x: contain; }
+  .views .card.wide { grid-row: span 2; }
 
-  .views .card img { max-width: none; }
-
-  .views .card.wide img { width: 46rem; }
-
-  .views .card:nth-child(2) img { width: 40rem; }
-
-  .views .card:nth-child(3) img { width: 30rem; }
+  .faq .qa { grid-template-columns: minmax(0, 1fr); }
 
   .steps .stair { grid-template-columns: minmax(0, 1fr); gap: 1.75rem; }
 
@@ -468,6 +482,28 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
   .nav-inner { flex-wrap: wrap; height: auto; gap: 0.75rem; padding-block: 0.75rem; }
 
   .nav nav { width: 100%; justify-content: space-between; gap: 0.5rem; }
+
+  /* On the home page the nav keeps one row: Guide and Method stay in the footer. */
+  .home .nav-inner { flex-wrap: nowrap; height: 3.75rem; padding-block: 0; gap: 0.75rem; }
+
+  .home .nav nav { width: auto; gap: 0.75rem; }
+
+  .home .nav nav .wide { display: none; }
+
+  .views .gallery { grid-template-columns: minmax(0, 1fr); }
+
+  .views .card.wide { grid-row: auto; }
+
+  /* The picture runs to the card's edges, so the phone layout draws at nearly its own size. */
+  .views .card { padding: 1.25rem 1rem 0; }
+
+  .views .card picture { margin-inline: -1rem; }
+
+  .views .card img { max-width: 24rem; margin-inline: auto; border-width: 1px 0 0; border-radius: 0; }
+}
+
+@media (max-width: 22.4375rem) {
+  .home .nav nav a[href="#pricing"] { display: none; }
 }
 
 @media (pointer: coarse), (max-width: 480px) {
