@@ -1,5 +1,7 @@
 import { amountsNote, DEFAULT_CELLS_TABLE, HUGE_AMOUNTS, type Query } from "../engine.ts";
+import { readCsvFile } from "./encoding.ts";
 import { isNumeric, PERIOD, VIEW } from "./setup.ts";
+import type { CsvDialect } from "./profile.ts";
 
 /** The most fields a header may hold before the file is refused as too wide. */
 export const MAX_COLUMNS_READ = 10_000;
@@ -52,10 +54,11 @@ const parsedNumber = (value: string) => northAmerican(`(${money(value)}).text`);
 /**
  * True when a cell's text is a number under the loader's own reading, so a
  * currency sign or brackets do not make it text. NaN and the infinities read
- * as DOUBLE but are not numbers, so a bridge never receives one.
+ * as DOUBLE but are not numbers, so a bridge never receives one. The parse is
+ * evaluated once, in a scalar subquery, because the gate runs it per row.
  */
 export const readsAsNumber = (value: string) =>
-  `(${parsedNumber(value)} IS NOT NULL AND isfinite(${parsedNumber(value)}))`;
+  `coalesce((SELECT isfinite(${parsedNumber(value)})), false)`;
 
 const decimalComma = (value: string) =>
   `try_cast(replace(replace(trim(${value}), '.', ''), ',', '.') AS DOUBLE)`;
@@ -99,11 +102,13 @@ const wellFormed = (value: string) =>
   `(regexp_matches(${decorationValue(value)}, '${DECIMAL_COMMA_NUMBER}') OR regexp_matches(${decorationValue(value)}, '${NORTH_AMERICAN_NUMBER}'))`;
 
 /**
- * A value the conversion gate counts as a number: a money shape under either
- * convention, so `1.979.849,56` reaches the whole-column decision, or today's
- * reading. Only the gate uses it; the conversion branches keep their own tests.
+ * A value the conversion gate counts as a number: a decimal-comma shape, so
+ * `1.979.849,56` reaches the whole-column decision, or the loader's own parse.
+ * Both read the column's materialized money text, so nothing expands `money()`
+ * a second time per row.
  */
-const gateNumber = (column: string) => `(${wellFormed(column)} OR ${readsAsNumber(column)})`;
+const finiteParse = (parse: string) => `(${parse} IS NOT NULL AND isfinite(${parse}))`;
+const gateText = (value: string) => `(${finiteParse(decimalComma(value))} OR ${finiteParse(northAmerican(value))})`;
 
 interface ColumnCounts {
   nonBlank: number;
@@ -123,6 +128,12 @@ interface ColumnCounts {
 
 function quotedName(name: string): string {
   return `"${name.replaceAll('"', '""')}"`;
+}
+
+function plainName(quoted: string): string {
+  return quoted.length >= 2 && quoted.startsWith('"') && quoted.endsWith('"')
+    ? quoted.slice(1, -1).replaceAll('""', '"')
+    : quoted;
 }
 
 function varcharColumns(described: Record<string, unknown>[]): string[] {
@@ -164,7 +175,7 @@ function provesBothStyles(counts: ColumnCounts): boolean {
 function formattingMeasures(column: string, index: number): string {
   return [
     `count(${column})::DOUBLE AS n${index}`,
-    `count(*) FILTER (WHERE ${gateNumber(column)})::DOUBLE AS ok${index}`,
+    `count(*) FILTER (WHERE ${gateText(moneyField(index, "text"))})::DOUBLE AS ok${index}`,
     `count(*) FILTER (WHERE ${formatted(column, index)})::DOUBLE AS f${index}`,
   ].join(", ");
 }
@@ -264,7 +275,7 @@ async function alterableColumns(query: Query, table: string, columns: string[]):
 /** Where a loaded table's rows sit in the file it came from, when the loader knew for free. */
 export type FileRows =
   | { readonly kind: "sheet"; readonly rows: readonly number[] }
-  | { readonly kind: "csv"; readonly file: Blob };
+  | { readonly kind: "csv"; readonly file: Blob; readonly dialect?: CsvDialect };
 
 export async function convertFormattedNumbers(query: Query, table: string, rows?: FileRows): Promise<void> {
   const tableName = quotedName(table);
@@ -278,7 +289,7 @@ export async function convertFormattedNumbers(query: Query, table: string, rows?
   const existing = new Set((await query(`DESCRIBE ${tableName}`)).map((row) => String(row.column_name).toLowerCase()));
   const temporary: string[] = [];
   const parsed = likely.map(() => "");
-  const rowOf = locateRows(query, tableName, rows);
+  const rowOf = locateRows(query, tableName, table, rows);
   let failure: { error: unknown } | undefined;
   try {
     for (const [index, column] of likely.entries()) {
@@ -332,51 +343,185 @@ export async function convertFormattedNumbers(query: Query, table: string, rows?
 }
 
 /** The file row of a table row, or undefined where the file cannot prove one. */
-type RowOf = (at: number) => Promise<number | undefined>;
+type RowOf = (at: number, column: string, value: string) => Promise<number | undefined>;
 
 /**
  * A row lookup that reads the CSV only when a sentence is about to name a row.
- * A sheet already knows its rows. A CSV names one only when its line breaks
- * match the table's row count plus its header line.
+ * A sheet already knows its rows. A CSV proves one only when its logical
+ * records match the table's row count and the located field holds the value.
  */
-function locateRows(query: Query, tableName: string, rows: FileRows | undefined): RowOf {
+function locateRows(query: Query, tableName: string, table: string, rows: FileRows | undefined): RowOf {
   if (rows === undefined) return async () => undefined;
   if (rows.kind === "sheet") return async (at) => rows.rows[at];
-  let first: Promise<number | undefined> | undefined;
-  return async (at) => {
-    first ??= csvFirstRow(query, tableName, rows.file);
-    const offset = await first;
-    return offset === undefined ? undefined : offset + at;
+  return async (at, column, value) => {
+    try {
+      const dialect = rows.dialect ?? DEFAULT_CSV_DIALECT;
+      const [counted] = await query(`SELECT count(*)::DOUBLE AS n FROM ${tableName}`);
+      const [where] = await query(
+        `SELECT column_index - 1 AS i FROM duckdb_columns()
+         WHERE schema_name = current_schema() AND table_name = ${literal(table)} AND column_name = ${literal(plainName(column))}`,
+      );
+      if (where?.i == null) return undefined;
+      const scan = await scanCsvSlot(rows.file, dialect, at, Number(where.i));
+      if (scan === undefined || scan.dataRecords !== Number(counted?.n) || scan.row === undefined) return undefined;
+      return scan.text?.trim() === value.trim() ? scan.row : undefined;
+    } catch {
+      return undefined;
+    }
   };
 }
 
-async function csvFirstRow(query: Query, tableName: string, file: Blob): Promise<number | undefined> {
-  const [row] = await query(`SELECT count(*)::DOUBLE AS n FROM ${tableName}`);
-  return (await countLineBreaks(file)) === Number(row?.n) + 1 ? 2 : undefined;
+const DEFAULT_CSV_DIALECT: CsvDialect = {
+  delimiter: ",",
+  quote: '"',
+  escape: '"',
+  header: true,
+  skipRows: 0,
+  comment: "",
+};
+
+type FieldMode = "start" | "unquoted" | "quoted" | "escaped" | "quoteSeen";
+
+interface SlotScan {
+  /** Loaded records after the header, which the table's row count must equal. */
+  readonly dataRecords: number;
+  /** The asked record's row in the file, counting skipped and empty slots from 1. */
+  row?: number;
+  /** That record's asked field, as the reader captured it. */
+  text?: string;
 }
 
-/** Line breaks in a file, counted a CRLF pair as one, without holding the whole file. */
-async function countLineBreaks(file: Blob): Promise<number> {
-  const reader = file.stream().getReader();
-  let breaks = 0;
-  let previous = -1;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      for (const byte of value as Uint8Array) {
-        if (byte === 0x0a) {
-          if (previous !== 0x0d) breaks += 1;
-        } else if (byte === 0x0d) {
-          breaks += 1;
-        }
-        previous = byte;
+/**
+ * Reads a CSV the way the loader did and counts record slots, which are the
+ * file's rows: a line break outside a quoted field ends one slot, a completely
+ * empty slot is a row the loader skips, and a break inside quotes belongs to
+ * its record. Slots skipped by the sniffer and the header are counted but not
+ * loaded. Undefined when the text ends inside a quoted field, or a closing
+ * quote is followed by something the reader would refuse.
+ */
+async function scanCsvSlot(file: Blob, dialect: CsvDialect, ordinal: number, field: number): Promise<SlotScan | undefined> {
+  const delimiter = dialect.delimiter;
+  const quoteChar = dialect.quote;
+  // The reader treats a doubled quote as one quote, and the sniffer reports that
+  // convention as either an empty escape or the quote itself.
+  const escapeChar = dialect.escape === quoteChar ? "" : dialect.escape;
+  const headerOffset = dialect.header ? 1 : 0;
+  const skipped = dialect.skipRows;
+
+  let slot = 1;
+  let loaded = 0;
+  let empty = true;
+  let column = 0;
+  let mode: FieldMode = "start";
+  let carryCR = false;
+  let recordRow = 1;
+  let wanted = false;
+  let captured = "";
+  let row: number | undefined;
+  let text: string | undefined;
+
+  const capture = (char: string) => {
+    if (wanted && column === field) captured += char;
+  };
+
+  const endSlot = () => {
+    if (!empty) {
+      if (wanted) {
+        row = recordRow;
+        text = captured;
+      }
+      if (slot > skipped) loaded += 1;
+    }
+    empty = true;
+    column = 0;
+    mode = "start";
+    wanted = false;
+    captured = "";
+    slot += 1;
+  };
+
+  const nextField = () => {
+    column += 1;
+    mode = "start";
+  };
+
+  // Read inside a closure, because the state changes only in `feed`.
+  const insideQuotes = () => mode === "quoted" || mode === "escaped";
+
+  const feed = (chars: string): boolean => {
+    for (const char of chars) {
+      if (carryCR) {
+        carryCR = false;
+        if (char === "\n") continue;
+      }
+      if (!insideQuotes() && (char === "\r" || char === "\n")) {
+        endSlot();
+        carryCR = char === "\r";
+        continue;
+      }
+      if (empty) {
+        empty = false;
+        recordRow = slot;
+        wanted = slot > skipped && loaded - headerOffset === ordinal;
+        captured = "";
+      }
+      switch (mode) {
+        case "start":
+          if (char === delimiter) nextField();
+          // A space before an opening quote keeps the quote eligible, and a
+          // tab does too unless the file separates fields with it.
+          else if (char === " " || (char === "\t" && delimiter !== "\t")) break;
+          else if (quoteChar !== "" && char === quoteChar) mode = "quoted";
+          else {
+            mode = "unquoted";
+            capture(char);
+          }
+          break;
+        case "unquoted":
+          if (char === delimiter) nextField();
+          else capture(char);
+          break;
+        case "quoted":
+          if (escapeChar !== "" && char === escapeChar) mode = "escaped";
+          else if (char === quoteChar) mode = "quoteSeen";
+          else capture(char);
+          break;
+        case "escaped":
+          capture(char);
+          mode = "quoted";
+          break;
+        case "quoteSeen":
+          if (char === quoteChar) {
+            capture(char);
+            mode = "quoted";
+          } else if (char === delimiter) nextField();
+          else if (char !== " " && char !== "\t") return false;
+          break;
       }
     }
-  } finally {
-    reader.releaseLock();
+    return true;
+  };
+
+  const reading = await readCsvFile(file);
+  if (reading.kind === "text") {
+    if (!feed(reading.text)) return undefined;
+  } else {
+    const decoder = new TextDecoder("utf-8");
+    const reader = file.stream().getReader();
+    try {
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        if (!feed(decoder.decode(chunk.value, { stream: true }))) return undefined;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    if (!feed(decoder.decode())) return undefined;
   }
-  return breaks;
+  if (insideQuotes()) return undefined;
+  if (!empty) endSlot();
+  return { dataRecords: loaded - headerOffset, row, text };
 }
 
 /**
@@ -397,8 +542,8 @@ async function mixedStyleComment(query: Query, tableName: string, column: string
   );
   const losing = row?.is_us === true ? { value: row?.eu, at: row?.eu_at } : { value: row?.us, at: row?.us_at };
   if (losing.value == null || losing.at == null) return MIXED_STYLES_MARK;
-  const located = await rowOf(Number(losing.at));
   const example = String(losing.value);
+  const located = await rowOf(Number(losing.at), column, example);
   return located === undefined ? MIXED_STYLES_MARK : `${MIXED_STYLES_MARK}:${example}|${located}`;
 }
 
@@ -714,19 +859,61 @@ export const MIXED_SEPARATOR_SENTENCE = 'This file mixes ";" and "," as separato
 
 const OTHER_SEPARATOR: Record<string, string> = { ",": ";", ";": "," };
 const WIDEST_SHARE = 0.6;
-const FEWEST_MIXED_LINES = 3;
+const FEWEST_MIXED_RECORDS = 3;
 const FEWEST_INLINE_MIXED = 2;
 
-/** One line split by a separator outside double quotes, and how many separators it held there. */
-function splitOutsideQuotes(line: string, separator: string): { fields: string[]; marks: number } {
+const DECIMAL_COMMA_VALUE = new RegExp(DECIMAL_COMMA_NUMBER);
+const NORTH_AMERICAN_VALUE = new RegExp(NORTH_AMERICAN_NUMBER);
+
+/** True when a cell is a number under either money convention, so it can carry a decimal mark. */
+function numberUnderEitherConvention(value: string): boolean {
+  const stripped = value.trim().replace(/[$\s()]/g, "");
+  return DECIMAL_COMMA_VALUE.test(stripped) || NORTH_AMERICAN_VALUE.test(stripped);
+}
+
+/**
+ * The prefix's logical records: a line break outside double quotes ends one,
+ * a doubled quote stands for one quote, and a blank record is dropped. The last
+ * record counts only when the prefix did not stop inside a quoted field.
+ */
+function logicalRecords(prefix: string): string[] {
+  const records: string[] = [];
+  let record = "";
+  let quoted = false;
+  for (let index = 0; index < prefix.length; index++) {
+    const char = prefix[index];
+    if (char === '"') {
+      if (quoted && prefix[index + 1] === '"') {
+        record += '""';
+        index += 1;
+        continue;
+      }
+      quoted = !quoted;
+      record += char;
+      continue;
+    }
+    if (!quoted && (char === "\n" || char === "\r")) {
+      records.push(record);
+      record = "";
+      if (char === "\r" && prefix[index + 1] === "\n") index += 1;
+      continue;
+    }
+    record += char;
+  }
+  if (!quoted && record !== "") records.push(record);
+  return records.filter((line) => line.trim() !== "");
+}
+
+/** One record split by a separator outside double quotes, and how many separators it held there. */
+function splitOutsideQuotes(record: string, separator: string): { fields: string[]; marks: number } {
   const fields: string[] = [];
   let field = "";
   let marks = 0;
   let quoted = false;
-  for (let index = 0; index < line.length; index++) {
-    const char = line[index];
+  for (let index = 0; index < record.length; index++) {
+    const char = record[index];
     if (char === '"') {
-      if (quoted && line[index + 1] === '"') {
+      if (quoted && record[index + 1] === '"') {
         field += '"';
         index += 1;
         continue;
@@ -747,24 +934,23 @@ function splitOutsideQuotes(line: string, separator: string): { fields: string[]
 }
 
 /**
- * The sentence for a file whose rows use the sniffed separator and the other
- * one, decided from its first 64 KB. A row opened with the other separator is
- * foreign when it splits into the file's own width there. A row that keeps the
- * width but carries the other separator at least as often as the sniffed one is
- * mixed inline. One stray cell or a short footer row stays silent.
+ * The sentence for a file whose records use the sniffed separator and the other
+ * one, decided from the first 64 KB read as logical records so a quoted line
+ * break stays inside its record. A record opened with the other separator is
+ * foreign when it splits into the file's own width there. A record that keeps
+ * the width but carries the other separator at least as often as the sniffed
+ * one is mixed inline, unless every field is a number and the marks are decimal
+ * commas. One stray cell or a short footer row stays silent.
  */
 export function mixedSeparatorSentence(prefix: string, delimiter: string): string | null {
   const other = OTHER_SEPARATOR[delimiter];
   if (other === undefined) return null;
-  const lines = prefix
-    .split(/\r\n|\n|\r/)
-    .filter((line) => line.trim() !== "")
-    .map((line) => ({
-      sniffed: splitOutsideQuotes(line, delimiter),
-      foreign: splitOutsideQuotes(line, other),
-    }));
-  const widths = lines.map((line) => line.sniffed.fields.length).filter((width) => width >= 2);
-  if (widths.length < FEWEST_MIXED_LINES) return null;
+  const records = logicalRecords(prefix).map((record) => ({
+    sniffed: splitOutsideQuotes(record, delimiter),
+    other: splitOutsideQuotes(record, other),
+  }));
+  const widths = records.map((record) => record.sniffed.fields.length).filter((width) => width >= 2);
+  if (widths.length < FEWEST_MIXED_RECORDS) return null;
   const counts = new Map<number, number>();
   for (const width of widths) counts.set(width, (counts.get(width) ?? 0) + 1);
   let widest = 0;
@@ -778,13 +964,21 @@ export function mixedSeparatorSentence(prefix: string, delimiter: string): strin
   if (frequency < WIDEST_SHARE * widths.length) return null;
   let foreign = 0;
   let inline = 0;
-  for (const line of lines) {
-    const width = line.sniffed.fields.length;
+  for (const record of records) {
+    const width = record.sniffed.fields.length;
+    const otherFills = record.other.fields.length === widest && record.other.fields.every((field) => field.trim() !== "");
     if (width !== widest) {
-      if (line.foreign.fields.length === widest && line.foreign.fields.every((field) => field.trim() !== "")) foreign += 1;
+      if (otherFills) foreign += 1;
       continue;
     }
-    if (widest >= 3 && line.foreign.marks >= line.sniffed.marks) inline += 1;
+    if (
+      widest >= 3 &&
+      otherFills &&
+      record.other.marks >= record.sniffed.marks &&
+      !record.sniffed.fields.every(numberUnderEitherConvention)
+    ) {
+      inline += 1;
+    }
   }
   return foreign > 0 || inline >= FEWEST_INLINE_MIXED ? MIXED_SEPARATOR_SENTENCE : null;
 }

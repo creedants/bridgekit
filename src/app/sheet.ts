@@ -88,7 +88,7 @@ export async function firstSheetAsCsv(
   dataRows: number[];
   /** The worksheet the reader loaded. */
   sheetName: string;
-  /** Worksheets after the first that hold at least a header and one data row. */
+  /** Worksheets after the first whose last used row is at least row 2. */
   otherSheets: number;
 }> {
   const ExcelJS = await tools.load();
@@ -176,7 +176,7 @@ async function loadFirstSheet(
     : undefined;
 }
 
-/** Worksheets after the first that hold a header and at least one data row. */
+/** Counts later worksheets whose last used row is at least row 2. */
 function otherSheets(read: { workbook?: Workbook }): number {
   return (read.workbook?.worksheets ?? []).slice(1).filter((sheet) => sheet.rowCount >= 2).length;
 }

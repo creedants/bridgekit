@@ -119,6 +119,11 @@ const DAY_FIRST_MARK = "day first";
 // value in it proving either reading.
 const SLASH_MONTH_FIRST_MARK = "slash date month first by language";
 const SLASH_DAY_FIRST_MARK = "slash date day first by language";
+// A wholly slash column that proves both orders, or one whose values include a
+// date that does not exist, stays text and carries the values its sentence
+// quotes.
+const BOTH_ORDERS_MARK = "slash dates in both orders";
+const MISSING_DATE_MARK = "date does not exist";
 const DATE_ORDER_MARKS = [MONTH_FIRST_MARK, DAY_FIRST_MARK, SLASH_MONTH_FIRST_MARK, SLASH_DAY_FIRST_MARK];
 
 /** The order a browser's own dates put the day and the month in. */
@@ -126,8 +131,8 @@ export type DateOrder = "month first" | "day first";
 
 /**
  * The date order the page's language writes, so a file with no value that
- * proves an order reads the way the person reading it expects. An unknown
- * language keeps the month-first order every Node test passes explicitly.
+ * proves an order follows the locale reported by Intl. An invalid language tag
+ * falls back to month-first.
  */
 export function orderForLanguage(language: string): DateOrder {
   try {
@@ -345,7 +350,7 @@ function shapeFor(counts: DateCounts, order: DateOrder): DateShape | undefined {
 /**
  * Converts a VARCHAR column whose every non-blank value is one date family,
  * in the one shape every value parses with. The column becomes TIMESTAMP when
- * any value has a time of day and DATE otherwise. A column that mixes a date
+ * all non-blank values have the same time format, and DATE when none has a time. A column that mixes a date
  * shape with text, or proves both slash orders, stays as the file wrote it.
  */
 async function convertDateColumns(query: Query, table: string, order: DateOrder): Promise<void> {
@@ -360,19 +365,53 @@ async function convertDateColumns(query: Query, table: string, order: DateOrder)
     const counts = dateCounts(row, index);
     if (!(counts.present > 0)) continue;
     const shape = shapeFor(counts, order);
-    if (shape === undefined) continue;
+    if (shape === undefined) {
+      if (counts.slash === counts.present && counts.dayProof > 0 && counts.monthProof > 0) {
+        await markBothOrders(query, name, column);
+      }
+      continue;
+    }
     const field = quote(column);
     const value = `trim(${field})`;
     const blank = `(${field} IS NULL OR ${value} = '')`;
-    const [checked] = await query(
-      `SELECT count(*) FILTER (WHERE NOT ${blank} AND try_strptime(${value}, '${shape.format}') IS NULL)::DOUBLE AS bad FROM ${name}`,
-    );
-    if (Number(checked?.bad) > 0) continue;
+    const failed = `NOT ${blank} AND try_strptime(${value}, '${shape.format}') IS NULL`;
+    const [checked] = await query(`SELECT count(*) FILTER (WHERE ${failed})::DOUBLE AS bad FROM ${name}`);
+    if (Number(checked?.bad) > 0) {
+      await markMissingDate(query, name, column, field, failed);
+      continue;
+    }
     const parsed = `try_strptime(${value}, '${shape.format}')`;
     const converted = shape.type === "DATE" ? `CAST(${parsed} AS DATE)` : parsed;
     await query(`ALTER TABLE ${name} ALTER ${field} TYPE ${shape.type} USING CASE WHEN ${blank} THEN NULL ELSE ${converted} END`);
     if (shape.mark !== undefined) await query(`COMMENT ON COLUMN ${name}.${field} IS '${shape.mark}'`);
   }
+}
+
+const textLiteral = (value: string) => `'${value.replaceAll("'", "''")}'`;
+
+/** Marks a wholly slash column that proves both orders with the first value of each. */
+async function markBothOrders(query: Query, name: string, column: string): Promise<void> {
+  const field = quote(column);
+  const value = `trim(${field})`;
+  const slash = `regexp_matches(${value}, '${SLASH_DATE_TEXT}')`;
+  const dayProof = `${slash} AND TRY_CAST(regexp_extract(${value}, '${SLASH_DAY_PART}', 1) AS INTEGER) > 12`;
+  const monthProof = `${slash} AND TRY_CAST(regexp_extract(${value}, '${SLASH_MONTH_PART}', 1) AS INTEGER) > 12`;
+  const [row] = await query(
+    `SELECT arg_min(${value}, rowid) FILTER (WHERE ${dayProof}) AS day, arg_min(${value}, rowid) FILTER (WHERE ${monthProof}) AS month FROM ${name}`,
+  );
+  if (row?.day == null || row?.month == null) return;
+  await query(
+    `COMMENT ON COLUMN ${name}.${field} IS ${textLiteral(`${BOTH_ORDERS_MARK}:${String(row.day)}|${String(row.month)}`)}`,
+  );
+}
+
+/** Marks a date column whose values include one that does not exist with the first such value. */
+async function markMissingDate(query: Query, name: string, column: string, field: string, failed: string): Promise<void> {
+  const [row] = await query(`SELECT arg_min(trim(${field}), rowid) AS value FROM ${name} WHERE ${failed}`);
+  if (row?.value == null) return;
+  await query(
+    `COMMENT ON COLUMN ${name}.${field} IS ${textLiteral(`${MISSING_DATE_MARK}:${String(row.value)}`)}`,
+  );
 }
 
 // A value read_csv typed as a number may hold NaN or an infinity, which a
@@ -382,8 +421,10 @@ const NON_FINITE_TYPES = ["DOUBLE", "FLOAT"];
 /**
  * Returns every numeric column that holds a non-finite value to the file's own
  * text, so the file problems message names the value and its row. One count
- * decides; the file is read again only when a value is found, and only when the
- * raw read holds the same rows, so the texts line up with the typed rows.
+ * decides; the file is read again only when a value is found. When the raw read
+ * holds a different row count the texts cannot be lined up, so every flagged
+ * column becomes text instead, which keeps NaN and the infinities out of a
+ * numeric column and lets the file problems message name them.
  */
 async function restoreNonFinite(query: Query, table: string, path: string): Promise<void> {
   const described = await query(`DESCRIBE ${quote(table)}`);
@@ -397,7 +438,14 @@ async function restoreNonFinite(query: Query, table: string, path: string): Prom
   if (flagged.size === 0) return;
   const escaped = path.replaceAll("'", "''");
   const [raw] = await query(`SELECT count(*)::DOUBLE AS n FROM read_csv('${escaped}', all_varchar=true, ${CSV_OPTIONS})`);
-  if (Number(raw?.n) !== Number(counted?.n)) return;
+  if (Number(raw?.n) !== Number(counted?.n)) {
+    for (const column of flagged) {
+      await query(
+        `ALTER TABLE ${quote(table)} ALTER ${quote(column)} TYPE VARCHAR USING CAST(${quote(column)} AS VARCHAR)`,
+      );
+    }
+    return;
+  }
   const selected = described
     .map((row) => {
       const column = String(row.column_name);
@@ -468,7 +516,7 @@ function headerTooWide(prefix: string, delimiter: string): boolean {
  * staged. Only a file that holds both marks can mix them, so the sniff that
  * names the separator runs only for those.
  */
-async function refuseMixedSeparators(query: Query, file: File, reading: CsvReading, path: string): Promise<void> {
+export async function refuseMixedSeparators(query: Query, file: File, reading: CsvReading, path: string): Promise<void> {
   const prefix =
     reading.kind === "text"
       ? reading.text.slice(0, CSV_PREFIX_BYTES)
@@ -650,8 +698,9 @@ async function ambiguousDateColumns(
 export async function dateOrderNote(query: Query, table: string): Promise<string | null> {
   const marks = DATE_ORDER_MARKS.map((mark) => `'${mark}'`).join(", ");
   const rows = await query(
-    `SELECT column_name, comment FROM duckdb_columns() WHERE schema_name = current_schema() AND table_name = '${table.replaceAll("'", "''")}' AND comment IN (${marks}) ORDER BY column_name`,
+    `SELECT column_name, comment FROM duckdb_columns() WHERE schema_name = current_schema() AND table_name = '${table.replaceAll("'", "''")}' AND (comment IN (${marks}) OR comment LIKE '${BOTH_ORDERS_MARK}:%' OR comment LIKE '${MISSING_DATE_MARK}:%') ORDER BY column_name`,
   );
+  const comments = rows.map((row) => ({ name: String(row.column_name), comment: String(row.comment ?? "") }));
   const sentences: string[] = [];
   for (const [mark, reading, byLanguage] of [
     [MONTH_FIRST_MARK, "month-first", false],
@@ -659,12 +708,26 @@ export async function dateOrderNote(query: Query, table: string): Promise<string
     [SLASH_MONTH_FIRST_MARK, "month-first", true],
     [SLASH_DAY_FIRST_MARK, "day-first", true],
   ] as const) {
-    const names = rows.filter((row) => String(row.comment) === mark).map((row) => String(row.column_name));
+    const names = comments.filter((column) => column.comment === mark).map((column) => column.name);
     if (names.length === 0) continue;
     const count = names.length === 1 ? "1 column" : `${names.length} columns`;
     const verb = names.length === 1 ? "was" : "were";
     const why = byLanguage ? ", as this browser's language expects" : "";
     sentences.push(`${count} with slash dates ${verb} read ${reading}${why}: ${names.join(", ")}.`);
+  }
+  for (const { name, comment } of comments) {
+    if (comment.startsWith(`${BOTH_ORDERS_MARK}:`)) {
+      const body = comment.slice(BOTH_ORDERS_MARK.length + 1);
+      const cut = body.indexOf("|");
+      if (cut < 0) continue;
+      sentences.push(
+        `${name} has slash dates in both orders, such as ${body.slice(0, cut)} and ${body.slice(cut + 1)}, so it was read as text.`,
+      );
+    } else if (comment.startsWith(`${MISSING_DATE_MARK}:`)) {
+      sentences.push(
+        `${name} has a date that does not exist, such as ${comment.slice(MISSING_DATE_MARK.length + 1)}, so it was read as text.`,
+      );
+    }
   }
   return sentences.length === 0 ? null : sentences.join(" ");
 }
