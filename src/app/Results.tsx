@@ -86,7 +86,17 @@ export function matchLabel(config: BridgeConfig, level: number): string {
   return coverageLabel(config, level);
 }
 
-export function Results(props: { run: Run; query: () => Promise<Query> }) {
+/**
+ * The report's names choice. App owns it so it survives the keyed Results remount.
+ * Optional so a direct render of Results without the choice still compiles; a missing
+ * choice reads unticked and ignores ticks.
+ */
+export interface NamesChoice {
+  omitNames?: boolean;
+  onOmitNames?: (next: boolean) => void;
+}
+
+export function Results(props: { run: Run; query: () => Promise<Query> } & NamesChoice) {
   const { run } = props;
   const { config } = run;
   const t = terms(config);
@@ -160,7 +170,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
               }
               priorLabel={String(config.prior)}
               currentLabel={String(config.current)}
-              footer={<Summary run={run} result={result} query={props.query} />}
+              footer={<Summary run={run} result={result} query={props.query} omitNames={props.omitNames} onOmitNames={props.onOmitNames} />}
               onSelect={(key) => {
                 setSortBy(key.startsWith("mix_") ? "mix" : key.startsWith("price") || key === "cost_rate" ? "price" : key);
                 setTab("movers");
@@ -228,10 +238,11 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
 
 type MoverRows = Awaited<ReturnType<typeof drill>>;
 
-function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<Query> }) {
-  const [omitNames, setOmitNames] = useState(false);
+function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<Query> } & NamesChoice) {
   const [movers, setMovers] = useState<MoverRows | null>(null);
   const [building, setBuilding] = useState(false);
+  // A render without the choice reads unticked and ignores ticks; App always passes both.
+  const omitNames = props.omitNames ?? false;
   const paragraphs = commentary(props.result, props.run.config);
   const { config, setup } = props.run;
   const first = config.levels[0];
@@ -293,7 +304,7 @@ function Summary(props: { run: Run; result: Run["result"]; query: () => Promise<
           <CopyButton text={() => paragraphs.join("\n\n")} />
           {hasNames && (
             <label className="check">
-              <input type="checkbox" checked={omitNames} onChange={(e) => setOmitNames(e.target.checked)} />
+              <input type="checkbox" checked={omitNames} onChange={(e) => props.onOmitNames?.(e.target.checked)} />
               Leave the file name, filter values and mover names out of the report
             </label>
           )}
