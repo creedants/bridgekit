@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { registerHooks } from "node:module";
 import { test } from "node:test";
+import { transformSync } from "esbuild";
+import type { Query } from "../src/engine.ts";
 import { makeDownloader } from "../src/app/files.ts";
+import { createConnectionQueue, statementStartsTurn } from "../src/app/small-bridges.ts";
 import {
   calculateGate,
   carryPeriods,
@@ -13,6 +18,37 @@ import {
   type Column,
   type Setup,
 } from "../src/app/setup.ts";
+import { openDatabase } from "../src/duckdb.ts";
+import { createSyntheticSales } from "../src/synth.ts";
+
+// The table owner lives in the page component, and this runner cannot load a
+// .tsx file by itself, so a load hook transforms it with the esbuild copy the
+// build already installs. The page database is kept off the wasm bundles the
+// browser build imports by URL.
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.includes("?url")) {
+      return { url: 'data:text/javascript,export default "stub"', shortCircuit: true };
+    }
+    return nextResolve(specifier, context);
+  },
+  load(url, context, nextLoad) {
+    if (url.endsWith(".tsx")) {
+      const source = readFileSync(new URL(url), "utf8");
+      const { code } = transformSync(source, {
+        loader: "tsx",
+        format: "esm",
+        jsx: "automatic",
+        define: { "import.meta.env": "{}" },
+      });
+      return { format: "module", source: code, shortCircuit: true };
+    }
+    return nextLoad(url, context);
+  },
+});
+
+const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 const NONE = { kind: "none" } as const;
 
@@ -155,3 +191,98 @@ test("different files save side by side, and a failed save frees its button", as
   await download("setup.json", "{}", "application/json");
   assert.deepEqual(saved, ["movers.csv", "bridge.png", "setup.json"]);
 });
+
+test("a load a newer pick replaced never writes", async () => {
+  const { createTableOwner } = await import("../src/app/App.tsx");
+  const tables = createTableOwner();
+  const a = tables.claim();
+  let writes = 0;
+  const aWrite = a.write(async () => {
+    writes += 1;
+    return "A-100";
+  });
+  const b = tables.claim();
+  const bWrite = b.write(async () => "B-200");
+  assert.deepEqual(await aWrite, { status: "superseded" });
+  assert.deepEqual(await bWrite, { status: "wrote", value: "B-200" });
+  assert.equal(writes, 0);
+  assert.equal(tables.owner()?.n, b.n);
+});
+
+test("a write already running finishes before the next starts, and the next lands last", async () => {
+  const { createTableOwner } = await import("../src/app/App.tsx");
+  const tables = createTableOwner();
+  const log: string[] = [];
+  let release: () => void = () => {};
+  const holding = new Promise<void>((resolve) => (release = resolve));
+  const a = tables.claim();
+  const aWrite = a.write(async () => {
+    log.push("A start");
+    await holding;
+    log.push("A end");
+  });
+  await settle();
+  const b = tables.claim();
+  const bWrite = b.write(async () => {
+    log.push("B");
+  });
+  release();
+  assert.deepEqual(await aWrite, { status: "wrote", value: undefined });
+  assert.deepEqual(await bWrite, { status: "wrote", value: undefined });
+  assert.deepEqual(log, ["A start", "A end", "B"]);
+  assert.equal(tables.owner()?.n, b.n);
+});
+
+test("a failed newest load leaves the last written table as the owner", async () => {
+  const { createTableOwner } = await import("../src/app/App.tsx");
+  const tables = createTableOwner();
+  const a = tables.claim();
+  assert.deepEqual(await a.write(async () => "A-100"), { status: "wrote", value: "A-100" });
+  const b = tables.claim();
+  await assert.rejects(
+    b.write(async () => {
+      throw new Error("The file has no rows.");
+    }),
+    /The file has no rows/,
+  );
+  assert.equal(tables.owner()?.n, a.n);
+});
+
+function queued(raw: Query): Query {
+  const statements = createConnectionQueue();
+  return (sql) => (statementStartsTurn(sql) ? statements.turn(() => raw(sql)) : statements.schedule(() => raw(sql)));
+}
+
+async function columnNames(query: Query): Promise<string[]> {
+  const described = await query('DESCRIBE "data"');
+  return described.map((row) => String(row.column_name));
+}
+
+test("the table in DuckDB holds the last pick's rows", async () => {
+  const { createTableOwner } = await import("../src/app/App.tsx");
+  const raw = await openDatabase();
+  const query = queued(raw);
+
+  const tables = createTableOwner();
+  const sample = tables.claim();
+  const sampleWrite = sample.write(() => createSyntheticSales(raw, 2000, "data"));
+  await settle();
+  const file = tables.claim();
+  const fileWrite = file.write(() => query('CREATE OR REPLACE TABLE "data" AS SELECT 1 AS "a"'));
+  const outcomes = await Promise.all([sampleWrite, fileWrite]);
+  assert.deepEqual(outcomes.map((outcome) => outcome.status), ["wrote", "wrote"]);
+  assert.deepEqual(await columnNames(raw), ["a"]);
+  assert.equal(tables.owner()?.n, file.n);
+});
+
+test("without an owner, a sample that hops before writing lands over the newer file", async () => {
+  const raw = await openDatabase();
+  const query = queued(raw);
+  const older = Promise.resolve().then(() => createSyntheticSales(query, 2000, "data"));
+  const newer = query('CREATE OR REPLACE TABLE "data" AS SELECT 1 AS "a"');
+  await Promise.all([older, newer]);
+  const names = await columnNames(query);
+  assert.equal(names.length, 13);
+  assert.ok(names.includes("units"), `the sample's columns landed last, but the table held ${names.join(", ")}`);
+});
+
