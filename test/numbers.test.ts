@@ -963,6 +963,11 @@ test("a file with one separator stays silent, including quoted marks and short r
   const { mixedSeparatorSentence } = await import("../src/app/numbers.ts");
   const decimalCommas = "period;product;units;sales\n2025;A-100;10;881,84\n2026;A-100;11;900,10\n";
   assert.equal(mixedSeparatorSentence(decimalCommas, ";"), null);
+  const decimalQuantities = "period;units;sales\n2025;10,50;100,50\n2026;12,50;144,50\n2025;5,50;60,50\n2026;6,50;90,50\n";
+  assert.equal(mixedSeparatorSentence(decimalQuantities, ";"), null);
+  const lines = ["period,product,units,sales,note"];
+  for (let index = 0; index < 4; index++) lines.push(`2025,A-100,${10 + index},${100 + index},"North\na;b;c;d;e\nSouth"`);
+  assert.equal(mixedSeparatorSentence(`${lines.join("\n")}\n`, ","), null);
   const quoted = 'period,region,units\n2025,"North, East",10\n2026,"South, West",20\n';
   assert.equal(mixedSeparatorSentence(quoted, ","), null);
   const oneMark = 'period,note,units\n2025,"a;b",10\n2026,"c;d",20\n';

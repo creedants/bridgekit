@@ -167,3 +167,162 @@ test("R9: a NaN column loads as text and the rest of the table loads", async () 
     ],
   );
 });
+
+const MIXED_SEPARATORS = 'This file mixes ";" and "," as separators, so save it again with one separator.';
+
+async function written(text: string, name: string): Promise<{ file: File; path: string }> {
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const directory = await mkdtemp("/tmp/bridgekit-load-errors-");
+  const filePath = path.join(directory, name);
+  await writeFile(filePath, text);
+  return { file: new File([text], name), path: filePath };
+}
+
+test("a semicolon file of decimal-comma quantities loads four rows without a refusal", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap, refuseMixedSeparators } = await import("../src/app/db.ts");
+  const { readCsvFile } = await import("../src/app/encoding.ts");
+  const text = "period;units;sales\n2025;10,50;100,50\n2026;12,50;144,50\n2025;5,50;60,50\n2026;6,50;90,50\n";
+  const { file, path } = await written(text, "decimal-comma.csv");
+  const query = await openDatabase();
+  await refuseMixedSeparators(query, file, await readCsvFile(file), path);
+  await stageCsvAndSwap(query, file, "data", path);
+  const types = Object.fromEntries((await query("DESCRIBE data")).map((row) => [String(row.column_name), String(row.column_type)]));
+  assert.equal(types.units, "DOUBLE");
+  assert.equal(types.sales, "DOUBLE");
+  const [sums] = await query("SELECT count(*)::DOUBLE AS n, sum(units) AS u, sum(sales) AS s FROM data");
+  assert.equal(Number(sums.n), 4);
+  assert.equal(Number(sums.u), 35);
+  assert.equal(Number(sums.s), 396);
+});
+
+test("a comma file with a quoted multiline note loads four records without a refusal", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap, refuseMixedSeparators } = await import("../src/app/db.ts");
+  const { readCsvFile } = await import("../src/app/encoding.ts");
+  const lines = ["period,product,units,sales,note"];
+  for (const [year, product, units, sales] of [
+    [2025, "A-100", 10, 100],
+    [2026, "A-100", 12, 94],
+    [2025, "B-200", 5, 100],
+    [2026, "B-200", 6, 100],
+  ] as const) {
+    lines.push(`${year},${product},${units},${sales},"North\na;b;c;d;e\nSouth"`);
+  }
+  const text = `${lines.join("\n")}\n`;
+  const { file, path } = await written(text, "multiline-note.csv");
+  const query = await openDatabase();
+  await refuseMixedSeparators(query, file, await readCsvFile(file), path);
+  await stageCsvAndSwap(query, file, "data", path);
+  const [sums] = await query("SELECT count(*)::DOUBLE AS n, sum(sales) AS s FROM data");
+  assert.equal(Number(sums.n), 4);
+  assert.equal(Number(sums.s), 394);
+});
+
+test("a file whose rows alternate separators is still refused with the one sentence", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { refuseMixedSeparators } = await import("../src/app/db.ts");
+  const { readCsvFile } = await import("../src/app/encoding.ts");
+  const rows = Array.from({ length: 36 }, (_, index) =>
+    index % 2 === 0 ? "2025;North;A-100;S;10;897" : "2025,North,A-100,S,10,897",
+  );
+  const text = `PERIOD;REGION;MODEL;SIZE;UNITS;NET_SALES\n${rows.join("\n")}\n`;
+  const { file, path } = await written(text, "mixed.csv");
+  const query = await openDatabase();
+  assert.equal(MIXED_SEPARATORS, 'This file mixes ";" and "," as separators, so save it again with one separator.');
+  await assert.rejects(
+    refuseMixedSeparators(query, file, await readCsvFile(file), path),
+    (error: unknown) => (error as Error).message === MIXED_SEPARATORS,
+  );
+});
+
+test("a headered file names the mixed-style value's file row", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { decimalCommaNote } = await import("../src/app/numbers.ts");
+  const text = 'period,amount\n2025,"1,000.50"\n2026,"1.300,75"\n';
+  const { file, path } = await written(text, "headered.csv");
+  const query = await openDatabase();
+  await stageCsvAndSwap(query, file, "data", path);
+  assert.equal(
+    await decimalCommaNote(query, "data"),
+    "amount mixes number styles, such as 1.300,75 in row 3, so it was read as text.",
+  );
+});
+
+test("a headerless file with a trailing blank line names the value's own row", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { decimalCommaNote } = await import("../src/app/numbers.ts");
+  const text = '2025,A-100,10,"1,000.50"\n2026,A-100,12,"1.300,75"\n\n';
+  const { file, path } = await written(text, "headerless-blank.csv");
+  const query = await openDatabase();
+  await stageCsvAndSwap(query, file, "data", path);
+  assert.equal(
+    await decimalCommaNote(query, "data"),
+    "column3 mixes number styles, such as 1.300,75 in row 2, so it was read as text.",
+  );
+});
+
+test("a headered file with no final newline still names its row", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { decimalCommaNote } = await import("../src/app/numbers.ts");
+  const text = 'period,amount\n2025,"1,000.50"\n2026,"1.300,75"';
+  const { file, path } = await written(text, "no-final-newline.csv");
+  const query = await openDatabase();
+  await stageCsvAndSwap(query, file, "data", path);
+  assert.equal(
+    await decimalCommaNote(query, "data"),
+    "amount mixes number styles, such as 1.300,75 in row 3, so it was read as text.",
+  );
+});
+
+test("two leading blank lines keep the data record's row in the file", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { decimalCommaNote } = await import("../src/app/numbers.ts");
+  const text = '\n\n2025,A-100,"1,000.50"\n2026,A-100,"1.300,75"\n';
+  const { file, path } = await written(text, "leading-blanks.csv");
+  const query = await openDatabase();
+  await stageCsvAndSwap(query, file, "data", path);
+  assert.equal(
+    await decimalCommaNote(query, "data"),
+    "column2 mixes number styles, such as 1.300,75 in row 4, so it was read as text.",
+  );
+});
+
+test("a row the table cannot prove falls back to the sentence with no example", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { decimalCommaNote } = await import("../src/app/numbers.ts");
+  const text = 'period,amount\n2025,"1,000.50"\n2026,"1.300,75"\n';
+  const { file, path } = await written(text, "unproved.csv");
+  const real = await openDatabase();
+  const query: typeof real = async (sql) =>
+    sql === 'SELECT count(*)::DOUBLE AS n FROM "data__staging"' ? [{ n: 99 }] : real(sql);
+  await stageCsvAndSwap(query, file, "data", path);
+  assert.equal(await decimalCommaNote(query, "data"), "amount mixes number styles, so it was read as text.");
+});
+
+test("a flagged non-finite column becomes text when the raw reread cannot line up", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const text = "period,units,sales,note\n2025,2,NaN,a\n2026,3,Infinity,b\n2027,4,-Infinity,c\n2028,5,12.5,d\n";
+  const { file, path } = await written(text, "nan-mismatch.csv");
+  const real = await openDatabase();
+  const query: typeof real = async (sql) =>
+    sql.startsWith("SELECT count(*)::DOUBLE AS n FROM read_csv(") && sql.includes("all_varchar=true")
+      ? [{ n: 999 }]
+      : real(sql);
+  await stageCsvAndSwap(query, file, "data", path);
+  const described = await query("DESCRIBE data");
+  assert.equal(String(described.find((row) => String(row.column_name) === "sales")?.column_type), "VARCHAR");
+  const rows = await query("SELECT sales FROM data ORDER BY period");
+  assert.deepEqual(
+    rows.map((row) => row.sales),
+    ["nan", "inf", "-inf", "12.5"],
+  );
+  assert.ok(rows.every((row) => typeof row.sales === "string"));
+});
