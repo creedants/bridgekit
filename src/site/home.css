@@ -631,3 +631,18 @@ footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
 
   .home .close h2 { font-size: 2.5rem; }
 }
+
+/* Phones: less paper between and inside the chapters, so pricing sits nearer the top of the page. */
+@media (max-width: 40rem) {
+  .home section:not(.hero) { padding-block: 2.5rem; }
+
+  .home .num { font-size: 4rem; }
+
+  .home .sec-head { margin-bottom: 1.5rem; }
+
+  .home .ledger tr { padding-block: 1rem; }
+
+  .home .stair { row-gap: 2rem; }
+
+  .home .stair li::before { margin-bottom: .5rem; font-size: 2.25rem; }
+}
