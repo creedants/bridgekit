@@ -318,9 +318,29 @@ test("an empty profile returns an empty list", () => {
   assert.deepEqual(suggestAttributes([], new Map(), new Set()), []);
 });
 
-// R26 is blocked: the measure word lists live in src/app/setup.ts, which this
-// change may not edit. The German file's columns must pick Menge and Umsatz.
-test.todo("R26: German measure names pick Menge and Umsatz");
+// R26: the measure word lists in src/app/setup.ts cover German files, so the
+// German measures are used and the other attributes are suggested.
+test("R26: German measure names pick Menge and Umsatz", () => {
+  const columns: Column[] = [
+    { name: "Jahr", type: "VARCHAR" },
+    { name: "A-100", type: "VARCHAR" },
+    { name: "North", type: "VARCHAR" },
+    { name: "Size", type: "VARCHAR" },
+    { name: "Colour", type: "VARCHAR" },
+    { name: "Menge", type: "INTEGER" },
+    { name: "Umsatz", type: "DOUBLE" },
+  ];
+  const setup = guessSetup(columns);
+  assert.equal(setup.unitsColumn, "Menge");
+  assert.equal(setup.salesColumn, "Umsatz");
+  const distinct = new Map([
+    ["A-100", 3],
+    ["North", 3],
+    ["Size", 3],
+    ["Colour", 3],
+  ]);
+  assert.deepEqual(suggestAttributes(columns, distinct, usedOf(columns)), ["A-100", "North", "Size", "Colour"]);
+});
 
 test("R8: German customer names are left out and the other attributes are suggested", () => {
   const columns: Column[] = [

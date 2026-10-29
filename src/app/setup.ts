@@ -48,17 +48,38 @@ export const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
 const text = (value: string) => `'${value.replaceAll("'", "''")}'`;
 
 const SALES_WORDS = ["sales", "revenue", "amount", "value"];
-const salesPattern = new RegExp(SALES_WORDS.join("|"), "i");
-const UNITS_PATTERN = /unit|qty|quant|jobs|volume|pieces/i;
+const GERMAN_SALES_STEMS = ["umsatz", "erlos", "erloes"];
+const salesPattern = new RegExp([...SALES_WORDS, ...GERMAN_SALES_STEMS].join("|"), "i");
+const UNITS_PATTERN = /unit|qty|quant|jobs|volume|pieces|menge|stuck|stueck|anzahl|absatz/i;
+
+/** A German unit price names a price: Stückpreis, Stueckpreis, Mengenpreis, Stückkosten. */
+const PRICE_DE = /preis|kosten/i;
+/** German tax marker used to exclude fallback sales candidates. */
+const TAX_DE = /steuer/i;
+
+/**
+ * Lowercased and NFC-normalized, with German umlauts folded, so Stück matches
+ * the stuck stem and Erlöse matches the erlos stem. ASCII names pass through.
+ */
+function fold(name: string): string {
+  return name
+    .normalize("NFC")
+    .toLowerCase()
+    .replaceAll("ä", "a")
+    .replaceAll("ö", "o")
+    .replaceAll("ü", "u")
+    .replaceAll("ß", "ss");
+}
 
 const words = (name: string) =>
   name
-    .split(/[^A-Za-z0-9]+/)
+    .normalize("NFC")
+    .split(/[^\p{L}\p{N}]+/u)
     .filter((part) => part !== "")
     .flatMap((part) => part.split(/(?<=[a-z0-9])(?=[A-Z])/))
-    .map((word) => word.toLowerCase());
-const unitWords = new Set(["unit", "units"]);
-const priceWords = new Set(["price", "cost", "rate"]);
+    .map((word) => fold(word));
+const unitWords = new Set(["unit", "units", "menge", "stuck", "stueck", "anzahl", "absatz"]);
+const priceWords = new Set(["price", "cost", "rate", "preis", "kosten"]);
 const noteWords = new Set(["note", "notes", "comment", "comments"]);
 const across = (left: string, right: string) =>
   (unitWords.has(left) && priceWords.has(right)) || (priceWords.has(left) && unitWords.has(right));
@@ -68,44 +89,56 @@ const isUnitPrice = (name: string) => {
     if (across(parts[i], parts[i + 1])) return true;
     if (parts[i + 1] === "per" && across(parts[i], parts[i + 2] ?? "")) return true;
   }
-  return false;
+  // German compounds join the words: Stückpreis is one token, so the pair
+  // check above never fires. A bare Stück or Menge names no price and stays pickable.
+  const folded = fold(name);
+  return PRICE_DE.test(folded) && UNITS_PATTERN.test(folded);
 };
 const isTrailingNote = (name: string) => noteWords.has(words(name).at(-1) ?? "");
 
 /**
  * First non-numeric, non-date column with a whole "net" word and a sales,
  * revenue, amount or value word, excluding trailing notes, unit prices and
- * quantity names. Empty when any numeric column has "net" in its name, checked
- * before that filtering, so callers keep the base guess whenever a numeric net
- * column exists. Callers decide whether to withhold or explain Sales.
+ * quantity names. German columns match the umsatz and erlos stems the same
+ * way, except a tax column such as Umsatzsteuer. Empty when any numeric
+ * column has "net" in its name, checked before that filtering, so callers
+ * keep the base guess whenever a numeric net column exists. Callers decide
+ * whether to withhold or explain Sales.
  */
 export function netSalesHeldAsText(columns: readonly Column[]): string {
   if (columns.some((column) => isNumeric(column.type) && /net/i.test(column.name))) return "";
   return columns.find((column) => {
     if (isNumeric(column.type) || isDate(column.type)) return false;
+    if (TAX_DE.test(fold(column.name))) return false;
     const parts = words(column.name);
     if (!parts.includes("net")) return false;
-    if (!SALES_WORDS.some((word) => parts.includes(word))) return false;
+    if (
+      !SALES_WORDS.some((word) => parts.includes(word)) &&
+      !GERMAN_SALES_STEMS.some((stem) => parts.some((part) => part.includes(stem)))
+    )
+      return false;
     if (isTrailingNote(column.name)) return false;
-    if (UNITS_PATTERN.test(column.name)) return false;
+    if (UNITS_PATTERN.test(fold(column.name))) return false;
     return true;
   })?.name ?? "";
 }
 
 export function guessSetup(columns: Column[]): Setup {
-  const find = (pattern: RegExp, among: Column[]) => among.find((c) => pattern.test(c.name))?.name ?? "";
+  const find = (pattern: RegExp, among: Column[]) => among.find((c) => pattern.test(fold(c.name)))?.name ?? "";
   const numeric = columns.filter((c) => isNumeric(c.type));
   const date = columns.find((c) => isDate(c.type));
   const withoutNotes = numeric.filter((column) => !isTrailingNote(column.name));
   const unitsCandidates = withoutNotes.filter((column) => !isUnitPrice(column.name));
   const net = find(/net/i, withoutNotes);
   const held = net ? "" : netSalesHeldAsText(columns);
-  const salesColumn = net || (held ? "" : find(salesPattern, withoutNotes));
+  // The sales-stem fallback excludes columns containing the German tax marker.
+  const salesCandidates = withoutNotes.filter((column) => !TAX_DE.test(fold(column.name)));
+  const salesColumn = net || (held ? "" : find(salesPattern, salesCandidates));
   const grossColumn = find(/gross|list/i, withoutNotes);
   return {
     periodColumn: date?.name ?? find(/year|period|month|quarter|date/i, columns),
     grain: date ? "year" : "value",
-    unitsColumn: find(/unit|qty|quant|jobs|volume|pieces/i, unitsCandidates),
+    unitsColumn: find(UNITS_PATTERN, unitsCandidates),
     salesColumn,
     grossColumn: held ? undefined : (grossColumn && grossColumn !== salesColumn ? grossColumn : undefined),
     levels: [],

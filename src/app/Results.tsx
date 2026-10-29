@@ -31,7 +31,7 @@ import { parsePlannedIncrease, saveOnce, shorten, toExportCsv, toExportTsv } fro
 import { finiteOrBlank } from "./exportExcel.ts";
 import { percent, price, shareOfPrior, signedPercent, signedWhole, whole } from "./format.ts";
 import { dateOrderNote } from "./db.ts";
-import { decimalCommaNote } from "./numbers.ts";
+import { decimalCommaNote, wholeRowNote } from "./numbers.ts";
 import { trendPeriods } from "./periods.ts";
 import { TABLE, type Setup } from "./setup.ts";
 import { useCommentaryOffer } from "./useConfig.ts";
@@ -104,7 +104,8 @@ export function Results(props: { run: Run; query: () => Promise<Query> }) {
   const change = result.currentSales - result.priorSales;
   const priceEffect = result.effects.filter((e) => e.key.startsWith("price")).reduce((sum, e) => sum + e.value, 0);
   const exact = result.coverage.find((c) => c.level === config.levels.length)?.share ?? 0;
-  const warnings = checkWarnings(run);
+  const fileWarnings = useWholeRowWarning(run, props.query);
+  const warnings = checkWarnings(run, fileWarnings);
 
   const tabs: { id: Tab; label: string }[] = [
     { id: "bridge", label: "Bridge" },
@@ -1162,7 +1163,7 @@ export function accountNote(count: number, column: string): string {
   return `${whole(count)} ${column} ${agree(count, "value")}`;
 }
 
-export function checkWarnings(run: Run): string[] {
+export function checkWarnings(run: Run, fileWarnings: string[] = []): string[] {
   const { check, config, result } = run;
   const t = terms(config);
   const exact = result.coverage.find((c) => c.level === config.levels.length)?.share ?? 0;
@@ -1186,14 +1187,40 @@ export function checkWarnings(run: Run): string[] {
   if (exact < 0.7) {
     warnings.push(t.lowMatch(exact));
   }
-  return warnings;
+  return [...warnings, ...fileWarnings];
+}
+
+/**
+ * Loads the whole-row note for the Data check tab badge. The note lives in
+ * the warnings, so the tab count includes it, while the notes list below
+ * omits this warning. A slow reply from a replaced file changes nothing.
+ */
+export function useWholeRowWarning(run: Run, query: () => Promise<Query>): string[] {
+  const [fileWarnings, setFileWarnings] = useState<string[]>([]);
+  useEffect(() => {
+    let stale = false;
+    setFileWarnings([]);
+    query()
+      .then((q) => wholeRowNote(q, TABLE))
+      .then((note) => {
+        if (!stale) setFileWarnings(note ? [note] : []);
+      })
+      .catch(() => {
+        if (!stale) setFileWarnings([]);
+      });
+    return () => {
+      stale = true;
+    };
+  }, [run, query]);
+  return fileWarnings;
 }
 
 /** The Data check's sentences about how the file was read, in the order the tab shows them. */
 export async function dataCheckNotes(query: Query, table: string, formulaBlanks = 0): Promise<string[]> {
-  // One note's query failing must not hide the other's sentence.
+  // One note's query failing must not hide the other's sentence. The whole-row
+  // note loads as a tab warning instead, so it is left out here.
   const sentences = [
-    await decimalCommaNote(query, table).catch(() => null),
+    await decimalCommaNote(query, table, false).catch(() => null),
     await dateOrderNote(query, table).catch(() => null),
   ];
   const read = sentences.filter((sentence): sentence is string => sentence !== null);

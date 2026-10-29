@@ -1,0 +1,2 @@
+- The Data check comments now say what the code does: the tab badge note is omitted from the notes list below, and the German tax marker only excludes fallback sales candidates. No behaviour changes.
+- `test/data-check-notes.test.ts` mounts the Data check with a controlled query: a whole-row-only file shows `Data check (1)` with the warning in the list and no success line, and a clean file shows the bare tab with the success line.

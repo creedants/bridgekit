@@ -437,7 +437,7 @@ export async function wholeRowNote(query: Query, table: string): Promise<string 
   }
 }
 
-export async function decimalCommaNote(query: Query, table: string): Promise<string | null> {
+export async function decimalCommaNote(query: Query, table: string, includeWholeRow = true): Promise<string | null> {
   const rows = await query(
     `SELECT column_name, comment FROM duckdb_columns() WHERE schema_name = current_schema() AND table_name = '${table.replaceAll("'", "''")}' AND comment IS NOT NULL ORDER BY column_index`,
   );
@@ -480,7 +480,7 @@ export async function decimalCommaNote(query: Query, table: string): Promise<str
       }
     }
   }
-  const whole = await wholeRowNote(query, table);
+  const whole = includeWholeRow ? await wholeRowNote(query, table) : null;
   if (whole !== null) sentences.push(whole);
   const huge = await amountsNote(query, DEFAULT_CELLS_TABLE).catch(() => null);
   if (huge !== null) sentences.push(huge);
