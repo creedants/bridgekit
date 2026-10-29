@@ -1,0 +1,1 @@
+- Setup gains an optional fiscal year start month. Year, year to date and quarter labels follow it; month labels do not change. `src/app/setup.ts` validates 1 to 12 at the boundary and builds the labels with integer month arithmetic only.

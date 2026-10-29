@@ -122,6 +122,40 @@ export function SetupPanel(props: {
             </select>
           </label>
         )}
+        {isDate(periodType) &&
+          (setup.grain === "year" || setup.grain === "ytd" || setup.grain === "quarter") && (
+            <label>
+              Year starts in
+              <select
+                value={setup.fiscalYearStart ?? 1}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  onChange({ fiscalYearStart: v === 1 ? undefined : v });
+                }}
+              >
+                <option value={1}>January</option>
+                <option value={2}>February</option>
+                <option value={3}>March</option>
+                <option value={4}>April</option>
+                <option value={5}>May</option>
+                <option value={6}>June</option>
+                <option value={7}>July</option>
+                <option value={8}>August</option>
+                <option value={9}>September</option>
+                <option value={10}>October</option>
+                <option value={11}>November</option>
+                <option value={12}>December</option>
+              </select>
+            </label>
+          )}
+        {isDate(periodType) &&
+          (setup.grain === "year" || setup.grain === "ytd" || setup.grain === "quarter") &&
+          setup.fiscalYearStart !== undefined &&
+          setup.fiscalYearStart !== 1 && (
+            <p className="hint">
+              Each year is named after the year it ends in: July 2025 to June 2026 is FY2026.
+            </p>
+          )}
         {isDate(periodType) && setup.grain === "ytd" && (
           <p className="hint">
             Year to date: each year is cut at the month and day of the latest date in the file, so every year covers the

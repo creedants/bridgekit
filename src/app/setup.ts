@@ -23,6 +23,8 @@ export interface Filter {
 export interface Setup {
   periodColumn: string;
   grain: Grain;
+  /** Optional first month of the fiscal year, 1 to 12. Missing or 1 means calendar. */
+  fiscalYearStart?: number;
   unitsColumn: string;
   salesColumn: string;
   /** Optional sales before discounts; splits the price effect into list price and discounts. */
@@ -146,16 +148,40 @@ export function guessSetup(columns: Column[]): Setup {
   };
 }
 
-function periodExpression(column: string, grain: Grain): string {
+function periodExpression(column: string, grain: Grain, fiscalYearStart?: number): string {
   const c = quote(column);
+  const m =
+    Number.isInteger(fiscalYearStart) && (fiscalYearStart as number) >= 2 && (fiscalYearStart as number) <= 12
+      ? (fiscalYearStart as number)
+      : 1;
+  if (m === 1) {
+    switch (grain) {
+      case "year":
+        return `strftime(${c}, '%Y')`;
+      case "ytd":
+        // Each year up to the month and day of the latest date in the data, so a part-year compares like with like.
+        return `CASE WHEN strftime(${c}, '%m%d') <= (SELECT strftime(max(${c}), '%m%d') FROM ${quote(TABLE)}) THEN strftime(${c}, '%Y') || ' YTD' END`;
+      case "quarter":
+        return `strftime(${c}, '%Y') || '-Q' || quarter(${c})`;
+      case "month":
+        return `strftime(${c}, '%Y-%m')`;
+      case "value":
+        return `CAST(${c} AS VARCHAR)`;
+    }
+  }
+  const fy = `'FY' || CAST(year(${c}) + CASE WHEN month(${c}) >= ${m} THEN 1 ELSE 0 END AS VARCHAR)`;
+  const fm = `((month(${c}) - ${m} + 12) % 12)`;
   switch (grain) {
     case "year":
-      return `strftime(${c}, '%Y')`;
-    case "ytd":
-      // Each year up to the month and day of the latest date in the data, so a part-year compares like with like.
-      return `CASE WHEN strftime(${c}, '%m%d') <= (SELECT strftime(max(${c}), '%m%d') FROM ${quote(TABLE)}) THEN strftime(${c}, '%Y') || ' YTD' END`;
+      return fy;
+    case "ytd": {
+      const maxMonth = `(SELECT month(max(${c})) FROM ${quote(TABLE)})`;
+      const maxDay = `(SELECT day(max(${c})) FROM ${quote(TABLE)})`;
+      const maxFm = `((${maxMonth} - ${m} + 12) % 12)`;
+      return `CASE WHEN ${fm} < ${maxFm} OR (${fm} = ${maxFm} AND day(${c}) <= ${maxDay}) THEN ${fy} || ' YTD' END`;
+    }
     case "quarter":
-      return `strftime(${c}, '%Y') || '-Q' || quarter(${c})`;
+      return `${fy} || '-Q' || CAST((${fm} // 3) + 1 AS VARCHAR)`;
     case "month":
       return `strftime(${c}, '%Y-%m')`;
     case "value":
@@ -175,7 +201,7 @@ function filterCondition(filter: Filter): string {
 export function viewSql(setup: Setup): string {
   const conditions = setup.filters.filter((f) => f.values.length > 0).map(filterCondition);
   return `CREATE OR REPLACE VIEW ${quote(VIEW)} AS
-    SELECT *, ${periodExpression(setup.periodColumn, setup.grain)} AS ${quote(PERIOD)}
+    SELECT *, ${periodExpression(setup.periodColumn, setup.grain, setup.fiscalYearStart)} AS ${quote(PERIOD)}
     FROM ${quote(TABLE)}
     ${conditions.length ? "WHERE " + conditions.join(" AND ") : ""}`;
 }
@@ -274,6 +300,8 @@ export function isValidSetup(value: unknown, columns: Column[]): value is Setup 
     (setup.grossColumn === undefined || fits(setup.grossColumn, COLUMN_RULES.gross)) &&
     (setup.costColumn === undefined || fits(setup.costColumn, COLUMN_RULES.cost)) &&
     ["value", "year", "ytd", "quarter", "month"].includes(setup.grain as string) &&
+    (setup.fiscalYearStart === undefined ||
+      (Number.isInteger(setup.fiscalYearStart) && setup.fiscalYearStart >= 1 && setup.fiscalYearStart <= 12)) &&
     Array.isArray(setup.levels) &&
     setup.levels.every(
       (l) => typeof l?.name === "string" && Array.isArray(l.columns) && l.columns.length > 0 && l.columns.every(named),
