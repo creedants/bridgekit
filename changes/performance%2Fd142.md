@@ -2,7 +2,7 @@
 - Unless the visitor asks for reduced motion, the hero chart's bars rise into place one after another when the page opens. With reduced motion they stand still.
 - A new section after the hero, "What each step measures. Figures from the sample.", draws the sample's bridge four times, small and to scale, and fills the bars of one step in each, on a pale sun band: volume, the four mix steps, price, and new and discontinued configurations. Each cell names the step, says in one line what it measures, and lists its amounts on the sample. The drawings are inline SVG hidden from screen readers; the amounts are text. On a phone each cell puts its drawing beside its text, with the amounts across the full width below.
 - The five main section headings carry a two-digit number after the sun rule. The light sections are divided by hairlines, and from 1300 px up two thin rails run down the page at the shell's edges.
-- The three view screenshots share one ruled frame with dotted cells instead of three separate cards.
+- The three view screenshots share one ruled frame with pale cells instead of three separate cards.
 - "How it works" numbers its steps in square tiles joined by a line, across on desktop and down at 56rem and below. The bars of three heights above the steps are gone.
 - Questions: "What is a mix step?" is gone, because the new section explains each step. Three questions are new: "Do the steps add up?", "Does it export to Excel?" and "Who runs it?". Each question sits beside its answer above 56rem, in ruled rows, and the section has its own top gap and rule.
 - `test/site-pages.test.ts`: the cap on the home page's visible words is now fewer than 600, up from 500, to fit the new section and questions. The page has 598 visible words.
