@@ -353,9 +353,6 @@ export function App() {
 
   const signature = JSON.stringify([setup, prior, current, source]);
   const fresh = run && run.signature === signature ? run : null;
-  // The run on screen, and the period views this setup's SQL holds, so a report
-  // or an export cannot be read off a view that belongs to another setup.
-  const runCurrent = fresh !== null && periodsCurrent;
   const calculating = tasks.has("calc");
   const busy = tasks.size > 0 || phase.kind === "reading" || phase.kind === "autoRun";
   const problem: FileProblem = setup
@@ -514,7 +511,7 @@ export function App() {
   const exportWorkbook = () =>
     exportGuard.run(() =>
       task("export", "Building Excel file…", async () => {
-        if (!fresh || !runCurrent) return;
+        if (!fresh) return;
         await exportExcel(await query(), fresh.config, fresh.result, fresh.check, fresh.tieOut, fresh.description);
       }),
     );
@@ -580,7 +577,7 @@ export function App() {
         <span className="status" aria-live="polite">{status}</span>
         <nav>
           {filePicker}
-          <button disabled={!runCurrent || busy} onClick={exportWorkbook} aria-label="Export Excel">Export<span className="wide-only"> Excel</span></button>
+          <button disabled={!fresh || busy} onClick={exportWorkbook} aria-label="Export Excel">Export<span className="wide-only"> Excel</span></button>
           {setup && (
             <button
               title="Remove the loaded data from this tab"

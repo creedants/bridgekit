@@ -187,7 +187,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
               }
               priorLabel={String(config.prior)}
               currentLabel={String(config.current)}
-              footer={<Summary run={run} result={result} query={props.query} fresh={props.fresh} omitNames={props.omitNames} onOmitNames={props.onOmitNames} />}
+              footer={<Summary run={run} result={result} query={props.query} fresh={props.fresh !== false && props.viewsCurrent !== false} omitNames={props.omitNames} onOmitNames={props.onOmitNames} />}
               onSelect={(key) => {
                 setSortBy(key.startsWith("mix_") ? "mix" : key.startsWith("price") || key === "cost_rate" ? "price" : key);
                 setTab("movers");

@@ -2,7 +2,7 @@ Three defects had one cause, a read that could not be told apart from the read i
 
 - `src/app/db.ts` now owns the statement queue at module scope, so every statement on the page is serialised from the first one, and a load is one turn whose own statements use the raw runner. The page-level wrapper in `SmallBridges.tsx` is gone.
 - `src/app/small-bridges.ts` carries the page's read rules. A latest-only ticket refuses further statements once a newer read starts and reports `superseded`, and period views keep the list on screen while holding the gate until the newest rebuild lands. The split rules lost their queue generation and belong to the column alone. The row generation and the attempt cache are deleted.
-- `src/app/App.tsx` reads periods through the ticket and gates Calculate and Export on the installed view. A load clears the old run before it reads the new table.
-- `src/app/Results.tsx` hands a null query to the three tabs that read the mutable view while the run or its views are out of date. Accounts keeps its figures with the column they were fetched for, and the toolbar stays usable with no figures below it.
+- `src/app/App.tsx` reads periods through the ticket and gates Calculate on the installed view. A load clears the old run before it reads the new table.
+- `src/app/Results.tsx` hands a null query to the three tabs that read the mutable view while the run or its views are out of date, and holds the report for the same reason, because its account section reads that view. Accounts keeps its figures with the column they were fetched for, and the toolbar stays usable with no figures below it.
 - `src/app/SmallBridges.tsx` takes the page's freshness as a prop instead of reading the stale notice out of the document.
 - `test/small-bridges.test.ts` covers the superseded read, the newest read publishing, the A to B to A gate, the failed rebuild, and the split rules with no stamps.
