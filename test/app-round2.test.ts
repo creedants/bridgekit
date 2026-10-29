@@ -16,6 +16,8 @@ import {
   initialPhase,
   withoutSample,
   type Column,
+  type Phase,
+  type PhaseEvent,
   type Setup,
 } from "../src/app/setup.ts";
 import { openDatabase } from "../src/duckdb.ts";
@@ -302,5 +304,119 @@ test("text that is not a table is refused, displayed data or not", async () => {
   const { pasteIntent } = await import("../src/app/App.tsx");
   assert.equal(pasteIntent("just a sentence", 0), "refuse");
   assert.equal(pasteIntent("just a sentence", 3), "refuse");
+});
+
+const read = (load: number, source: "file" | "sample" = "file"): PhaseEvent => ({
+  type: "read",
+  load,
+  source,
+  ...(source === "file" ? { fileName: "own-" + load + ".csv" } : {}),
+  label: "Reading…",
+});
+const loaded = (load: number): PhaseEvent => ({ type: "loaded", load });
+const failed = (load: number): PhaseEvent => ({ type: "failed", load });
+const ran = (load: number): PhaseEvent => ({ type: "ran", load });
+
+/** Steps the real reducer and the real fold in the order the page applies them. */
+function walk(fold: (shown: number, phase: Phase) => number, search: string, events: PhaseEvent[]) {
+  let phase = initialPhase(search);
+  let shown = 0;
+  const markers: number[] = [];
+  for (const event of events) {
+    phase = nextPhase(phase, event);
+    shown = fold(shown, phase);
+    markers.push(shown);
+  }
+  return { phase, markers };
+}
+
+const marker = (trail: { markers: number[] }) => trail.markers[trail.markers.length - 1];
+
+test("a paste before the first workspace is shown asks nothing", async () => {
+  const { pasteIntent, visibleLoad } = await import("../src/app/App.tsx");
+  const reading = walk(visibleLoad, "", [read(1)]);
+  assert.equal(reading.phase.kind, "reading");
+  assert.deepEqual(reading.markers, [0]);
+  assert.equal(pasteIntent(PASTED, marker(reading)), "load");
+  const workspace = walk(visibleLoad, "", [read(1), loaded(1)]);
+  assert.equal(workspace.phase.kind, "workspace");
+  assert.deepEqual(workspace.markers, [0, 1]);
+  assert.equal(pasteIntent(PASTED, marker(workspace)), "ask");
+});
+
+test("a sample link asks nothing until its bridge is drawn", async () => {
+  const { pasteIntent, visibleLoad } = await import("../src/app/App.tsx");
+  const bridge = walk(visibleLoad, "?sample", [read(1, "sample"), loaded(1)]);
+  assert.equal(bridge.phase.kind, "autoRun");
+  assert.deepEqual(bridge.markers, [0, 0]);
+  assert.equal(pasteIntent(PASTED, marker(bridge)), "load");
+  const drawn = walk(visibleLoad, "?sample", [read(1, "sample"), loaded(1), ran(1)]);
+  assert.equal(drawn.phase.kind, "workspace");
+  assert.deepEqual(drawn.markers, [0, 0, 1]);
+  assert.equal(pasteIntent(PASTED, marker(drawn)), "ask");
+});
+
+test("a newer reading load over displayed data still asks", async () => {
+  const { pasteIntent, visibleLoad } = await import("../src/app/App.tsx");
+  const trail = walk(visibleLoad, "", [read(1), loaded(1), read(2), read(3)]);
+  assert.equal(trail.phase.kind, "reading");
+  assert.deepEqual(trail.markers, [0, 1, 1, 1]);
+  assert.equal(pasteIntent(PASTED, marker(trail)), "ask");
+});
+
+test("a refused load falling back keeps asking", async () => {
+  const { pasteIntent, visibleLoad } = await import("../src/app/App.tsx");
+  const trail = walk(visibleLoad, "", [read(1), loaded(1), read(2), read(3), loaded(2), failed(3)]);
+  assert.equal(trail.phase.kind, "workspace");
+  assert.notEqual(marker(trail), 0);
+  assert.equal(pasteIntent(PASTED, marker(trail)), "ask");
+});
+
+test("a refused first load asks nothing", async () => {
+  const { pasteIntent, visibleLoad } = await import("../src/app/App.tsx");
+  const once = walk(visibleLoad, "", [read(1), failed(1)]);
+  assert.equal(once.phase.kind, "start");
+  assert.deepEqual(once.markers, [0, 0]);
+  assert.equal(pasteIntent(PASTED, marker(once)), "load");
+  const twice = walk(visibleLoad, "", [read(1), read(2), failed(2)]);
+  assert.equal(twice.phase.kind, "start");
+  assert.deepEqual(twice.markers, [0, 0, 0]);
+  assert.equal(pasteIntent(PASTED, marker(twice)), "load");
+});
+
+test("a failed sample auto-run draws the workspace and then asks", async () => {
+  const { pasteIntent, visibleLoad } = await import("../src/app/App.tsx");
+  const loadedSample = walk(visibleLoad, "?sample", [read(1, "sample"), loaded(1)]);
+  assert.equal(marker(loadedSample), 0);
+  const trail = walk(visibleLoad, "?sample", [read(1, "sample"), loaded(1), failed(1)]);
+  assert.equal(trail.phase.kind, "workspace");
+  assert.notEqual(marker(trail), 0);
+  assert.equal(pasteIntent(PASTED, marker(trail)), "ask");
+});
+
+test("late events from a superseded load change nothing", async () => {
+  const { pasteIntent, visibleLoad } = await import("../src/app/App.tsx");
+  const trail = walk(visibleLoad, "", [read(1), read(2), loaded(1), ran(1), failed(1)]);
+  assert.equal(trail.phase.kind, "reading");
+  assert.deepEqual(trail.markers, [0, 0, 0, 0, 0]);
+  assert.equal(pasteIntent(PASTED, marker(trail)), "load");
+});
+
+test("only the workspace commit advances the load a paste compares against", () => {
+  const source = readFileSync(new URL("../src/app/App.tsx", import.meta.url), "utf8");
+  const writes = [...source.matchAll(/displayed\.current\s*=/g)];
+  assert.equal(writes.length, 1, `the marker has one writer, but found ${writes.length}`);
+  const at = writes[0].index;
+  assert.ok(at !== undefined, "the marker writer is found");
+  const line = source.slice(at).split("\n")[0].trim();
+  assert.equal(line, "displayed.current = visibleLoad(displayed.current, phase);");
+  const afterLoadAt = source.indexOf("async function afterLoad");
+  const loadSampleAt = source.indexOf("const loadSample", afterLoadAt);
+  assert.ok(afterLoadAt >= 0 && loadSampleAt > afterLoadAt, "afterLoad sits before loadSample");
+  assert.ok(
+    !source.slice(afterLoadAt, loadSampleAt).includes("displayed.current"),
+    "afterLoad does not touch the marker a paste reads",
+  );
+  assert.ok(source.includes("pasteIntent(text, displayed.current)"), "the paste handler reads the marker");
 });
 
