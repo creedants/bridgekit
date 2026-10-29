@@ -1,5 +1,5 @@
 - The home page has a new layout. The hero keeps its heading, lead sentence and picture of the tool. It adds a second button, "Load your own file", and a screenshot of the Movers table that overlaps the picture's lower edge.
-- A new section, "Every bar has a table behind it.", shows screenshots of the Price changes, Movers and Accounts views taken on the sample. The images are AVIF with PNG fallbacks in `public/img`.
+- A new section, "Every bar has a table behind it.", shows screenshots of the Price changes, Movers and Accounts views taken on the sample. The images are AVIF with PNG fallbacks in `public/img`. On narrow screens each screenshot keeps a readable size and scrolls sideways inside its card.
 - A new "How it works" section lists the three steps from export to bridge.
 - The privacy band adds a "Check it yourself" card that links to the privacy page and the source code.
 - The pricing cards are now two bordered cards of equal height. The free plan card is filled plum, and the divider line between the plans is gone.
