@@ -342,7 +342,12 @@ export function SetupPanel(props: {
                   level={level}
                   onCommit={(name) =>
                     setLevels(
-                      setup.levels.with(i, { ...level, name: name.trim() === "" ? effectiveName(level) : name }),
+                      // An emptied name falls back to the column's own name, never to
+                      // the custom name the box held before it was cleared.
+                      setup.levels.with(i, {
+                        ...level,
+                        name: name.trim() === "" ? effectiveName({ ...level, name: "" }) : name,
+                      }),
                     )
                   }
                 />

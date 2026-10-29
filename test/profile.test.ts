@@ -420,4 +420,8 @@ test("D143: a class name whose code splits one class in two is still one thing",
   const { chains, duplicates } = await findRelationships(query, columns, distinct);
   assert.deepEqual(chains, []);
   assert.deepEqual(duplicates, [["class_name", "class_code"]]);
+  const marked = columns.map((column) =>
+    duplicates.some(([, later]) => later === column.name) ? { ...column, duplicateOf: column.duplicateOf ?? "class_name" } : column,
+  );
+  assert.deepEqual(suggestAttributes(marked, distinct, new Set()), ["class_name"]);
 });
