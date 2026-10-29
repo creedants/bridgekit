@@ -507,13 +507,16 @@ export function App() {
 
   useEffect(() => scheduleSpeculative(prefetchResults, RESULTS_PREFETCH_SETTLE_MS), []);
 
-  // Start the engine download once the first frame is painted. A link to /app/?sample
-  // starts its load then too, so it opens with the sample already calculated.
+  // The engine files are several megabytes, so they download when the page is
+  // idle and not on a connection that asked to save data.
+  useEffect(() => scheduleSpeculative(() => void startEngine().catch(() => {})), []);
+
+  // A link to /app/?sample starts its load once the first frame is painted, so it
+  // opens with the sample already calculated. That load opens the engine itself.
   useEffect(() => {
     let timer = 0;
     const frame = requestAnimationFrame(() => {
       timer = window.setTimeout(() => {
-        void startEngine().catch(() => {});
         if (sampleLinkRead.current || phase.kind !== "reading" || phase.load !== 0) return;
         sampleLinkRead.current = true;
         loadSample();

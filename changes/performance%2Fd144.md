@@ -1,3 +1,4 @@
 - A file picked while an earlier load is still loading now wins. Before, the earlier sample's million rows could land after the file, so the top bar showed the file's name over the sample's totals; the page now writes loads in the order they were picked, and a load a newer pick replaced does no work at all.
 - A refused file now leaves the page naming the data that is actually loaded, instead of a name from a load that never reached the table.
 - Pasting cells over a loaded file or a bridge now asks "Replace the loaded data with the pasted cells?" before it loads them. Dismissing the question changes nothing. Paste into a page with no data still loads straight away.
+- The engine used to start downloading at first paint, whatever the visitor's connection asked for. It now starts when the page is idle, and not at all when the browser reports a data-saver preference, through the idle scheduler the page already uses for the results view.
