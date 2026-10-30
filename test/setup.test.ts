@@ -2625,3 +2625,35 @@ test("T429: the alternative Sales skips a tax column for the next money name", (
     sentence: 'Sales is "sales", but "revenue" also looks like money; choose it in Sales if you meant that one.',
   });
 });
+
+test("T450: the value fallback skips a larger tax column for the next qualifying column", () => {
+  const file: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "units", type: "BIGINT", facts: fact(216) },
+    { name: "Umsatzsteuer", type: "DOUBLE", facts: fact(6_000) },
+    { name: "alpha", type: "DOUBLE", facts: fact(5_600) },
+  ];
+  const guess = guessSetup(file);
+  assert.equal(guess.unitsColumn, "units");
+  assert.equal(guess.salesColumn, "");
+  const setup = { ...guess, ...refineGuess(guess, file) };
+  assert.equal(setup.salesColumn, "alpha");
+  assert.equal(setup.salesFromValues, "alpha");
+});
+
+test("T450: the value fallback skips a larger count-named column for the next qualifying column", () => {
+  const file: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "units", type: "BIGINT", facts: fact(216) },
+    { name: "pieces", type: "DOUBLE", facts: fact(6_100) },
+    { name: "alpha", type: "DOUBLE", facts: fact(5_600) },
+  ];
+  const guess = guessSetup(file);
+  assert.equal(guess.unitsColumn, "units");
+  assert.equal(guess.salesColumn, "");
+  const setup = { ...guess, ...refineGuess(guess, file) };
+  assert.equal(setup.salesColumn, "alpha");
+  assert.equal(setup.salesFromValues, "alpha");
+});
