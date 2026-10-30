@@ -710,15 +710,21 @@ export interface PriceBucket {
   priceEffect: number;
 }
 
+/**
+ * Band edges in percent, low to high. A change that rounds to an edge belongs
+ * to the band nearer no change, so +10.0% reads as "Up 5% to 10%" and -10.0%
+ * as "Down 5% to 10%". Negative edges compare strictly and positive ones
+ * inclusively, which is what makes each edge land on its near-zero side.
+ */
 const PRICE_BUCKETS: [number, string][] = [
-  [-0.1, "Down more than 10%"],
-  [-0.05, "Down 5% to 10%"],
-  [-0.02, "Down 2% to 5%"],
-  [-0.005, "Down 0.5% to 2%"],
-  [0.005, "No change (within 0.5%)"],
-  [0.02, "Up 0.5% to 2%"],
-  [0.05, "Up 2% to 5%"],
-  [0.1, "Up 5% to 10%"],
+  [-10, "Down more than 10%"],
+  [-5, "Down 5% to 10%"],
+  [-2, "Down 2% to 5%"],
+  [-0.5, "Down 0.5% to 2%"],
+  [0.5, "No change (within 0.5%)"],
+  [2, "Up 0.5% to 2%"],
+  [5, "Up 2% to 5%"],
+  [10, "Up 5% to 10%"],
   [Infinity, "Up more than 10%"],
 ];
 
@@ -732,10 +738,16 @@ export async function priceDistribution(
 ): Promise<{ buckets: PriceBucket[]; averageChange: number }> {
   const k = config.levels.length;
   const change = "(s1 / q1) / (s0 / q0) - 1";
+  // The comparison runs on the percentage rounded to six decimals. That snaps
+  // the division's error off a bound, so 11.00 over 10.00 is +10.0% and files
+  // under "Up 5% to 10%". Six decimals is far finer than the closest two
+  // changes two-decimal prices up to 10,000 can hold (0.0001 of a percent), so
+  // a change that is not a bound cannot move.
+  const percent = `round((${change}) * 100, 6)`;
   const bucket =
     "CASE " +
     PRICE_BUCKETS.slice(0, -1)
-      .map(([limit], i) => `WHEN ${change} < ${limit} THEN ${i}`)
+      .map(([limit], i) => `WHEN ${percent} ${limit < 0 ? "<" : "<="} ${limit} THEN ${i}`)
       .join(" ") +
     ` ELSE ${PRICE_BUCKETS.length - 1} END`;
   const matched = `FROM ${ident(config.cellsTable ?? DEFAULT_CELLS_TABLE)}
