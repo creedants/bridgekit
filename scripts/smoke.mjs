@@ -965,10 +965,10 @@ async function splitExports(browser, nodeQuery, csvPath, setup) {
 }
 
 /**
- * A paste that lands before the first workspace asks nothing. The confirm
- * recorder is installed with the paste trigger before the sample finishes
- * loading; the paste fires on the first sight of the named phase. If the
- * workspace wins the race, the attempt reloads and tries again.
+ * A paste that lands before the first workspace asks nothing. The check starts
+ * the sample itself, so the confirm recorder and the paste trigger are in place
+ * before the named phase begins. The trigger fires on the first sight of the
+ * phase text and survives into the next phase.
  */
 async function pendingPaste(browser, origin) {
   const tsv = "period\tproduct\tregion\tunits\tsales\n2025\tA-100\tNorth\t100\t1000\n2026\tA-100\tNorth\t110\t1210\n2026\tB-200\tNorth\t50\t550\n";
@@ -976,34 +976,29 @@ async function pendingPaste(browser, origin) {
     ["preview query", "Making the sample data"],
     ["calculating sample", "Calculating the sample bridge"],
   ]) {
-    let pasted = false;
-    for (let attempt = 1; attempt <= 3 && !pasted; attempt++) {
-      await browser.goto(`${origin}/app/?sample=sku`);
-      await browser.evalJs(`(() => {
-        window.__asked = [];
-        window.confirm = (message) => { window.__asked.push(message); return true; };
-        window.__pasted = false;
-        window.__observer = new MutationObserver(() => {
-          if (window.__pasted || !document.body.innerText.includes(${JSON.stringify(phaseText)})) return;
-          window.__pasted = true;
-          const data = { getData: (t) => (t === "text/plain" ? ${JSON.stringify(tsv)} : "") };
-          const event = new Event("paste", { bubbles: true, cancelable: true });
-          Object.defineProperty(event, "clipboardData", { value: data });
-          document.body.dispatchEvent(event);
-        });
-        window.__observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-        return true;
-      })()`);
-      try {
-        await browser.waitFor("window.__pasted === true && document.querySelector('.source')?.textContent.includes('Pasted cells')", 600);
-        pasted = true;
-      } catch {
-        const workspace = await browser.evalJs("!!document.querySelector('.kpis')");
-        if (workspace) continue;
-        throw new Error(`pending paste: the ${name} phase never showed and no workspace either`);
-      }
+    await browser.goto(`${origin}/app/`);
+    await browser.waitFor("T.btn('Use sample data') && !T.btn('Use sample data').disabled", 40);
+    await browser.evalJs(`(() => {
+      window.__asked = [];
+      window.confirm = (message) => { window.__asked.push(message); return true; };
+      window.__pasted = false;
+      window.__observer = new MutationObserver(() => {
+        if (window.__pasted || !document.body.innerText.includes(${JSON.stringify(phaseText)})) return;
+        window.__pasted = true;
+        const data = { getData: (t) => (t === "text/plain" ? ${JSON.stringify(tsv)} : "") };
+        const event = new Event("paste", { bubbles: true, cancelable: true });
+        Object.defineProperty(event, "clipboardData", { value: data });
+        document.body.dispatchEvent(event);
+      });
+      window.__observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+      return true;
+    })()`);
+    await browser.evalJs("T.btn('Use sample data').click()");
+    try {
+      await browser.waitFor("window.__pasted === true && document.querySelector('.source')?.textContent.includes('Pasted cells')", 600);
+    } catch {
+      fail(`pending paste: the paste never landed during the ${name} phase`);
     }
-    if (!pasted) fail(`pending paste: the paste never landed during the ${name} phase in 3 attempts`);
     const asked = JSON.parse(await browser.evalJs("JSON.stringify(window.__asked)"));
     if (asked.length) fail(`pending paste: a paste during the ${name} phase asked ${JSON.stringify(asked)}`);
     // A paste is a fresh file load, so the tool lands on the setup form for
