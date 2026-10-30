@@ -27,8 +27,8 @@ function featureBlocks(enabled: Record<string, boolean>): Plugin {
 // In development, serves the AI commentary endpoint from this server when
 // ANTHROPIC_API_KEY is set (for example in .env.local), so the opt-in feature
 // can be tried locally. Production hosts mount the same handler. The route
-// answers its own server's origin only, so a page on another site cannot spend
-// the key.
+// requires an HTTP(S) Origin with the same host and port as the request's Host
+// header; Vite rejects unapproved Host headers before this plugin runs.
 function devCommentary(apiKey: string | undefined): Plugin {
   return {
     name: "dev-commentary",
@@ -60,7 +60,7 @@ function devCommentary(apiKey: string | undefined): Plugin {
   };
 }
 
-/** True when a dev-server request carries the origin of the server that received it. */
+/** True when an HTTP(S) Origin has the same host and port as the request's Host header. */
 function fromThisServer(req: IncomingMessage): boolean {
   const { origin, host } = req.headers;
   if (typeof origin !== "string" || typeof host !== "string") return false;

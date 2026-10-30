@@ -48,7 +48,7 @@ function buildWarnings(env: Record<string, string | undefined>): string[] {
 }
 
 test("a workspaces build warns once when VITE_PADDLE_CLIENT_TOKEN is unset; a build with the token or without workspaces stays quiet", () => {
-  const unset = buildWarnings({ VITE_WORKSPACES: "1", VITE_PADDLE_CLIENT_TOKEN: undefined });
+  const unset = buildWarnings({ VITE_WORKSPACES: "1", VITE_PADDLE_CLIENT_TOKEN: "" });
   assert.equal(unset.length, 1, `expected one warning, got ${JSON.stringify(unset)}`);
   assert.match(unset[0], /VITE_PADDLE_CLIENT_TOKEN/);
   assert.match(unset[0], /checkout will not load/);
@@ -78,7 +78,9 @@ async function callRoute(
   return result;
 }
 
-test("the development commentary route refuses a request from another site and answers a same-origin one", async () => {
+const refusal = JSON.stringify({ error: "Requests must come from this site." });
+
+function mountCommentaryRoute(): { handler: Handler; seen: string[] } {
   const mounted: Handler[] = [];
   const seen: string[] = [];
   const server: FakeServer = {
@@ -107,18 +109,49 @@ test("the development commentary route refuses a request from another site and a
   });
   assert.equal(plugin?.apply, "serve");
   assert.equal(mounted.length, 1);
+  return { handler: mounted[0], seen };
+}
 
-  const refused = await callRoute(mounted[0], "https://example.test");
+async function assertRefused(origin: string) {
+  const { handler, seen } = mountCommentaryRoute();
+  const refused = await callRoute(handler, origin);
   assert.equal(refused.status, 403);
+  assert.equal(refused.body, refusal);
+  assert.equal(seen.length, 0);
+}
+
+test("the development commentary route refuses a request from another site and answers a same-origin one", async () => {
+  const { handler, seen } = mountCommentaryRoute();
+
+  const refused = await callRoute(handler, "https://example.test");
+  assert.equal(refused.status, 403);
+  assert.equal(refused.body, refusal);
   assert.equal(seen.length, 0);
 
-  const withoutOrigin = await callRoute(mounted[0], undefined);
+  const withoutOrigin = await callRoute(handler, undefined);
   assert.equal(withoutOrigin.status, 403);
+  assert.equal(withoutOrigin.body, refusal);
   assert.equal(seen.length, 0);
 
-  const answered = await callRoute(mounted[0], "http://localhost:5173");
+  const answered = await callRoute(handler, "http://localhost:5173");
   assert.equal(answered.status, 200);
   assert.equal(seen.length, 1);
   assert.equal(seen[0], "not json");
   assert.match(answered.body, /fine/);
+});
+
+test("the development commentary route refuses a same-host Origin with a non-HTTP(S) scheme", async () => {
+  await assertRefused("ftp://localhost:5173");
+});
+
+test("the development commentary route refuses a malformed Origin", async () => {
+  await assertRefused("not a url");
+});
+
+test("the development commentary route refuses a null Origin", async () => {
+  await assertRefused("null");
+});
+
+test("the development commentary route refuses a same-host Origin with a different port", async () => {
+  await assertRefused("http://localhost:5174");
 });
