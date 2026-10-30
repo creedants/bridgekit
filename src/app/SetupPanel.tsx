@@ -1,8 +1,28 @@
 import { useEffect, useRef, useState } from "react";
 import type { Level, Query } from "../engine.ts";
 import { sameSuggestedLevels } from "./fileProblems.ts";
-import { suggestAttributes, totalRowOffers, type TotalRow } from "./profile.ts";
-import { isDate, isNumeric, MAX_LEVEL_NAME, measureColumns, quote, TABLE, type Column, type Filter, type Grain, type Setup } from "./setup.ts";
+import { coverageNote, coverageSql, readCoverage, type PeriodCoverage } from "./periods.ts";
+import { feeNote, feeRows, suggestAttributes, totalRowOffers, type FeeRows, type TotalRow } from "./profile.ts";
+import {
+  cleanLevels,
+  effectiveName,
+  isDate,
+  isNumeric,
+  MAX_LEVEL_NAME,
+  measureChange,
+  measureColumns,
+  measureNote,
+  quote,
+  refineGuess,
+  TABLE,
+  type Column,
+  type Filter,
+  type Grain,
+  type Setup,
+} from "./setup.ts";
+
+/** Names that say how much one unit holds, so a shift in one can read as a price change. */
+const SIZE_NAME = /volume|size|ml|litre|liter/i;
 
 /** Count agreement lives here because this module loads eagerly and the lazily loaded results view can import it. */
 export function agree(count: number, one: string, many = one + "s"): string {
@@ -29,6 +49,13 @@ export function SetupPanel(props: {
   onCurrent: (value: string) => void;
 }) {
   const { columns, setup, onChange } = props;
+  // A visitor's own setup change ends the guess, so no later profile refines over it.
+  const change = (patch: Partial<Setup>) =>
+    onChange({ ...patch, fresh: undefined, ...(patch.salesColumn !== undefined ? { salesFromValues: undefined } : {}) });
+  // App hands a fresh column list for a load and again when the profile lands, so a new list clears both hints.
+  const source = useRef({ columns, seq: 0 });
+  if (source.current.columns !== columns) source.current = { columns, seq: source.current.seq + 1 };
+  const sourceSeq = source.current.seq;
   const numeric = measureColumns(columns, setup);
   const periodType = columns.find((c) => c.name === setup.periodColumn)?.type ?? "";
   const used = new Set([
@@ -47,9 +74,82 @@ export function SetupPanel(props: {
   );
   const distinctByName = new Map(columns.map((column) => [column.name, column.distinct ?? 0]));
   const suggested = suggestAttributes(columns, distinctByName, usedNames);
-  // Names made from column headers are capped here, like typed ones.
-  const setLevels = (levels: Level[]) => onChange({ levels: levels.map((level) => ({ ...level, name: level.name.slice(0, MAX_LEVEL_NAME) })) });
-  const setFilters = (filters: Filter[]) => onChange({ filters });
+  // Names made from column headers are capped here, like typed ones. A level
+  // with no column never reaches the bridge, the report or the export.
+  const setLevels = (levels: Level[]) =>
+    change({
+      levels: cleanLevels(levels).map((level) => ({ ...level, name: level.name.slice(0, MAX_LEVEL_NAME) })),
+    });
+  const setFilters = (filters: Filter[]) => change({ filters });
+  const factsSignature = columns
+    .map((column) => `${column.name}:${column.facts?.sum ?? ""}:${column.facts?.first ?? ""}:${column.facts?.last ?? ""}:${column.facts?.months ?? ""}`)
+    .join("|");
+  // A value-based refinement lands once per set of column facts, so a later choice by the visitor stands.
+  const refined = useRef("");
+  useEffect(() => {
+    if (refined.current === factsSignature) return;
+    refined.current = factsSignature;
+    const patch = refineGuess(setup, columns);
+    if (Object.keys(patch).length > 0) onChange(patch);
+  }, [factsSignature]);
+  const [coverage, setCoverage] = useState<{ key: string; rows: PeriodCoverage[] } | null>(null);
+  const coverageKey = [
+    sourceSeq,
+    setup.periodColumn,
+    setup.grain,
+    setup.fiscalYearStart ?? 1,
+    JSON.stringify(setup.filters),
+  ].join("|");
+  useEffect(() => {
+    let stale = false;
+    if (!isDate(periodType)) {
+      setCoverage(null);
+      return;
+    }
+    props
+      .query()
+      .then((query) =>
+        query(
+          coverageSql({
+            table: TABLE,
+            periodColumn: setup.periodColumn,
+            grain: setup.grain,
+            fiscalYearStart: setup.fiscalYearStart,
+            filters: setup.filters,
+          }),
+        ),
+      )
+      .then((rows) => !stale && setCoverage({ key: coverageKey, rows: readCoverage(rows) }))
+      .catch(() => !stale && setCoverage(null));
+    return () => {
+      stale = true;
+    };
+  }, [coverageKey, periodType]);
+  const partial = coverage !== null && coverage.key === coverageKey ? coverageNote(coverage.rows, props.prior, props.current) : null;
+  const [fees, setFees] = useState<{ key: string; found: FeeRows } | null>(null);
+  const feeKey = [
+    sourceSeq,
+    setup.periodColumn,
+    setup.unitsColumn,
+    setup.salesColumn,
+    setup.levels[0]?.columns.join("+") ?? "",
+  ].join("|");
+  useEffect(() => {
+    let stale = false;
+    props
+      .query()
+      .then((query) => feeRows(query, TABLE, setup))
+      .then((found) => !stale && setFees({ key: feeKey, found }))
+      .catch(() => !stale && setFees(null));
+    return () => {
+      stale = true;
+    };
+  }, [feeKey]);
+  const feesSentence = fees !== null && fees.key === feeKey ? feeNote(fees.found) : null;
+  const measureHint = measureNote(columns, setup);
+  const sizeColumn = columns.find(
+    (column) => column.name !== setup.periodColumn && SIZE_NAME.test(column.name),
+  );
   const suggestRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const [asking, setAsking] = useState(false);
@@ -99,7 +199,7 @@ export function SetupPanel(props: {
             onChange={(e) => {
               const column = columns.find((c) => c.name === e.target.value);
               const name = e.target.value;
-              onChange({
+              change({
                 periodColumn: name,
                 grain: column && isDate(column.type) ? "year" : "value",
                 ...(setup.unitsColumn === name ? { unitsColumn: "" } : {}),
@@ -114,7 +214,7 @@ export function SetupPanel(props: {
         {isDate(periodType) && (
           <label>
             Compare by
-            <select value={setup.grain} onChange={(e) => onChange({ grain: e.target.value as Grain })}>
+            <select value={setup.grain} onChange={(e) => change({ grain: e.target.value as Grain })}>
               <option value="year">Year</option>
               <option value="ytd">Year to date</option>
               <option value="quarter">Quarter</option>
@@ -130,7 +230,7 @@ export function SetupPanel(props: {
                 value={setup.fiscalYearStart ?? 1}
                 onChange={(e) => {
                   const v = Number(e.target.value);
-                  onChange({ fiscalYearStart: v === 1 ? undefined : v });
+                  change({ fiscalYearStart: v === 1 ? undefined : v });
                 }}
               >
                 <option value={1}>January</option>
@@ -176,6 +276,7 @@ export function SetupPanel(props: {
             </select>
           </label>
         </div>
+        {partial && <p className="hint">{partial}</p>}
       </fieldset>
 
       <fieldset>
@@ -183,7 +284,7 @@ export function SetupPanel(props: {
         <div className="pair">
           <label>
             Units
-            <select value={setup.unitsColumn} onChange={(e) => onChange({ unitsColumn: e.target.value })}>
+            <select value={setup.unitsColumn} onChange={(e) => change(measureChange(setup, "units", e.target.value))}>
               <option value="">Choose…</option>
               {numeric.map((c) => <option key={c.name}>{c.name}</option>)}
             </select>
@@ -191,15 +292,16 @@ export function SetupPanel(props: {
           </label>
           <label>
             Sales
-            <select value={setup.salesColumn} onChange={(e) => onChange({ salesColumn: e.target.value })}>
+            <select value={setup.salesColumn} onChange={(e) => change(measureChange(setup, "sales", e.target.value))}>
               <option value="">Choose…</option>
               {numeric.map((c) => <option key={c.name}>{c.name}</option>)}
             </select>
+            {measureHint && <span className="hint">{measureHint.sentence}</span>}
           </label>
         </div>
         <label>
           Gross sales (optional)
-          <select value={setup.grossColumn ?? ""} onChange={(e) => onChange({ grossColumn: e.target.value || undefined })}>
+          <select value={setup.grossColumn ?? ""} onChange={(e) => change({ grossColumn: e.target.value || undefined })}>
             <option value="">None</option>
             {numeric.filter((c) => c.name !== setup.salesColumn).map((c) => <option key={c.name}>{c.name}</option>)}
           </select>
@@ -207,7 +309,7 @@ export function SetupPanel(props: {
         {setup.grossColumn && !setup.costColumn && <p className="hint">Price is split into list price and discounts.</p>}
         <label>
           Cost (optional)
-          <select value={setup.costColumn ?? ""} onChange={(e) => onChange({ costColumn: e.target.value || undefined })}>
+          <select value={setup.costColumn ?? ""} onChange={(e) => change({ costColumn: e.target.value || undefined })}>
             <option value="">None</option>
             {numeric
               .filter((c) => c.name !== setup.salesColumn && c.name !== setup.unitsColumn)
@@ -254,11 +356,18 @@ export function SetupPanel(props: {
             <li key={level.columns.join("|")}>
               <div className="level-head">
                 <span className="rank">{i + 1}</span>
-                <input
-                  aria-label="Attribute name"
-                  value={level.name}
-                  maxLength={MAX_LEVEL_NAME}
-                  onChange={(e) => setLevels(setup.levels.with(i, { ...level, name: e.target.value }))}
+                <NameInput
+                  level={level}
+                  onCommit={(name) =>
+                    setLevels(
+                      // An emptied name falls back to the column's own name, never to
+                      // the custom name the box held before it was cleared.
+                      setup.levels.with(i, {
+                        ...level,
+                        name: name.trim() === "" ? effectiveName({ ...level, name: "" }) : name,
+                      }),
+                    )
+                  }
                 />
                 <button className="icon" aria-label="Move up" title="Move up" disabled={i === 0} onClick={() => move(i, i - 1)}>↑</button>
                 <button className="icon" aria-label="Move down" title="Move down" disabled={i === setup.levels.length - 1} onClick={() => move(i, i + 1)}>↓</button>
@@ -285,9 +394,10 @@ export function SetupPanel(props: {
                     className="quiet"
                     aria-label="Combine another column into this attribute"
                     value=""
-                    onChange={(e) =>
-                      setLevels(setup.levels.with(i, { ...level, columns: [...level.columns, e.target.value] }))
-                    }
+                    onChange={(e) => {
+                      if (e.target.value === "") return;
+                      setLevels(setup.levels.with(i, { ...level, columns: [...level.columns, e.target.value] }));
+                    }}
                   >
                     <option value="">+ combine</option>
                     {free.map((c) => <option key={c.name}>{c.name}</option>)}
@@ -304,7 +414,10 @@ export function SetupPanel(props: {
           <select
             value=""
             aria-label="Add attribute"
-            onChange={(e) => setLevels([...setup.levels, { name: e.target.value, columns: [e.target.value] }])}
+            onChange={(e) => {
+              if (e.target.value === "") return;
+              setLevels([...setup.levels, { name: e.target.value, columns: [e.target.value] }]);
+            }}
           >
             <option value="">Add attribute…</option>
             {free.map((c) => (
@@ -320,8 +433,13 @@ export function SetupPanel(props: {
           .map((chain) => (
             <div className="rollup" key={chain.join(">")}>
               <span className="hint">
-                Roll-up found: {chain.join(" › ")}. Using every level splits mix by level.
+                These columns nest: {chain[0]} is broader than {chain.at(-1)}.
               </span>
+              {sizeColumn && !chain.includes(sizeColumn.name) && (
+                <span className="hint">
+                  "{sizeColumn.name}" is not in this roll-up, and a shift in it can show up as a price change.
+                </span>
+              )}
               <button
                 className="quiet"
                 onClick={() =>
@@ -342,6 +460,7 @@ export function SetupPanel(props: {
           </div>
         ))}
       </fieldset>
+      {feesSentence && <p className="hint">{feesSentence}</p>}
 
       <fieldset>
         <legend>Options</legend>
@@ -349,7 +468,7 @@ export function SetupPanel(props: {
           New and discontinued
           <select
             value={setup.newAndDiscontinued ?? "difference"}
-            onChange={(e) => onChange({ newAndDiscontinued: e.target.value as Setup["newAndDiscontinued"] })}
+            onChange={(e) => change({ newAndDiscontinued: e.target.value as Setup["newAndDiscontinued"] })}
           >
             <option value="difference">Price difference only</option>
             <option value="full">Full sales</option>
@@ -389,6 +508,34 @@ export function SetupPanel(props: {
 }
 
 const MAX_FILTER_VALUES = 500;
+
+/**
+ * The attribute name, which keeps its own text while focused. An empty or blank
+ * name falls back to the column's name when focus leaves, so a cleared name
+ * can never reach the bridge, the report or the Excel export.
+ */
+function NameInput(props: { level: Level; onCommit: (name: string) => void }) {
+  const [text, setText] = useState<string | null>(null);
+  const value = text ?? props.level.name;
+  return (
+    <input
+      aria-label="Attribute name"
+      value={value}
+      maxLength={MAX_LEVEL_NAME}
+      onChange={(e) => {
+        const next = e.target.value.slice(0, MAX_LEVEL_NAME);
+        setText(next);
+        // An emptied name goes to the setup as the column's own name at once, so
+        // the bridge, the report and the export never see a blank one.
+        props.onCommit(next);
+      }}
+      onBlur={() => setText(null)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+      }}
+    />
+  );
+}
 
 function FilterEditor(props: {
   filter: Filter;

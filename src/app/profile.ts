@@ -1,5 +1,5 @@
 import type { Query } from "../engine.ts";
-import { isDate, isNumeric, quote, TABLE, type Column, type Filter, type Setup } from "./setup.ts";
+import { isDate, isNumeric, quote, TABLE, type Column, type ColumnFacts, type Filter, type Setup } from "./setup.ts";
 import { measureColumns, type UnreadCell } from "./fileProblems.ts";
 import { readsAsNumber } from "./numbers.ts";
 import { readCsvFile } from "./encoding.ts";
@@ -7,6 +7,8 @@ import { readCsvFile } from "./encoding.ts";
 const SAMPLE_ROWS = 200_000;
 const MAX_CANDIDATES = 14;
 const MAX_DISTINCT = 5_000;
+/** How close two columns' value counts are before the finer one is read as a code of the broader one. */
+const NEARLY_THE_SAME = 0.95;
 
 /**
  * Same numbers as count(DISTINCT col) and as count(DISTINCT (a, b)) filtered
@@ -50,10 +52,49 @@ function sampleCountSql(candidates: string[], pairs: [string, string][]): string
 
 /** Exact distinct count per column, used to label the attribute pickers. */
 export async function distinctCounts(query: Query, columns: Column[]): Promise<Map<string, number>> {
-  const [row] = await query(
-    `SELECT ${columns.map((c, i) => `count(DISTINCT ${quote(c.name)})::DOUBLE AS c${i}`).join(", ")} FROM ${quote(TABLE)}`,
-  );
-  return new Map(columns.map((c, i) => [c.name, Number(row[`c${i}`])]));
+  return (await columnProfile(query, columns)).distinct;
+}
+
+/**
+ * The distinct count of every column plus the facts a value-based reading
+ * needs: a numeric column's sum, and a date column's first and last date and
+ * its month count. One statement covers every column.
+ */
+async function columnProfile(
+  query: Query,
+  columns: Column[],
+): Promise<{ distinct: Map<string, number>; facts: Map<string, ColumnFacts> }> {
+  if (columns.length === 0) return { distinct: new Map(), facts: new Map() };
+  const selects = [
+    ...columns.map((column, i) => `count(DISTINCT ${quote(column.name)})::DOUBLE AS c${i}`),
+    ...columns.flatMap((column, i) => {
+      const field = quote(column.name);
+      if (isNumeric(column.type)) return [`sum(${field})::DOUBLE AS s${i}`];
+      if (isDate(column.type)) {
+        return [
+          `strftime(min(${field}), '%Y-%m-%d') AS lo${i}`,
+          `strftime(max(${field}), '%Y-%m-%d') AS hi${i}`,
+          `count(DISTINCT strftime(${field}, '%Y-%m'))::DOUBLE AS m${i}`,
+        ];
+      }
+      return [];
+    }),
+  ];
+  const [row] = await query(`SELECT ${selects.join(", ")} FROM ${quote(TABLE)}`);
+  const distinct = new Map<string, number>();
+  const facts = new Map<string, ColumnFacts>();
+  columns.forEach((column, i) => {
+    distinct.set(column.name, Number(row[`c${i}`]));
+    if (isNumeric(column.type) && row[`s${i}`] != null) facts.set(column.name, { sum: Number(row[`s${i}`]) });
+    if (isDate(column.type) && row[`lo${i}`] != null) {
+      facts.set(column.name, {
+        first: String(row[`lo${i}`]),
+        last: String(row[`hi${i}`]),
+        months: Number(row[`m${i}`]),
+      });
+    }
+  });
+  return { distinct, facts };
 }
 
 export interface FileProfile {
@@ -407,7 +448,7 @@ export async function profileFile(
   isCurrent: () => boolean,
   apply: (profile: FileProfile) => void,
 ): Promise<void> {
-  const distinct = await distinctCounts(query, columns);
+  const { distinct, facts } = await columnProfile(query, columns);
   const measures = new Set(measureColumns(columns));
   const candidates: UnreadCandidate[] = [];
   for (const column of columns) {
@@ -427,15 +468,18 @@ export async function profileFile(
     const row = located[index];
     unread.set(cell.column, row === undefined ? { value: cell.value } : { value: cell.value, row });
   });
-  const rollups = await findRollups(query, columns, distinct);
+  const { chains, duplicates } = await findRelationships(query, columns, distinct);
   if (!isCurrent()) return;
+  const duplicateOf = new Map(duplicates.map(([earlier, later]) => [later, earlier]));
   apply({
     columns: columns.map((column) => ({
       ...column,
       distinct: distinct.get(column.name),
+      ...(facts.has(column.name) ? { facts: facts.get(column.name) } : {}),
+      ...(duplicateOf.has(column.name) ? { duplicateOf: duplicateOf.get(column.name) } : {}),
       ...(unread.has(column.name) ? { firstUnread: unread.get(column.name) } : {}),
     })),
-    rollups,
+    rollups: chains,
   });
 }
 
@@ -520,22 +564,31 @@ function nameWords(name: string): string[] {
  * Returns the columns that look like product attributes, fewest distinct
  * values first with ties in file order. Keeps columns that are neither
  * numeric nor dates, which includes text and true/false columns, with 2 to
- * 5000 distinct values, drops the used period and measure columns and names
- * with a customer, region, date or id word.
+ * 5000 distinct values, drops the used period and measure columns, names
+ * with a customer, region, date or id word, and a column marked as an exact
+ * or near duplicate of a column that would otherwise be suggested.
  */
 export function suggestAttributes(
   columns: Column[],
   distinct: Map<string, number>,
   used: ReadonlySet<string>,
 ): string[] {
-  const scored: { name: string; n: number; index: number }[] = [];
-  columns.forEach((column, index) => {
+  // Eligibility ignores the duplicate mark, so a pair whose earlier column is
+  // excluded by a name rule keeps the later one.
+  const eligible = new Set<string>();
+  columns.forEach((column) => {
     if (used.has(column.name)) return;
     if (isNumeric(column.type) || isDate(column.type)) return;
     const n = distinct.get(column.name) ?? 0;
     if (n < 2 || n > MAX_DISTINCT) return;
     if (nameWords(column.name).some((word) => NON_ATTRIBUTE_WORDS.has(word))) return;
-    scored.push({ name: column.name, n, index });
+    eligible.add(column.name);
+  });
+  const scored: { name: string; n: number; index: number }[] = [];
+  columns.forEach((column, index) => {
+    if (!eligible.has(column.name)) return;
+    if (column.duplicateOf !== undefined && column.duplicateOf !== "" && eligible.has(column.duplicateOf)) return;
+    scored.push({ name: column.name, n: distinct.get(column.name) ?? 0, index });
   });
   scored.sort((a, b) => (a.n === b.n ? a.index - b.index : a.n - b.n));
   return scored.map((entry) => entry.name);
@@ -552,6 +605,19 @@ export async function findRollups(
   columns: Column[],
   distinct: Map<string, number>,
 ): Promise<string[][]> {
+  return (await findRelationships(query, columns, distinct)).chains;
+}
+
+/**
+ * The roll-up chains plus pairs that are identical or nearly identical on the
+ * sample: every finer value has one broader value, and the broader count is
+ * at least 95% of the finer count, which must be at least 2.
+ */
+export async function findRelationships(
+  query: Query,
+  columns: Column[],
+  distinct: Map<string, number>,
+): Promise<{ chains: string[][]; duplicates: [string, string][] }> {
   const candidates = columns
     .filter((c) => !isNumeric(c.type) && !isDate(c.type))
     .filter((c) => {
@@ -560,20 +626,35 @@ export async function findRollups(
     })
     .slice(0, MAX_CANDIDATES)
     .map((c) => c.name);
-  if (candidates.length < 2) return [];
+  if (candidates.length < 2) return { chains: [], duplicates: [] };
 
   const pairs: [string, string][] = [];
   for (const a of candidates) for (const b of candidates) if (a < b) pairs.push([a, b]);
   const rows = await query(sampleCountSql(candidates, pairs));
   const byKey = new Map(rows.map((row) => [String(row.key), Number(row.n)]));
   const count = new Map(candidates.map((c, i) => [c, byKey.get(`d${i}`) ?? 0]));
+  const position = new Map(columns.map((column, index) => [column.name, index]));
+  const earlier = (a: string, b: string) => ((position.get(a) ?? 0) < (position.get(b) ?? 0) ? [a, b] : [b, a]);
   // finer -> the broader columns it sits under
   const parents = new Map<string, Set<string>>(candidates.map((c) => [c, new Set()]));
+  const duplicates: [string, string][] = [];
   pairs.forEach(([a, b], i) => {
     const together = byKey.get(`p${i}`) ?? 0;
-    const [finer, broader] = count.get(a)! > count.get(b)! ? [a, b] : [b, a];
-    if (count.get(finer)! > count.get(broader)! && together === count.get(finer)) parents.get(finer)!.add(broader);
+    const aCount = count.get(a)!;
+    const bCount = count.get(b)!;
+    const [finer, broader] = aCount > bCount ? [a, b] : [b, a];
+    const finerCount = count.get(finer)!;
+    const broaderCount = count.get(broader)!;
+    // Treat a nested pair with nearly equal value counts as a name/code pair.
+    // This is a heuristic: a real hierarchy can also have nearly equal counts.
+    const same = finerCount >= 2 && together === finerCount && broaderCount >= NEARLY_THE_SAME * finerCount;
+    if (same) {
+      duplicates.push(earlier(a, b) as [string, string]);
+      return;
+    }
+    if (finerCount > broaderCount && together === finerCount) parents.get(finer)!.add(broader);
   });
+  duplicates.sort((x, y) => (position.get(x[0]) ?? 0) - (position.get(y[0]) ?? 0));
 
   const isParent = new Set([...parents.values()].flatMap((set) => [...set]));
   const chains: string[][] = [];
@@ -587,7 +668,7 @@ export async function findRollups(
     }
     chains.push(chain.reverse());
   }
-  return chains;
+  return { chains, duplicates };
 }
 
 const TOTAL_ROW_VALUES = ["total", "totals", "grand total", "subtotal", "sub-total", "sub total"];
@@ -668,4 +749,76 @@ export function totalRowOffers(found: readonly TotalRow[], filters: readonly Fil
     });
   }
   return offers;
+}
+
+/** Rows that have no units but some sales, and the fee-like names among them. */
+export interface FeeRows {
+  withoutUnits: number;
+  named: string[];
+  /** Rows whose name reads like a fee or an adjustment; a repeated name counts each of its rows. */
+  namedRows: number;
+}
+
+const FEE_PATTERN = /fee|adjust|postage|shipping|discount|surcharge/i;
+
+/** The first non-numeric, non-date column other than the period column, in file order. */
+async function firstTextColumn(query: Query, table: string, periodColumn: string): Promise<string> {
+  const [row] = await query(
+    `SELECT column_name FROM duckdb_columns()
+     WHERE schema_name = current_schema()
+       AND table_name = '${table.replaceAll("'", "''")}'
+       AND column_name <> '${periodColumn.replaceAll("'", "''")}'
+       AND NOT regexp_matches(data_type, 'INT|DOUBLE|DECIMAL|FLOAT|REAL|DATE|TIMESTAMP')
+     ORDER BY column_index
+     LIMIT 1`,
+  );
+  return row?.column_name == null ? "" : String(row.column_name);
+}
+
+/**
+ * Finds the rows that carry sales but no units, such as a postage line, and the
+ * distinct names of the ones that read like a fee or an adjustment. One
+ * aggregate query covers the table; no row is dropped.
+ */
+export async function feeRows(
+  query: Query,
+  table: string,
+  setup: Pick<Setup, "periodColumn" | "unitsColumn" | "salesColumn" | "levels">,
+): Promise<FeeRows> {
+  const units = setup.unitsColumn;
+  const sales = setup.salesColumn;
+  if (units === "" || sales === "") return { withoutUnits: 0, named: [], namedRows: 0 };
+  const name = setup.levels[0]?.columns[0] ?? (await firstTextColumn(query, table, setup.periodColumn));
+  if (name === "") return { withoutUnits: 0, named: [], namedRows: 0 };
+  const nameField = `CAST(${quote(name)} AS VARCHAR)`;
+  const rows = await query(
+    `SELECT ${nameField} AS v, count(*)::DOUBLE AS n
+     FROM ${quote(table)}
+     WHERE (${quote(units)} IS NULL OR ${quote(units)} = 0) AND ${quote(sales)} <> 0 AND ${quote(name)} IS NOT NULL
+     GROUP BY 1`,
+  );
+  const withoutUnits = rows.reduce((total, row) => total + Number(row.n), 0);
+  const matching = rows.filter((row) => FEE_PATTERN.test(String(row.v)));
+  const named = matching.map((row) => String(row.v)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  // Rows group by name, so a repeated fee name counts every one of its rows.
+  const namedRows = matching.reduce((total, row) => total + Number(row.n), 0);
+  return { withoutUnits, named, namedRows };
+}
+
+/** One sentence naming the rows that count like products, or null when there are none. */
+export function feeNote(found: FeeRows): string | null {
+  if (found.withoutUnits === 0) return null;
+  const rows = found.withoutUnits.toLocaleString("en-US");
+  const head =
+    found.withoutUnits === 1
+      ? "1 row has no units but some sales"
+      : `${rows} rows have no units but some sales`;
+  const named =
+    found.named.length === 0
+      ? "and none of them is named like a fee or an adjustment"
+      : found.namedRows === 1
+        ? "and 1 of them is named like a fee or an adjustment"
+        : `and ${found.namedRows.toLocaleString("en-US")} of them are named like fees or adjustments`;
+  const tail = found.withoutUnits === 1 ? "it is counted like a product" : "they are counted like products";
+  return `${head}, ${named}; ${tail}.`;
 }
