@@ -27,8 +27,8 @@ function featureBlocks(enabled: Record<string, boolean>): Plugin {
 // In development, serves the AI commentary endpoint from this server when
 // ANTHROPIC_API_KEY is set (for example in .env.local), so the opt-in feature
 // can be tried locally. Production hosts mount the same handler. The route
-// answers its own server's origin only, the way the Worker's /api/commentary
-// does, so a page on another site cannot spend the key.
+// answers its own server's origin only, so a page on another site cannot spend
+// the key.
 function devCommentary(apiKey: string | undefined): Plugin {
   return {
     name: "dev-commentary",
