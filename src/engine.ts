@@ -781,9 +781,9 @@ export async function priceDistribution(
   const change = "(s1 / q1) / (s0 / q0) - 1";
   // The band edges are whole tenths of a percent, so a change within 5e-7 of a
   // percent of one rounds to it at six decimals. The division's error is a few
-  // units in the last place of the percentage: under 5e-15 of a percent at a
+  // units in the last place of the percentage: about 9e-15 of a percent at a
   // 10% change, and still under the window's 5e-7 until the price has moved
-  // more than ten millionfold. So this window is only a net: it catches every
+  // more than five millionfold. So this window is only a net: it catches every
   // change that could be exactly at an edge, and each is then tested on the
   // cell's exact decimal sales and units. A change outside the net is that far
   // from every edge, where the double comparison is right. The window decides
