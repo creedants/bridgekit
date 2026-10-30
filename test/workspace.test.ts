@@ -430,6 +430,26 @@ test("deleting an account removes the workspaces it is alone in, with their save
   assert.equal((await db.prepare(`SELECT count(*) AS n FROM saved_setup`).first<{ n: number }>())?.n, 0);
 });
 
+test("deleting an account cancels the workspace's live subscription before the rows go", async () => {
+  const db = await seeded();
+  await db.prepare(`INSERT INTO organization (id, name, slug, createdAt) VALUES ('w2', 'Solo', 'solo', ?)`).bind(now).run();
+  await db.prepare(`INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES ('m3', 'w2', 'u1', 'owner', ?)`).bind(now).run();
+  await applySubscription(db, subscription({ workspaceId: "w2", subscriptionId: "sub_2" }));
+  const sent: { method: string; url: string; body: unknown }[] = [];
+  const fake = (async (url: string | URL, init?: RequestInit) => {
+    // The subscription is cancelled while its workspace still exists, so a
+    // failed cancel can still leave the rows in place.
+    assert.ok(await db.prepare(`SELECT id FROM organization WHERE id = 'w2'`).first(), "workspace still exists when Paddle is asked");
+    sent.push({ method: init?.method ?? "GET", url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    return Response.json({ data: {} });
+  }) as typeof fetch;
+  await deleteSoleWorkspaces(db, "u1", { apiKey: "pdl_sdbx_key", environment: "sandbox", fetch: fake });
+  assert.deepEqual(sent, [
+    { method: "POST", url: "https://sandbox-api.paddle.com/subscriptions/sub_2/cancel", body: { effective_from: "next_billing_period" } },
+  ]);
+  assert.equal(await db.prepare(`SELECT id FROM organization WHERE id = 'w2'`).first(), null);
+});
+
 test("page counts keep the path and referring site only, and skip bots and non-pages", async () => {
   const db = testDatabase();
   const html = new Response("<html>", { headers: { "content-type": "text/html; charset=utf-8" } });
