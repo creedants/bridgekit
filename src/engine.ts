@@ -742,9 +742,9 @@ export async function priceDistribution(
   // the division's error (about 1e-14 of a percent) off a bound, so 11.00 over
   // 10.00 is +10.0% and files under "Up 5% to 10%". For two-decimal price pairs
   // up to 10,000, no pair that is not a bound comes within the rounding's
-  // half-width of 0.0000005 of a percent, so only a bound moves. A price with
-  // more decimals that lands inside that half-width joins the bound, where the
-  // table prints the same one-decimal figure.
+  // half-width of 0.0000005 of a percent, so for those prices only a bound
+  // moves. A price with more decimals that lands inside that half-width joins
+  // the bound, where the table prints the same one-decimal figure.
   const percent = `round((${change}) * 100, 6)`;
   const bucket =
     "CASE " +
