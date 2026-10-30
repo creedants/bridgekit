@@ -510,22 +510,56 @@ test("Save setup to file leaves the guess markers out", async () => {
     { name: "units", type: "BIGINT" },
     { name: "net_sales", type: "DOUBLE" },
   ];
-  assert.ok(isValidSetup({ ...persisted, levels: [{ name: "Size", columns: ["year"] }] }, columns) || true, "shape stays a setup");
-  const restored = restoredSetup({ ...full, levels: [{ name: "Size", columns: ["year"] }] });
-  assert.ok(!("fresh" in restored) && !("salesFromValues" in restored), "a setup file saved by main still loads");
+  // A setup saved by this branch: the export validates and keeps its mapping through a restore.
+  const headFile = { ...persisted, levels: [{ name: "Size", columns: ["year"] }] };
+  assert.ok(isValidSetup(headFile, columns), "a setup saved by this branch passes validation");
+  const headRestored = restoredSetup(headFile);
+  assert.equal(headRestored.periodColumn, persisted.periodColumn, "this branch's export keeps its period column");
+  assert.equal(headRestored.unitsColumn, persisted.unitsColumn, "this branch's export keeps its units column");
+  assert.equal(headRestored.salesColumn, persisted.salesColumn, "this branch's export keeps its sales column");
+  assert.deepEqual(headRestored.levels, [{ name: "Size", columns: ["year"] }], "this branch's export keeps its attribute mapping");
+  // A setup file saved by main: it validates, and the restore drops the guess markers.
+  const mainFile = { ...full, levels: [{ name: "Size", columns: ["year"] }] };
+  assert.ok(isValidSetup(mainFile, columns), "a setup saved by main passes validation");
+  const restored = restoredSetup(mainFile);
+  assert.ok(!("fresh" in restored), "a setup saved by main loads without its fresh marker");
+  assert.ok(!("salesFromValues" in restored), "a setup saved by main loads without its salesFromValues marker");
   const source = readFileSync(new URL("../src/app/App.tsx", import.meta.url), "utf8");
   assert.ok(source.includes("persistedSetupForFile(setup)"), "Save setup to file exports the stripped setup");
   assert.ok(!source.includes("JSON.stringify(setup,"), "Save setup to file no longer serializes the raw setup");
 });
 
-test("a refused load keeps its error through the period rebuild", () => {
-  const source = readFileSync(new URL("../src/app/App.tsx", import.meta.url), "utf8");
-  const taskAt = source.indexOf("async function task");
-  assert.ok(taskAt >= 0, "the task runner is found");
-  const taskBody = source.slice(taskAt, source.indexOf("async function readData", taskAt));
-  assert.ok(taskBody.includes('kind !== "periods"'), "the period rebuild does not clear the banner");
-  assert.ok(taskBody.includes('setError("")'), "other tasks still clear the banner");
-  assert.ok(taskBody.includes("setError(describeError(e))"), "a failed task still reports its own error");
-  assert.ok(source.includes('task("periods"'), "the period list still rebuilds through the task runner");
+test("the fallback's own period rebuild keeps a refused load's error", async () => {
+  const { createRefusalHold, viewOf } = await import("../src/app/App.tsx");
+  const view = viewOf(1, setup());
+  assert.equal(view, viewOf(1, setup()), "the same load and setup build one view");
+  const hold = createRefusalHold();
+  hold.hold(view);
+  assert.equal(hold.spend(view), true, "the fallback's own rebuild keeps the banner");
+  assert.equal(hold.spend(view), false, "the hold covers one rebuild only");
+});
+
+test("a period rebuild the visitor starts clears a refused load's error", async () => {
+  const { createRefusalHold, viewOf } = await import("../src/app/App.tsx");
+  const fallback = viewOf(1, setup());
+  const held = () => {
+    const hold = createRefusalHold();
+    hold.hold(fallback);
+    return hold;
+  };
+  assert.equal(
+    held().spend(viewOf(1, setup({ grain: "year" }))),
+    false,
+    "a change of Compare by does not spend the hold",
+  );
+  assert.equal(
+    held().spend(viewOf(1, setup({ periodColumn: "other_date" }))),
+    false,
+    "a change of Period column does not spend the hold",
+  );
+  assert.equal(held().spend(viewOf(2, setup())), false, "a new load does not spend the hold");
+  assert.equal(createRefusalHold().spend(fallback), false, "nothing held keeps nothing");
+  // A setup change builds its view the same way, so the hold cannot reach it.
+  assert.notEqual(viewOf(1, setup({ grain: "month" })), fallback, "a changed setup is a different view");
 });
 
