@@ -450,8 +450,7 @@ export async function exportExcel(
   // grid show the same figures by construction. Absent with no Split by column.
   if (split) {
     const grid = drawGrid(split, String(config.prior), String(config.current));
-    // The reserved name keeps the By sheets from taking it; this sheet keeps
-    // the exact name the grid on screen uses.
+    // Use the reserved sheet name for the grid export.
     const sheet = workbook.addWorksheet("Small bridges");
     usedNames.add("small bridges");
     sheet.columns = [{ width: 34 }, { width: 18 }];

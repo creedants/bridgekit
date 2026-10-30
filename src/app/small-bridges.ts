@@ -526,9 +526,9 @@ export type PanelBlock =
   | { readonly kind: "figures"; readonly title: string; readonly status: string | null; readonly prior: number; readonly current: number };
 
 /**
- * The painted grid derived once from a split result. The grid on screen, the
- * Excel sheet and the picture export all read this, so the three cannot drift
- * apart: there is no second derivation.
+ * The shared representation of a split result. The grid on screen, the
+ * Excel sheet and the picture export each call drawGrid on that same result,
+ * so their panel figures use the same derivation without rerunning the engine.
  */
 export interface DrawnGrid {
   readonly blocks: PanelBlock[];
@@ -568,7 +568,7 @@ export function shownSplit(owner: BridgeResult): BridgeBy | null {
   return shown !== null && shown.owner === owner ? shown.grid : null;
 }
 
-/** One rectangle on the composite picture, in device pixels. */
+/** One rectangle on the composite picture, in CSS pixels. */
 export interface PictureRect {
   readonly x: number;
   readonly y: number;
@@ -592,7 +592,7 @@ export interface PictureLayout {
 export const PICTURE_CELL_WIDTH = 420;
 export const PICTURE_CELL_HEIGHT = 320;
 
-/** Wraps the between line onto lines of at most `width` characters, on word boundaries. */
+/** Wraps at word boundaries near `width` characters, preserving overlong words. */
 export function wrapBetweenLine(line: string, width: number): string[] {
   const words = line.split(" ");
   const lines: string[] = [];
