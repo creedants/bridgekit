@@ -14,6 +14,8 @@ registerHooks({
 const { TOO_BIG_SENTENCE, isOutOfMemory, loadFailure } = await import("../src/app/db.ts");
 
 const TOO_BIG = "This file is too big to open in this browser. Try a smaller file, or save it with fewer rows or columns.";
+// Pinned as a literal so rewording the sentence fails here too.
+const ENCODING = "This file's text encoding could not be read. Save it as CSV UTF-8.";
 const OUT_OF_MEMORY = "Out of Memory Error: Allocation failure";
 
 test("the too-big sentence is the approved wording", () => {
@@ -449,6 +451,71 @@ test("a file with ragged trailing fields loads", async () => {
   const [sums] = await query("SELECT count(*)::DOUBLE AS n, sum(sales) AS s FROM data");
   assert.equal(Number(sums.n), 3);
   assert.equal(Number(sums.s), 220);
+});
+
+test("an invalid byte after the prefix shows the plain sentence whatever the database says", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { readCsvFile } = await import("../src/app/encoding.ts");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const lines = ["period,product,units,sales,note"];
+  for (let index = 0; index < 4000; index++) {
+    lines.push(`2025,A-100,${(index % 5) + 1},${100 + index},note ${index}`);
+  }
+  const text = `${lines.join("\n")}\n`;
+  assert.ok(text.length > 65536);
+  // The prefix, and every byte before the last, are valid UTF-8.
+  const encoded = new TextEncoder().encode(text);
+  const bytes = new Uint8Array(encoded.length + 1);
+  bytes.set(encoded);
+  bytes[encoded.length] = 0xff;
+  const directory = await mkdtemp("/tmp/bridgekit-load-errors-");
+  const filePath = path.join(directory, "late-byte.csv");
+  await writeFile(filePath, bytes);
+  // Built from the bytes, not the text, so the last byte stays 0xFF.
+  const file = new File([bytes], "late-byte.csv");
+  const reading = await readCsvFile(file);
+  assert.equal(reading.kind, "bytes");
+  const query = await openDatabase();
+  const renamed = async (sql: string) => {
+    try {
+      return await query(sql);
+    } catch {
+      throw new Error("The reader refused the file.");
+    }
+  };
+  await assert.rejects(
+    stageCsvAndSwap(renamed, file, "data", filePath, "month first", reading),
+    (error: unknown) => (error as Error).message === ENCODING,
+    ENCODING,
+  );
+});
+
+test("a malformed valid UTF-8 CSV keeps the database's own error", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { readCsvFile } = await import("../src/app/encoding.ts");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const text = `a,b\n${"x".repeat(2_097_152)},2\nx,2\n`;
+  const bytes = new TextEncoder().encode(text);
+  const directory = await mkdtemp("/tmp/bridgekit-load-errors-");
+  const filePath = path.join(directory, "long-line.csv");
+  await writeFile(filePath, bytes);
+  const file = new File([bytes], "long-line.csv");
+  const reading = await readCsvFile(file);
+  assert.equal(reading.kind, "bytes");
+  const query = await openDatabase();
+  const failure = await stageCsvAndSwap(query, file, "data", filePath, "month first", reading).then(
+    () => null,
+    (error: unknown) => error as Error,
+  );
+  assert.ok(failure instanceof Error);
+  assert.notEqual(failure.message, ENCODING);
+  assert.notEqual(failure.message, TOO_BIG);
+  // Pinned as a literal so a changed database message fails here.
+  assert.ok(failure.message.startsWith("Invalid Input Error: CSV Error on Line: 1"), failure.message);
 });
 
 test("a file whose 64 KB prefix ends inside a quoted record loads", async () => {
