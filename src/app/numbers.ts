@@ -901,7 +901,8 @@ const CURRENCY_FIELD = /[\p{Sc}$]/u;
  * while northAmerican() then ignores commas, spaces, tabs, line breaks, form
  * feeds and dollar signs and treats remaining brackets as the sign. The
  * pre-load guard has no database, so this repeats that reading from the same
- * pattern constants, and counts a cell only when it carries currency, grouping,
+ * currency and marker constants and JavaScript copies of the group patterns,
+ * and counts a cell only when it carries currency, grouping,
  * bracket or trailing-minus formatting as well, so a bare exponent, underscore
  * or leading dot keeps its plain-measure decision.
  */
