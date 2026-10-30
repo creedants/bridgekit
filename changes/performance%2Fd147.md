@@ -1,0 +1,1 @@
+- The home page hero Change tile shows the engine rounded Change for the sample bridge. `test/site-pages.test.ts` builds the default sample with the same code the app uses and checks the hero Change tile and the eight step amounts against the rounded engine figures, so a later rounding or engine change fails the test instead of drifting.
