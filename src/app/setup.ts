@@ -135,17 +135,20 @@ const across = (left: string, right: string) =>
 /** Words that join a price to a unit, as in Preis pro Stk, price for each unit or Kosten/Stk. */
 const CONNECTOR_WORDS = new Set(["per", "je", "pro", "for", "each"]);
 /**
- * A price word and a unit word in either order name a unit price when nothing
- * but connector words stands between them, however many. A count word with
- * other words before the price, such as Units Sold at Full Price, names a
- * quantity instead and is left out.
+ * A price word and a unit word name a unit price when they sit side by side, as
+ * in Kosten/Stk, or when only connector words join them and the price comes
+ * first, as in price for each unit. A unit word first with a connector between
+ * is a unit price only when the price word ends the name, so Stk Preis is one
+ * while Units for Rate Card, a count named by a category, is not.
  */
 const isUnitPrice = (name: string) => {
   const parts = words(name);
   for (let i = 0; i < parts.length; i++) {
     for (let j = i + 1; j < parts.length; j++) {
       if (j > i + 1 && !CONNECTOR_WORDS.has(parts[j - 1])) break;
-      if (across(parts[i], parts[j])) return true;
+      if (!across(parts[i], parts[j])) continue;
+      if (unitWords.has(parts[i]) && j > i + 1 && j < parts.length - 1) continue;
+      return true;
     }
   }
   // German compounds join the words: Stückpreis is one token, so the pair
