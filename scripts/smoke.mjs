@@ -1451,6 +1451,9 @@ async function drive(browser, origin, rows) {
     };
     const reloadTotals = async (step, load) => {
       await load();
+      if (await browser.evalJs("!!document.querySelector('.error')")) {
+        fail(`${step}: ${(await browser.evalJs("document.querySelector('.error').textContent.trim()")).trim()}`);
+      }
       await addFixtureLevels();
       await waitReady();
       await calculate();
