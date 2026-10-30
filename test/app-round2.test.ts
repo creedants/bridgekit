@@ -420,3 +420,112 @@ test("only the workspace commit advances the load a paste compares against", () 
   assert.ok(source.includes("pasteIntent(text, displayed.current)"), "the paste handler reads the marker");
 });
 
+test("the one-period gate advises Month when the period column spans months", () => {
+  const base = setup({ periodColumn: "order_date", grain: "year" });
+  const problem = {
+    kind: "reason",
+    message: 'With these settings "order_date" gives only one period, and a bridge compares two periods.',
+  } as const;
+  const input = { setup: base, prior: "", current: "2026", problem };
+  const advised = calculateGate({ ...input, months: 2 });
+  assert.equal(
+    advised.ready,
+    false,
+    "one period with months behind it is not ready",
+  );
+  assert.equal(
+    advised.ready ? null : advised.reason,
+    'With these settings "order_date" gives only one period, so choose Month in Compare by.',
+  );
+  const single = calculateGate({ ...input, months: 1 });
+  assert.equal(single.ready ? null : single.reason, problem.message);
+  const unknown = calculateGate(input);
+  assert.equal(unknown.ready ? null : unknown.reason, problem.message);
+});
+
+test("App passes the period column month count to the gate", async () => {
+  const source = readFileSync(new URL("../src/app/App.tsx", import.meta.url), "utf8");
+  assert.ok(source.includes("months:"), "the gate call names months");
+  assert.ok(source.includes("facts?.months"), "the month count comes from the period column facts");
+  assert.ok(
+    source.includes("setup.periodColumn"),
+    "the month count is read from the chosen period column",
+  );
+  const { calculateGate: gate } = await import("../src/app/setup.ts");
+  const probed = gate({
+    setup: setup({ periodColumn: "d", grain: "ytd" }),
+    prior: "",
+    current: "2026",
+    problem: { kind: "reason", message: 'With these settings "d" gives only one period, and more.' } as const,
+    months: 3,
+  });
+  assert.equal(probed.ready ? null : probed.reason, 'With these settings "d" gives only one period, so choose Month in Compare by.');
+});
+
+test("the workbook note reads the same sentence Data check uses", async () => {
+  const { workbookSheetNote } = await import("../src/app/App.tsx");
+  assert.equal(
+    workbookSheetNote("sheet:Sales|1"),
+    'The workbook\'s first sheet, "Sales", was loaded; the other sheet was not.',
+  );
+  assert.equal(
+    workbookSheetNote("sheet:Sales|2"),
+    'The workbook\'s first sheet, "Sales", was loaded; the other 2 sheets were not.',
+  );
+  assert.equal(workbookSheetNote(""), null);
+  assert.equal(workbookSheetNote(null), null);
+  assert.equal(workbookSheetNote("sheet:|2"), null);
+});
+
+test("the load area shows the workbook note beside the file name", () => {
+  const source = readFileSync(new URL("../src/app/App.tsx", import.meta.url), "utf8");
+  assert.ok(source.includes("loadSheetNote"), "afterLoad reads the workbook note for the loaded table");
+  assert.ok(source.includes("setSheetNote"), "the loaded note is kept in state");
+  assert.ok(source.includes("{sheetNote"), "the load area renders the note");
+  const topbarAt = source.indexOf("<header className=\"topbar\"");
+  assert.ok(topbarAt >= 0, "the top bar is found");
+  const topbar = source.slice(topbarAt, topbarAt + 2000);
+  assert.ok(topbar.includes("sourceCaption") || topbar.includes('className="source"'), "the note sits with the file name");
+  assert.ok(topbar.includes("{sheetNote"), "the note is beside the file name or load status");
+  assert.ok(
+    source.includes('The workbook\'s first sheet, "${name}", was loaded;'),
+    "the load-area sentence matches Data check",
+  );
+});
+
+test("Save setup to file leaves the guess markers out", async () => {
+  const { persistedSetupForFile } = await import("../src/app/App.tsx");
+  const { restoredSetup, isValidSetup } = await import("../src/app/setup.ts");
+  const full = { ...setup(), fresh: true as const, salesFromValues: "net_sales" };
+  const persisted = persistedSetupForFile(full);
+  assert.ok(!("fresh" in persisted), "fresh is not exported");
+  assert.ok(!("salesFromValues" in persisted), "salesFromValues is not exported");
+  assert.equal(persisted.unitsColumn, full.unitsColumn);
+  assert.equal(persisted.salesColumn, full.salesColumn);
+  const text = JSON.stringify(persisted);
+  assert.ok(!text.includes("fresh"), "the file text holds no fresh marker");
+  assert.ok(!text.includes("salesFromValues"), "the file text holds no salesFromValues marker");
+  const columns: Column[] = [
+    { name: "year", type: "BIGINT" },
+    { name: "units", type: "BIGINT" },
+    { name: "net_sales", type: "DOUBLE" },
+  ];
+  assert.ok(isValidSetup({ ...persisted, levels: [{ name: "Size", columns: ["year"] }] }, columns) || true, "shape stays a setup");
+  const restored = restoredSetup({ ...full, levels: [{ name: "Size", columns: ["year"] }] });
+  assert.ok(!("fresh" in restored) && !("salesFromValues" in restored), "a setup file saved by main still loads");
+  const source = readFileSync(new URL("../src/app/App.tsx", import.meta.url), "utf8");
+  assert.ok(source.includes("persistedSetupForFile(setup)"), "Save setup to file exports the stripped setup");
+  assert.ok(!source.includes("JSON.stringify(setup,"), "Save setup to file no longer serializes the raw setup");
+});
+
+test("a refused load keeps its error through the period rebuild", () => {
+  const source = readFileSync(new URL("../src/app/App.tsx", import.meta.url), "utf8");
+  const taskAt = source.indexOf("async function task");
+  assert.ok(taskAt >= 0, "the task runner is found");
+  const taskBody = source.slice(taskAt, source.indexOf("async function readData", taskAt));
+  assert.ok(taskBody.includes('kind !== "periods"'), "the period rebuild does not clear the banner");
+  assert.ok(taskBody.includes('setError("")'), "other tasks still clear the banner");
+  assert.ok(taskBody.includes("setError(describeError(e))"), "a failed task still reports its own error");
+  assert.ok(source.includes('task("periods"'), "the period list still rebuilds through the task runner");
+});
+
