@@ -23,6 +23,12 @@ import {
 import { openDatabase } from "../src/duckdb.ts";
 import { createSyntheticSales } from "../src/synth.ts";
 
+const FAKE_DATABASE_MODULE = `
+export const PARQUET_REFUSAL = "That file is a Parquet file. Save it as CSV or Excel, then choose it again.";
+export function scheduleSpeculative() { return () => {}; }
+export function openBrowserDatabase() { return Promise.resolve(globalThis.__bridgekitDatabase); }
+`;
+
 // The table owner lives in the page component, and this runner cannot load a
 // .tsx file by itself, so a load hook transforms it with the esbuild copy the
 // build already installs. The page database is kept off the wasm bundles the
@@ -32,6 +38,11 @@ registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier.includes("?url")) {
       return { url: 'data:text/javascript,export default "stub"', shortCircuit: true };
+    }
+    // The page database needs a browser and wasm bundles. The banner test mounts
+    // the real App, so its database is replaced by one this runner scripts.
+    if (specifier === "./db.ts" && context.parentURL?.endsWith("/src/app/App.tsx")) {
+      return { url: `data:text/javascript,${encodeURIComponent(FAKE_DATABASE_MODULE)}`, shortCircuit: true };
     }
     return nextResolve(specifier, context);
   },
@@ -563,3 +574,506 @@ test("a period rebuild the visitor starts clears a refused load's error", async 
   assert.notEqual(viewOf(1, setup({ grain: "month" })), fallback, "a changed setup is a different view");
 });
 
+// The banner's lifetime spans the real App: the fallback's publish, the profile's
+// refinement and the period rebuilds they start. These tests mount that component
+// with a scripted database, so the wiring between them runs for real.
+
+type HarnessListener = (event: Record<string, unknown>) => void;
+
+class HarnessNode {
+  nodeType: number;
+  nodeName: string;
+  childNodes: HarnessNode[] = [];
+  parentNode: HarnessNode | null = null;
+  private listeners = new Map<string, Set<HarnessListener>>();
+
+  constructor(nodeType: number, nodeName: string) {
+    this.nodeType = nodeType;
+    this.nodeName = nodeName;
+  }
+
+  get firstChild(): HarnessNode | null {
+    return this.childNodes[0] ?? null;
+  }
+
+  get lastChild(): HarnessNode | null {
+    return this.childNodes[this.childNodes.length - 1] ?? null;
+  }
+
+  get nextSibling(): HarnessNode | null {
+    if (!this.parentNode) return null;
+    const at = this.parentNode.childNodes.indexOf(this);
+    return this.parentNode.childNodes[at + 1] ?? null;
+  }
+
+  get previousSibling(): HarnessNode | null {
+    if (!this.parentNode) return null;
+    const at = this.parentNode.childNodes.indexOf(this);
+    return at > 0 ? this.parentNode.childNodes[at - 1] : null;
+  }
+
+  appendChild(child: HarnessNode): HarnessNode {
+    return this.insertBefore(child, null);
+  }
+
+  insertBefore(child: HarnessNode, before: HarnessNode | null): HarnessNode {
+    if (child.parentNode) child.parentNode.removeChild(child);
+    const at = before === null ? -1 : this.childNodes.indexOf(before);
+    this.childNodes.splice(at === -1 ? this.childNodes.length : at, 0, child);
+    child.parentNode = this;
+    return child;
+  }
+
+  removeChild(child: HarnessNode): HarnessNode {
+    const at = this.childNodes.indexOf(child);
+    if (at >= 0) {
+      this.childNodes.splice(at, 1);
+      child.parentNode = null;
+    }
+    return child;
+  }
+
+  addEventListener(type: string, listener: HarnessListener): void {
+    const set = this.listeners.get(type) ?? new Set();
+    set.add(listener);
+    this.listeners.set(type, set);
+  }
+
+  removeEventListener(type: string, listener: HarnessListener): void {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  dispatchEvent(event: Record<string, unknown>): boolean {
+    event.target = event.target ?? this;
+    for (const listener of this.listeners.get(String(event.type)) ?? []) listener.call(this, event);
+    if (event.bubbles && this.parentNode) return this.parentNode.dispatchEvent(event);
+    return true;
+  }
+}
+
+class HarnessText extends HarnessNode {
+  data: string;
+
+  constructor(data: string) {
+    super(3, "#text");
+    this.data = String(data);
+  }
+
+  get nodeValue(): string {
+    return this.data;
+  }
+
+  set nodeValue(value: string) {
+    this.data = String(value);
+  }
+
+  get textContent(): string {
+    return this.data;
+  }
+}
+
+class HarnessElement extends HarnessNode {
+  tagName: string;
+  localName: string;
+  attributes = new Map<string, string>();
+  style: Record<string, unknown> = { setProperty() {} };
+  ownValue = "";
+  ownSelected = false;
+  checked = false;
+  disabled = false;
+  type = "";
+
+  constructor(tagName: string) {
+    super(1, String(tagName).toUpperCase());
+    this.tagName = this.nodeName;
+    this.localName = String(tagName).toLowerCase();
+  }
+
+  get namespaceURI(): string {
+    return "http://www.w3.org/1999/xhtml";
+  }
+
+  /** An option answers with its value attribute, or with its text when it has none. */
+  get value(): string {
+    if (this.localName === "select") {
+      const chosen = harnessNodes(this, "OPTION").find((option) => option.ownSelected);
+      return chosen ? chosen.value : this.ownValue;
+    }
+    if (this.localName === "option") return this.getAttribute("value") ?? this.textContent;
+    return this.ownValue;
+  }
+
+  set value(next: string) {
+    this.ownValue = String(next);
+    if (this.localName === "select") {
+      for (const option of harnessNodes(this, "OPTION")) option.selected = option.value === this.ownValue;
+    }
+  }
+
+  /** Selecting an option clears its siblings, as a select does. */
+  get selected(): boolean {
+    return this.ownSelected;
+  }
+
+  set selected(next: boolean) {
+    this.ownSelected = Boolean(next);
+    if (!this.ownSelected || !this.parentNode) return;
+    for (const sibling of this.parentNode.childNodes) {
+      if (sibling !== this && sibling instanceof HarnessElement) sibling.ownSelected = false;
+    }
+  }
+
+  get options(): HarnessElement[] {
+    return harnessNodes(this, "OPTION");
+  }
+
+  get ownerDocument(): HarnessDocument {
+    return harnessDocument;
+  }
+
+  setAttribute(name: string, value: string): void {
+    this.attributes.set(String(name), String(value));
+  }
+
+  setAttributeNS(_namespace: string, name: string, value: string): void {
+    this.setAttribute(name, value);
+  }
+
+  getAttribute(name: string): string | null {
+    return this.attributes.get(String(name)) ?? null;
+  }
+
+  hasAttribute(name: string): boolean {
+    return this.attributes.has(String(name));
+  }
+
+  removeAttribute(name: string): void {
+    this.attributes.delete(String(name));
+  }
+
+  get textContent(): string {
+    return this.childNodes.map((child) => (child as HarnessElement).textContent ?? "").join("");
+  }
+
+  set textContent(value: string) {
+    this.childNodes = [];
+    if (value !== "" && value != null) this.appendChild(new HarnessText(value));
+  }
+
+  closest(): null {
+    return null;
+  }
+
+  focus(): void {}
+
+  remove(): void {
+    this.parentNode?.removeChild(this);
+  }
+}
+
+type HarnessDocument = HarnessElement & {
+  createElement(tag: string): HarnessElement;
+  createElementNS(namespace: string, tag: string): HarnessElement;
+  createTextNode(text: string): HarnessText;
+  createComment(text: string): HarnessText;
+  documentElement: HarnessElement;
+  body: HarnessElement;
+  head: HarnessElement;
+  HTMLIFrameElement: unknown;
+  readyState: string;
+};
+
+let harnessDocument: HarnessDocument;
+
+function installHarnessDom(): HarnessDocument {
+  const existing = (globalThis as unknown as { document?: HarnessDocument }).document;
+  if (existing && (existing as unknown as { body?: unknown }).body) return existing;
+  const doc = new HarnessElement("#document") as unknown as HarnessDocument;
+  (doc as unknown as { nodeType: number }).nodeType = 9;
+  doc.readyState = "complete";
+  doc.createElement = (tag: string) => new HarnessElement(tag);
+  doc.createElementNS = (_namespace: string, tag: string) => new HarnessElement(tag);
+  doc.createTextNode = (text: string) => new HarnessText(text);
+  doc.createComment = (text: string) => new HarnessText(text);
+  doc.documentElement = new HarnessElement("html");
+  doc.head = new HarnessElement("head");
+  doc.body = new HarnessElement("body");
+  doc.HTMLIFrameElement = class extends HarnessElement {};
+  doc.documentElement.appendChild(doc.head);
+  doc.documentElement.appendChild(doc.body);
+  (doc as unknown as HarnessNode).appendChild(doc.documentElement);
+  const windowListeners = new Map<string, Set<HarnessListener>>();
+  const view: Record<string, unknown> = {
+    document: doc,
+    location: { href: "http://127.0.0.1:8790/app/", pathname: "/app/", search: "" },
+    navigator: { userAgent: "node" },
+    Event: class {
+      type: string;
+      constructor(type: string, init: Record<string, unknown> = {}) {
+        this.type = type;
+        Object.assign(this, init);
+      }
+    },
+    Node: HarnessNode,
+    Element: HarnessElement,
+    HTMLElement: HarnessElement,
+    HTMLIFrameElement: doc.HTMLIFrameElement,
+    MutationObserver: class {
+      observe() {}
+      disconnect() {}
+      takeRecords() {
+        return [];
+      }
+    },
+    addEventListener(type: string, listener: HarnessListener) {
+      const set = windowListeners.get(type) ?? new Set();
+      set.add(listener);
+      windowListeners.set(type, set);
+    },
+    removeEventListener(type: string, listener: HarnessListener) {
+      windowListeners.get(type)?.delete(listener);
+    },
+    setTimeout: globalThis.setTimeout.bind(globalThis),
+    clearTimeout: globalThis.clearTimeout.bind(globalThis),
+    requestAnimationFrame: (work: (time: number) => void) => globalThis.setTimeout(() => work(0), 0),
+    cancelAnimationFrame: (id: number) => globalThis.clearTimeout(id),
+    matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
+    confirm: () => true,
+    performance: globalThis.performance,
+  };
+  view.dispatch = (type: string, event: Record<string, unknown>) => {
+    event.target = event.target ?? doc.body;
+    for (const listener of windowListeners.get(type) ?? []) listener.call(view, event);
+  };
+  const globals = globalThis as unknown as Record<string, unknown>;
+  globals.window = view;
+  globals.document = doc;
+  globals.location = view.location;
+  globals.Node = HarnessNode;
+  globals.Element = HarnessElement;
+  globals.HTMLElement = HarnessElement;
+  globals.HTMLIFrameElement = doc.HTMLIFrameElement;
+  globals.Event = view.Event;
+  globals.MutationObserver = view.MutationObserver;
+  globals.requestAnimationFrame = view.requestAnimationFrame;
+  globals.cancelAnimationFrame = view.cancelAnimationFrame;
+  globals.matchMedia = view.matchMedia;
+  globals.confirm = view.confirm;
+  globals.IS_REACT_ACT_ENVIRONMENT = true;
+  harnessDocument = doc;
+  return doc;
+}
+
+const HARNESS_COLUMNS = [
+  { column_name: "order_date", column_type: "DATE" },
+  { column_name: "other_date", column_type: "DATE" },
+  { column_name: "product", column_type: "VARCHAR" },
+  { column_name: "units", column_type: "DOUBLE" },
+  { column_name: "net_sales", column_type: "DOUBLE" },
+];
+
+const GOOD_CSV = [
+  "order_date,other_date,product,units,net_sales",
+  "2026-01-01,2025-01-01,A-100,2,20",
+  "2026-02-01,2026-01-01,A-100,3,33",
+  "2026-01-01,2025-01-01,B-200,4,40",
+  "2026-02-01,2026-01-01,B-200,5,55",
+].join("\n");
+
+const HEADER_ONLY_CSV = "order_date,product,units,net_sales";
+
+interface HarnessDatabase {
+  loads: number;
+  /** When set, the next DESCRIBE waits on it. */
+  describeGate: (() => Promise<void>) | null;
+  /** When set, the next profile read waits on it. */
+  profileGate: (() => Promise<void>) | null;
+  /** How many period views were built over the month grain. */
+  monthViews: number;
+  query(sql: string): Promise<readonly Record<string, unknown>[]>;
+  loadFile(file: unknown, table: string): Promise<number>;
+}
+
+function harnessDatabase(): HarnessDatabase {
+  const database: HarnessDatabase = {
+    loads: 0,
+    describeGate: null,
+    profileGate: null,
+    monthViews: 0,
+    async query(sql: string) {
+      if (sql.startsWith("CREATE OR REPLACE VIEW") && sql.includes("%Y-%m")) database.monthViews += 1;
+      if (/^\s*DESCRIBE/i.test(sql)) {
+        // The copy that a newer pick supersedes is held here so the newer pick
+        // can arrive while its metadata is still being read.
+        if (database.describeGate !== null) {
+          const gate = database.describeGate;
+          database.describeGate = null;
+          await gate();
+        }
+        return HARNESS_COLUMNS;
+      }
+      if (sql.includes("duckdb_tables()")) return [];
+      if (sql.includes("count(*)::DOUBLE AS n FROM")) return [{ n: 4 }];
+      if (sql.includes("SELECT * FROM")) return [];
+      if (sql.includes(" AS c0")) {
+        if (database.profileGate !== null) {
+          const gate = database.profileGate;
+          database.profileGate = null;
+          await gate();
+        }
+        // A real profile takes a moment, so the load's own columns commit first.
+        await new Promise<void>((resolve) => setTimeout(resolve, 5));
+        return [
+          {
+            c0: 2,
+            c1: 2,
+            c2: 2,
+            c3: 2,
+            c4: 2,
+            lo0: "2026-01-01",
+            hi0: "2026-02-01",
+            m0: 2,
+            lo1: "2025-01-01",
+            hi1: "2026-01-01",
+            m1: 2,
+            s3: 14,
+            s4: 148,
+          },
+        ];
+      }
+      if (sql.includes("arg_min")) return [{ present: 0, parsed: 0, records: 4, value: null, at: null, field: 2 }];
+      if (sql.includes("ranked")) return [{ p: "2026", numeric: true }];
+      return [];
+    },
+    async loadFile() {
+      database.loads += 1;
+      if (database.loads === 3) throw new Error("This file has no data rows.");
+      return 0;
+    },
+  };
+  return database;
+}
+
+function harnessNodes(node: HarnessNode, name: string, found: HarnessElement[] = []): HarnessElement[] {
+  if (node instanceof HarnessElement && node.nodeName === name) found.push(node);
+  for (const child of node.childNodes) harnessNodes(child, name, found);
+  return found;
+}
+
+function harnessBanner(container: HarnessNode): string {
+  return harnessNodes(container, "P")
+    .filter((node) => node.getAttribute("role") === "alert")
+    .map((node) => node.textContent)
+    .join("");
+}
+
+function harnessOptions(select: HarnessElement): string[] {
+  return harnessNodes(select, "OPTION").map((option) => option.textContent);
+}
+
+test("the banner stays through the fallback's refinement until a visitor change", async () => {
+  const doc = installHarnessDom();
+  const React = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const database = harnessDatabase();
+  (globalThis as unknown as { __bridgekitDatabase: HarnessDatabase }).__bridgekitDatabase = database;
+  const { App } = await import("../src/app/App.tsx");
+  const container = doc.createElement("div");
+  doc.body.appendChild(container as unknown as HarnessNode);
+  const root = createRoot(container as unknown as Element);
+  const flush = async () => {
+    for (let i = 0; i < 8; i += 1) await React.act(async () => {});
+  };
+  const until = async (check: () => boolean, what: string) => {
+    for (let i = 0; i < 300; i += 1) {
+      if (check()) return;
+      await React.act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+    const selects = harnessNodes(container, "SELECT").map(
+      (node) => `${node.value}(${harnessOptions(node).join("|")})`,
+    );
+    throw new Error(`timed out waiting for ${what}: selects ${selects.join(" ")}`);
+  };
+  const pick = async (name: string, text: string) => {
+    const input = harnessNodes(container, "INPUT").find(
+      (node) => node.getAttribute("type") === "file" || (node as unknown as { type?: string }).type === "file",
+    );
+    assert.ok(input, "a file picker is on screen");
+    await React.act(async () => {
+      (input as unknown as { files: unknown }).files = [new File([text], name, { type: "text/csv" })];
+      input.value = "";
+      input.dispatchEvent({
+        type: "change",
+        bubbles: true,
+        target: input,
+        preventDefault() {},
+        stopPropagation() {},
+      });
+    });
+    await flush();
+  };
+  try {
+    await React.act(async () => {
+      root.render(React.createElement(App));
+    });
+    await flush();
+
+    await pick("A-100.csv", GOOD_CSV);
+    await until(() => harnessBanner(container) === "" && harnessNodes(container, "SELECT").length > 0, "the first load");
+
+    // A copy of the same file, held mid-read, then a header-only file while it reads.
+    let releaseCopy: () => void = () => {};
+    let releaseProfile: () => void = () => {};
+    database.describeGate = () => new Promise<void>((resolve) => (releaseCopy = resolve));
+    database.profileGate = () => new Promise<void>((resolve) => (releaseProfile = resolve));
+
+    await pick("A-100 copy.csv", GOOD_CSV);
+    await until(() => database.describeGate === null, "the copy's metadata read to start");
+    await pick("A-100 header only.csv", HEADER_ONLY_CSV);
+
+    await until(() => harnessBanner(container) === "This file has no data rows.", "the refused file's error");
+
+    // The copy's read finishes late; the fallback has already published it.
+    releaseCopy();
+    await until(() => database.profileGate === null, "the fallback's profile to start");
+    // The refusal is on screen while the profile lands, the moment the refinement
+    // used to clear it.
+    assert.equal(harnessBanner(container), "This file has no data rows.", "the refusal is on screen before the profile lands");
+    releaseProfile();
+
+    const compare = () => {
+      const select = harnessNodes(container, "SELECT").find((node) => harnessOptions(node).includes("Year to date"));
+      assert.ok(select, "the Compare by picker is on screen");
+      return select;
+    };
+    await until(() => compare().value === "month", "the profile's refinement to Month");
+    await until(() => database.monthViews > 0, "the refinement's period rebuild");
+
+    assert.equal(
+      harnessBanner(container),
+      "This file has no data rows.",
+      "the refusal stays after the automatic refinement and its period rebuild",
+    );
+
+    await React.act(async () => {
+      const select = compare();
+      select.value = "quarter";
+      select.dispatchEvent({
+        type: "change",
+        bubbles: true,
+        target: select,
+        preventDefault() {},
+        stopPropagation() {},
+      });
+    });
+    await flush();
+    assert.equal(harnessBanner(container), "", "a visitor's Compare by change clears the refusal");
+  } finally {
+    await React.act(async () => {
+      root.unmount();
+    });
+    doc.body.removeChild(container as unknown as HarnessNode);
+  }
+});
