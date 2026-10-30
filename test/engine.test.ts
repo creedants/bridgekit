@@ -269,11 +269,18 @@ test("a gross column splits price into list price and discounts", async () => {
   near(distribution.averageChange, 35 / 1400);
 });
 
-/** The bucket the engine files one price pair under, one unit in each period. */
-async function bucketForPair(query: Query, prior: number, current: number): Promise<string> {
+/** The bucket the engine files one price pair under, at the given unit counts. */
+async function bucketForPair(
+  query: Query,
+  prior: number,
+  current: number,
+  priorUnits = 1,
+  currentUnits = 1,
+): Promise<string> {
   await query(`DROP TABLE IF EXISTS price_pair`);
   await query(`CREATE TABLE price_pair AS SELECT * FROM (VALUES
-    ('p0', 'A-100', 1, ${prior}), ('p1', 'A-100', 1, ${current})) v(period, product, units, sales)`);
+    ('p0', 'A-100', ${priorUnits}, ${priorUnits * prior}),
+    ('p1', 'A-100', ${currentUnits}, ${currentUnits * current})) v(period, product, units, sales)`);
   const config: BridgeConfig = {
     table: "price_pair", periodColumn: "period", prior: "p0", current: "p1",
     unitsColumn: "units", salesColumn: "sales",
@@ -318,6 +325,27 @@ test("a change of exactly a bucket bound is filed in the bucket its label names"
   ];
   for (const [prior, current, expected] of cases) {
     assert.equal(await bucketForPair(query, prior, current), expected, `${prior} to ${current}`);
+  }
+});
+
+test("a change that is not exactly a bound keeps its own bucket", async () => {
+  const query = await openDatabase();
+  // Prior unit prices 999.9999 and 9999.9999, 3 prior units and 7 current
+  // units. Each change is past its bound by 5e-8 of a percent or more, which is
+  // 500 times the division's error at these prices, so it must not join the
+  // bucket nearer no change. The nine-figure pairs are past the bound by just
+  // 1e-10 of a percent, still 1,000 times the error.
+  const cases: [number, number, string][] = [
+    [999.9999, 1004.9999, "Up 0.5% to 2%"],
+    [999.9999, 994.9999, "Down 0.5% to 2%"],
+    [999.9999, 1019.9999, "Up 2% to 5%"],
+    [9999.9999, 10999.9999, "Up more than 10%"],
+    [100000000, 102000000.0001, "Up 2% to 5%"],
+    [100000000, 100500000.0001, "Up 0.5% to 2%"],
+    [100000000, 89999999.9999, "Down more than 10%"],
+  ];
+  for (const [prior, current, expected] of cases) {
+    assert.equal(await bucketForPair(query, prior, current, 3, 7), expected, `${prior} to ${current}`);
   }
 });
 

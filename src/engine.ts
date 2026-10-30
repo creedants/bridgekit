@@ -711,7 +711,7 @@ export interface PriceBucket {
 }
 
 /**
- * Band edges in percent, low to high. A change that rounds to an edge belongs
+ * Band edges in percent, low to high. A change that is exactly an edge belongs
  * to the band nearer no change, so +10.0% reads as "Up 5% to 10%" and -10.0%
  * as "Down 5% to 10%". Negative edges compare strictly and positive ones
  * inclusively, which is what makes each edge land on its near-zero side.
@@ -728,6 +728,44 @@ const PRICE_BUCKETS: [number, string][] = [
   [Infinity, "Up more than 10%"],
 ];
 
+/** One amount as an exact decimal: value = sign x digits x 10^negative(scale). */
+function decimalParts(text: string): { negative: boolean; digits: bigint; scale: number } | null {
+  const match = /^([-+]?)(\d+)(?:\.(\d+))?(?:[eE]([-+]?\d+))?$/.exec(text.trim());
+  if (!match) return null;
+  const [, sign, whole, fraction = "", exponent = "0"] = match;
+  return {
+    negative: sign === "-",
+    digits: BigInt(whole + fraction),
+    scale: fraction.length - Number(exponent),
+  };
+}
+
+/**
+ * The bucket for one matched configuration, decided on its exact decimal sales
+ * and units. Every edge is 100 + e percent of the prior unit price, so the
+ * compared quantities are 200 x current sales x prior units against twice that
+ * percent x prior sales x current units, where 200 clears the half-percent
+ * edge. Both sides are whole numbers at a common power of ten, so the
+ * comparison keeps the last decimal digit the division would round away and is
+ * exact at an edge. Null means a value was not a plain finite decimal, and the
+ * caller falls back to the double comparison.
+ */
+function exactBucket(s0: string, q0: string, s1: string, q1: string): number | null {
+  const parsed = [s0, q0, s1, q1].map(decimalParts);
+  if (parsed.some((part) => part === null)) return null;
+  const [p0, pq0, p1, pq1] = parsed as { negative: boolean; digits: bigint; scale: number }[];
+  const scale = Math.max(p0.scale, pq0.scale, p1.scale, pq1.scale);
+  const [priorSales, priorUnits, currentSales, currentUnits] = [p0, pq0, p1, pq1].map(
+    (part) => (part.negative ? -1n : 1n) * part.digits * 10n ** BigInt(scale - part.scale),
+  );
+  const left = 200n * currentSales * priorUnits;
+  const index = PRICE_BUCKETS.slice(0, -1).findIndex(([edge]) => {
+    const right = BigInt(2 * (100 + edge)) * priorSales * currentUnits;
+    return edge > 0 ? left <= right : left < right;
+  });
+  return index === -1 ? PRICE_BUCKETS.length - 1 : index;
+}
+
 /**
  * Current sales of exactly matched configurations, grouped by how much their
  * average price moved. Answers "how much of the book actually got the increase".
@@ -738,41 +776,58 @@ export async function priceDistribution(
 ): Promise<{ buckets: PriceBucket[]; averageChange: number }> {
   const k = config.levels.length;
   const change = "(s1 / q1) / (s0 / q0) - 1";
-  // The comparison runs on the percentage rounded to six decimals. That snaps
-  // the division's error (about 1e-14 of a percent) off a bound, so 11.00 over
-  // 10.00 is +10.0% and files under "Up 5% to 10%". For two-decimal price pairs
-  // up to 10,000, no pair that is not a bound comes within the rounding's
-  // half-width of 0.0000005 of a percent, so for those prices only a bound
-  // moves. A price with more decimals that lands inside that half-width joins
-  // the bound, where the table prints the same one-decimal figure.
-  const percent = `round((${change}) * 100, 6)`;
+  // The band edges are whole tenths of a percent, so a change within 5e-7 of a
+  // percent of one rounds to it at six decimals. The division's own error is
+  // about 1e-13 of a percent, 40,000 times smaller, so this window is only a
+  // net: it catches every change that could be at an edge, and each is then
+  // decided exactly from the cell's decimal sales and units. A change outside
+  // the net is that much further from every edge, so the double comparison
+  // decides it correctly. Nothing inside the net is snapped by the window.
+  const nearEdge = `round((${change}) * 100, 6) IN (${PRICE_BUCKETS.slice(0, -1)
+    .map(([edge]) => edge)
+    .join(", ")})`;
   const bucket =
     "CASE " +
     PRICE_BUCKETS.slice(0, -1)
-      .map(([limit], i) => `WHEN ${percent} ${limit < 0 ? "<" : "<="} ${limit} THEN ${i}`)
+      .map(([edge], i) => `WHEN ${change} < ${edge / 100} THEN ${i}`)
       .join(" ") +
     ` ELSE ${PRICE_BUCKETS.length - 1} END`;
   const matched = `FROM ${ident(config.cellsTable ?? DEFAULT_CELLS_TABLE)}
      WHERE match_level = ${k} AND q0 > 0 AND q1 > 0 AND s0 > 0`;
   const rows = await query(
     `SELECT ${bucket} AS bucket, count(*)::DOUBLE AS cells, sum(s1) AS sales, sum(price) AS price_effect
-     ${matched} GROUP BY 1`,
+     ${matched} AND NOT (${nearEdge}) GROUP BY 1`,
   );
+  const near = await query(
+    `SELECT s0::VARCHAR AS s0, q0::VARCHAR AS q0, s1::VARCHAR AS s1, q1::VARCHAR AS q1,
+       s1 AS sales, price AS price_effect, ${bucket} AS fallback
+     ${matched} AND (${nearEdge})`,
+  );
+  const cells = PRICE_BUCKETS.map(() => 0);
+  const sales = PRICE_BUCKETS.map(() => 0);
+  const priceEffect = PRICE_BUCKETS.map(() => 0);
+  for (const row of rows) {
+    const i = Number(row.bucket);
+    cells[i] += Number(row.cells);
+    sales[i] += Number(row.sales);
+    priceEffect[i] += Number(row.price_effect);
+  }
+  for (const row of near) {
+    const i = exactBucket(String(row.s0), String(row.q0), String(row.s1), String(row.q1)) ?? Number(row.fallback);
+    cells[i] += 1;
+    sales[i] += Number(row.sales);
+    priceEffect[i] += Number(row.price_effect);
+  }
   const [totals] = await query(`SELECT sum(s1) AS sales, sum(price) AS price_effect ${matched}`);
   const totalSales = Number(totals.sales ?? 0);
-  const byIndex = new Map(rows.map((row) => [Number(row.bucket), row]));
   return {
-    buckets: PRICE_BUCKETS.map(([, label], i) => {
-      const row = byIndex.get(i);
-      const sales = Number(row?.sales ?? 0);
-      return {
-        label,
-        cells: Number(row?.cells ?? 0),
-        sales,
-        share: totalSales === 0 ? 0 : sales / totalSales,
-        priceEffect: Number(row?.price_effect ?? 0),
-      };
-    }),
+    buckets: PRICE_BUCKETS.map(([, label], i) => ({
+      label,
+      cells: cells[i],
+      sales: sales[i],
+      share: totalSales === 0 ? 0 : sales[i] / totalSales,
+      priceEffect: priceEffect[i],
+    })),
     // Price effect over what current volume would have cost at prior prices.
     averageChange: totalSales === 0 ? 0 : Number(totals.price_effect) / (totalSales - Number(totals.price_effect)),
   };
