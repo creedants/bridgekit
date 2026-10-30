@@ -69,6 +69,44 @@ export function isValidUtf8(bytes: Uint8Array): boolean {
 }
 
 /**
+ * How much of a file the encoding check reads at a time, so a large file is
+ * never held whole.
+ */
+export const ENCODING_CHECK_BYTES = 8 * 1024 * 1024;
+
+/** What a file's bytes say about its text encoding. */
+export type Utf8Verdict = "valid" | "invalid" | "unreadable";
+
+/**
+ * Decides whether a whole file is UTF-8 by reading it in slices, so no buffer
+ * or string of the whole file is built. A slice that cannot be read answers
+ * `"unreadable"`, kept apart from a byte the decoder refuses.
+ */
+export async function blobIsUtf8(file: Blob, sliceBytes = ENCODING_CHECK_BYTES): Promise<Utf8Verdict> {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  for (let at = 0; at < file.size; at += sliceBytes) {
+    let slice: ArrayBuffer;
+    try {
+      slice = await file.slice(at, Math.min(at + sliceBytes, file.size)).arrayBuffer();
+    } catch {
+      return "unreadable";
+    }
+    try {
+      decoder.decode(slice, { stream: true });
+    } catch {
+      return "invalid";
+    }
+  }
+  // A character cut off at the end of the file is refused here, not in a slice.
+  try {
+    decoder.decode();
+  } catch {
+    return "invalid";
+  }
+  return "valid";
+}
+
+/**
  * True when every complete UTF-8 sequence in `bytes` decodes, allowing a final
  * character the caller cut short. A prefix of a longer file is the case: the
  * file can be valid UTF-8 while the prefix ends between a lead byte and its

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { decodeCsvBuffer, ENCODING_SENTENCE, isUtf8Prefix, isValidUtf8, type DecodedCsv } from "../src/app/encoding.ts";
+import { blobIsUtf8, decodeCsvBuffer, ENCODING_SENTENCE, isUtf8Prefix, isValidUtf8, type DecodedCsv } from "../src/app/encoding.ts";
 
 const utf8 = (text: string) => new TextEncoder().encode(text);
 
@@ -21,7 +21,7 @@ const BOM_UTF8 = [0xef, 0xbb, 0xbf];
 // Pinned as a literal so rewording the sentence fails here too.
 const SENTENCE = "This file's text encoding could not be read. Save it as CSV UTF-8.";
 
-function joined(...parts: Uint8Array[]): Uint8Array {
+function joined(...parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
   const total = parts.reduce((sum, part) => sum + part.length, 0);
   const out = new Uint8Array(total);
   let at = 0;
@@ -199,6 +199,27 @@ test("isUtf8Prefix keeps no decoder state between files", () => {
   assert.equal(isUtf8Prefix(prefix), true);
   assert.equal(isUtf8Prefix(Uint8Array.from([0x69, 0xe2, 0x82])), true);
   assert.equal(isUtf8Prefix(Uint8Array.from([0x41])), true);
+});
+
+// A tiny slice size keeps the byte-check tests' files small while still
+// splitting a character across two slices.
+const PAGE = 64;
+
+test("the byte check keeps a character split across two slices valid", async () => {
+  // The lead byte of é ends slice 1 and its continuation starts slice 2.
+  const bytes = joined(utf8("a".repeat(63)), utf8("é"), utf8("b".repeat(64)), utf8("z".repeat(64)));
+  assert.equal(bytes.length, 193);
+  assert.equal(await blobIsUtf8(new Blob([bytes]), PAGE), "valid");
+});
+
+test("a byte the check finds in its last slice is invalid", async () => {
+  const bytes = joined(utf8("a".repeat(128)), Uint8Array.from([0xff]));
+  assert.equal(await blobIsUtf8(new Blob([bytes]), PAGE), "invalid");
+});
+
+test("a multibyte character cut off at the end of the file is invalid", async () => {
+  const bytes = joined(utf8("a".repeat(60)), Uint8Array.from([0xe2, 0x82]));
+  assert.equal(await blobIsUtf8(new Blob([bytes]), PAGE), "invalid");
 });
 
 test("looksBinary refuses NUL and C0 controls but keeps text and UTF-16", async () => {

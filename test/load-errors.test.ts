@@ -518,6 +518,27 @@ test("a malformed valid UTF-8 CSV keeps the database's own error", async () => {
   assert.ok(failure.message.startsWith("Invalid Input Error: CSV Error on Line: 1"), failure.message);
 });
 
+test("a file whose bytes cannot be read keeps the database's error", async () => {
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const file = {
+    size: 8 * 1024 * 1024 + 1,
+    slice(start: number) {
+      return {
+        arrayBuffer: () =>
+          start === 0 ? Promise.resolve(new ArrayBuffer(1024)) : Promise.reject(new Error("NotReadableError")),
+      };
+    },
+  } as unknown as File;
+  const query = async (): Promise<never> => {
+    throw new Error("The reader refused the file.");
+  };
+  await assert.rejects(
+    stageCsvAndSwap(query, file, "data", "unreadable.csv", "month first", { kind: "bytes" }),
+    (error: unknown) => (error as Error).message === "The reader refused the file.",
+    "a check that cannot read the file must not replace the database's error",
+  );
+});
+
 test("a file whose 64 KB prefix ends inside a quoted record loads", async () => {
   const { openDatabase } = await import("../src/duckdb.ts");
   const { stageCsvAndSwap, refuseMixedSeparators } = await import("../src/app/db.ts");
