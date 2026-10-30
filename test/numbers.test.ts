@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { createRequire, registerHooks } from "node:module";
 import path from "node:path";
 import { test } from "node:test";
 import { convertFormattedNumbers, decimalCommaNote, readsAsNumber } from "../src/app/numbers.ts";
@@ -8,6 +8,17 @@ import { isNumeric } from "../src/app/setup.ts";
 import { openDatabase } from "../src/duckdb.ts";
 import { runBridge, type Query } from "../src/engine.ts";
 import { createSyntheticSales } from "../src/synth.ts";
+
+// The browser build imports its worker URLs with `?url`, which node cannot
+// resolve, so the load guard's module graph needs a stub for those specifiers.
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.includes("?url")) {
+      return { url: 'data:text/javascript,export default "stub"', shortCircuit: true };
+    }
+    return nextResolve(specifier, context);
+  },
+});
 
 const EURO_FILE = `period;sku;units;net_sales
 2024;A;10,00;1.234,56
@@ -989,4 +1000,90 @@ test("a file with one separator stays silent, including quoted marks and short r
   assert.equal(mixedSeparatorSentence(tabbed, "\t"), null);
   const tabbedMarks = "period\tproduct\tunits\n2025\tA,100; X\t10\n2026\tB,200; Y\t12\n";
   assert.equal(mixedSeparatorSentence(tabbedMarks, "\t"), null);
+});
+
+test("a punctuation short row loads while a foreign record stays refused", async () => {
+  const { mixedSeparatorSentence } = await import("../src/app/numbers.ts");
+  const header = "period,product,units,sales";
+  const good = Array.from({ length: 100 }, (_, index) =>
+    index % 2 === 0 ? "2025,A-100,10,100" : "2026,A-100,10,100",
+  ).join("\n");
+  const t435 = `${header}\n2025,A-100,10,100\n2026,A-100,12,144\n2025,A;B;C;D\n2026,B-200,6,90\n`;
+  assert.equal(mixedSeparatorSentence(t435, ","), null);
+
+  const foreign = "2026;A-100, large;100;10000";
+  assert.equal(mixedSeparatorSentence(`${header}\n${foreign}\n${good}\n`, ","), MIXED_SEPARATOR_SENTENCE);
+  assert.equal(
+    mixedSeparatorSentence(`${header}\n${good}\n${foreign}\n2025,A-100,10,100\n2026,A-100,10,100\n`, ","),
+    MIXED_SEPARATOR_SENTENCE,
+  );
+
+  const replaced = `${header}\n2025,A-100,10,100\n2026,A-100,12,144\n2025,X;Y;10;100\n2026,B-200,6,90\n`;
+  assert.equal(mixedSeparatorSentence(replaced, ","), MIXED_SEPARATOR_SENTENCE);
+
+  const twoShort = `${header}\n2025,A-100,10,100\n2026,A-100,12,144\n2025,A;B;C;D\n2026,A;B;C;D\n2026;N-300, large;20;200\n2026,B-200,6,90\n`;
+  assert.equal(mixedSeparatorSentence(twoShort, ","), MIXED_SEPARATOR_SENTENCE);
+
+  const quoted = '2026;"A-100, large";100;10000';
+  assert.equal(mixedSeparatorSentence(`${header}\n${quoted}\n${good}\n`, ","), MIXED_SEPARATOR_SENTENCE);
+  assert.equal(
+    mixedSeparatorSentence(`${header}\n${good}\n${quoted}\n2025,A-100,10,100\n2026,A-100,10,100\n`, ","),
+    MIXED_SEPARATOR_SENTENCE,
+  );
+  // The decider refuses the quoted record at every position. The real load
+  // reads the strictly last one only because the sniff names the other
+  // separator, so the guard test below pins that load.
+  assert.equal(mixedSeparatorSentence(`${header}\n${good}\n${quoted}\n`, ","), MIXED_SEPARATOR_SENTENCE);
+});
+
+async function guardMixed(query: Query, text: string, name: string): Promise<{ file: File; filePath: string }> {
+  const { refuseMixedSeparators } = await import("../src/app/db.ts");
+  const { readCsvFile } = await import("../src/app/encoding.ts");
+  const directory = await mkdtemp("/tmp/bridgekit-mixed-");
+  const filePath = path.join(directory, name);
+  await writeFile(filePath, text);
+  const file = new File([text], name);
+  await refuseMixedSeparators(query, file, await readCsvFile(file), filePath);
+  return { file, filePath };
+}
+
+test("the real load keeps the punctuation short row and refuses a foreign record", async () => {
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const query = await openDatabase();
+  const header = "period,product,units,sales";
+  const good = Array.from({ length: 100 }, (_, index) =>
+    index % 2 === 0 ? "2025,A-100,10,100" : "2026,A-100,10,100",
+  ).join("\n");
+  const t435 = `${header}\n2025,A-100,10,100\n2026,A-100,12,144\n2025,A;B;C;D\n2026,B-200,6,90\n`;
+  const loaded = await guardMixed(query, t435, "t435.csv");
+  await stageCsvAndSwap(query, loaded.file, "data", loaded.filePath);
+  const columns = (await query("DESCRIBE data")).map((row) => String(row.column_name));
+  assert.deepEqual(columns, ["period", "product", "units", "sales"]);
+  const rows = await query("SELECT * FROM data ORDER BY rowid");
+  assert.equal(rows.length, 4);
+  const [sums] = await query("SELECT sum(sales) AS s FROM data");
+  assert.equal(Number(sums.s), 334);
+
+  const refused = (error: unknown) => (error as Error).message === MIXED_SEPARATOR_SENTENCE;
+  const foreign = "2026;A-100, large;100;10000";
+  await assert.rejects(guardMixed(query, `${header}\n${foreign}\n${good}\n`, "foreign-top.csv"), refused);
+  await assert.rejects(
+    guardMixed(query, `${header}\n${good}\n${foreign}\n2025,A-100,10,100\n2026,A-100,10,100\n`, "foreign-after.csv"),
+    refused,
+  );
+  const replaced = `${header}\n2025,A-100,10,100\n2026,A-100,12,144\n2025,X;Y;10;100\n2026,B-200,6,90\n`;
+  await assert.rejects(guardMixed(query, replaced, "replaced.csv"), refused);
+  const twoShort = `${header}\n2025,A-100,10,100\n2026,A-100,12,144\n2025,A;B;C;D\n2026,A;B;C;D\n2026;N-300, large;20;200\n2026,B-200,6,90\n`;
+  await assert.rejects(guardMixed(query, twoShort, "two-short.csv"), refused);
+
+  const quoted = '2026;"A-100, large";100;10000';
+  await assert.rejects(guardMixed(query, `${header}\n${quoted}\n${good}\n`, "quoted-top.csv"), refused);
+  await assert.rejects(
+    guardMixed(query, `${header}\n${good}\n${quoted}\n2025,A-100,10,100\n2026,A-100,10,100\n`, "quoted-middle.csv"),
+    refused,
+  );
+  const last = await guardMixed(query, `${header}\n${good}\n${quoted}\n`, "quoted-last.csv");
+  await stageCsvAndSwap(query, last.file, "data", last.filePath);
+  const [count] = await query("SELECT count(*)::DOUBLE AS n FROM data");
+  assert.equal(Number(count.n), 102);
 });
