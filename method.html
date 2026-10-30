@@ -100,12 +100,13 @@
 
         <h2>Worked example, fallback</h2>
         <p>
-          Attributes are model, then finish. Model MD2 sold only with the basic finish last year, at an average
-          price of 20. This year it also sells 4 units with a premium finish for 200.
+          Attributes are model, then finish. Across all models the overall prior average price is 15. Model MD2 sold
+          only with the basic finish last year, at an average price of 20. This year it also sells 4 units with a
+          premium finish for 200.
         </p>
         <ul>
           <li>MD2 with the premium finish has no exact prior match, so its reference price falls back to the MD2 average of 20.</li>
-          <li>Its 4 units add 4 × 20 = 80 to volume.</li>
+          <li>Its 4 units add 4 × 15 = 60 to volume, the model mix adds 4 × (20 − 15) = 20, and the finish mix adds 0.</li>
           <li>The remaining 200 − 80 = 120 is reported as new configurations, not as price.</li>
           <li>The match coverage table lists this revenue under “Where the full configuration did not match, matched on Model.”</li>
         </ul>
