@@ -14,6 +14,7 @@ import {
   createConnectionQueue,
   createLatestOnly,
   createSplitRunner,
+  drawGrid,
   focusPlace,
   gridAction,
   IDLE_SPLIT_PHASE,
@@ -21,13 +22,17 @@ import {
   paintSplit,
   panelStatusLabel,
   panelTitle,
+  pictureLayout,
   reducePeriodViews,
   reduceSplitPhase,
   sharedScale,
+  showSplit,
+  shownSplit,
   SPLIT_FAILURE_SENTENCE,
   statementStartsTurn,
   steps,
   viewsInstalled,
+  wrapBetweenLine,
   type Step,
 } from "../src/app/small-bridges.ts";
 import { compact } from "../src/app/format.ts";
@@ -501,4 +506,74 @@ test("a load waits out the engine call instead of joining it", async () => {
   await engine;
   assert.equal(maxActive, 1);
   assert.deepEqual(order, ["prior:start", "prior:end", "panel:start", "panel:end", "load:start", "load:end"]);
+});
+
+function splitResult(): BridgeBy {
+  return {
+    column: "finish",
+    total: bridge(1000, [["volume", 200]]),
+    between: [{ key: "volume", label: "Volume", value: 0 }],
+    panels: [
+      { ...panel({ value: "East" }), priorSales: 1000, currentSales: 1200, change: 200, result: bridge(1000, [["volume", 200]]) },
+      { ...panel({ value: null }), status: "new", priorSales: 0, currentSales: 50, change: 50, result: null },
+    ],
+  };
+}
+
+test("drawGrid publishes one block per panel with the grid's shared scale", () => {
+  const by = splitResult();
+  const grid = drawGrid(by, "2025", "2026");
+  assert.equal(grid.blocks.length, 2);
+  assert.deepEqual(grid.blocks[0], {
+    kind: "bridge",
+    title: "East",
+    status: null,
+    bars: steps(by.panels[0].result!, "2025", "2026"),
+  });
+  assert.deepEqual(grid.blocks[1], {
+    kind: "figures",
+    title: BLANK_TITLE,
+    status: "New",
+    prior: 0,
+    current: 50,
+  });
+  assert.deepEqual(grid.scale, sharedScale([steps(by.panels[0].result!, "2025", "2026")]));
+  assert.equal(grid.between, betweenLine(by));
+});
+
+test("showSplit publishes the ready grid only for its own run", () => {
+  const owner = bridge(1000, []);
+  const other = bridge(1000, []);
+  const by = splitResult();
+  showSplit(owner, { kind: "ready", column: "finish", grid: by });
+  assert.equal(shownSplit(owner), by);
+  // Another run's result never reads this run's grid.
+  assert.equal(shownSplit(other), null);
+  // Publishing the same ready grid again keeps it.
+  showSplit(owner, { kind: "ready", column: "finish", grid: by });
+  assert.equal(shownSplit(owner), by);
+  // Any other phase clears it.
+  showSplit(owner, { kind: "calculating", column: "finish" });
+  assert.equal(shownSplit(owner), null);
+  showSplit(owner, { kind: "ready", column: "finish", grid: by });
+  showSplit(other, IDLE_SPLIT_PHASE);
+  assert.equal(shownSplit(owner), null);
+});
+
+test("pictureLayout stacks the grid below the main bridge in rows of the column count", () => {
+  const grid = drawGrid(splitResult(), "2025", "2026");
+  const layout = pictureLayout({ width: 800, height: 400 }, grid, 3);
+  assert.equal(layout.width, 3 * 420);
+  assert.deepEqual(layout.main, { x: 0, y: 0, width: 800, height: 400 });
+  assert.equal(layout.cells.length, 2);
+  assert.deepEqual(layout.cells[0], { x: 0, y: 424, width: 420, height: 320 });
+  assert.deepEqual(layout.cells[1], { x: 420, y: 424, width: 420, height: 320 });
+  assert.ok(layout.height > 424 + 320, "the between lines sit below the cells");
+  assert.ok(layout.between.length >= 1);
+  assert.equal(layout.between.join(" "), grid.between);
+});
+
+test("wrapBetweenLine keeps words whole", () => {
+  assert.deepEqual(wrapBetweenLine("a b c", 100), ["a b c"]);
+  assert.deepEqual(wrapBetweenLine("aa bb cc", 5), ["aa bb", "cc"]);
 });

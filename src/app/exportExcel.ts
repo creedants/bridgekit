@@ -7,6 +7,7 @@ import {
   ident,
   measureName,
   tieOutLines,
+  type BridgeBy,
   type BridgeConfig,
   type BridgeResult,
   type DataCheck,
@@ -16,6 +17,7 @@ import {
 import { download } from "./files.ts";
 import { shareOfPrior } from "./format.ts";
 import { terms } from "./report.ts";
+import { drawGrid, shownSplit } from "./small-bridges.ts";
 
 type ChunkFailure = "network" | "gone";
 
@@ -205,6 +207,17 @@ function columnLetter(index: number): string {
   return letters;
 }
 
+/** Excel compares sheet names without regard to case and caps them at 31 characters. */
+function sheetName(base: string, usedNames: Set<string>): string {
+  let name = base;
+  for (let n = 2; usedNames.has(name.toLowerCase()); n++) {
+    const suffix = ` ${n}`;
+    name = `${base.slice(0, 31 - suffix.length)}${suffix}`;
+  }
+  usedNames.add(name.toLowerCase());
+  return name;
+}
+
 export async function exportExcel(
   query: Query,
   config: BridgeConfig,
@@ -213,6 +226,7 @@ export async function exportExcel(
   tieOut: TieOut,
   description: string[],
   tools: ExcelTools = excelTools,
+  split: BridgeBy | null = shownSplit(result),
 ): Promise<void> {
   const ExcelJS = await tools.load();
   const workbook = new ExcelJS.Workbook();
@@ -302,7 +316,7 @@ export async function exportExcel(
   coverage.getColumn(3).numFmt = numberFormat;
 
   const usedNames = new Set(workbook.worksheets.map((sheet) => sheet.name.toLowerCase()));
-  for (const fixed of ["Price bands", "Setup check", "Detail", "Setup"]) usedNames.add(fixed.toLowerCase());
+  for (const fixed of ["Price bands", "Setup check", "Detail", "Setup", "Small bridges"]) usedNames.add(fixed.toLowerCase());
   for (const level of config.levels) {
     const rows = await drill(query, config, { columns: level.columns, limit: MAX_BY_ROWS });
     let capped = false;
@@ -316,13 +330,8 @@ export async function exportExcel(
       .replace(/[\\/*?:[\]]/g, " ")
       .slice(0, 28)
       .replace(/^'+|'+$/g, "");
-    let sheetName = baseName;
-    for (let n = 2; usedNames.has(sheetName.toLowerCase()); n++) {
-      const suffix = ` ${n}`;
-      sheetName = `${baseName.slice(0, 31 - suffix.length)}${suffix}`;
-    }
-    usedNames.add(sheetName.toLowerCase());
-    const sheet = workbook.addWorksheet(sheetName);
+    const sheetNameForLevel = sheetName(baseName, usedNames);
+    const sheet = workbook.addWorksheet(sheetNameForLevel);
     sheet.addRow([...level.columns, t.prior, t.current, "Change", ...effects.map((e) => e.label)]).font = bold;
     for (const row of visible) {
       sheet.addRow([
@@ -436,6 +445,33 @@ export async function exportExcel(
   setup.addRow(["Rows in other periods (ignored)", check.otherPeriodRows]);
   setup.addRow(["Rows with blank units or sales", check.blankMeasureRows]);
   setup.addRow(["Rows with negative units", check.negativeUnitRows]);
+
+  // The grid on screen, written from the same derivation, so the sheet and the
+  // grid show the same figures by construction. Absent with no Split by column.
+  if (split) {
+    const grid = drawGrid(split, String(config.prior), String(config.current));
+    // The reserved name keeps the By sheets from taking it; this sheet keeps
+    // the exact name the grid on screen uses.
+    const sheet = workbook.addWorksheet("Small bridges");
+    usedNames.add("small bridges");
+    sheet.columns = [{ width: 34 }, { width: 18 }];
+    sheet.addRow([`Split by: ${split.column}`]).font = bold;
+    const measure = measureName(config).toLowerCase();
+    grid.blocks.forEach((block, index) => {
+      if (index > 0) sheet.addRow([]);
+      sheet.addRow([block.title]).font = bold;
+      if (block.status) sheet.addRow([block.status]);
+      if (block.kind === "bridge") {
+        for (const bar of block.bars) sheet.addRow([bar.label, finiteOrBlank(bar.value)]);
+      } else {
+        sheet.addRow([`Prior ${measure}`, finiteOrBlank(block.prior)]);
+        sheet.addRow([`Current ${measure}`, finiteOrBlank(block.current)]);
+      }
+    });
+    sheet.addRow([]);
+    sheet.addRow([grid.between]);
+    sheet.getColumn(2).numFmt = numberFormat;
+  }
 
   const buffer = await workbook.xlsx.writeBuffer();
   download(

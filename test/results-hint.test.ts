@@ -16,7 +16,7 @@ registerHooks({
     }
     if (specifier.endsWith("SmallBridges.tsx")) {
       return {
-        url: "data:text/javascript,export const SmallBridges = () => null",
+        url: "data:text/javascript,export const SmallBridges = () => null; export const splitPicture = async () => null",
         shortCircuit: true,
       };
     }

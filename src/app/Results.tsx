@@ -37,7 +37,7 @@ import { TABLE, type Setup } from "./setup.ts";
 import { useCommentaryOffer } from "./useConfig.ts";
 import { buildReport, moverHeader, terms, trendHeader } from "./report.ts";
 import { agree } from "./SetupPanel.tsx";
-import { SmallBridges } from "./SmallBridges.tsx";
+import { SmallBridges, splitPicture } from "./SmallBridges.tsx";
 import { Waterfall } from "./Waterfall.tsx";
 
 const AI_COMMENTARY = import.meta.env && import.meta.env.VITE_AI_COMMENTARY === "1";
@@ -190,6 +190,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
               }
               priorLabel={String(config.prior)}
               currentLabel={String(config.current)}
+              below={() => splitPicture(run)}
               footer={<Summary run={run} result={result} shown={shown} query={props.query} fresh={props.fresh !== false && props.viewsCurrent !== false} omitNames={props.omitNames} onOmitNames={props.onOmitNames} />}
               onSelect={(key) => {
                 setSortBy(key.startsWith("mix_") ? "mix" : key.startsWith("price") || key === "cost_rate" ? "price" : key);

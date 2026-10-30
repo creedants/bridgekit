@@ -518,6 +518,131 @@ export function createConnectionQueue(): {
 }
 
 /**
+ * One block of the painted grid, in panel order. A value with a bridge draws
+ * its bars; a value with nothing to bridge shows its two figures instead.
+ */
+export type PanelBlock =
+  | { readonly kind: "bridge"; readonly title: string; readonly status: string | null; readonly bars: Step[] }
+  | { readonly kind: "figures"; readonly title: string; readonly status: string | null; readonly prior: number; readonly current: number };
+
+/**
+ * The painted grid derived once from a split result. The grid on screen, the
+ * Excel sheet and the picture export all read this, so the three cannot drift
+ * apart: there is no second derivation.
+ */
+export interface DrawnGrid {
+  readonly blocks: PanelBlock[];
+  readonly scale: ValueScale;
+  readonly between: string;
+}
+
+/** One derivation of every block and the one axis they share. */
+export function drawGrid(by: BridgeBy, priorLabel: string, currentLabel: string): DrawnGrid {
+  const blocks: PanelBlock[] = by.panels.map((panel) => {
+    const title = panelTitle(panel);
+    const status = panelStatusLabel(panel.status);
+    if (panel.result) return { kind: "bridge", title, status, bars: steps(panel.result, priorLabel, currentLabel) };
+    return { kind: "figures", title, status, prior: panel.priorSales, current: panel.currentSales };
+  });
+  const scale = sharedScale(blocks.flatMap((block) => (block.kind === "bridge" ? [block.bars] : [])));
+  return { blocks, scale, between: betweenLine(by) };
+}
+
+/**
+ * The ready grid of the run on screen, published by the one writer in
+ * `SmallBridges.tsx`. `App.tsx` cannot pass its grid through the export call,
+ * so the exports read it here instead, keyed on the run's own result object.
+ */
+let shown: { owner: BridgeResult; grid: BridgeBy } | null = null;
+
+/**
+ * Publishes the ready grid for `owner`, and clears any earlier one for any
+ * other phase. Idempotent: publishing the same ready grid twice keeps it.
+ */
+export function showSplit(owner: BridgeResult, phase: SplitPhase): void {
+  shown = phase.kind === "ready" ? { owner, grid: phase.grid } : null;
+}
+
+/** The published grid, or null when it belongs to another run or no grid is ready. */
+export function shownSplit(owner: BridgeResult): BridgeBy | null {
+  return shown !== null && shown.owner === owner ? shown.grid : null;
+}
+
+/** One rectangle on the composite picture, in device pixels. */
+export interface PictureRect {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * Where the composite picture puts the main bridge, one cell per grid block
+ * in rows of `columns`, and the wrapped between lines underneath.
+ */
+export interface PictureLayout {
+  readonly width: number;
+  readonly height: number;
+  readonly main: PictureRect;
+  readonly cells: PictureRect[];
+  readonly between: string[];
+}
+
+/** The grid's fixed cell size on the picture, in CSS pixels. */
+export const PICTURE_CELL_WIDTH = 420;
+export const PICTURE_CELL_HEIGHT = 320;
+
+/** Wraps the between line onto lines of at most `width` characters, on word boundaries. */
+export function wrapBetweenLine(line: string, width: number): string[] {
+  const words = line.split(" ");
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    const joined = current ? `${current} ${word}` : word;
+    if (joined.length <= width) {
+      current = joined;
+    } else {
+      if (current) lines.push(current);
+      current = word;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
+/** The composite picture's geometry: the main bridge on top, the grid below it. */
+export function pictureLayout(
+  mainSize: { width: number; height: number },
+  grid: DrawnGrid,
+  columns: number,
+): PictureLayout {
+  const gap = 24;
+  const lineHeight = 28;
+  const charsPerLine = Math.max(20, Math.floor(Math.max(mainSize.width, columns * PICTURE_CELL_WIDTH) / 9));
+  const width = Math.max(mainSize.width, columns * PICTURE_CELL_WIDTH);
+  const rows = Math.ceil(grid.blocks.length / columns);
+  const gridTop = mainSize.height + gap;
+  const cells: PictureRect[] = grid.blocks.map((_, index) => {
+    const row = Math.floor(index / columns);
+    const column = index % columns;
+    return {
+      x: column * PICTURE_CELL_WIDTH,
+      y: gridTop + row * PICTURE_CELL_HEIGHT,
+      width: PICTURE_CELL_WIDTH,
+      height: PICTURE_CELL_HEIGHT,
+    };
+  });
+  const between = wrapBetweenLine(grid.between, charsPerLine);
+  const betweenTop = gridTop + rows * PICTURE_CELL_HEIGHT + gap / 2;
+  return {
+    width,
+    height: betweenTop + between.length * lineHeight + gap,
+    main: { x: 0, y: 0, width: mainSize.width, height: mainSize.height },
+    cells,
+    between,
+  };
+}
+/**
  * Remembers only the latest column. A column replaced before its turn
  * started never runs. The column already running finishes, then the latest
  * one runs.

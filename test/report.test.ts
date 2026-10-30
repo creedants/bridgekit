@@ -22,7 +22,7 @@ registerHooks({
       return { url: 'data:text/javascript,export default "stub"', shortCircuit: true };
     }
     if (specifier.endsWith("SmallBridges.tsx")) {
-      return { url: "data:text/javascript,export const SmallBridges = () => null", shortCircuit: true };
+      return { url: "data:text/javascript,export const SmallBridges = () => null; export const splitPicture = async () => null", shortCircuit: true };
     }
     if (specifier.endsWith("Waterfall.tsx")) {
       return {
