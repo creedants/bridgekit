@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { countPageView, pageView } from "../server/counts.ts";
-import type { SubscriptionChange } from "../server/paddle.ts";
+import type { PaddleAccount, SubscriptionChange } from "../server/paddle.ts";
 import {
   applySubscription,
   deleteSaved,
@@ -13,6 +13,7 @@ import {
   saveBridge,
   saveSetup,
   setupListQuery,
+  SUBSCRIPTION_CANCEL_SENTENCE,
   userHasPro,
   workspaceCount,
   WorkspaceError,
@@ -70,6 +71,11 @@ const rejects = (promise: Promise<unknown>, status: number, message?: string) =>
     promise,
     (error) => error instanceof WorkspaceError && error.status === status && (message === undefined || error.message === message),
   );
+
+const paddleAccount = (fake: typeof fetch): PaddleAccount => ({ apiKey: "pdl_sdbx_key", environment: "sandbox", fetch: fake });
+
+const refusesDeletion = (promise: Promise<unknown>) =>
+  assert.rejects(promise, (error: unknown) => error instanceof Error && error.message === SUBSCRIPTION_CANCEL_SENTENCE);
 
 test("saving needs Pro; a signed Paddle event grants it with its seat count", async () => {
   const db = await seeded();
@@ -424,7 +430,8 @@ test("deleting an account removes the workspaces it is alone in, with their save
   await db.prepare(`INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES ('m3', 'w2', 'u1', 'owner', ?)`).bind(now).run();
   await applySubscription(db, subscription({ workspaceId: "w2" }));
   await saveSetup(db, "u1", "w2", { name: "Mine", columns, setup });
-  await deleteSoleWorkspaces(db, "u1");
+  const ok = (async () => Response.json({ data: {} })) as unknown as typeof fetch;
+  await deleteSoleWorkspaces(db, "u1", paddleAccount(ok));
   const left = await db.prepare(`SELECT id FROM organization ORDER BY id`).all<{ id: string }>();
   assert.deepEqual(left.results.map((r) => r.id), ["w1"]);
   assert.equal((await db.prepare(`SELECT count(*) AS n FROM saved_setup`).first<{ n: number }>())?.n, 0);
@@ -448,6 +455,65 @@ test("deleting an account cancels the workspace's live subscription before the r
     { method: "POST", url: "https://sandbox-api.paddle.com/subscriptions/sub_2/cancel", body: { effective_from: "next_billing_period" } },
   ]);
   assert.equal(await db.prepare(`SELECT id FROM organization WHERE id = 'w2'`).first(), null);
+});
+
+test("a refused Paddle cancel keeps the workspace and its subscription, and says why", async () => {
+  const db = await seeded();
+  await db.prepare(`INSERT INTO organization (id, name, slug, createdAt) VALUES ('w2', 'Solo', 'solo', ?)`).bind(now).run();
+  await db.prepare(`INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES ('m3', 'w2', 'u1', 'owner', ?)`).bind(now).run();
+  await applySubscription(db, subscription({ workspaceId: "w2", subscriptionId: "sub_2" }));
+  const failing = (async () => new Response("{}", { status: 500 })) as unknown as typeof fetch;
+  await refusesDeletion(deleteSoleWorkspaces(db, "u1", paddleAccount(failing)));
+  assert.ok(await db.prepare(`SELECT id FROM organization WHERE id = 'w2'`).first(), "workspace stays");
+  assert.equal(
+    (await db.prepare(`SELECT status FROM subscription WHERE organizationId = 'w2'`).first<{ status: string }>())?.status,
+    "active",
+  );
+});
+
+test("an unreachable Paddle keeps the workspace and its subscription, and says why", async () => {
+  const db = await seeded();
+  await db.prepare(`INSERT INTO organization (id, name, slug, createdAt) VALUES ('w2', 'Solo', 'solo', ?)`).bind(now).run();
+  await db.prepare(`INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES ('m3', 'w2', 'u1', 'owner', ?)`).bind(now).run();
+  await applySubscription(db, subscription({ workspaceId: "w2", subscriptionId: "sub_2" }));
+  const offline = (async () => {
+    throw new Error("offline");
+  }) as unknown as typeof fetch;
+  await refusesDeletion(deleteSoleWorkspaces(db, "u1", paddleAccount(offline)));
+  assert.ok(await db.prepare(`SELECT id FROM organization WHERE id = 'w2'`).first(), "workspace stays");
+  assert.equal(
+    (await db.prepare(`SELECT status FROM subscription WHERE organizationId = 'w2'`).first<{ status: string }>())?.status,
+    "active",
+  );
+});
+
+test("a workspace whose subscription is already canceled is deleted without asking Paddle", async () => {
+  const db = await seeded();
+  await db.prepare(`INSERT INTO organization (id, name, slug, createdAt) VALUES ('w2', 'Solo', 'solo', ?)`).bind(now).run();
+  await db.prepare(`INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES ('m3', 'w2', 'u1', 'owner', ?)`).bind(now).run();
+  await applySubscription(db, subscription({ workspaceId: "w2", status: "canceled" }));
+  let calls = 0;
+  const fake = (async () => {
+    calls += 1;
+    return Response.json({ data: {} });
+  }) as unknown as typeof fetch;
+  await deleteSoleWorkspaces(db, "u1", paddleAccount(fake));
+  assert.equal(calls, 0);
+  assert.deepEqual((await db.prepare(`SELECT id FROM organization ORDER BY id`).all<{ id: string }>()).results.map((r) => r.id), ["w1"]);
+});
+
+test("a workspace with no subscription is deleted without asking Paddle", async () => {
+  const db = await seeded();
+  await db.prepare(`INSERT INTO organization (id, name, slug, createdAt) VALUES ('w2', 'Solo', 'solo', ?)`).bind(now).run();
+  await db.prepare(`INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES ('m3', 'w2', 'u1', 'owner', ?)`).bind(now).run();
+  let calls = 0;
+  const fake = (async () => {
+    calls += 1;
+    return Response.json({ data: {} });
+  }) as unknown as typeof fetch;
+  await deleteSoleWorkspaces(db, "u1", paddleAccount(fake));
+  assert.equal(calls, 0);
+  assert.deepEqual((await db.prepare(`SELECT id FROM organization ORDER BY id`).all<{ id: string }>()).results.map((r) => r.id), ["w1"]);
 });
 
 test("page counts keep the path and referring site only, and skip bots and non-pages", async () => {

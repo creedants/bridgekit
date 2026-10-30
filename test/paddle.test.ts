@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { test } from "node:test";
 import {
+  cancelSubscription,
   chooseSubscription,
   createCheckout,
   createPortalSession,
   hasPro,
   listWorkspaceSubscriptions,
+  PaddleCancelError,
   PaddleReadError,
   parseSubscriptionEvent,
   SIGNATURE_TOLERANCE_SECONDS,
@@ -371,4 +373,39 @@ test("createPortalSession throws when Paddle errors or omits the URL", async () 
   await assert.rejects(createPortalSession({ ...base, fetch: noUrl }), /did not return a portal URL/);
   const flat = (async () => Response.json({ data: { id: "pstl_1", url: "https://paddle.com/portal/flat" } })) as unknown as typeof fetch;
   assert.deepEqual(await createPortalSession({ ...base, fetch: flat }), { portalUrl: "https://paddle.com/portal/flat" });
+});
+
+test("cancelSubscription posts the cancel at the end of the paid period", async () => {
+  const calls: { url: string; init: RequestInit }[] = [];
+  const fakeFetch = (async (url: string, init: RequestInit) => {
+    calls.push({ url, init });
+    return Response.json({ data: {} });
+  }) as unknown as typeof fetch;
+  await cancelSubscription({ apiKey: "pdl_sdbx_key", environment: "sandbox", subscriptionId: "sub_1", fetch: fakeFetch });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://sandbox-api.paddle.com/subscriptions/sub_1/cancel");
+  assert.equal(calls[0].init.method, "POST");
+  assert.deepEqual(calls[0].init.headers, {
+    authorization: "Bearer pdl_sdbx_key",
+    "content-type": "application/json",
+    "paddle-version": "1",
+  });
+  assert.equal(calls[0].init.redirect, "manual");
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)), { effective_from: "next_billing_period" });
+});
+
+test("cancelSubscription rejects when Paddle errors or cannot be reached", async () => {
+  const base = { apiKey: "k", environment: "live" as const, subscriptionId: "sub_1" };
+  const failing = (async () => new Response("{}", { status: 500 })) as unknown as typeof fetch;
+  await assert.rejects(
+    cancelSubscription({ ...base, fetch: failing }),
+    (error: unknown) => error instanceof PaddleCancelError && error.message === "Paddle returned 500 when cancelling a subscription.",
+  );
+  const offline = (async () => {
+    throw new Error("offline");
+  }) as unknown as typeof fetch;
+  await assert.rejects(
+    cancelSubscription({ ...base, fetch: offline }),
+    (error: unknown) => error instanceof PaddleCancelError && error.message === "Paddle could not be reached.",
+  );
 });
