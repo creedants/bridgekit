@@ -67,6 +67,98 @@ a.button:hover { border-color: #33182f; background: #33182f; color: var(--paper)
 a.button.ghost:hover { border-color: var(--plum); background: var(--blush); color: var(--plum); }
 
 .nav nav a.button { padding: 0.6rem 1rem; }
+/* Footer */
+
+footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
+
+.footer-inner { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.5rem; font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; font-size: 0.8125rem; }
+
+.footer-inner span { color: var(--plum-2); }
+
+.footer-inner a { color: var(--plum); text-decoration: none; }
+
+.footer-inner a:hover { color: var(--plum-2); }
+
+/* Focus */
+
+:focus-visible { outline: 3px solid currentColor; outline-offset: 3px; }
+
+/* The solid button's own text is white, which would draw a white ring on the white page. */
+.button:focus-visible { outline-color: var(--plum); }
+
+.keeps :focus-visible { outline-color: var(--sun); }
+
+@media (max-width: 40rem) {
+  .nav-inner { flex-wrap: wrap; height: auto; gap: 0.75rem; padding-block: 0.75rem; }
+
+  .nav nav { width: 100%; justify-content: space-between; gap: 0.5rem; }
+
+  /* On the home page the nav keeps one row: Guide and Method stay in the footer. */
+  .home .nav-inner { flex-wrap: nowrap; height: 3.75rem; padding-block: 0; gap: 0.75rem; }
+
+  .home .nav nav { width: auto; gap: 0.75rem; }
+
+  .home .nav nav .wide { display: none; }
+
+}
+
+@media (max-width: 22.4375rem) {
+  .home .nav nav a[href="#pricing"] { display: none; }
+}
+
+@media (pointer: coarse), (max-width: 480px) {
+  .wordmark, .nav nav a, .footer-inner a { min-height: 44px; }
+
+  .nav nav a:not(.button), .footer-inner a { display: inline-flex; align-items: center; }
+
+  .footer-inner { row-gap: 0; }
+}
+
+/* Home page: an annual-report system. Warm paper, one display serif scale on a 12-column grid, hanging chapter numerals, figure plates with small captions, tables set light with hairline rules. The rules below target home-page classes; the hero rules use .hero and .hero-grid without a body.home ancestor. */
+
+.home { --sheet: #f7f2ea; --paper-2: #fbf8f3; --ink: #42203d; --ink-2: #6a4b64; --ink-3: #7a5f73; --rule: #dccfbf; --rule-strong: #a99a8c; --numeral: #ddd1c0; --sans: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; background: var(--sheet); -webkit-font-smoothing: antialiased; }
+
+.home .nav { background: var(--sheet); border-bottom-color: var(--rule); }
+
+.home section:not(.hero) { padding-block: clamp(3.5rem, 7vw, 6.5rem); }
+
+.home .anatomy, .home .views, .home .steps, .home section.price, .home .faq { border-top: 1px solid var(--rule-strong); }
+
+/* The chapter grid: twelve columns, the numeral in the first two, the heading and the body from the third. */
+.home .chapter { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: 2rem; }
+
+.home .num { grid-column: 1 / 3; grid-row: 1 / span 2; margin-top: -.12em; font: 500 8.5rem/.8 Newsreader, Georgia, "Times New Roman", serif; letter-spacing: -.05em; color: var(--numeral); user-select: none; -webkit-user-select: none; }
+
+/* The chapter numerals and figure labels are decorative, so CSS counters number them. */
+.home { counter-reset: chapter fig; }
+
+.home .num::before { counter-increment: chapter; content: counter(chapter, decimal-leading-zero); }
+
+.home .fig::before { counter-increment: fig; content: "Fig. " counter(fig); }
+
+.home .sec-head { grid-column: 3 / -1; margin-bottom: 3.5rem; }
+
+.home .sec-head h2 { max-width: 16ch; font-size: 4rem; line-height: 1.02; letter-spacing: -.028em; }
+
+.home .sec-head h2 span { display: block; color: var(--ink-3); }
+
+/* Figure labels and captions: small tracked sans beside a short serif title. */
+.home .fig { font: 600 .75rem/1 var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--ink); }
+
+.home figcaption { font: 400 .9375rem/1.5 var(--sans); color: var(--ink-2); }
+
+.home figcaption b { margin: 0 .25rem 0 .75rem; font: 500 1.25rem/1.2 Newsreader, Georgia, "Times New Roman", serif; color: var(--ink); }
+
+.home .plate img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); background: #fff; }
+
+/* Calls to action: the two buttons side by side, each at least 48 px tall. */
+.home .actions { display: flex; flex-wrap: wrap; gap: .75rem; }
+
+.home .actions .button { gap: .6rem; min-height: 3rem; padding: .9rem 1.15rem; font-size: .9375rem; }
+
+.home .cta span { transition: transform .15s; }
+
+.home .cta:hover span { transform: translateX(3px); }
 
 /* Hero */
 
@@ -166,75 +258,52 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
 .hero .wf-narrow { display: none; }
 
-/* A second real view, the Movers table, laps the picture's lower edge below the chart's labels. Its right edge lines up with the picture's, or the band's when the picture fills it. */
-.hero .peek { position: relative; z-index: 1; width: min(21rem, 64%); margin: -1.25rem max(0px, (100% - 48rem) / 2) 0 auto; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 0 0 1px rgba(255, 255, 255, .16), 0 2px 6px rgba(0, 0, 0, .2), 0 24px 48px -14px rgba(0, 0, 0, .6); }
-
-.hero .peek-head { padding: .6rem .9rem; border-bottom: 1px solid var(--t-line); font: 600 .75rem/1.2 var(--sans); color: var(--t-text); }
-
-.hero .peek img { display: block; width: 100%; height: auto; }
-
-/* From 1240 px the copy runs in two columns above the picture, which grows to the shell's width on an inset stage. */
+/* From 1240 px the copy and the picture sit side by side, so the whole bridge, its figures and both buttons share the first screen. */
 @media (min-width: 1240px) {
-  .hero { padding-block: 2.25rem 9rem; }
+  .hero { padding-block: 3.25rem 5rem; }
 
-  .hero .hero-grid { gap: 2.25rem; }
+  .hero .hero-grid { grid-template-columns: minmax(0, 23.25rem) minmax(0, 1fr); gap: 2.75rem; align-items: center; }
 
-  .hero .copy { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 27rem); column-gap: 4rem; }
+  .hero .copy h1 { font-size: 5rem; line-height: .95; letter-spacing: -.03em; }
 
-  .hero .copy > * { grid-column: 2; }
+  .hero .copy .lead { max-width: none; font-size: 1.375rem; }
 
-  .hero .copy .eyebrow { grid-area: 1 / 1; }
+  .hero .copy .define { max-width: none; }
 
-  .hero .copy h1 { grid-area: 2 / 1 / 5; font-size: 5.5rem; line-height: .96; letter-spacing: -.03em; }
+  .hero .actions { margin-top: 2rem; gap: .625rem; }
 
-  .hero .copy .lead { grid-row: 2; margin-top: 0; max-width: none; font-size: 1.4375rem; }
-
-  .hero .copy .for { grid-row: 3; }
-
-  .hero .copy .define { grid-row: 4; max-width: none; }
-
-  /* The buttons and their fine print sit under the heading, so the promise and its next step read together. */
-  .hero .copy .actions { grid-area: 5 / 1; margin-top: 2rem; }
-
-  .hero .copy .fine { grid-area: 6 / 1; }
+  .hero .actions .button { padding-inline: .95rem; font-size: .875rem; }
 
   .hero .copy .fine br { display: none; }
 
-  .hero figure { margin-inline: -2rem; padding: 2.25rem 4rem 2.5rem; border-radius: 24px; }
+  .hero .frame { max-width: none; border-radius: 14px; }
 
-  .hero .frame { max-width: none; }
-
-  .hero .chrome { height: 48px; padding: 0 1.25rem; }
+  .hero .chrome { height: 46px; padding: 0 1.25rem; }
 
   .hero .app-name { font-size: .875rem; }
 
-  .hero .dataset { font-size: .8125rem; }
+  .hero .dataset { font-size: .75rem; }
 
-  .hero .body { padding: 1rem 1.5rem 1.5rem; }
+  .hero .body { padding: 1rem 1.25rem 1.25rem; }
 
-  .hero .kpi { padding: .85rem 1rem .9rem; }
+  .hero .kpi { padding: .75rem .75rem .8rem; }
 
-  .hero .kpi b { font-size: .6875rem; }
+  .hero .kpi strong { font-size: 1.125rem; }
 
-  .hero .kpi strong { font-size: 1.375rem; }
+  .hero .kpi b { letter-spacing: .04em; }
 
-  .hero .kpi small { font-size: .75rem; }
+  .hero .kpi small { white-space: normal; }
 
-  .hero .tabs { gap: 1.5rem; margin-top: .9rem; font-size: .8125rem; }
+  .hero .tabs { gap: 1.5rem; font-size: .8125rem; }
 
-  .hero .legend { margin-top: .75rem; font-size: .75rem; }
+  .hero .legend { margin-top: .8rem; font-size: .75rem; }
 
-  /* The wide chart draws at about 1.25 of its 760 units here, so its labels are set to read at 13 to 14 px. */
-  .hero .wf .ax { font-size: 10px; }
+  /* At 1440 px the wide chart draws 616 px across its 760-unit viewBox; the label sizes below are in SVG units. */
+  .hero .wf .ax { font-size: 11.5px; }
 
-  .hero .wf .val { font-size: 11px; font-weight: 600; }
+  .hero .wf .val { font-size: 12.5px; font-weight: 600; }
 
-  .hero .wf .cat { font-size: 10.5px; }
-
-  /* The table laps the picture's lower edge and hangs below the stage. */
-  .hero .peek { width: 23rem; margin: -1rem -1.75rem -9rem auto; }
-
-  .hero .peek-head { padding: .7rem 1rem; font-size: .8125rem; }
+  .hero .wf .cat { font-size: 12px; }
 }
 
 @media (hover: hover) {
@@ -308,372 +377,310 @@ a.button.ghost:hover { border-color: var(--plum); background: var(--blush); colo
 
   .hero .wf .val { font-size: 12px; }
 
-  .hero .peek { width: 88%; margin-top: -.25rem; }
 }
 
-/* Page structure: the section heads are numbered, the light sections are divided by hairlines, and on wide screens two rails run down the shell's edges. */
+/* The dark stage is retained from 1200 px to below 1240 px for the social card; elsewhere the picture is a lit white window on the page's paper. */
+@media (max-width: 1199.98px), (min-width: 1240px) {
+  .hero { padding-bottom: 4.5rem; }
 
-.home { counter-reset: sec; }
+  .hero figure { margin-inline: 0; padding: 0; background: none; box-shadow: none; }
 
-.home .anatomy, .home .views, .home .steps, .home .faq { border-top: 1px solid var(--blush); }
+  .hero figure::before { display: none; }
 
-@media (min-width: 1300px) {
-  .home > section:not(.keeps):not(.close) { background-image: linear-gradient(var(--blush), var(--blush)), linear-gradient(var(--blush), var(--blush)); background-repeat: no-repeat; background-size: 1px 100%; background-position: calc(50% - 38rem) 0, calc(50% + 38rem) 0; }
+  .hero .frame { box-shadow: 0 0 0 1px rgba(66, 32, 61, .1), 0 2px 4px rgba(66, 32, 61, .05), 0 28px 64px -20px rgba(66, 32, 61, .32); }
+
+  .hero a.frame:focus-visible { outline-color: var(--plum); }
 }
 
-/* Calls to action: a filled and an outlined button side by side, each at least 44 px tall. */
-
-.actions { display: flex; flex-wrap: wrap; gap: .75rem; }
-
-.actions .button { gap: .6rem; min-height: 3rem; padding: .9rem 1.15rem; font-size: .9375rem; }
-
-/* Section headings: a short sun rule, then a large two-tone heading. */
-
-.sec-head { margin-bottom: clamp(2rem, 4vw, 3rem); counter-increment: sec; }
-
-.sec-head::before { content: counter(sec, decimal-leading-zero); display: block; margin-bottom: 1.25rem; padding-left: 4rem; background: linear-gradient(var(--sun), var(--sun)) 0 50% / 3rem .375rem no-repeat; font: 600 .8125rem/1 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; letter-spacing: .08em; color: #7a5f73; }
-
-.sec-head h2,
-.close h2 { max-width: 22ch; font-size: clamp(2rem, 3.6vw, 3rem); line-height: 1.06; letter-spacing: -.022em; }
-
-.sec-head h2 span { color: #7a5f73; }
-
-/* What each step measures: four cells, each drawing the sample's bridge small and to scale from 52M to 72M, with its own steps filled. */
-
-.anatomy { background: #faf6f9; }
-
-.anatomy .figs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; padding: 0; list-style: none; overflow: hidden; background: var(--paper); border: 1px solid var(--blush); border-radius: 14px; }
-
-.anatomy .figs li { display: flex; flex-direction: column; padding: 0 1.5rem 1.5rem; border-left: 1px solid var(--blush); }
-
-.anatomy .figs li:first-child { border-left: 0; }
-
-.anatomy .mini { display: block; width: calc(100% + 3rem); height: auto; margin: 0 -1.5rem; padding: 1.5rem 1.5rem 1rem; border-bottom: 1px solid var(--blush); background: #fdfafc; }
-
-.anatomy .mini line { stroke: #9c8196; stroke-width: 1; }
-
-.anatomy .mini .link { stroke-dasharray: 2 2; }
-
-.anatomy .mini rect { stroke-width: 1; }
-
-/* The other bars stay as quiet outlines, so the filled step leads. */
-.anatomy .mini .total, .anatomy .mini .step { fill: var(--paper); stroke: #d3c2cf; }
-
-.anatomy .mini .lit { fill: rgba(244, 191, 58, .2); }
-
-.anatomy .mini .on { fill: var(--sun); stroke: var(--plum); }
-
-.anatomy .mini .on.down { fill: var(--plum); }
-
-.anatomy h3 { margin-top: 1.25rem; font-size: 1.5rem; line-height: 1.15; }
-
-.anatomy .figs p { margin-top: .4rem; font: 400 .9375rem/1.5 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
-
-.anatomy .figs .amt { display: grid; margin-top: auto; padding-top: 1.25rem; }
-
-.anatomy .amt span { display: flex; justify-content: space-between; gap: 1rem; padding-block: .35rem; border-top: 1px solid var(--blush); font: 400 .875rem/1.3 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
-
-.anatomy .amt b { font-weight: 600; color: var(--plum); }
-
-.anatomy .amt span:only-child b { font: 500 1.75rem/1.1 Newsreader, Georgia, "Times New Roman", serif; letter-spacing: -.01em; }
-
-/* Views: real screenshots of the tool on the sample, in one ruled grid of pale cells, each with a caption. */
-
-.views .gallery { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--blush); border-radius: 14px; }
-
-.views .card { display: flex; flex-direction: column; padding: 1.5rem 1.5rem 0; overflow: hidden; background: #faf6f9; }
-
-.views .card:nth-child(n+2) { border-top: 1px solid var(--blush); }
-
-.views .card:nth-child(3) { border-left: 1px solid var(--blush); }
-
-.views .card:nth-child(2), .views .card:nth-child(3) { grid-column: span 6; }
-
-.views .card.wide { grid-column: 1 / -1; }
-
-.views figcaption { max-width: 36rem; font: 400 .9375rem/1.45 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
-
-.views figcaption b { display: block; margin-bottom: .2rem; font-family: Newsreader, Georgia, "Times New Roman", serif; font-size: 1.375rem; font-weight: 500; line-height: 1.2; color: var(--plum); }
-
-/* The screenshot rises from the card's lower edge, so cards of unequal height keep their pictures aligned at the bottom. */
-.views .card picture { display: block; margin-top: auto; padding-top: 1.25rem; }
-
-.views .card img { display: block; width: 100%; height: auto; border: 1px solid var(--blush); border-bottom: 0; border-radius: 8px 8px 0 0; background: #fff; }
-
-.views .also { display: flex; flex-wrap: wrap; gap: .5rem; max-width: none; margin-top: 1.5rem; }
-
-.views .also b { align-self: center; margin-right: .25rem; font: 600 .8125rem/1.3 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum); }
-
-.views .also span { padding: .4rem .8rem; border: 1px solid var(--blush); border-radius: 999px; font: 500 .8125rem/1.3 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
-
-/* Steps: three columns, each under a numbered tile, the tiles joined by a rail. */
-
-.steps { background: #faf6f9; }
-
-.steps .stair { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(1.25rem, 3vw, 2.5rem); margin: 0; padding: 0; list-style: none; counter-reset: step; }
-
-.steps .stair li { position: relative; display: flex; flex-direction: column; padding-top: 4.75rem; counter-increment: step; }
-
-/* The rail from each tile to the next. */
-.steps .stair li::after { content: ""; position: absolute; top: 1.5rem; left: 3rem; right: calc(-1 * clamp(1.25rem, 3vw, 2.5rem)); border-top: 1px solid #c9b3c4; }
-
-.steps .stair li:last-child::after { display: none; }
-
-.steps .stair li::before { content: ""; position: absolute; top: 0; left: 0; width: 3rem; height: 3rem; border-radius: 10px; background: var(--plum); }
-
-.steps .stair li:nth-child(2)::before { background: var(--sun); }
-
-.steps .stair h3 { max-width: 17rem; font-size: clamp(1.5rem, 2.4vw, 2rem); line-height: 1.15; letter-spacing: -.01em; }
-
-.steps .stair p { max-width: 17rem; margin-top: .6rem; font: 400 1rem/1.5 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
-
-.steps .stair h3::before { content: counter(step, decimal-leading-zero); position: absolute; top: 0; left: 0; display: grid; place-items: center; width: 3rem; height: 3rem; font: 600 .875rem/1 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; letter-spacing: .04em; color: var(--paper); }
-
-.steps .stair li:nth-child(2) h3::before { color: var(--plum); }
-
-/* Under each step, the part of the tool it names, cropped from the tool on the sample. The frames end on one line. */
-.steps .stair picture { display: block; margin-top: auto; padding-top: 1.5rem; }
-
-.steps .stair img { display: block; width: 100%; height: auto; border-radius: 10px; background: #fff; box-shadow: 0 0 0 1px rgba(66, 32, 61, .12), 0 2px 4px rgba(66, 32, 61, .06), 0 16px 32px -14px rgba(66, 32, 61, .3); }
-
-/* Questions: a ruled list, each question beside its answer. */
-
-.faq .qa { border-bottom: 1px solid var(--blush); }
-
-.faq .qa div { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: .5rem clamp(1.25rem, 3vw, 2.5rem); padding-block: 1.5rem; border-top: 1px solid var(--blush); }
-
-.faq dt { font-size: 1.375rem; font-weight: 500; line-height: 1.25; }
-
-.faq dd { font: 400 1rem/1.55 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
-
-/* Privacy */
-
-.keeps { background: var(--plum); color: var(--blush); }
-
-.keeps-grid { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: clamp(2rem, 5vw, 4.5rem); align-items: center; }
-
-.keeps-inner { max-width: 38rem; }
-
-.keeps h2 { margin-bottom: 1rem; color: var(--sun); font-size: clamp(2rem, 3.6vw, 3rem); line-height: 1.06; letter-spacing: -.022em; }
-
-.keeps p + p { margin-top: 1rem; }
-
-.keeps a { color: var(--sun); text-decoration: underline; }
-
-.keeps a:hover { /* plum-2 fails contrast on the plum band */ color: var(--sun); }
-
-.keeps .check { padding: clamp(1.5rem, 3vw, 2rem); border: 1px solid rgba(231, 211, 226, .28); border-radius: 14px; background: rgba(255, 255, 255, .04); }
-
-.keeps .check h3 { margin-bottom: .5rem; font-size: 1.375rem; color: var(--paper); }
-
-.keeps .check p { font-size: 1.0625rem; line-height: 1.5; }
-
-.keeps .check .links { display: flex; flex-wrap: wrap; gap: 0 1.5rem; margin-top: .5rem; }
-
-.keeps .check .links a { display: inline-flex; align-items: center; min-height: 44px; font: 600 .9375rem/1.2 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; }
-
-/* Pricing */
-
-.plans { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; align-items: stretch; }
-
-.plan { position: relative; display: flex; flex-direction: column; align-items: flex-start; padding: clamp(1.5rem, 3vw, 2.25rem); border: 1px solid var(--blush); border-radius: 14px; overflow: hidden; }
-
-/* The free plan is the one on offer: a filled plum card with the wordmark's three bars drawn large in its corner. */
-.plan:first-child { border-color: var(--plum); background: var(--plum); color: var(--blush); }
-
-.plan:first-child::after { content: ""; position: absolute; right: clamp(1.5rem, 3vw, 2.25rem); bottom: clamp(1.5rem, 3vw, 2.25rem); width: 7.5rem; height: 7rem;
-  background: linear-gradient(#5c3a56, #5c3a56) 0 100% / 2rem 3.15rem no-repeat, linear-gradient(var(--sun), var(--sun)) 2.75rem calc(100% - 3.15rem) / 2rem 1.75rem no-repeat, linear-gradient(#5c3a56, #5c3a56) 100% 100% / 2rem 7rem no-repeat; }
-
-.plan:first-child h3, .plan:first-child .price { color: var(--paper); }
-
-.plan:first-child .tag { background: var(--sun); color: var(--plum); }
-
-.plan:first-child .button { border-color: var(--sun); background: var(--sun); color: var(--plum); }
-
-.plan:first-child a.button:hover { border-color: var(--paper); background: var(--paper); color: var(--plum); }
-
-.plan:first-child .button:focus-visible { outline-color: var(--sun); }
-
-.tag { display: inline-block; padding: 0.2rem 0.5rem; background: var(--plum); color: var(--paper); font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; font-size: 0.8125rem; font-weight: 500; }
-
-.tag.muted { background: var(--blush); color: var(--plum-2); }
-
-.plan h3 { margin: 0.75rem 0 0.25rem; font-size: 1.375rem; }
-
-.plan .price { font-size: clamp(2.25rem, 3.4vw, 2.75rem); font-weight: 500; line-height: 1.1; }
-
-.plan .price span { font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; font-size: 0.8125rem; font-weight: 500; color: var(--plum-2); }
-
-.plan p { margin-top: 0.5rem; }
-
-.plan .when { margin-top: 0.25rem; font: 400 0.8125rem/1.5 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
-
-.plan ul { margin: 1.25rem 0 1.75rem; padding-left: 1.1rem; display: grid; gap: 0.4rem; }
-
-.plan li { font-size: 1.0625rem; line-height: 1.45; }
-
-.plan li small { display: block; margin-top: 0.15rem; font: 400 0.8125rem/1.5 "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; color: var(--plum-2); }
-
-.plan .button { min-height: 44px; margin-top: 1.5rem; }
-
-.plan ul + .button { margin-top: auto; }
-
-/* Closing band */
-
-.close { background: var(--sun); }
-
-.close-inner { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 2rem 3rem; }
-
-.close h2 span { color: var(--plum-2); }
-
-.close .button.ghost { border-color: var(--plum); }
-
-.close a.button.ghost:hover { background: var(--paper); }
-
-/* The hero's bars rise into place once, one after another, when the page opens. */
-@media (prefers-reduced-motion: no-preference) {
-  .hero .wf rect { animation: rise .5s cubic-bezier(.2, .7, .3, 1) both; }
-
-  .hero .wf rect:nth-of-type(n+3) { animation-delay: .06s; }
-
-  .hero .wf rect:nth-of-type(n+4) { animation-delay: .12s; }
-
-  .hero .wf rect:nth-of-type(n+5) { animation-delay: .18s; }
-
-  .hero .wf rect:nth-of-type(n+6) { animation-delay: .24s; }
-
-  .hero .wf rect:nth-of-type(n+7) { animation-delay: .3s; }
-
-  .hero .wf rect:nth-of-type(n+8) { animation-delay: .36s; }
-
-  .hero .wf rect:nth-of-type(n+9) { animation-delay: .42s; }
-
-  .hero .wf rect:nth-of-type(n+10) { animation-delay: .48s; }
+@media (hover: hover) and (max-width: 1199.98px), (hover: hover) and (min-width: 1240px) {
+  .hero a.frame:hover { box-shadow: 0 0 0 1px rgba(66, 32, 61, .14), 0 4px 8px rgba(66, 32, 61, .07), 0 36px 72px -20px rgba(66, 32, 61, .38); }
 }
 
-@keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+@media (max-width: 760px) {
+  .hero { padding-bottom: 3rem; }
+
+  .hero .copy .define { font-size: 1rem; }
+
+  .hero .copy .fine { font-size: .875rem; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .hero .frame, .hero .copy .cta span { transition: none; }
 
-  .hero a.frame:hover, .hero .copy .cta:hover span, .hero-grid:has(a.frame:hover) .cta span { transform: none; }
+  .hero a.frame:hover { transform: none; }
+
+  .hero .copy .cta:hover span, .hero-grid:has(a.frame:hover) .cta span { transform: none; }
 }
 
-/* Footer */
+/* 01 What each step measures: the four steps as a ruled ledger. */
 
-footer { padding-block: 2rem; border-top: 1px solid var(--blush); }
+.home .ledger { grid-column: 3 / -1; width: 100%; margin-top: 0; border-collapse: collapse; border-top: 1px solid var(--rule-strong); border-bottom: 1px solid var(--rule-strong); }
 
-.footer-inner { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.5rem; font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; font-size: 0.8125rem; }
+.home .ledger tr + tr { border-top: 1px solid var(--rule); }
 
-.footer-inner span { color: var(--plum-2); }
+.home .ledger th, .home .ledger td { padding: 1.75rem 0; vertical-align: top; text-align: left; }
 
-.footer-inner a { color: var(--plum); text-decoration: none; }
+.home .ledger th { width: 27%; padding-right: 2rem; font: 500 1.625rem/1.15 Newsreader, Georgia, "Times New Roman", serif; letter-spacing: -.01em; }
 
-.footer-inner a:hover { color: var(--plum-2); }
+.home .ledger td { padding-right: 2.5rem; font: 400 1rem/1.55 var(--sans); color: var(--ink-2); }
 
-/* Focus */
+.home .ledger td.amt { width: 30%; padding-right: 0; }
 
-:focus-visible { outline: 3px solid currentColor; outline-offset: 3px; }
+.home .ledger .amt b { display: block; font: 500 1.75rem/1.1 Newsreader, Georgia, "Times New Roman", serif; letter-spacing: -.015em; color: var(--ink); text-align: right; }
 
-/* The solid button's own text is white, which would draw a white ring on the white page. */
-.button:focus-visible { outline-color: var(--plum); }
+.home .ledger .amt span { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; padding-block: .25rem; }
 
-.keeps :focus-visible { outline-color: var(--sun); }
+.home .ledger .amt span b { font-size: 1.25rem; }
 
-/* Narrow screens */
+/* Each step carries the sample bridge with its own bars lit, drawn under its name. */
+.home .ledger .mini { display: block; width: 100%; max-width: 13rem; height: auto; margin-top: 1.25rem; padding: .75rem .75rem .5rem; border: 1px solid var(--rule); background: var(--paper-2); box-sizing: border-box; }
+
+.home .ledger .mini line { stroke: var(--rule-strong); stroke-width: 1; }
+
+.home .ledger .mini .link { stroke-dasharray: 2 2; }
+
+.home .ledger .mini rect { stroke-width: 1; }
+
+.home .ledger .mini .total, .home .ledger .mini .step { fill: var(--paper); stroke: var(--rule-strong); }
+
+.home .ledger .mini .lit { fill: rgba(244, 191, 58, .22); stroke: none; }
+
+.home .ledger .mini .on { fill: var(--sun); stroke: var(--ink); }
+
+.home .ledger .mini .on.down { fill: var(--ink); }
+
+/* 02 The views: one full-width plate of the Movers table, then two plates beside their captions. */
+
+.home .views .plate.full { grid-column: 1 / -1; }
+
+.home .views .plate.full figcaption { margin-top: 1rem; }
+
+.home .views .plate.side { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 9fr); column-gap: 2rem; align-items: start; margin-top: 4.5rem; }
+
+.home .views .plate.side figcaption { display: flex; flex-direction: column; align-items: flex-start; gap: .75rem; padding-top: .25rem; }
+
+.home .views .plate.side figcaption b { margin: 0; font-size: 1.75rem; }
+
+.home .views .plate.gaps img { max-width: 30.625rem; }
+
+.home .views .also { grid-column: 3 / -1; display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; max-width: none; margin-top: 3.5rem; padding-top: 1rem; border-top: 1px solid var(--rule); font: 500 .875rem/1.4 var(--sans); color: var(--ink-2); }
+
+.home .views .also b { font-weight: 600; color: var(--ink); }
+
+/* 03 How it works: three ruled columns, each numbered in display serif, each ending in the part of the tool it names. */
+
+.home .stair { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 2rem; margin: 0; padding: 0; list-style: none; counter-reset: step; }
+
+.home .stair li { display: flex; flex-direction: column; padding-top: 1.25rem; border-top: 1px solid var(--rule-strong); counter-increment: step; }
+
+.home .stair li::before { content: counter(step); margin-bottom: 1.5rem; font: 500 3.5rem/1 Newsreader, Georgia, "Times New Roman", serif; color: var(--ink-3); }
+
+.home .stair h3 { max-width: 16rem; font-size: 1.75rem; line-height: 1.15; letter-spacing: -.012em; }
+
+.home .stair p { max-width: 17rem; margin-top: .6rem; font: 400 1rem/1.55 var(--sans); color: var(--ink-2); }
+
+.home .stair picture { display: block; margin-top: auto; padding-top: 2rem; }
+
+.home .stair img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); background: #fff; }
+
+/* Privacy: the one ink spread. */
+
+.home .keeps { background: var(--ink); color: var(--blush); }
+
+.home .keeps-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: 2rem; align-items: end; }
+
+.home .keeps-inner { grid-column: 1 / 9; max-width: 36rem; }
+
+.home .keeps h2 { margin-bottom: 1.5rem; color: var(--sun); font-size: 4rem; line-height: 1.02; letter-spacing: -.028em; }
+
+.home .keeps a { color: var(--sun); text-decoration: underline; }
+
+.home .keeps a:hover { color: var(--sun); }
+
+.home .keeps .check { grid-column: 9 / -1; padding-top: 1.25rem; border-top: 1px solid rgba(244, 191, 58, .6); }
+
+.home .keeps .check h3 { margin-bottom: .5rem; font-size: 1.375rem; color: var(--sheet); }
+
+.home .keeps .check p { font-size: 1.0625rem; line-height: 1.5; }
+
+.home .keeps .check .links { display: flex; flex-wrap: wrap; gap: 0 1.5rem; margin-top: .5rem; }
+
+.home .keeps .check .links a { display: inline-flex; align-items: center; min-height: 44px; font: 600 .9375rem/1.2 var(--sans); }
+
+/* 04 Pricing: two ruled columns, the price as a display numeral. */
+
+.home .plans { grid-column: 3 / -1; display: grid; grid-template-columns: 1fr 1fr; column-gap: 0; border-top: 1px solid var(--rule-strong); }
+
+.home .plan { display: flex; flex-direction: column; align-items: flex-start; padding: 1.5rem 3rem 0 0; }
+
+.home .plan + .plan { padding: 1.5rem 0 0 3rem; border-left: 1px solid var(--rule); }
+
+.home .tag { padding: 0; background: none; font: 600 .75rem/1 var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--ink); }
+
+.home .tag::before { content: ""; display: inline-block; width: .6rem; height: .6rem; margin-right: .6rem; background: var(--sun); vertical-align: 0; }
+
+.home .tag.muted { color: var(--ink-2); }
+
+.home .tag.muted::before { background: transparent; box-shadow: inset 0 0 0 1px var(--rule-strong); }
+
+.home .plan h3 { margin: 1.5rem 0 0; font-size: 1.5rem; }
+
+.home .plan .price { padding-top: .08em; font-size: 5.5rem; font-weight: 500; line-height: 1.05; letter-spacing: -.035em; }
+
+.home .plan .price span { display: block; margin-top: .5rem; font: 400 .875rem/1.4 var(--sans); letter-spacing: 0; color: var(--ink-2); }
+
+.home .plan p { margin-top: .75rem; }
+
+.home .plan .when { margin-top: .5rem; font: 400 .875rem/1.5 var(--sans); color: var(--ink-2); }
+
+.home .plan ul { margin: 1.25rem 0 0; padding-left: 1.1rem; display: grid; gap: .5rem; }
+
+.home .plan li { font-size: 1.0625rem; line-height: 1.45; }
+
+.home .plan li small { display: block; margin-top: .15rem; font: 400 .8125rem/1.5 var(--sans); color: var(--ink-2); }
+
+.home .plan .button { min-height: 44px; margin-top: 2rem; }
+
+.home .plan ul + .button { margin-top: auto; padding-top: 0; }
+
+.home .plan ul { margin-bottom: 2rem; }
+
+/* The free plan is the one on offer: a filled plum panel with the wordmark's three bars drawn large in its lower corner. */
+.home .plan:first-child { position: relative; margin-top: 1.5rem; padding: 2rem 2.25rem 2.25rem; background: var(--ink); color: var(--blush); }
+
+.home .plan:first-child::after { content: ""; position: absolute; right: 2.25rem; bottom: 2.25rem; width: 7.5rem; height: 7rem;
+  background: linear-gradient(var(--plum-2), var(--plum-2)) 0 100% / 2rem 3.15rem no-repeat, linear-gradient(var(--sun), var(--sun)) 2.75rem calc(100% - 3.15rem) / 2rem 1.75rem no-repeat, linear-gradient(var(--plum-2), var(--plum-2)) 100% 100% / 2rem 7rem no-repeat; }
+
+.home .plan:first-child h3, .home .plan:first-child .price { color: #fff; }
+
+.home .plan:first-child .tag { color: var(--sun); }
+
+.home .plan:first-child .button { border-color: var(--sun); background: var(--sun); color: var(--ink); }
+
+.home .plan:first-child a.button:hover { border-color: #fff; background: #fff; color: var(--ink); }
+
+.home .plan:first-child .button:focus-visible { outline-color: var(--sun); }
+
+/* 05 Questions: a ruled list, each question beside its answer. */
+
+.home .qa { grid-column: 3 / -1; border-top: 1px solid var(--rule-strong); border-bottom: 1px solid var(--rule-strong); }
+
+.home .qa div { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: .5rem 2rem; padding-block: 1.75rem; }
+
+.home .qa div + div { border-top: 1px solid var(--rule); }
+
+.home .qa dt { font-size: 1.5rem; font-weight: 500; line-height: 1.2; letter-spacing: -.01em; }
+
+.home .qa dd { font: 400 1.0625rem/1.55 var(--sans); color: var(--ink-2); }
+
+/* Closing band */
+
+.home .close { background: var(--sun); }
+
+.home .close-inner { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 2rem 3rem; }
+
+.home .close h2 { max-width: 14ch; font-size: 3.5rem; line-height: 1.02; letter-spacing: -.028em; }
+
+.home .close h2 span { color: var(--ink-2); }
+
+.home .close .button.ghost { border-color: var(--ink); }
+
+.home .close a.button.ghost:hover { background: var(--sheet); }
+
+.home footer { border-top-color: var(--rule); }
+
+@media (prefers-reduced-motion: reduce) {
+  .home .cta span { transition: none; }
+
+  .home .cta:hover span { transform: none; }
+}
+
+/* Narrow screens: one column, the numeral above its heading, the phone chart. */
 
 @media (max-width: 56rem) {
-  /* Below this width each card shows the tool's own phone layout of its view, whole, so nothing scrolls sideways. */
-  .views .gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .home figcaption { font-size: 1rem; }
+  .home section { padding-block: 3rem; }
 
-  .views .card:nth-child(n) { grid-column: auto; }
+  .home .chapter { display: block; }
 
-  .views .card.wide { grid-row: span 2; }
+  .home .num { display: block; margin: 0 0 .25rem -.04em; font-size: 5.5rem; }
 
-  .views .card:nth-child(n+2) { border-top: 0; border-left: 1px solid var(--blush); }
+  .home .sec-head { margin-bottom: 2rem; }
 
-  .views .card:nth-child(3) { border-top: 1px solid var(--blush); }
+  .home .sec-head h2 { font-size: 2.5rem; }
 
-  .anatomy .figs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .home .ledger { display: block; margin-top: 2rem; }
 
-  .anatomy .figs li:nth-child(3) { border-left: 0; }
+  .home .ledger tbody, .home .ledger tr, .home .ledger th, .home .ledger td { display: block; width: auto; padding: 0; }
 
-  .anatomy .figs li:nth-child(n+3) { border-top: 1px solid var(--blush); }
+  .home .ledger tr { padding-block: 1.5rem; }
 
-  .faq .qa div { grid-template-columns: minmax(0, 1fr); }
+  .home .ledger th { font-size: 1.5rem; }
 
-  .steps .stair { grid-template-columns: minmax(0, 1fr); gap: 1.75rem; }
+  .home .ledger td { margin-top: .5rem; }
 
-  .steps .stair li { min-height: 5rem; padding: 0 0 0 4.75rem; }
+  .home .ledger td.amt { margin-top: 1rem; }
 
-  /* In one column the rail runs down from each tile to the next. */
-  .steps .stair li::after { top: 3rem; bottom: -1.75rem; left: 1.5rem; right: auto; border-top: 0; border-left: 1px solid #c9b3c4; }
+  .home .ledger .amt b { text-align: left; }
 
-  /* In one column the steps stay short; the pictures show from 56rem up. */
-  .steps .stair picture { display: none; }
+  /* On narrow screens the drawing sits at the right of the step name, so each row grows only a little. */
+  .home .ledger th { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
 
-  .keeps-grid { grid-template-columns: minmax(0, 1fr); }
+  .home .ledger .mini { flex: none; width: 6.5rem; margin-top: 0; padding: .4rem .4rem .25rem; }
 
-  .plans { grid-template-columns: 1fr; }
+  .home .views .plate.side { display: block; margin-top: 3rem; }
 
-  .close-inner { flex-direction: column; align-items: flex-start; }
+  .home .views .plate.side figcaption { margin-bottom: 1rem; }
+
+  .home .views .plate img, .home .views .plate.gaps img { width: 100%; max-width: 24rem; }
+
+  .home .views .also { margin-top: 2.5rem; }
+
+  .home .stair { display: grid; grid-template-columns: minmax(0, 1fr); row-gap: 2.5rem; }
+
+  .home .stair li::before { margin-bottom: 1rem; font-size: 2.75rem; }
+
+  .home .stair h3 { font-size: 1.5rem; }
+
+  .home .stair picture { padding-top: 1.5rem; }
+
+  .home .keeps-grid { display: block; }
+
+  .home .keeps h2 { font-size: 2.5rem; }
+
+  .home .keeps .check { margin-top: 2.5rem; }
+
+  .home .plans { display: block; }
+
+  .home .plan { padding: 1.5rem 0 2.5rem; }
+
+  .home .plan + .plan { padding: 1.5rem 0 0; border-left: 0; border-top: 1px solid var(--rule); }
+
+  .home .plan:first-child { margin-block: 1.5rem; padding: 1.75rem 1.5rem 1.75rem; }
+
+  /* The bars at 0.6 scale, beside the button. */
+  .home .plan:first-child::after { right: 1.5rem; bottom: 1.75rem; width: 4.5rem; height: 4.2rem; background-size: 1.2rem 1.89rem, 1.2rem 1.05rem, 1.2rem 4.2rem; background-position: 0 100%, 1.65rem calc(100% - 1.89rem), 100% 100%; }
+
+  .home .plan .price { font-size: 4rem; }
+
+  .home .qa div { grid-template-columns: minmax(0, 1fr); padding-block: 1.5rem; }
+
+  .home .qa dt { font-size: 1.375rem; }
+
+  .home .close h2 { font-size: 2.5rem; }
 }
 
+/* Phones: less paper between and inside the chapters, so pricing sits nearer the top of the page. */
 @media (max-width: 40rem) {
-  .nav-inner { flex-wrap: wrap; height: auto; gap: 0.75rem; padding-block: 0.75rem; }
+  .home section:not(.hero) { padding-block: 2.5rem; }
 
-  .nav nav { width: 100%; justify-content: space-between; gap: 0.5rem; }
+  .home .num { font-size: 4rem; }
 
-  /* On the home page the nav keeps one row: Guide and Method stay in the footer. */
-  .home .nav-inner { flex-wrap: nowrap; height: 3.75rem; padding-block: 0; gap: 0.75rem; }
+  .home .sec-head { margin-bottom: 1.5rem; }
 
-  .home .nav nav { width: auto; gap: 0.75rem; }
+  .home .ledger tr { padding-block: 1rem; }
 
-  .home .nav nav .wide { display: none; }
+  .home .stair { row-gap: 2rem; }
 
-  .views .gallery { grid-template-columns: minmax(0, 1fr); }
-
-  .views .card.wide { grid-row: auto; }
-
-  .views .card:nth-child(n+2) { border-left: 0; border-top: 1px solid var(--blush); }
-
-  /* On a phone each cell puts its drawing beside its text. */
-  .anatomy .figs { grid-template-columns: minmax(0, 1fr); }
-
-  .anatomy .figs li { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); grid-template-rows: auto 1fr auto; column-gap: .75rem; align-items: start; padding: 1.25rem 1rem; border-left: 0; }
-
-  .anatomy .figs li:nth-child(n+2) { border-top: 1px solid var(--blush); }
-
-  .anatomy .mini { grid-row: 1 / 3; width: 100%; margin: 0; padding: .75rem .5rem .5rem; border: 1px solid var(--blush); border-radius: 8px; }
-
-  .anatomy h3 { margin-top: 0; font-size: 1.25rem; }
-
-  .anatomy .figs p { font-size: .875rem; }
-
-  /* The amounts run the cell's full width under the drawing and the text. */
-  .anatomy .figs .amt { grid-column: 1 / -1; padding-top: 1rem; }
-
-  .anatomy .amt span:only-child b { font-size: 1.375rem; }
-
-  /* The picture runs to the card's edges, so the phone layout draws at nearly its own size. */
-  .views .card { padding: 1.25rem 1rem 0; }
-
-  .views .card picture { margin-inline: -1rem; }
-
-  .views .card img { max-width: 24rem; margin-inline: auto; border-width: 1px 0 0; border-radius: 0; }
-
-  /* The free card's bars at 0.6 scale, low enough to sit beside its button, clear of the line above it. */
-  .plan:first-child::after { width: 4.5rem; height: 4.2rem; background-size: 1.2rem 1.89rem, 1.2rem 1.05rem, 1.2rem 4.2rem; background-position: 0 100%, 1.65rem calc(100% - 1.89rem), 100% 100%; }
-}
-
-@media (max-width: 22.4375rem) {
-  .home .nav nav a[href="#pricing"] { display: none; }
-}
-
-@media (pointer: coarse), (max-width: 480px) {
-  .wordmark, .nav nav a, .footer-inner a { min-height: 44px; }
-
-  .nav nav a:not(.button), .footer-inner a { display: inline-flex; align-items: center; }
-
-  .footer-inner { row-gap: 0; }
+  .home .stair li::before { margin-bottom: .5rem; font-size: 2.25rem; }
 }
