@@ -2543,3 +2543,20 @@ test("D143: only a fresh guess refines, and a fiscal start that already splits t
   assert.deepEqual(refineGuess({ ...guess, fiscalYearStart: 2 }, file), {});
   assert.deepEqual(refineGuess(guess, file), { grain: "month" });
 });
+
+test("T430: a count-named Units does not hide that a guessed Sales came from its values", () => {
+  const file: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "Sales Qty", type: "BIGINT", facts: fact(216) },
+    { name: "alpha", type: "DOUBLE", facts: fact(5_600) },
+  ];
+  const guess = guessSetup(file);
+  assert.equal(guess.unitsColumn, "Sales Qty");
+  assert.equal(guess.salesColumn, "");
+  const setup = { ...guess, ...refineGuess(guess, file) };
+  assert.equal(setup.salesColumn, "alpha");
+  assert.deepEqual(measureNote(file, setup), {
+    role: "sales",
+    sentence: 'No column of numbers is named like sales, so Sales is "alpha" because its values look like money.',
+  });
+});
