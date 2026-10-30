@@ -136,7 +136,7 @@ const isUnitPrice = (name: string) => {
   const parts = words(name);
   for (let i = 0; i < parts.length - 1; i++) {
     if (across(parts[i], parts[i + 1])) return true;
-    if (parts[i + 1] === "per" && across(parts[i], parts[i + 2] ?? "")) return true;
+    if ((parts[i + 1] === "per" || parts[i + 1] === "je") && across(parts[i], parts[i + 2] ?? "")) return true;
   }
   // German compounds join the words: Stückpreis is one token, so the pair
   // check above never fires. A bare Stück or Menge names no price and stays pickable.

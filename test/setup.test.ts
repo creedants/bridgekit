@@ -2789,3 +2789,42 @@ test("T453: cost compounds stay out of Units and Sales", () => {
     assert.equal(setup.salesColumn, "", name);
   }
 });
+
+test("Preis je Stk is a unit price, never Units or Sales", () => {
+  const lone: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "Preis je Stk", type: "DOUBLE", facts: fact(6_100) },
+  ];
+  const loneGuess = guessSetup(lone);
+  assert.equal(loneGuess.unitsColumn, "");
+  assert.equal(loneGuess.salesColumn, "");
+  const loneSetup = { ...loneGuess, ...refineGuess(loneGuess, lone) };
+  assert.equal(loneSetup.unitsColumn, "");
+  assert.equal(loneSetup.salesColumn, "");
+  assert.equal(loneSetup.salesFromValues, undefined);
+  assert.equal(measureNote(lone, loneSetup), null);
+  const file: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "units", type: "BIGINT", facts: fact(216) },
+    { name: "Preis je Stk", type: "DOUBLE", facts: fact(6_100) },
+    { name: "alpha", type: "DOUBLE", facts: fact(5_600) },
+  ];
+  const guess = guessSetup(file);
+  assert.equal(guess.unitsColumn, "units");
+  assert.equal(guess.salesColumn, "");
+  const setup = { ...guess, ...refineGuess(guess, file) };
+  assert.equal(setup.salesColumn, "alpha");
+  assert.equal(setup.salesFromValues, "alpha");
+  const withSales: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "Preis je Stk", type: "DOUBLE", facts: fact(6_100) },
+    { name: "sales", type: "DOUBLE", facts: fact(5_600) },
+  ];
+  const priced = guessSetup(withSales);
+  assert.equal(priced.unitsColumn, "");
+  assert.equal(priced.salesColumn, "sales");
+  assert.equal(measureNote(withSales, priced), null);
+});
