@@ -2679,3 +2679,113 @@ test("T449: a unit-price column is never offered as the alternative Sales", () =
   assert.equal(setup.salesColumn, "sales");
   assert.equal(measureNote(file, setup), null);
 });
+
+test("T452: the value fallback skips a larger trailing note for the next qualifying column", () => {
+  const file: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "units", type: "BIGINT", facts: fact(216) },
+    { name: "revenue note", type: "DOUBLE", facts: fact(6_100) },
+    { name: "alpha", type: "DOUBLE", facts: fact(5_600) },
+  ];
+  const guess = guessSetup(file);
+  assert.equal(guess.unitsColumn, "units");
+  assert.equal(guess.salesColumn, "");
+  const setup = { ...guess, ...refineGuess(guess, file) };
+  assert.equal(setup.salesColumn, "alpha");
+  assert.equal(setup.salesFromValues, "alpha");
+});
+
+test("T452: a trailing note alone leaves Sales empty through the value fallback", () => {
+  const file: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "units", type: "BIGINT", facts: fact(216) },
+    { name: "revenue note", type: "DOUBLE", facts: fact(6_100) },
+  ];
+  const guess = guessSetup(file);
+  assert.equal(guess.salesColumn, "");
+  const setup = { ...guess, ...refineGuess(guess, file) };
+  assert.equal(setup.salesColumn, "");
+  assert.equal(setup.salesFromValues, undefined);
+});
+
+test("T451: the net branch skips a tax name and the fallback picks the next column", () => {
+  const file: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "units", type: "BIGINT", facts: fact(216) },
+    { name: "Umsatzsteuer netto", type: "DOUBLE", facts: fact(6_000) },
+    { name: "alpha", type: "DOUBLE", facts: fact(5_600) },
+  ];
+  const guess = guessSetup(file);
+  assert.equal(guess.unitsColumn, "units");
+  assert.equal(guess.salesColumn, "");
+  const setup = { ...guess, ...refineGuess(guess, file) };
+  assert.equal(setup.salesColumn, "alpha");
+  assert.equal(setup.salesFromValues, "alpha");
+});
+
+test("T451: a tax net name alone leaves Sales empty", () => {
+  const file: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "units", type: "BIGINT", facts: fact(216) },
+    { name: "Umsatzsteuer netto", type: "DOUBLE", facts: fact(6_000) },
+  ];
+  const guess = guessSetup(file);
+  assert.equal(guess.salesColumn, "");
+  const setup = { ...guess, ...refineGuess(guess, file) };
+  assert.equal(setup.salesColumn, "");
+  assert.equal(setup.salesFromValues, undefined);
+});
+
+test("T453: the value fallback skips a larger stk column for the next qualifying column", () => {
+  const file: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "units", type: "BIGINT", facts: fact(216) },
+    { name: "stk", type: "DOUBLE", facts: fact(6_000) },
+    { name: "alpha", type: "DOUBLE", facts: fact(5_600) },
+  ];
+  const guess = guessSetup(file);
+  assert.equal(guess.unitsColumn, "units");
+  assert.equal(guess.salesColumn, "");
+  const setup = { ...guess, ...refineGuess(guess, file) };
+  assert.equal(setup.salesColumn, "alpha");
+  assert.equal(setup.salesFromValues, "alpha");
+});
+
+test("T453: stk alone leaves Sales empty through the value fallback", () => {
+  const file: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "units", type: "BIGINT", facts: fact(216) },
+    { name: "stk", type: "DOUBLE", facts: fact(6_000) },
+  ];
+  const guess = guessSetup(file);
+  assert.equal(guess.salesColumn, "");
+  const setup = { ...guess, ...refineGuess(guess, file) };
+  assert.equal(setup.salesColumn, "");
+  assert.equal(setup.salesFromValues, undefined);
+});
+
+test("T453: stk is Units when it is the only count-like column", () => {
+  const file: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "stk", type: "BIGINT", facts: fact(216) },
+    { name: "sales", type: "DOUBLE", facts: fact(5_600) },
+  ];
+  const setup = guessSetup(file);
+  assert.equal(setup.unitsColumn, "stk");
+  assert.equal(setup.salesColumn, "sales");
+});
+
+test("T453: cost compounds stay out of Units and Sales", () => {
+  for (const name of ["Selbstkosten", "Festkosten", "Erstkauf"]) {
+    const setup = measures(name);
+    assert.equal(setup.unitsColumn, "", name);
+    assert.equal(setup.salesColumn, "", name);
+  }
+});
