@@ -890,32 +890,41 @@ const MEASURE_SHAPE_FIELD = new RegExp(
 const MEASURE_SPACE_FIELD = /[$,\x20\t\n\r\f\v]/gu;
 const MARKER_AT_START_FIELD = new RegExp(MARKER_AT_START, "u");
 const MARKER_AT_END_FIELD = new RegExp(MARKER_AT_END, "u");
+const MARKED_PARENS_FIELD = new RegExp(MARKED_PARENS, "u");
+const CURRENCY_FIELD = /[\p{Sc}$]/u;
 
 /**
  * A field that reads as a formatted measure. The loader reads a number in SQL:
- * money() drops one currency marker at either end, folds grouping marks only
- * inside a whole group shape, and keeps a currency code glued to the digits as
- * text, while northAmerican() ignores grouping, spaces and dollar signs and
- * treats brackets and a trailing minus as the sign before it casts. The
- * pre-load guard has no database, so this repeats that reading from the same
- * pattern constants.
+ * money() unwraps a marked bracket pair, drops one currency marker at either
+ * end, treats a trailing minus as the sign, folds grouping marks only inside a
+ * whole group shape, and keeps a currency code glued to the digits as text,
+ * while northAmerican() then ignores commas, ASCII whitespace and dollar signs
+ * and treats remaining brackets as the sign. The pre-load guard has no
+ * database, so this repeats that reading from the same pattern constants, and
+ * counts a cell only when it carries currency, grouping, bracket or
+ * trailing-minus formatting as well, so a bare exponent, underscore or leading
+ * dot keeps its plain-measure decision.
  */
 function readsAsFormattedMeasure(field: string): boolean {
   let text = field.trim();
-  const bracketed = BRACKETS_FIELD.exec(text);
-  if (bracketed !== null) text = `-${bracketed[1]}`;
+  const markedParens = MARKED_PARENS_FIELD.test(text);
+  if (markedParens) text = `-${text.slice(1, -1)}`;
+  const trailingMinus = TRAILING_MINUS_FIELD.test(text);
   text = text.replace(TRAILING_MINUS_FIELD, "-$1");
   if (GLUED_CODE_FIELD.test(text)) return false;
-  const marked = text;
+  const beforeMarker = text;
   text = text.replace(MARKER_AT_START_FIELD, "$1$3").replace(MARKER_AT_END_FIELD, "$1");
-  if ((marked === text ? MARK_GROUPS_FIELD : SPACE_GROUPS_FIELD).test(text)) {
+  const marker = beforeMarker !== text;
+  const grouped = MARK_GROUPS_FIELD.test(beforeMarker) || SPACE_GROUPS_FIELD.test(beforeMarker);
+  if ((beforeMarker === text ? MARK_GROUPS_FIELD : SPACE_GROUPS_FIELD).test(text)) {
     const separator = text.includes(",") ? "." : ",";
     text = text.replace(new RegExp(MARK_FIELD, "gu"), separator).replaceAll(" ", separator);
   }
   text = text.replace(MEASURE_SPACE_FIELD, "");
   const wrapped = BRACKETS_FIELD.exec(text);
   if (wrapped !== null) text = `-${wrapped[1]}`;
-  return MEASURE_SHAPE_FIELD.test(text) && Number.isFinite(Number(text.replaceAll("_", "")));
+  const formatted = markedParens || trailingMinus || marker || grouped || wrapped !== null || CURRENCY_FIELD.test(beforeMarker);
+  return formatted && MEASURE_SHAPE_FIELD.test(text) && Number.isFinite(Number(text.replaceAll("_", "")));
 }
 
 /**
