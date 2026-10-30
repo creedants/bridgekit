@@ -941,12 +941,12 @@ function splitOutsideQuotes(record: string, separator: string, quote: string, es
 }
 
 /**
- * True when every kept logical record holds the header's field count under the
- * given delimiter, with the sniffed quote, escape, skipped rows and comment.
- * A consistent file is never a mixed file, whatever its cells hold, including
- * a tab file whose cells hold commas and semicolons.
+ * The header's field count under the given delimiter, or 0 when no kept
+ * record survives. Used to keep a third-separator file that already has
+ * columns under its sniffed separator from ever falling back to a comma or
+ * semicolon check.
  */
-export function hasConsistentRecords(prefix: string, delimiter: string, dialect?: CsvDialect): boolean {
+export function headerFieldCount(prefix: string, delimiter: string, dialect?: CsvDialect, truncated = false): number {
   const quote = dialect?.quote ?? '"';
   const escape = dialect?.escape ?? '"';
   const skipRows = dialect?.skipRows ?? 0;
@@ -954,6 +954,27 @@ export function hasConsistentRecords(prefix: string, delimiter: string, dialect?
   const kept = logicalRecords(prefix, quote, escape)
     .slice(skipRows)
     .filter((record) => record.trim() !== "" && (comment === "" || !record.trimStart().startsWith(comment)));
+  if (truncated && kept.length > 0) kept.pop();
+  if (kept.length === 0) return 0;
+  return splitOutsideQuotes(kept[0], delimiter, quote, escape).length;
+}
+
+/**
+ * True when every kept logical record holds the header's field count under the
+ * given delimiter, with the sniffed quote, escape, skipped rows and comment.
+ * A consistent file is never a mixed file, whatever its cells hold, including
+ * a tab file whose cells hold commas and semicolons. When the prefix was cut
+ * mid-file the last record may be partial and is dropped.
+ */
+export function hasConsistentRecords(prefix: string, delimiter: string, dialect?: CsvDialect, truncated = false): boolean {
+  const quote = dialect?.quote ?? '"';
+  const escape = dialect?.escape ?? '"';
+  const skipRows = dialect?.skipRows ?? 0;
+  const comment = dialect?.comment ?? "";
+  const kept = logicalRecords(prefix, quote, escape)
+    .slice(skipRows)
+    .filter((record) => record.trim() !== "" && (comment === "" || !record.trimStart().startsWith(comment)));
+  if (truncated && kept.length > 0) kept.pop();
   if (kept.length === 0) return true;
   const widths = kept.map((record) => splitOutsideQuotes(record, delimiter, quote, escape).length);
   const header = widths[0];
@@ -970,7 +991,12 @@ export function hasConsistentRecords(prefix: string, delimiter: string, dialect?
  * header count is never refused, whatever its cells hold. A one-column file, a
  * short file, and a prefix that ends inside a quoted field stay silent.
  */
-export function mixedSeparatorSentence(prefix: string, delimiter: string, dialect?: CsvDialect): string | null {
+export function mixedSeparatorSentence(
+  prefix: string,
+  delimiter: string,
+  dialect?: CsvDialect,
+  truncated = false,
+): string | null {
   const other = OTHER_SEPARATOR[delimiter];
   if (other === undefined) return null;
   const quote = dialect?.quote ?? '"';
@@ -980,6 +1006,7 @@ export function mixedSeparatorSentence(prefix: string, delimiter: string, dialec
   const kept = logicalRecords(prefix, quote, escape)
     .slice(skipRows)
     .filter((record) => record.trim() !== "" && (comment === "" || !record.trimStart().startsWith(comment)));
+  if (truncated && kept.length > 0) kept.pop();
   if (kept.length < FEWEST_MIXED_RECORDS) return null;
   const widths = kept.map((record) => splitOutsideQuotes(record, delimiter, quote, escape).length);
   const header = widths[0];

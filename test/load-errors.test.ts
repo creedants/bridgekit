@@ -390,6 +390,37 @@ test("a tab file holding both marks loads", async () => {
   assert.equal(Number(sums.u), 27);
 });
 
+test("a large tab file holding both marks loads", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap, refuseMixedSeparators } = await import("../src/app/db.ts");
+  const { readCsvFile } = await import("../src/app/encoding.ts");
+  const lines = ["period\tprice, eur\tunits"];
+  for (let index = 0; index < 4000; index++) lines.push(`2025\tsmall; red\t${(index % 5) + 1}`);
+  const text = `${lines.join("\n")}\n`;
+  assert.ok(text.length > 65536);
+  const { file, path } = await written(text, "tabbed-large.tsv");
+  const query = await openDatabase();
+  await refuseMixedSeparators(query, file, await readCsvFile(file), path);
+  await stageCsvAndSwap(query, file, "data", path);
+  const [sums] = await query("SELECT count(*)::DOUBLE AS n, sum(units) AS u FROM data");
+  assert.equal(Number(sums.n), 4000);
+  assert.equal(Number(sums.u), 12000);
+});
+
+test("a tab file with a short row loads", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap, refuseMixedSeparators } = await import("../src/app/db.ts");
+  const { readCsvFile } = await import("../src/app/encoding.ts");
+  const text = "period\tprice, eur\tunits\n2025\tsmall; red\t10\n2026\tbig; blue\t\n2025\ttiny; green\t5\n";
+  const { file, path } = await written(text, "tabbed-short.tsv");
+  const query = await openDatabase();
+  await refuseMixedSeparators(query, file, await readCsvFile(file), path);
+  await stageCsvAndSwap(query, file, "data", path);
+  const [sums] = await query("SELECT count(*)::DOUBLE AS n, sum(units) AS u FROM data");
+  assert.equal(Number(sums.n), 3);
+  assert.equal(Number(sums.u), 15);
+});
+
 test("a one-column file holding both marks loads", async () => {
   const { openDatabase } = await import("../src/duckdb.ts");
   const { stageCsvAndSwap, refuseMixedSeparators } = await import("../src/app/db.ts");

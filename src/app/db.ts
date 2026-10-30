@@ -10,6 +10,7 @@ import {
   convertFormattedNumbers,
   CSV_OPTIONS,
   hasConsistentRecords,
+  headerFieldCount,
   mixedSeparatorSentence,
   MAX_COLUMNS_READ,
   planDotColumns,
@@ -701,9 +702,13 @@ export async function refuseMixedSeparators(query: Query, file: File, reading: C
     comment: sniffed?.comment ?? "",
   };
   const tried = delimiter === ";" || delimiter === "," ? [delimiter] : [",", ";"];
-  if (tried.length === 2 && hasConsistentRecords(prefix, delimiter, dialect)) return;
+  const truncated = file.size > CSV_PREFIX_BYTES;
+  if (tried.length === 2) {
+    if (headerFieldCount(prefix, delimiter, dialect, truncated) >= 2) return;
+    if (hasConsistentRecords(prefix, delimiter, dialect, truncated)) return;
+  }
   for (const candidate of tried) {
-    const sentence = mixedSeparatorSentence(prefix, candidate, { ...dialect, delimiter: candidate });
+    const sentence = mixedSeparatorSentence(prefix, candidate, { ...dialect, delimiter: candidate }, truncated);
     if (sentence !== null) throw new Error(sentence);
   }
 }
