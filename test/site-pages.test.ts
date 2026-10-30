@@ -1168,3 +1168,72 @@ test("the home page sample figures match the engine sample bridge", async () => 
   );
   assert.deepEqual(actual, expected, "index.html step amounts differ from the engine sample bridge: use the engine figures");
 });
+
+test("the method page fallback example states the engine's figures", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE t AS SELECT * FROM (VALUES
+    ('p0', 'D-100', 'basic', 10, 100.0), ('p0', 'D-200', 'basic', 10, 200.0),
+    ('p1', 'D-100', 'basic', 10, 100.0), ('p1', 'D-200', 'basic', 10, 200.0),
+    ('p1', 'D-200', 'premium', 4, 200.0)
+  ) v(period, design, finish, units, sales)`);
+  const result = await runBridge(query, {
+    table: "t",
+    periodColumn: "period",
+    prior: "p0",
+    current: "p1",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: [
+      { name: "Design", columns: ["design"] },
+      { name: "Finish", columns: ["finish"] },
+    ],
+  });
+  const [prior] = await query(`SELECT sum(units) AS units FROM t WHERE period = 'p0'`);
+  const priorAverage = result.priorSales / Number(prior.units);
+  const effect = (key: string): number => {
+    const found = result.effects.find((candidate) => candidate.key === key);
+    assert.ok(found, `the example bridge has no ${key} effect`);
+    return found.value;
+  };
+  const volume = effect("volume");
+  const modelMix = effect("mix_1");
+  assert.equal(priorAverage, 15, "the fallback example's rows no longer average 15 last year");
+  assert.equal(volume, 60, "the fallback example's rows no longer give volume 60");
+  assert.equal(modelMix, 20, "the fallback example's rows no longer give model mix 20");
+
+  const html = readPage("method.html");
+  const section = /<h2>Worked example, fallback<\/h2>([\s\S]*?)<h2>/.exec(html);
+  assert.ok(section, "method.html has no Worked example, fallback heading: restore it");
+  const text = textOf(section[1]);
+  assert.ok(
+    text.includes("the overall prior average price is 15"),
+    "the fallback example does not state the overall prior average price: state 15",
+  );
+  assert.ok(
+    text.includes(`Its 4 units add 4 × ${priorAverage} = ${volume} to volume`),
+    `the fallback example does not put ${volume} in volume: the 4 new units are valued at the overall prior average`,
+  );
+  assert.ok(
+    text.includes(`the model mix adds 4 × (20 − 15) = ${modelMix}`),
+    `the fallback example does not put ${modelMix} in the model mix: value MD2's average 20 against the overall average`,
+  );
+  assert.ok(
+    text.includes("the finish mix adds 0"),
+    "the fallback example does not say its finish mix is 0: MD2's average price equals its basic price",
+  );
+  assert.ok(
+    !text.includes("4 × 20 = 80 to volume"),
+    "the fallback example still counts the 80 as volume: the 80 is 60 volume plus 20 model mix",
+  );
+});
+
+test("the PVM analysis page links the grouping level from the grouping item", () => {
+  const html = readPage("price-volume-mix-analysis.html");
+  const item = /Products built from options need more than one level; (see [\s\S]*?)<\/li>/.exec(html);
+  assert.ok(item, "price-volume-mix-analysis.html has no grouping item: restore the sentence about products built from options");
+  assert.equal(
+    collapseSpaces(item[1]),
+    'see <a href="/grouping-level.html">why the grouping level changes the price effect</a> and <a href="/method.html">how PVM Bridge handles this</a>.',
+    "the grouping item does not link the grouping level before the method page: restore both links in that order",
+  );
+});
