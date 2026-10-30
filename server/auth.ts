@@ -124,14 +124,13 @@ export function authOptions(env: Env, seatsFor: (workspaceId: string) => Promise
 }
 
 export async function limitMagicLinkSignIn(request: Request, rateLimit: RateLimit | undefined): Promise<Response | null> {
-  // Better Auth mounts its endpoints under the pathname of its base URL, and
-  // that URL carries AUTH_BASE_PATH only when BETTER_AUTH_URL has no path of
-  // its own: better-auth's withPath returns a URL that already has a path
-  // unchanged, and its router takes the mount point from
-  // new URL(baseURL).pathname. The endpoint's own route, signInMagicLink.path,
-  // does not move with it, so the route is matched as the end of the request
-  // path. A path Better Auth would answer 404 is counted too, the same cost
-  // server/worker.ts pays for its two email routes.
+  // Better Auth mounts its endpoints under the pathname of its base URL, and a
+  // BETTER_AUTH_URL that carries a path keeps it: withPath returns that URL
+  // unchanged, and the router strips new URL(baseURL).pathname as its base
+  // path. The endpoint's own route, signInMagicLink.path, does not move with
+  // it, so the route is matched as the end of the request path, the way
+  // server/worker.ts matches its two email routes. A path Better Auth would
+  // answer 404 is counted too, which costs the caller only its own slot.
   if (request.method !== "POST" || !new URL(request.url).pathname.endsWith(signInMagicLink.path)) return null;
   const mediaType = request.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
   if (mediaType !== "application/json") return Response.json({ message: "Content-Type must be application/json." }, { status: 415 });
