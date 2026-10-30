@@ -3,7 +3,7 @@ import mvpWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url
 import ehWasm from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
 import mvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import type { Query } from "../engine.ts";
-import { CSV_PREFIX_BYTES, ENCODING_SENTENCE, isValidUtf8, readCsvFile, type CsvReading } from "./encoding.ts";
+import { CSV_PREFIX_BYTES, ENCODING_SENTENCE, blobIsUtf8, readCsvFile, type CsvReading } from "./encoding.ts";
 import { ChunkUnavailable, lazyChunk, type ChunkSentences } from "./exportExcel.ts";
 import {
   applyDotColumns,
@@ -971,10 +971,11 @@ export async function dateOrderNote(query: Query, table: string): Promise<string
 // read_csv only reads UTF-8. When a file whose prefix passed is refused by the
 // database, its own bytes decide whether the encoding sentence replaces the
 // error: a file that is not UTF-8 anywhere shows the sentence, and any other
-// failure is shown as it is.
+// failure is shown as it is. The bytes are read in slices, and a check that
+// cannot read the file keeps the database's error.
 async function csvEncodingFailure(error: unknown, bytes?: Blob): Promise<unknown> {
   if (bytes === undefined || isOutOfMemory(error)) return error;
-  return isValidUtf8(new Uint8Array(await bytes.arrayBuffer())) ? error : new Error(ENCODING_SENTENCE);
+  return (await blobIsUtf8(bytes)) === "invalid" ? new Error(ENCODING_SENTENCE) : error;
 }
 
 export const TOO_BIG_SENTENCE =
