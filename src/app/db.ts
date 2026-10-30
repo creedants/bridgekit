@@ -281,6 +281,8 @@ interface DateShape {
   type: "DATE" | "TIMESTAMP";
   /** The mark a language decision carries, so the Data check can name it. */
   mark?: string;
+  /** True when the value is read with comma spacing normalised, so `April 13,2026` parses. */
+  normalize: boolean;
 }
 
 function dateMeasures(column: string, index: number): string {
@@ -344,6 +346,7 @@ function slashShape(counts: DateCounts, order: DateOrder): DateShape | undefined
     format: `${dayFirst ? "%d/%m" : "%m/%d"}/${year}${time}`,
     type: time === "" ? "DATE" : "TIMESTAMP",
     mark: settled ? undefined : dayFirst ? SLASH_DAY_FIRST_MARK : SLASH_MONTH_FIRST_MARK,
+    normalize: false,
   };
 }
 
@@ -355,8 +358,9 @@ function namedShape(counts: DateCounts): DateShape | undefined {
   if (month === undefined) return undefined;
   const time = timeSuffix(counts);
   if (time === undefined) return undefined;
-  const date = counts.monthFirst === counts.present ? `${month} %d, %Y` : `%d ${month} %Y`;
-  return { format: `${date}${time}`, type: time === "" ? "DATE" : "TIMESTAMP" };
+  const monthFirst = counts.monthFirst === counts.present;
+  const date = monthFirst ? `${month} %d, %Y` : `%d ${month} %Y`;
+  return { format: `${date}${time}`, type: time === "" ? "DATE" : "TIMESTAMP", normalize: monthFirst };
 }
 
 function shapeFor(counts: DateCounts, order: DateOrder): DateShape | undefined {
@@ -398,50 +402,180 @@ async function convertDateColumns(query: Query, table: string, order: DateOrder)
     const shape = shapeFor(counts, order);
     if (shape === undefined) {
       if (counts.slash === counts.present && counts.dayProof > 0 && counts.monthProof > 0) {
-        await markBothOrders(query, name, column);
+        await resolveBothProofs(query, name, column, counts);
       }
       continue;
     }
-    const field = quote(column);
-    const value = `trim(${field})`;
-    const blank = `(${field} IS NULL OR ${value} = '')`;
-    const failed = `NOT ${blank} AND try_strptime(${value}, '${shape.format}') IS NULL`;
-    const [checked] = await query(`SELECT count(*) FILTER (WHERE ${failed})::DOUBLE AS bad FROM ${name}`);
-    if (Number(checked?.bad) > 0) {
-      await markMissingDate(query, name, column, field, failed);
-      continue;
-    }
-    const parsed = `try_strptime(${value}, '${shape.format}')`;
-    const converted = shape.type === "DATE" ? `CAST(${parsed} AS DATE)` : parsed;
-    await query(`ALTER TABLE ${name} ALTER ${field} TYPE ${shape.type} USING CASE WHEN ${blank} THEN NULL ELSE ${converted} END`);
-    if (shape.mark !== undefined) await query(`COMMENT ON COLUMN ${name}.${field} IS '${shape.mark}'`);
+    await convertWithShape(query, name, column, shape);
   }
+}
+
+/**
+ * Converts a column under one shape, or leaves it text with the missing-date
+ * note when a value fails the shape. A month-name value is read with comma
+ * spacing normalised, so `April 13,2026` parses with no other change in what
+ * reads as a date.
+ */
+async function convertWithShape(query: Query, name: string, column: string, shape: DateShape): Promise<void> {
+  const field = quote(column);
+  const value = `trim(${field})`;
+  const blank = `(${field} IS NULL OR ${value} = '')`;
+  const parsed = shape.normalize ? `regexp_replace(${value}, ',\\s*', ', ')` : value;
+  const failed = `NOT ${blank} AND try_strptime(${parsed}, '${shape.format}') IS NULL`;
+  const [checked] = await query(`SELECT count(*) FILTER (WHERE ${failed})::DOUBLE AS bad FROM ${name}`);
+  if (Number(checked?.bad) > 0) {
+    await markMissingDate(query, name, column, field, failed, shape);
+    return;
+  }
+  const read = `try_strptime(${parsed}, '${shape.format}')`;
+  const converted = shape.type === "DATE" ? `CAST(${read} AS DATE)` : read;
+  await query(`ALTER TABLE ${name} ALTER ${field} TYPE ${shape.type} USING CASE WHEN ${blank} THEN NULL ELSE ${converted} END`);
+  if (shape.mark !== undefined) await query(`COMMENT ON COLUMN ${name}.${field} IS '${shape.mark}'`);
 }
 
 const textLiteral = (value: string) => `'${value.replaceAll("'", "''")}'`;
 
-/** Marks a wholly slash column that proves both orders with the first value of each. */
-async function markBothOrders(query: Query, name: string, column: string): Promise<void> {
+/**
+ * Marks a wholly slash column whose candidates prove both orders. A candidate
+ * proves an order only when it parses as a real date under that order's full
+ * date and time format, so `99/04/2026` beside `04/13/2026` proves nothing.
+ * When exactly one order proves out, the column converts under it, or stays
+ * text with the missing-date note when a value fails there. Otherwise silence.
+ */
+async function resolveBothProofs(query: Query, name: string, column: string, counts: DateCounts): Promise<void> {
+  const year = counts.wide === counts.slash ? "%Y" : counts.wide === 0 ? "%y" : undefined;
+  const time = timeSuffix(counts);
+  if (year === undefined || time === undefined) return;
+  const dayFormat = `%d/%m/${year}${time}`;
+  const monthFormat = `%m/%d/${year}${time}`;
   const field = quote(column);
   const value = `trim(${field})`;
   const slash = `regexp_matches(${value}, '${SLASH_DATE_TEXT}')`;
-  const dayProof = `${slash} AND TRY_CAST(regexp_extract(${value}, '${SLASH_DAY_PART}', 1) AS INTEGER) > 12`;
-  const monthProof = `${slash} AND TRY_CAST(regexp_extract(${value}, '${SLASH_MONTH_PART}', 1) AS INTEGER) > 12`;
+  const dayCandidate = `${slash} AND TRY_CAST(regexp_extract(${value}, '${SLASH_DAY_PART}', 1) AS INTEGER) > 12`;
+  const monthCandidate = `${slash} AND TRY_CAST(regexp_extract(${value}, '${SLASH_MONTH_PART}', 1) AS INTEGER) > 12`;
   const [row] = await query(
-    `SELECT arg_min(${value}, rowid) FILTER (WHERE ${dayProof}) AS day, arg_min(${value}, rowid) FILTER (WHERE ${monthProof}) AS month FROM ${name}`,
+    `SELECT (SELECT ${value} FROM ${name} WHERE ${dayCandidate} AND try_strptime(${value}, '${dayFormat}') IS NOT NULL ORDER BY rowid LIMIT 1) AS day, (SELECT ${value} FROM ${name} WHERE ${monthCandidate} AND try_strptime(${value}, '${monthFormat}') IS NOT NULL ORDER BY rowid LIMIT 1) AS month`,
   );
-  if (row?.day == null || row?.month == null) return;
-  await query(
-    `COMMENT ON COLUMN ${name}.${field} IS ${textLiteral(`${BOTH_ORDERS_MARK}:${String(row.day)}|${String(row.month)}`)}`,
-  );
+  if (row?.day != null && row?.month != null) {
+    await query(
+      `COMMENT ON COLUMN ${name}.${field} IS ${textLiteral(`${BOTH_ORDERS_MARK}:${String(row.day)}|${String(row.month)}`)}`,
+    );
+    return;
+  }
+  if (row?.day == null && row?.month == null) return;
+  const format = row?.day != null ? dayFormat : monthFormat;
+  await convertWithShape(query, name, column, { format, type: time === "" ? "DATE" : "TIMESTAMP", normalize: false });
 }
 
-/** Marks a date column whose values include one that does not exist with the first such value. */
-async function markMissingDate(query: Query, name: string, column: string, field: string, failed: string): Promise<void> {
+/** Two-digit years read 00 to 68 as 2000 to 2068 and 69 to 99 as 1969 to 1999. */
+function fullYear(year: number, wide: boolean): number {
+  return wide ? year : year <= 68 ? 2000 + year : 1900 + year;
+}
+
+function daysInMonth(month: number, year: number): number {
+  if (month === 2) return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28;
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
+function validTime(hour: string | undefined, minute: string | undefined, second: string | undefined, timed: boolean): boolean {
+  if (!timed) return hour === undefined;
+  if (hour === undefined || minute === undefined) return false;
+  return Number(hour) <= 23 && Number(minute) <= 59 && (second === undefined || Number(second) <= 59);
+}
+
+const MONTH_NUMBERS: Record<string, number> = {
+  jan: 1,
+  january: 1,
+  feb: 2,
+  february: 2,
+  mar: 3,
+  march: 3,
+  apr: 4,
+  april: 4,
+  may: 5,
+  jun: 6,
+  june: 6,
+  jul: 7,
+  july: 7,
+  aug: 8,
+  august: 8,
+  sep: 9,
+  sept: 9,
+  september: 9,
+  oct: 10,
+  october: 10,
+  nov: 11,
+  november: 11,
+  dec: 12,
+  december: 12,
+};
+
+/**
+ * True when a value that failed its shape matches that shape exactly but names
+ * a calendar date that cannot exist, such as February 31 or month 13 under the
+ * proved order. A spelling the shape does not accept and a bad time get no
+ * note. When unsure there is no note.
+ */
+function calendarImpossible(example: string, format: string, normalize: boolean): boolean {
+  const text = normalize ? example.replace(/,\s*/, ", ") : example;
+  const slash = /^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/;
+  const namedFirst = /^([A-Za-z]+)\s+(\d{1,2}), (\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/;
+  const namedDayFirst = /^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/;
+  let month = 0;
+  let day = 0;
+  let year = 0;
+  let wide = true;
+  let hour: string | undefined;
+  let minute: string | undefined;
+  let second: string | undefined;
+  const dayFirst = format.startsWith("%d/%m");
+  const monthFirst = format.startsWith("%m/%d");
+  if (dayFirst || monthFirst) {
+    const parts = text.match(slash);
+    if (parts === null) return false;
+    if ((parts[3].length === 4) !== format.includes("%Y")) return false;
+    const first = Number(parts[1]);
+    const secondPart = Number(parts[2]);
+    month = dayFirst ? secondPart : first;
+    day = dayFirst ? first : secondPart;
+    year = Number(parts[3]);
+    wide = parts[3].length === 4;
+    [hour, minute, second] = [parts[4], parts[5], parts[6]];
+    if (format.includes("%S") !== (second !== undefined)) return false;
+  } else {
+    const monthFirstNamed = /^%[bB] %d, %Y/.test(format);
+    const parts = text.match(monthFirstNamed ? namedFirst : namedDayFirst);
+    if (parts === null) return false;
+    const name = (monthFirstNamed ? parts[1] : parts[2]).toLowerCase();
+    const number = MONTH_NUMBERS[name];
+    if (number === undefined) return false;
+    month = number;
+    day = Number(monthFirstNamed ? parts[2] : parts[1]);
+    year = Number(parts[3]);
+    [hour, minute, second] = [parts[4], parts[5], parts[6]];
+    if (format.includes("%S") !== (second !== undefined)) return false;
+  }
+  if (!validTime(hour, minute, second, format.includes("%H"))) return false;
+  if (!(month >= 1 && month <= 12)) return true;
+  if (!(day >= 1)) return true;
+  return day > daysInMonth(month, fullYear(year, wide));
+}
+
+/** Marks a date column whose failed value is a date that does not exist with that value. */
+async function markMissingDate(
+  query: Query,
+  name: string,
+  column: string,
+  field: string,
+  failed: string,
+  shape: DateShape,
+): Promise<void> {
   const [row] = await query(`SELECT arg_min(trim(${field}), rowid) AS value FROM ${name} WHERE ${failed}`);
   if (row?.value == null) return;
+  const example = String(row.value);
+  if (!calendarImpossible(example, shape.format, shape.normalize)) return;
   await query(
-    `COMMENT ON COLUMN ${name}.${field} IS ${textLiteral(`${MISSING_DATE_MARK}:${String(row.value)}`)}`,
+    `COMMENT ON COLUMN ${name}.${field} IS ${textLiteral(`${MISSING_DATE_MARK}:${example}`)}`,
   );
 }
 
@@ -555,10 +689,19 @@ export async function refuseMixedSeparators(query: Query, file: File, reading: C
   if (!prefix.includes(",") || !prefix.includes(";")) return;
   // A file with no single separator sniffs as some third character, or as
   // nothing, so both marks are tried when the sniff names neither of them.
-  const sniffed = (await sniffDialect(query, path))?.delimiter || ",";
-  const tried = sniffed === ";" || sniffed === "," ? [sniffed] : [",", ";"];
-  for (const delimiter of tried) {
-    const sentence = mixedSeparatorSentence(prefix, delimiter);
+  const sniffed = await sniffDialect(query, path);
+  const delimiter = sniffed?.delimiter || ",";
+  const dialect: CsvDialect = {
+    delimiter,
+    quote: sniffed?.quote ?? '"',
+    escape: sniffed?.escape ?? '"',
+    header: sniffed?.header ?? true,
+    skipRows: sniffed?.skipRows ?? 0,
+    comment: sniffed?.comment ?? "",
+  };
+  const tried = delimiter === ";" || delimiter === "," ? [delimiter] : [",", ";"];
+  for (const candidate of tried) {
+    const sentence = mixedSeparatorSentence(prefix, candidate, { ...dialect, delimiter: candidate });
     if (sentence !== null) throw new Error(sentence);
   }
 }

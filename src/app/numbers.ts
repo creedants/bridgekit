@@ -858,38 +858,38 @@ export function typeOverrides(columns: readonly string[]): string {
 export const MIXED_SEPARATOR_SENTENCE = 'This file mixes ";" and "," as separators, so save it again with one separator.';
 
 const OTHER_SEPARATOR: Record<string, string> = { ",": ";", ";": "," };
-const WIDEST_SHARE = 0.6;
 const FEWEST_MIXED_RECORDS = 3;
-const FEWEST_INLINE_MIXED = 2;
-
-const DECIMAL_COMMA_VALUE = new RegExp(DECIMAL_COMMA_NUMBER);
-const NORTH_AMERICAN_VALUE = new RegExp(NORTH_AMERICAN_NUMBER);
-
-/** True when a cell is a number under either money convention, so it can carry a decimal mark. */
-function numberUnderEitherConvention(value: string): boolean {
-  const stripped = value.trim().replace(/[$\s()]/g, "");
-  return DECIMAL_COMMA_VALUE.test(stripped) || NORTH_AMERICAN_VALUE.test(stripped);
-}
 
 /**
- * The prefix's logical records: a line break outside double quotes ends one,
- * a doubled quote stands for one quote, and a blank record is dropped. The last
- * record counts only when the prefix did not stop inside a quoted field.
+ * The prefix's logical records, split with the sniffed quote and escape so a
+ * quoted line break stays inside its record. Blank records are kept for the
+ * caller to drop after skipped rows are removed. The last record counts only
+ * when the prefix did not stop inside a quoted field.
  */
-function logicalRecords(prefix: string): string[] {
+function logicalRecords(prefix: string, quote: string, escape: string): string[] {
   const records: string[] = [];
   let record = "";
   let quoted = false;
+  const useQuotes = quote !== "";
+  const doubled = escape === "" || escape === quote;
   for (let index = 0; index < prefix.length; index++) {
     const char = prefix[index];
-    if (char === '"') {
-      if (quoted && prefix[index + 1] === '"') {
-        record += '""';
+    if (useQuotes && char === quote) {
+      if (quoted && doubled && prefix[index + 1] === quote) {
+        record += quote + quote;
         index += 1;
         continue;
       }
       quoted = !quoted;
       record += char;
+      continue;
+    }
+    if (useQuotes && !doubled && quoted && char === escape) {
+      record += char;
+      if (index + 1 < prefix.length) {
+        record += prefix[index + 1];
+        index += 1;
+      }
       continue;
     }
     if (!quoted && (char === "\n" || char === "\r")) {
@@ -901,84 +901,72 @@ function logicalRecords(prefix: string): string[] {
     record += char;
   }
   if (!quoted && record !== "") records.push(record);
-  return records.filter((line) => line.trim() !== "");
+  return records;
 }
 
-/** One record split by a separator outside double quotes, and how many separators it held there. */
-function splitOutsideQuotes(record: string, separator: string): { fields: string[]; marks: number } {
+/** One record's fields split by a separator outside the sniffed quotes. */
+function splitOutsideQuotes(record: string, separator: string, quote: string, escape: string): string[] {
   const fields: string[] = [];
   let field = "";
-  let marks = 0;
   let quoted = false;
+  const useQuotes = quote !== "";
+  const doubled = escape === "" || escape === quote;
   for (let index = 0; index < record.length; index++) {
     const char = record[index];
-    if (char === '"') {
-      if (quoted && record[index + 1] === '"') {
-        field += '"';
+    if (useQuotes && char === quote) {
+      if (quoted && doubled && record[index + 1] === quote) {
+        field += char;
         index += 1;
         continue;
       }
       quoted = !quoted;
       continue;
     }
+    if (useQuotes && !doubled && quoted && char === escape) {
+      if (index + 1 < record.length) {
+        field += record[index + 1];
+        index += 1;
+      }
+      continue;
+    }
     if (!quoted && char === separator) {
       fields.push(field);
       field = "";
-      marks += 1;
       continue;
     }
     field += char;
   }
   fields.push(field);
-  return { fields, marks };
+  return fields;
 }
 
 /**
- * The sentence for a file whose records use the sniffed separator and the other
- * one, decided from the first 64 KB read as logical records so a quoted line
- * break stays inside its record. A record opened with the other separator is
- * foreign when it splits into the file's own width there. A record that keeps
- * the width but carries the other separator at least as often as the sniffed
- * one is mixed inline, unless every field is a number and the marks are decimal
- * commas. One stray cell or a short footer row stays silent.
+ * The sentence for a file whose logical records do not all hold the header's
+ * field count under the sniffed separator while the other separator gives an
+ * odd record that count with every part filled, decided from the first 64 KB
+ * with the sniffed quote, escape, skipped rows and comment. Punctuation inside
+ * cells is never evidence on its own: a file whose every kept record holds the
+ * header count is never refused, whatever its cells hold. A one-column file, a
+ * short file, and a prefix that ends inside a quoted field stay silent.
  */
-export function mixedSeparatorSentence(prefix: string, delimiter: string): string | null {
+export function mixedSeparatorSentence(prefix: string, delimiter: string, dialect?: CsvDialect): string | null {
   const other = OTHER_SEPARATOR[delimiter];
   if (other === undefined) return null;
-  const records = logicalRecords(prefix).map((record) => ({
-    sniffed: splitOutsideQuotes(record, delimiter),
-    other: splitOutsideQuotes(record, other),
-  }));
-  const widths = records.map((record) => record.sniffed.fields.length).filter((width) => width >= 2);
-  if (widths.length < FEWEST_MIXED_RECORDS) return null;
-  const counts = new Map<number, number>();
-  for (const width of widths) counts.set(width, (counts.get(width) ?? 0) + 1);
-  let widest = 0;
-  let frequency = 0;
-  for (const [width, count] of counts) {
-    if (count > frequency || (count === frequency && width > widest)) {
-      widest = width;
-      frequency = count;
-    }
+  const quote = dialect?.quote ?? '"';
+  const escape = dialect?.escape ?? '"';
+  const skipRows = dialect?.skipRows ?? 0;
+  const comment = dialect?.comment ?? "";
+  const kept = logicalRecords(prefix, quote, escape)
+    .slice(skipRows)
+    .filter((record) => record.trim() !== "" && (comment === "" || !record.trimStart().startsWith(comment)));
+  if (kept.length < FEWEST_MIXED_RECORDS) return null;
+  const widths = kept.map((record) => splitOutsideQuotes(record, delimiter, quote, escape).length);
+  const header = widths[0];
+  if (header < 2) return null;
+  for (let index = 1; index < kept.length; index++) {
+    if (widths[index] === header) continue;
+    const parts = splitOutsideQuotes(kept[index], other, quote, escape);
+    if (parts.length === header && parts.every((field) => field.trim() !== "")) return MIXED_SEPARATOR_SENTENCE;
   }
-  if (frequency < WIDEST_SHARE * widths.length) return null;
-  let foreign = 0;
-  let inline = 0;
-  for (const record of records) {
-    const width = record.sniffed.fields.length;
-    const otherFills = record.other.fields.length === widest && record.other.fields.every((field) => field.trim() !== "");
-    if (width !== widest) {
-      if (otherFills) foreign += 1;
-      continue;
-    }
-    if (
-      widest >= 3 &&
-      otherFills &&
-      record.other.marks >= record.sniffed.marks &&
-      !record.sniffed.fields.every(numberUnderEitherConvention)
-    ) {
-      inline += 1;
-    }
-  }
-  return foreign > 0 || inline >= FEWEST_INLINE_MIXED ? MIXED_SEPARATOR_SENTENCE : null;
+  return null;
 }
