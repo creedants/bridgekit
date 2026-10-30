@@ -311,6 +311,8 @@ export function refineGuess(setup: Setup, columns: readonly Column[]): Partial<S
       for (const column of columns) {
         if (!isNumeric(column.type) || column.name === setup.periodColumn || column.name === setup.unitsColumn) continue;
         if (notMoney(column.name)) continue;
+        if (TAX_DE.test(fold(column.name))) continue;
+        if (countName(column.name)) continue;
         const sum = column.facts?.sum;
         if (sum === undefined || sum < unitsSum * 2) continue;
         if (best === undefined || sum > best.sum) best = { name: column.name, sum };
