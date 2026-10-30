@@ -988,11 +988,10 @@ export function hasConsistentRecords(prefix: string, delimiter: string, dialect?
  * odd record that count with every part filled, decided from the first 64 KB
  * with the sniffed quote, escape, skipped rows and comment. A short record
  * whose other-separator split reaches the header count with every part
- * filled is still punctuation plus omitted trailing cells, not a foreign
- * record, when one of its first sniffed-width other parts holds the sniffed
- * separator, so that record is skipped and the rest are still checked.
- * Punctuation inside
- * cells is never evidence on its own: a file whose every kept record holds the
+ * filled reads as punctuation plus omitted trailing cells rather than a
+ * foreign record when one of its first sniffed-width other parts holds the
+ * sniffed separator, so that record is skipped and the rest are still
+ * checked. Punctuation inside cells is never evidence on its own: a file whose every kept record holds the
  * header count is never refused, whatever its cells hold. A one-column file
  * and a file with fewer than three complete kept records stay silent. An
  * unfinished quoted record is ignored; earlier complete records are checked.
