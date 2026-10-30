@@ -884,8 +884,12 @@ const HEADER_ONLY_CSV = "order_date,product,units,net_sales";
 
 interface HarnessDatabase {
   loads: number;
+  /** The last file loadFile accepted, so preview rows name the loaded file. */
+  table: string;
   /** When set, the next DESCRIBE waits on it. */
   describeGate: (() => Promise<void>) | null;
+  /** When set, the next LIMIT 8 preview read waits on it, then releases. */
+  previewGate: (() => Promise<void>) | null;
   /** When set, the next profile read waits on it. */
   profileGate: (() => Promise<void>) | null;
   /** How many period views were built over the month grain. */
@@ -897,7 +901,9 @@ interface HarnessDatabase {
 function harnessDatabase(): HarnessDatabase {
   const database: HarnessDatabase = {
     loads: 0,
+    table: "",
     describeGate: null,
+    previewGate: null,
     profileGate: null,
     monthViews: 0,
     async query(sql: string) {
@@ -914,7 +920,19 @@ function harnessDatabase(): HarnessDatabase {
       }
       if (sql.includes("duckdb_tables()")) return [];
       if (sql.includes("count(*)::DOUBLE AS n FROM")) return [{ n: 4 }];
-      if (sql.includes("SELECT * FROM")) return [];
+      if (sql.includes("SELECT * FROM")) {
+        // Only the preview read carries LIMIT 8; every other SELECT * passes through.
+        if (sql.includes("LIMIT 8") && database.previewGate !== null) {
+          const gate = database.previewGate;
+          database.previewGate = null;
+          await gate();
+        }
+        const label = database.table || "A-100.csv";
+        return [
+          { order_date: "2026-01-01", other_date: "2025-01-01", product: label, units: 2, net_sales: 20 },
+          { order_date: "2026-02-01", other_date: "2026-01-01", product: label, units: 3, net_sales: 33 },
+        ];
+      }
       if (sql.includes(" AS c0")) {
         if (database.profileGate !== null) {
           const gate = database.profileGate;
@@ -945,9 +963,11 @@ function harnessDatabase(): HarnessDatabase {
       if (sql.includes("ranked")) return [{ p: "2026", numeric: true }];
       return [];
     },
-    async loadFile() {
+    async loadFile(file: unknown) {
       database.loads += 1;
-      if (database.loads === 3) throw new Error("This file has no data rows.");
+      const name = file instanceof File ? file.name : String((file as { name?: unknown } | null)?.name ?? "");
+      if (/header.only/i.test(name)) throw new Error("This file has no data rows.");
+      database.table = name;
       return 0;
     },
   };
@@ -1072,6 +1092,193 @@ test("the banner stays through the fallback's refinement until a visitor change"
     });
     await flush();
     assert.equal(harnessBanner(container), "", "a visitor's Compare by change clears the refusal");
+  } finally {
+    await React.act(async () => {
+      root.unmount();
+    });
+    doc.body.removeChild(container as unknown as HarnessNode);
+  }
+});
+
+function harnessCaption(container: HarnessNode): string {
+  return harnessNodes(container, "SPAN")
+    .map((node) => node.textContent)
+    .join(" ");
+}
+
+function harnessPreview(container: HarnessNode): string {
+  return harnessNodes(container, "TD")
+    .map((node) => node.textContent)
+    .join("|");
+}
+
+test("a refused load never shows one file's name over another file's rows", async () => {
+  const doc = installHarnessDom();
+  const React = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const database = harnessDatabase();
+  (globalThis as unknown as { __bridgekitDatabase: HarnessDatabase }).__bridgekitDatabase = database;
+  const { App } = await import("../src/app/App.tsx");
+  const container = doc.createElement("div");
+  doc.body.appendChild(container as unknown as HarnessNode);
+  const root = createRoot(container as unknown as Element);
+  const flush = async () => {
+    for (let i = 0; i < 8; i += 1) await React.act(async () => {});
+  };
+  const until = async (check: () => boolean, what: string) => {
+    for (let i = 0; i < 300; i += 1) {
+      if (check()) return;
+      await React.act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+    throw new Error(
+      `timed out waiting for ${what}: banner ${harnessBanner(container)} caption ${harnessCaption(container)} preview ${harnessPreview(container)}`,
+    );
+  };
+  const pick = async (name: string, text: string) => {
+    const input = harnessNodes(container, "INPUT").find(
+      (node) => node.getAttribute("type") === "file" || (node as unknown as { type?: string }).type === "file",
+    );
+    assert.ok(input, "a file picker is on screen");
+    await React.act(async () => {
+      (input as unknown as { files: unknown }).files = [new File([text], name, { type: "text/csv" })];
+      input.value = "";
+      input.dispatchEvent({
+        type: "change",
+        bubbles: true,
+        target: input,
+        preventDefault() {},
+        stopPropagation() {},
+      });
+    });
+    await flush();
+  };
+  try {
+    await React.act(async () => {
+      root.render(React.createElement(App));
+    });
+    await flush();
+
+    await pick("A-100.csv", GOOD_CSV);
+    await until(
+      () => harnessCaption(container).includes("A-100.csv") && harnessPreview(container).includes("A-100.csv"),
+      "the first load",
+    );
+
+    // The copy's preview read is held so the refused file lands while it is in flight.
+    let releasePreview: () => void = () => {};
+    database.previewGate = () => new Promise<void>((resolve) => (releasePreview = resolve));
+    await pick("A-100 copy.csv", GOOD_CSV);
+    await until(() => database.previewGate === null, "the copy's preview read to start");
+    await pick("A-100 header only.csv", HEADER_ONLY_CSV);
+
+    await until(() => harnessBanner(container) === "This file has no data rows.", "the refused file's error");
+    await until(() => harnessCaption(container).includes("A-100 copy.csv"), "the copy's name");
+
+    releasePreview();
+    await until(() => harnessCaption(container).includes("A-100 copy.csv"), "the copy's name after release");
+    await flush();
+    assert.ok(
+      harnessPreview(container).includes("A-100 copy.csv"),
+      `the preview shows the copy, but held ${harnessPreview(container)}`,
+    );
+    assert.ok(
+      !harnessPreview(container).includes("A-100.csv"),
+      `the preview shows only the copy, but held ${harnessPreview(container)}`,
+    );
+    assert.equal(harnessBanner(container), "This file has no data rows.", "the refusal is still on screen");
+  } finally {
+    await React.act(async () => {
+      root.unmount();
+    });
+    doc.body.removeChild(container as unknown as HarnessNode);
+  }
+});
+
+test("a Prior or Current pick clears a refused load's error", async () => {
+  const doc = installHarnessDom();
+  const React = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const database = harnessDatabase();
+  (globalThis as unknown as { __bridgekitDatabase: HarnessDatabase }).__bridgekitDatabase = database;
+  const { App } = await import("../src/app/App.tsx");
+  const container = doc.createElement("div");
+  doc.body.appendChild(container as unknown as HarnessNode);
+  const root = createRoot(container as unknown as Element);
+  const flush = async () => {
+    for (let i = 0; i < 8; i += 1) await React.act(async () => {});
+  };
+  const until = async (check: () => boolean, what: string) => {
+    for (let i = 0; i < 300; i += 1) {
+      if (check()) return;
+      await React.act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+    throw new Error(`timed out waiting for ${what}: banner ${harnessBanner(container)}`);
+  };
+  const pick = async (name: string, text: string) => {
+    const input = harnessNodes(container, "INPUT").find(
+      (node) => node.getAttribute("type") === "file" || (node as unknown as { type?: string }).type === "file",
+    );
+    assert.ok(input, "a file picker is on screen");
+    await React.act(async () => {
+      (input as unknown as { files: unknown }).files = [new File([text], name, { type: "text/csv" })];
+      input.value = "";
+      input.dispatchEvent({
+        type: "change",
+        bubbles: true,
+        target: input,
+        preventDefault() {},
+        stopPropagation() {},
+      });
+    });
+    await flush();
+  };
+  // The Prior and Current pickers offer the loaded periods only.
+  const periodSelects = () =>
+    harnessNodes(container, "SELECT").filter((node) => harnessOptions(node).join("|") === "2026");
+  const changeSelect = async (select: HarnessElement, value: string) => {
+    await React.act(async () => {
+      select.value = value;
+      select.dispatchEvent({
+        type: "change",
+        bubbles: true,
+        target: select,
+        preventDefault() {},
+        stopPropagation() {},
+      });
+    });
+    await flush();
+  };
+  try {
+    await React.act(async () => {
+      root.render(React.createElement(App));
+    });
+    await flush();
+
+    await pick("A-100.csv", GOOD_CSV);
+    await until(
+      () => periodSelects().length === 2 && harnessBanner(container) === "",
+      "the first load with its period pickers",
+    );
+
+    await pick("A-100 header only.csv", HEADER_ONLY_CSV);
+    await until(() => harnessBanner(container) === "This file has no data rows.", "the refused file's error");
+
+    const prior = periodSelects()[0];
+    assert.ok(prior, "the Prior picker is on screen");
+    await changeSelect(prior, "2026");
+    assert.equal(harnessBanner(container), "", "a Prior pick clears the refusal");
+
+    await pick("A-100 header only.csv", HEADER_ONLY_CSV);
+    await until(() => harnessBanner(container) === "This file has no data rows.", "the second refusal");
+
+    const current = periodSelects()[1];
+    assert.ok(current, "the Current picker is on screen");
+    await changeSelect(current, "");
+    assert.equal(harnessBanner(container), "", "a Current pick clears the refusal");
   } finally {
     await React.act(async () => {
       root.unmount();

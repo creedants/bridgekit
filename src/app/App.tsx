@@ -115,6 +115,31 @@ export async function loadSheetNote(q: Query, table: string): Promise<string | n
   return workbookSheetNote(row?.comment);
 }
 
+/** One load's display metadata, kept per table number so a refused load can fall back to it. */
+export interface LoadMeta {
+  name: string;
+  preset?: Sample;
+  blanks: number;
+}
+
+/** Everything one load publishes to the page, read before anything is shown. */
+export interface TableRead {
+  columns: Column[];
+  rowCount: number;
+  note: string | null;
+  preview: Record<string, unknown>[];
+}
+
+/** Reads one load's display state from the loaded table without touching React state. */
+export async function readTable(q: Query): Promise<TableRead> {
+  const described = await q(`DESCRIBE ${quote(TABLE)}`);
+  const columns = described.map((row) => ({ name: String(row.column_name), type: String(row.column_type) }));
+  const [count] = await q(`SELECT count(*)::DOUBLE AS n FROM ${quote(TABLE)}`);
+  const note = await loadSheetNote(q, TABLE).catch(() => null);
+  const preview = await q(`SELECT * FROM ${quote(TABLE)} LIMIT 8`);
+  return { columns, rowCount: Number(count.n), note, preview };
+}
+
 /** A setup for Save setup to file, without the in-session guess markers. */
 export function persistedSetupForFile(setup: Setup): Omit<Setup, "fresh" | "salesFromValues"> {
   const { fresh: _fresh, salesFromValues: _salesFromValues, ...persisted } = setup;
@@ -329,7 +354,7 @@ export function App() {
   // The one rebuild a refused load's banner is allowed to survive.
   const [refusalHold] = useState(createRefusalHold);
   // What each table number holds, so the page can name the rows that are in the table.
-  const loads = useRef(new Map<number, { name: string; preset?: Sample; blanks: number }>());
+  const loads = useRef(new Map<number, LoadMeta>());
   // The load whose name, columns and setup afterLoad last put in state, for the refused-load fallback.
   const published = useRef(0);
   // The load the visitor has actually been shown, which the paste question reads.
@@ -382,7 +407,7 @@ export function App() {
     write: () => Promise<number>,
   ) {
     const claim = tables.claim();
-    const meta = { name, preset, blanks: 0 };
+    const meta: LoadMeta = { name, preset, blanks: 0 };
     loads.current.set(claim.n, meta);
     dispatch({ type: "read", load: claim.n, ...read });
     clearBanner();
@@ -390,8 +415,7 @@ export function App() {
       const outcome = await claim.write(write);
       if (outcome.status === "superseded") return;
       meta.blanks = outcome.value;
-      setFormulaBlanks(outcome.value);
-      await afterLoad(claim.n, name, preset, () => claim.current());
+      await afterLoad(claim.n, meta, () => claim.current());
       dispatch({ type: "loaded", load: claim.n });
     } catch (e) {
       if (!claim.current()) return;
@@ -405,8 +429,7 @@ export function App() {
             ? loads.current.get(held.n)
             : undefined;
         if (held && shown) {
-          setFormulaBlanks(shown.blanks);
-          await afterLoad(held.n, shown.name, shown.preset, () => claim.current(), true);
+          await afterLoad(held.n, shown, () => claim.current(), true);
         }
       } finally {
         dispatch({ type: "failed", load: claim.n });
@@ -414,38 +437,39 @@ export function App() {
     }
   }
 
-  async function afterLoad(load: number, name: string, preset: Sample | undefined, current: () => boolean, keepRefusal = false) {
+  /** Installs one load's name, columns, count and preview together, so the page never shows a mix of two loads. */
+  function publish(load: number, meta: LoadMeta, read: TableRead, keepRefusal = false) {
+    const saved = meta.preset ? null : loadSavedSetup(read.columns);
+    const next = meta.preset?.setup ?? saved ?? guessSetup(read.columns);
+    setColumns(read.columns);
+    setRowCount(read.rowCount);
+    setSource(meta.name);
+    setSheetNote(read.note);
+    setFromSample(!!meta.preset);
+    setFormulaBlanks(meta.blanks);
+    setLoad(load);
+    published.current = load;
+    setSetup(next);
+    // A refused load's banner survives this fallback rebuild; onRefine holds the refinement's.
+    if (keepRefusal) refusalHold.hold(viewOf(load, next));
+    setSuggestedPeriods(meta.preset?.periods ?? null);
+    writesSetup.current = meta.preset?.savesSetup ?? true;
+    setNotice(saved ? "Restored the setup you last used with these columns." : "");
+    setSetupError("");
+    setPreview(read.preview);
+    setRollups([]);
+  }
+
+  async function afterLoad(load: number, meta: LoadMeta, current: () => boolean, keepRefusal = false) {
     // The table has already been replaced, so a run from the file before it must
     // not survive a load that a newer load superseded.
     setRun(null);
     const q = await query();
-    const described = await q(`DESCRIBE ${quote(TABLE)}`);
-    const found = described.map((row) => ({ name: String(row.column_name), type: String(row.column_type) }));
-    const [count] = await q(`SELECT count(*)::DOUBLE AS n FROM ${quote(TABLE)}`);
-    const note = await loadSheetNote(q, TABLE).catch(() => null);
+    const read = await readTable(q);
     if (!current()) return;
-    const saved = preset ? null : loadSavedSetup(found);
-    setColumns(found);
-    setRowCount(Number(count.n));
-    setSource(name);
-    setSheetNote(note);
-    setFromSample(!!preset);
-    setLoad(load);
-    published.current = load;
-    const next = preset?.setup ?? saved ?? guessSetup(found);
-    setSetup(next);
-    // A refused load's banner survives this fallback rebuild; onRefine holds the refinement's.
-    if (keepRefusal) refusalHold.hold(viewOf(load, next));
-    setSuggestedPeriods(preset?.periods ?? null);
-    writesSetup.current = preset?.savesSetup ?? true;
-    setNotice(saved ? "Restored the setup you last used with these columns." : "");
-    setSetupError("");
-    const previewRows = await q(`SELECT * FROM ${quote(TABLE)} LIMIT 8`);
-    if (!current()) return;
-    setPreview(previewRows);
-    setRollups([]);
+    publish(load, meta, read, keepRefusal);
     // Profiling is a convenience; the tool works without it.
-    profileFile(q, found, current, (profile) => {
+    profileFile(q, read.columns, current, (profile) => {
       setColumns(profile.columns);
       setRollups(profile.rollups);
     }).catch(() => {});
@@ -862,8 +886,14 @@ export function App() {
                 if (banner?.refusal && nextView !== view) refusalHold.hold(nextView);
                 setSetup(next);
               }}
-              onPrior={setPrior}
-              onCurrent={setCurrent}
+              onPrior={(value) => {
+                clearBanner();
+                setPrior(value);
+              }}
+              onCurrent={(value) => {
+                clearBanner();
+                setCurrent(value);
+              }}
             />
             <div className="run">
               <button className="primary" disabled={!canCalculate} onClick={() => calculate(problemPeriods)}>
