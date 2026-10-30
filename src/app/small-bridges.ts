@@ -259,12 +259,12 @@ export type GridAction = "clear" | "keep" | "calculate";
 /**
  * The grid is calculated for the bridge on screen. While that bridge is out
  * of date, a grid that already belongs to it stays, and any other column waits.
+ * A fresh bridge keeps only the grid for the column now chosen.
  */
 export function gridAction(column: string, stale: boolean, shownFor: string): GridAction {
   if (column === "") return "clear";
-  if (!stale) return "calculate";
-  if (shownFor === column) return "keep";
-  return "clear";
+  if (stale) return shownFor === "" ? "clear" : "keep";
+  return shownFor === column ? "keep" : "calculate";
 }
 
 /** The one sentence shown when the split cannot be calculated. */

@@ -106,7 +106,8 @@ export function SmallBridges(props: { run: Run; query: () => Promise<Query>; fre
     wanted.current = column;
     chosen = column;
     const next = applyPhase({ type: "inputs", column, stale: !props.fresh });
-    if (next.kind !== "ready" && openRef.current !== null) {
+    const nextPaint = paintSplit({ phase: next, column, stale: !props.fresh });
+    if (nextPaint.view !== "grid" && openRef.current !== null) {
       pendingFocus.current = "select";
       setOpen(null);
     }
