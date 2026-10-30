@@ -279,3 +279,255 @@ test("ISO dates stay unchanged and the note is null", async () => {
   );
   assert.equal(await dateOrderNote(query, "iso"), null);
 });
+
+test("Excel-style slash timestamps become timestamps with year, quarter and month periods", async () => {
+  const file = await csvPath("period,day\n2025,12/13/09 9:58\n2026,12/1/09 7:45\n");
+  const query = await openDatabase();
+  await readCsvTable(query, "excelstyle", file);
+  const described = await query("DESCRIBE excelstyle");
+  assert.equal(String(described.find((row) => String(row.column_name) === "day")?.column_type), "TIMESTAMP");
+  const rows = await query(
+    "SELECT CAST(day AS VARCHAR) AS day, year(day) AS y, quarter(day) AS q, month(day) AS m FROM excelstyle ORDER BY y, m, day",
+  );
+  assert.deepEqual(
+    rows.map((row) => [String(row.day), Number(row.y), Number(row.q), Number(row.m)]),
+    [
+      ["2009-12-01 07:45:00", 2009, 4, 12],
+      ["2009-12-13 09:58:00", 2009, 4, 12],
+    ],
+  );
+});
+
+test("a day past twelve that appears after the sniff sample loads without a conversion error", async () => {
+  const lines = ["period,units,day"];
+  for (let index = 0; index < 20_600; index++) {
+    const day = index < 20_480 ? `12/${(index % 12) + 1}/09 7:45` : "12/13/09 9:58";
+    lines.push(`2025,${(index % 5) + 1},${day}`);
+  }
+  const file = await csvPath(`${lines.join("\n")}\n`);
+  const query = await openDatabase();
+  await readCsvTable(query, "late_day", file);
+  const [counts] = await query("SELECT count(*)::DOUBLE AS n FROM late_day");
+  assert.equal(Number(counts.n), 20_600);
+  const described = await query("DESCRIBE late_day");
+  assert.equal(String(described.find((row) => String(row.column_name) === "day")?.column_type), "TIMESTAMP");
+  const late = await query("SELECT CAST(day AS VARCHAR) AS day FROM late_day WHERE rowid = 20599");
+  assert.equal(String(late[0].day), "2009-12-13 09:58:00");
+});
+
+test("a four-digit slash timestamp with no proof follows the browser's order and says so", async () => {
+  const file = await csvPath("period,day\n2025,12/1/2009 7:45\n2026,1/2/2009 6:30\n");
+  const query = await openDatabase();
+  await readCsvTable(query, "four_digit", file);
+  const described = await query("DESCRIBE four_digit");
+  assert.equal(String(described.find((row) => String(row.column_name) === "day")?.column_type), "TIMESTAMP");
+  const rows = await query("SELECT CAST(day AS VARCHAR) AS day FROM four_digit ORDER BY day");
+  assert.deepEqual(
+    rows.map((row) => String(row.day)),
+    ["2009-01-02 06:30:00", "2009-12-01 07:45:00"],
+  );
+  assert.equal(
+    await dateOrderNote(query, "four_digit"),
+    "1 column with slash dates was read month-first, as this browser's language expects: day.",
+  );
+});
+
+test("a day-first text date becomes a date and a monthly slash date stays day-first", async () => {
+  const dayFirst = await csvPath("period,day\n2025,31/03/2026\n2026,01/04/2026\n");
+  const withTime = await csvPath("period,day\n2025,31/03/2026 8:00\n2026,01/04/2026 9:30\n");
+  const query = await openDatabase();
+  await readCsvTable(query, "day_first", dayFirst);
+  await readCsvTable(query, "day_first_time", withTime);
+  const types = async (table: string) =>
+    (await query(`DESCRIBE ${table}`)).map((row) => [String(row.column_name), String(row.column_type)]);
+  assert.deepEqual(await types("day_first"), [
+    ["period", "BIGINT"],
+    ["day", "DATE"],
+  ]);
+  const plain = await query("SELECT CAST(day AS VARCHAR) AS day FROM day_first ORDER BY day");
+  assert.deepEqual(
+    plain.map((row) => String(row.day)),
+    ["2026-03-31", "2026-04-01"],
+  );
+  assert.deepEqual(await types("day_first_time"), [
+    ["period", "BIGINT"],
+    ["day", "TIMESTAMP"],
+  ]);
+  const timed = await query("SELECT CAST(day AS VARCHAR) AS day FROM day_first_time ORDER BY day");
+  assert.deepEqual(
+    timed.map((row) => String(row.day)),
+    ["2026-03-31 08:00:00", "2026-04-01 09:30:00"],
+  );
+});
+
+test("an English month-name date becomes a date", async () => {
+  const monthFirst = await csvPath('period,day\n2025,"Mar 31, 2026"\n2026,"Apr 1, 2026"\n');
+  const dayFirst = await csvPath("period,day\n2025,31 Mar 2026\n2026,1 Apr 2026\n");
+  const query = await openDatabase();
+  await readCsvTable(query, "month_name", monthFirst);
+  await readCsvTable(query, "day_name", dayFirst);
+  for (const table of ["month_name", "day_name"]) {
+    const described = await query(`DESCRIBE ${table}`);
+    assert.equal(String(described.find((row) => String(row.column_name) === "day")?.column_type), "DATE", table);
+    const rows = await query(`SELECT CAST(day AS VARCHAR) AS day FROM ${table} ORDER BY day`);
+    assert.deepEqual(
+      rows.map((row) => String(row.day)),
+      ["2026-03-31", "2026-04-01"],
+      table,
+    );
+  }
+});
+
+test("an unsettled slash column follows the passed order and says the language decided", async () => {
+  const file = await csvPath("period,day\n2025,03/04/2026 8:00\n2026,05/06/2026 9:30\n");
+  const query = await openDatabase();
+  await readCsvTable(query, "unsettled_day", file, false, "day first");
+  await readCsvTable(query, "unsettled_month", file);
+  const values = async (table: string) =>
+    (await query(`SELECT CAST(day AS VARCHAR) AS day FROM ${table} ORDER BY day`)).map((row) => String(row.day));
+  assert.deepEqual(await values("unsettled_day"), ["2026-04-03 08:00:00", "2026-06-05 09:30:00"]);
+  assert.equal(
+    await dateOrderNote(query, "unsettled_day"),
+    "1 column with slash dates was read day-first, as this browser's language expects: day.",
+  );
+  assert.deepEqual(await values("unsettled_month"), ["2026-03-04 08:00:00", "2026-05-06 09:30:00"]);
+  assert.equal(
+    await dateOrderNote(query, "unsettled_month"),
+    "1 column with slash dates was read month-first, as this browser's language expects: day.",
+  );
+});
+
+test("a column with a first part and a second part both above twelve stays text", async () => {
+  const file = await csvPath("period,day\n2025,13/04/2026\n2026,04/13/2026\n");
+  const query = await openDatabase();
+  await readCsvTable(query, "both_proofs", file);
+  const described = await query("DESCRIBE both_proofs");
+  assert.equal(String(described.find((row) => String(row.column_name) === "day")?.column_type), "VARCHAR");
+  const rows = await query("SELECT day FROM both_proofs ORDER BY rowid");
+  assert.deepEqual(
+    rows.map((row) => String(row.day)),
+    ["13/04/2026", "04/13/2026"],
+  );
+  assert.equal(
+    await dateOrderNote(query, "both_proofs"),
+    "day has slash dates in both orders, such as 13/04/2026 and 04/13/2026, so it was read as text.",
+  );
+});
+
+test("an ordinary text column with one date-like value gets no date note", async () => {
+  const file = await csvPath("period,note\n2025,written 03/04/2025\n2026,plain\n");
+  const query = await openDatabase();
+  await readCsvTable(query, "few_dates", file);
+  const described = await query("DESCRIBE few_dates");
+  assert.equal(String(described.find((row) => String(row.column_name) === "note")?.column_type), "VARCHAR");
+  assert.equal(await dateOrderNote(query, "few_dates"), null);
+});
+
+test("a slash date column with a date that does not exist stays text and says so", async () => {
+  const file = await csvPath("period,day\n2025,31/02/2026\n2026,28/02/2026\n");
+  const query = await openDatabase();
+  await readCsvTable(query, "missing_date", file);
+  const described = await query("DESCRIBE missing_date");
+  assert.equal(String(described.find((row) => String(row.column_name) === "day")?.column_type), "VARCHAR");
+  assert.equal(
+    await dateOrderNote(query, "missing_date"),
+    "day has a date that does not exist, such as 31/02/2026, so it was read as text.",
+  );
+});
+
+test("a two-digit-year timestamp reads its own year and month", async () => {
+  const file = await csvPath("period,day\n2025,12/13/09 9:58\n");
+  const query = await openDatabase();
+  await readCsvTable(query, "short_year", file);
+  const described = await query("DESCRIBE short_year");
+  assert.equal(String(described.find((row) => String(row.column_name) === "day")?.column_type), "TIMESTAMP");
+  const [row] = await query("SELECT CAST(day AS VARCHAR) AS day, year(day) AS y, month(day) AS m FROM short_year");
+  assert.equal(String(row.day), "2009-12-13 09:58:00");
+  assert.equal(Number(row.y), 2009);
+  assert.equal(Number(row.m), 12);
+});
+
+test("a day-13 timestamp past the sniff sample is converted by the retry", async () => {
+  const lines = ["period,units,day"];
+  for (let index = 0; index < 20_600; index++) {
+    lines.push(`2025,${(index % 5) + 1},${index < 20_480 ? "01/02/09 7:45" : "12/13/09 9:58"}`);
+  }
+  const file = await csvPath(`${lines.join("\n")}\n`);
+  const query = await openDatabase();
+  await readCsvTable(query, "late_retry", file);
+  const described = await query("DESCRIBE late_retry");
+  assert.equal(String(described.find((row) => String(row.column_name) === "day")?.column_type), "TIMESTAMP");
+  const late = await query("SELECT CAST(day AS VARCHAR) AS day FROM late_retry WHERE rowid = 20599");
+  assert.equal(String(late[0].day), "2009-12-13 09:58:00");
+});
+
+test("an ambiguous four-digit timestamp follows the browser and names the language", async () => {
+  const file = await csvPath("period,day\n2025,03/04/2026 8:00\n2026,05/06/2026 9:30\n");
+  const query = await openDatabase();
+  await readCsvTable(query, "ambiguous_stamp", file);
+  const described = await query("DESCRIBE ambiguous_stamp");
+  assert.equal(String(described.find((row) => String(row.column_name) === "day")?.column_type), "TIMESTAMP");
+  const rows = await query("SELECT CAST(day AS VARCHAR) AS day FROM ambiguous_stamp ORDER BY day");
+  assert.deepEqual(
+    rows.map((row) => String(row.day)),
+    ["2026-03-04 08:00:00", "2026-05-06 09:30:00"],
+  );
+  assert.equal(
+    await dateOrderNote(query, "ambiguous_stamp"),
+    "1 column with slash dates was read month-first, as this browser's language expects: day.",
+  );
+});
+
+test("an untimed day-first column becomes a DATE, not a timestamp", async () => {
+  const lines = ["period,units,stamp,day"];
+  for (let index = 0; index < 20_600; index++) {
+    const stamp = index === 20_480 ? "12/13/09 9:58" : `12/${(index % 12) + 1}/09 7:45`;
+    const day = index < 20_480 ? "03/04/2026" : index === 20_480 ? "31/03/2026" : "01/04/2026";
+    lines.push(`2025,${(index % 5) + 1},${stamp},${day}`);
+  }
+  const file = await csvPath(`${lines.join("\n")}\n`);
+  const query = await openDatabase();
+  await readCsvTable(query, "untimed_day_first", file);
+  const described = await query("DESCRIBE untimed_day_first");
+  assert.equal(String(described.find((row) => String(row.column_name) === "day")?.column_type), "DATE");
+  const rows = await query("SELECT CAST(day AS VARCHAR) AS day FROM untimed_day_first WHERE rowid IN (0, 20480, 20599) ORDER BY rowid");
+  assert.deepEqual(
+    rows.map((row) => String(row.day)),
+    ["2026-04-03", "2026-03-31", "2026-04-01"],
+  );
+});
+
+test("an impossible slash value beside a valid month-first date gets no both-orders note", async () => {
+  const file = await csvPath("period,day\n2025,99/04/2026\n2026,04/13/2026\n");
+  const query = await openDatabase();
+  await readCsvTable(query, "bad_proof", file);
+  const described = await query("DESCRIBE bad_proof");
+  assert.equal(String(described.find((row) => String(row.column_name) === "day")?.column_type), "VARCHAR");
+  assert.equal(
+    await dateOrderNote(query, "bad_proof"),
+    "day has a date that does not exist, such as 99/04/2026, so it was read as text.",
+  );
+});
+
+test("a month name without a space after the comma reads as a date", async () => {
+  const file = await csvPath('period,day\n2025,"April 13,2026"\n2026,"April 13,2026"\n');
+  const query = await openDatabase();
+  await readCsvTable(query, "tight_comma", file);
+  const described = await query("DESCRIBE tight_comma");
+  assert.equal(String(described.find((row) => String(row.column_name) === "day")?.column_type), "DATE");
+  const rows = await query("SELECT CAST(day AS VARCHAR) AS day FROM tight_comma ORDER BY rowid");
+  assert.deepEqual(
+    rows.map((row) => String(row.day)),
+    ["2026-04-13", "2026-04-13"],
+  );
+  assert.equal(await dateOrderNote(query, "tight_comma"), null);
+});
+
+test("a bad time stays text with no date note", async () => {
+  const file = await csvPath("period,day\n2025,04/13/2026 25:00\n2026,04/14/2026 12:00\n");
+  const query = await openDatabase();
+  await readCsvTable(query, "bad_time", file);
+  const described = await query("DESCRIBE bad_time");
+  assert.equal(String(described.find((row) => String(row.column_name) === "day")?.column_type), "VARCHAR");
+  assert.equal(await dateOrderNote(query, "bad_time"), null);
+});

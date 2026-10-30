@@ -3,7 +3,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { test } from "node:test";
-import { convertFormattedNumbers, decimalCommaNote } from "../src/app/numbers.ts";
+import { convertFormattedNumbers, decimalCommaNote, readsAsNumber } from "../src/app/numbers.ts";
 import { isNumeric } from "../src/app/setup.ts";
 import { openDatabase } from "../src/duckdb.ts";
 import { runBridge, type Query } from "../src/engine.ts";
@@ -899,3 +899,92 @@ test("wasm reads the decimal-comma file and keeps the column comment", async () 
   assert.deepEqual(await comments(), ["net_sales", "units"]);
 });
 
+
+test("money written with many dot groups and a decimal comma reads as numbers", async () => {
+  const query = await openDatabase();
+  await createText(query, "euro_groups", {
+    euro: ["1.979.849,56", "12.345.678"],
+    grouped: ["1,000.50", "1,234,567"],
+    decorated: ["€600", "(520)"],
+  });
+  await convertFormattedNumbers(query, "euro_groups");
+  assert.equal(await columnType(query, "euro_groups", "euro"), "DOUBLE");
+  expectNumbers(await columnValues(query, "euro_groups", "euro"), [1979849.56, 12345678]);
+  assert.equal(await columnType(query, "euro_groups", "grouped"), "DOUBLE");
+  expectNumbers(await columnValues(query, "euro_groups", "grouped"), [1000.5, 1234567]);
+  assert.equal(await columnType(query, "euro_groups", "decorated"), "DOUBLE");
+  expectNumbers(await columnValues(query, "euro_groups", "decorated"), [600, -520]);
+  assert.equal(
+    await decimalCommaNote(query, "euro_groups"),
+    ONE + " " + GROUPED("grouped", "1,000.50", "1000.5") + " " + CURRENCY("decorated", "€600", "600"),
+  );
+});
+
+test("a column that mixes two money styles names the value and its row", async () => {
+  const directory = await mkdtemp("/tmp/bridgekit-comma-");
+  const file = path.join(directory, "styles.csv");
+  const text = 'period,amount\n2025,"1,000.50"\n2026,"1.300,75"\n';
+  await writeFile(file, text);
+  const query = await openDatabase();
+  await query(`CREATE TABLE styles AS SELECT * FROM read_csv(${sqlText(file)})`);
+  await convertFormattedNumbers(query, "styles", { kind: "csv", file: new File([text], "styles.csv") });
+  assert.equal(await columnType(query, "styles", "amount"), "VARCHAR");
+  assert.deepEqual(await columnValues(query, "styles", "amount"), ["1,000.50", "1.300,75"]);
+  assert.equal(
+    await decimalCommaNote(query, "styles"),
+    "amount mixes number styles, such as 1.300,75 in row 3, so it was read as text.",
+  );
+});
+
+test("NaN and Infinity cells do not read as numbers", async () => {
+  const query = await openDatabase();
+  await createText(query, "not_finite", { v: ["NaN", "Infinity", "-Infinity", "12.5", null] });
+  const rows = await query(`SELECT v, ${readsAsNumber("v")} AS ok FROM not_finite ORDER BY rowid`);
+  assert.deepEqual(
+    rows.map((row) => row.ok),
+    [false, false, false, true, false],
+  );
+});
+
+const MIXED_SEPARATOR_SENTENCE = 'This file mixes ";" and "," as separators, so save it again with one separator.';
+
+test("a file whose rows use two separators is named", async () => {
+  const { mixedSeparatorSentence } = await import("../src/app/numbers.ts");
+  const qaRows = Array.from({ length: 36 }, (_, index) =>
+    index % 2 === 0 ? "2025;North;A-100;S;10;897" : "2025,North,A-100,S,10,897",
+  );
+  const qa = `PERIOD;REGION;MODEL;SIZE;UNITS;NET_SALES\n${qaRows.join("\n")}\n`;
+  assert.equal(mixedSeparatorSentence(qa, ";"), MIXED_SEPARATOR_SENTENCE);
+  const alternating = "period,product,units,sales\n2025,A-100,10,100\n2025;A-100;10;100\n2026,B-200,20,200\n2026;B-200;20;200\n";
+  assert.equal(mixedSeparatorSentence(alternating, ","), MIXED_SEPARATOR_SENTENCE);
+});
+
+test("a file with one separator stays silent, including quoted marks and short rows", async () => {
+  const { mixedSeparatorSentence } = await import("../src/app/numbers.ts");
+  const decimalCommas = "period;product;units;sales\n2025;A-100;10;881,84\n2026;A-100;11;900,10\n";
+  assert.equal(mixedSeparatorSentence(decimalCommas, ";"), null);
+  const decimalQuantities = "period;units;sales\n2025;10,50;100,50\n2026;12,50;144,50\n2025;5,50;60,50\n2026;6,50;90,50\n";
+  assert.equal(mixedSeparatorSentence(decimalQuantities, ";"), null);
+  const decimalText = "period;product;units;sales\n2025;A,100;10,50;100,50\n2026;A,100;12,50;144,50\n2025;B,200;5,50;60,50\n2026;B,200;6,50;90,50\n";
+  assert.equal(mixedSeparatorSentence(decimalText, ";"), null);
+  const semicolonsInCell = "period,product,units,sales,note\n2025,A;B;C;D;E,10,100,north\n2026,F;G;H;I;J,12,120,south\n";
+  assert.equal(mixedSeparatorSentence(semicolonsInCell, ","), null);
+  const bothMarksInCells = "period,product;region;units,sales\n2025,A-100;North;10,1000\n2026,B-200;South;20,2000\n";
+  assert.equal(mixedSeparatorSentence(bothMarksInCells, ","), null);
+  const oneColumn = "note\na,b\nc;d\ne,f\ng;h\ni\n";
+  assert.equal(mixedSeparatorSentence(oneColumn, ","), null);
+  assert.equal(mixedSeparatorSentence(oneColumn, ";"), null);
+  const lines = ["period,product,units,sales,note"];
+  for (let index = 0; index < 4; index++) lines.push(`2025,A-100,${10 + index},${100 + index},"North\na;b;c;d;e\nSouth"`);
+  assert.equal(mixedSeparatorSentence(`${lines.join("\n")}\n`, ","), null);
+  const quoted = 'period,region,units\n2025,"North, East",10\n2026,"South, West",20\n';
+  assert.equal(mixedSeparatorSentence(quoted, ","), null);
+  const oneMark = 'period,note,units\n2025,"a;b",10\n2026,"c;d",20\n';
+  assert.equal(mixedSeparatorSentence(oneMark, ","), null);
+  const ragged = "period,region,units,sales\n2025,North,10,100\n2026,South,11\n2027,North,12,120\n";
+  assert.equal(mixedSeparatorSentence(ragged, ","), null);
+  const tabbed = "period\tregion\tunits\n2025\tNorth\t10\n2026\tSouth\t12\n";
+  assert.equal(mixedSeparatorSentence(tabbed, "\t"), null);
+  const tabbedMarks = "period\tproduct\tunits\n2025\tA,100; X\t10\n2026\tB,200; Y\t12\n";
+  assert.equal(mixedSeparatorSentence(tabbedMarks, "\t"), null);
+});

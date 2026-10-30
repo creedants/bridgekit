@@ -1,4 +1,4 @@
-import type { Worksheet } from "exceljs";
+import type { Workbook, Worksheet } from "exceljs";
 import { excelTools, type ExcelModule, type ExcelTools } from "./exportExcel.ts";
 import { toCsv } from "./files.ts";
 import { MAX_COLUMNS_READ, TOO_MANY_COLUMNS_SENTENCE } from "./numbers.ts";
@@ -81,7 +81,16 @@ export const NO_DATA_ROWS = "This file has no data rows.";
 export async function firstSheetAsCsv(
   file: File,
   tools: ExcelTools = excelTools,
-): Promise<{ csv: string; holes: readonly number[]; formulaBlanks: number; dataRows: number[] }> {
+): Promise<{
+  csv: string;
+  holes: readonly number[];
+  formulaBlanks: number;
+  dataRows: number[];
+  /** The worksheet the reader loaded. */
+  sheetName: string;
+  /** Worksheets after the first whose last used row is at least row 2. */
+  otherSheets: number;
+}> {
   const ExcelJS = await tools.load();
   const data = await file.arrayBuffer();
   if (!isZipArchive(data)) throw new Error(INVALID_WORKBOOK);
@@ -114,6 +123,8 @@ export async function firstSheetAsCsv(
     // The spreadsheet row of each data row, so a cell the reader cannot use is
     // named by its own row even after a blank row is dropped.
     dataRows: rowNumbers.slice(1),
+    sheetName: sheet.name,
+    otherSheets: loaded.otherSheets,
   };
 }
 
@@ -147,10 +158,12 @@ const LITERAL_NAMESPACES = [
 async function loadFirstSheet(
   ExcelJS: ExcelModule,
   data: ArrayBuffer,
-): Promise<{ sheet: Worksheet; bytes: ArrayBuffer } | undefined> {
+): Promise<{ sheet: Worksheet; bytes: ArrayBuffer; otherSheets: number } | undefined> {
   const repaired = (await hasPrefixedRoot(data)) ? await repairPackage(data) : undefined;
   const first = await readSheet(ExcelJS, repaired ?? data);
-  if (first.sheet && first.sheet.rowCount >= 2) return { sheet: first.sheet, bytes: repaired ?? data };
+  if (first.sheet && first.sheet.rowCount >= 2) {
+    return { sheet: first.sheet, bytes: repaired ?? data, otherSheets: otherSheets(first) };
+  }
   if (repaired) return undefined;
   const whole = await repairPackage(data);
   if (!whole) {
@@ -158,14 +171,24 @@ async function loadFirstSheet(
     return undefined;
   }
   const second = await readSheet(ExcelJS, whole);
-  return second.sheet && second.sheet.rowCount >= 2 ? { sheet: second.sheet, bytes: whole } : undefined;
+  return second.sheet && second.sheet.rowCount >= 2
+    ? { sheet: second.sheet, bytes: whole, otherSheets: otherSheets(second) }
+    : undefined;
 }
 
-async function readSheet(ExcelJS: ExcelModule, bytes: ArrayBuffer): Promise<{ sheet?: Worksheet; error?: unknown }> {
+/** Counts later worksheets whose last used row is at least row 2. */
+function otherSheets(read: { workbook?: Workbook }): number {
+  return (read.workbook?.worksheets ?? []).slice(1).filter((sheet) => sheet.rowCount >= 2).length;
+}
+
+async function readSheet(
+  ExcelJS: ExcelModule,
+  bytes: ArrayBuffer,
+): Promise<{ workbook?: Workbook; sheet?: Worksheet; error?: unknown }> {
   try {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(bytes);
-    return { sheet: workbook.worksheets[0] };
+    return { workbook, sheet: workbook.worksheets[0] };
   } catch (error) {
     return { error };
   }
