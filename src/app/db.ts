@@ -413,8 +413,9 @@ async function convertDateColumns(query: Query, table: string, order: DateOrder)
 }
 
 /**
- * Converts a column under one shape, or leaves it text with the missing-date
- * note when a value fails the shape. A month-name value is read with comma
+ * Converts a column under one shape, or leaves it text when a value fails.
+ * Only a proved impossible calendar date gets the missing-date note.
+ * A month-name value is read with comma
  * spacing normalised, so `April 13,2026` parses with no other change in what
  * reads as a date.
  */
@@ -440,9 +441,10 @@ const textLiteral = (value: string) => `'${value.replaceAll("'", "''")}'`;
 /**
  * Marks a wholly slash column whose candidates prove both orders. A candidate
  * proves an order only when it parses as a real date under that order's full
- * date and time format, so `99/04/2026` beside `04/13/2026` proves nothing.
- * When exactly one order proves out, the column converts under it, or stays
- * text with the missing-date note when a value fails there. Otherwise silence.
+ * date and time format: `99/04/2026` proves neither order, while
+ * `04/13/2026` proves month-first. When exactly one order proves out, the
+ * column converts under it or stays text; only a proved impossible calendar
+ * date gets the missing-date note. With no valid proof there is no note.
  */
 async function resolveBothProofs(query: Query, name: string, column: string, counts: DateCounts): Promise<void> {
   const year = counts.wide === counts.slash ? "%Y" : counts.wide === 0 ? "%y" : undefined;

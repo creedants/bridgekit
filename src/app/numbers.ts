@@ -988,8 +988,9 @@ export function hasConsistentRecords(prefix: string, delimiter: string, dialect?
  * odd record that count with every part filled, decided from the first 64 KB
  * with the sniffed quote, escape, skipped rows and comment. Punctuation inside
  * cells is never evidence on its own: a file whose every kept record holds the
- * header count is never refused, whatever its cells hold. A one-column file, a
- * short file, and a prefix that ends inside a quoted field stay silent.
+ * header count is never refused, whatever its cells hold. A one-column file
+ * and a file with fewer than three complete kept records stay silent. An
+ * unfinished quoted record is ignored; earlier complete records are checked.
  */
 export function mixedSeparatorSentence(
   prefix: string,
