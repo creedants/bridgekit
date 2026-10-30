@@ -3,7 +3,7 @@ import mvpWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url
 import ehWasm from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
 import mvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import type { Query } from "../engine.ts";
-import { CSV_PREFIX_BYTES, ENCODING_SENTENCE, readCsvFile, type CsvReading } from "./encoding.ts";
+import { CSV_PREFIX_BYTES, ENCODING_SENTENCE, isValidUtf8, readCsvFile, type CsvReading } from "./encoding.ts";
 import { ChunkUnavailable, lazyChunk, type ChunkSentences } from "./exportExcel.ts";
 import {
   applyDotColumns,
@@ -662,11 +662,12 @@ export async function readLoadedTable(
   isExcel: boolean,
   order: DateOrder = "month first",
   skip = 0,
+  bytes?: Blob,
 ): Promise<void> {
   try {
     await readCsvTable(query, table, path, isExcel, order, skip);
   } catch (error) {
-    throw csvEncodingFailure(error);
+    throw await csvEncodingFailure(error, bytes);
   }
 }
 
@@ -766,6 +767,7 @@ export async function stageCsvAndSwap(
   table: string,
   readablePath: string,
   order: DateOrder = "month first",
+  reading?: CsvReading,
 ): Promise<void> {
   if (file.size === 0) throw new Error(NO_DATA_ROWS);
   const prefix = new TextDecoder().decode(new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer()));
@@ -784,7 +786,9 @@ export async function stageCsvAndSwap(
   }
   const staging = `${table}__staging`;
   const source: SourceRows = { kind: "csv", file, dialect: dialectForWidth };
-  await readLoadedTable(query, staging, readablePath, false, order, leading);
+  // A file that readCsvFile decoded as text was never handed to the database as
+  // bytes, so it keeps its own error.
+  await readLoadedTable(query, staging, readablePath, false, order, leading, reading?.kind === "bytes" ? file : undefined);
   await convertFormattedNumbers(query, staging, source);
   // No mixed-separator check: a record split by another separator can match a valid sparse record byte for byte.
   await requireDataRows(query, staging);
@@ -964,16 +968,13 @@ export async function dateOrderNote(query: Query, table: string): Promise<string
   return sentences.length === 0 ? null : sentences.join(" ");
 }
 
-// read_csv only reads UTF-8. When a file that passed the prefix check turns out
-// to hold bytes that are not UTF-8, the database's own message names exactly
-// this failure, and the one sentence replaces it. Any other database error is
-// shown as it is.
-function csvEncodingFailure(error: unknown): unknown {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message.includes("Invalid unicode (byte sequence mismatch)") && message.includes("This file is not utf-8 encoded")) {
-    return new Error(ENCODING_SENTENCE);
-  }
-  return error;
+// read_csv only reads UTF-8. When a file whose prefix passed is refused by the
+// database, its own bytes decide whether the encoding sentence replaces the
+// error: a file that is not UTF-8 anywhere shows the sentence, and any other
+// failure is shown as it is.
+async function csvEncodingFailure(error: unknown, bytes?: Blob): Promise<unknown> {
+  if (bytes === undefined || isOutOfMemory(error)) return error;
+  return isValidUtf8(new Uint8Array(await bytes.arrayBuffer())) ? error : new Error(ENCODING_SENTENCE);
 }
 
 export const TOO_BIG_SENTENCE =
@@ -1293,7 +1294,7 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
           await stageExcelAndSwap(raw, table, registered, excelHoles, excelRows, sheet, order);
         } else if (reading !== undefined) {
           await refuseMixedSeparators(raw, file, reading, registered);
-          await stageCsvAndSwap(raw, file, table, registered, order);
+          await stageCsvAndSwap(raw, file, table, registered, order, reading);
         }
         return formulaBlanks;
       } catch (error) {
