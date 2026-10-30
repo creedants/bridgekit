@@ -770,18 +770,6 @@ function decimalParts(text: string): { negative: boolean; digits: bigint; scale:
 }
 
 /**
- * The bucket an exactly-at-edge configuration belongs to, decided on its exact
- * decimal sales and units, or null when the change is not exactly an edge.
- * Every edge is 100 + e percent of the prior unit price, so the compared
- * quantities are 200 x current sales x prior units against twice that percent x
- * prior sales x current units, where 200 clears the half-percent edge. Both
- * sides are whole numbers at a common power of ten, so an edge compares equal
- * however the division would have rounded it, and any other change compares
- * unequal and keeps the band the double comparison gives it. Null also covers a
- * value that is not a plain finite decimal, where the caller uses the same
- * double comparison.
- */
-/**
  * The bucket an exactly-at-edge configuration belongs to, decided on the exact
  * decimal sums of the cell's source measure and units, or null when the change
  * is not exactly an edge. Those sums are read from the source rows: each value
@@ -889,7 +877,9 @@ export async function priceDistribution(
   // change that could be exactly at an edge, and each is then tested on the
   // exact per-cell sums of the source measure and units. A change outside the
   // net is that far from every edge, where the double comparison is right. The
-  // window decides nothing itself.
+  // window decides nothing itself. The cells hold units rounded to six decimals,
+  // so a source whose units carry more decimals than that can put a real edge
+  // just outside the net; it keeps the double band, stated in the report.
   const nearEdge = `round((${change}) * 100, 6) IN (${PRICE_BUCKETS.slice(0, -1)
     .map(([edge]) => edge)
     .join(", ")})`;
