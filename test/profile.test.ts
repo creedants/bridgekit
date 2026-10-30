@@ -1,10 +1,23 @@
 import assert from "node:assert/strict";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { registerHooks } from "node:module";
+import path from "node:path";
 import { test } from "node:test";
 import { distinctCounts, feeNote, feeRows, findRelationships, findRollups, profileFile, suggestAttributes } from "../src/app/profile.ts";
+import { fileProblem, periodView, periodsFor, type Periods } from "../src/app/fileProblems.ts";
 import { guessSetup, quote, refineGuess, type Column } from "../src/app/setup.ts";
 import { openDatabase } from "../src/duckdb.ts";
 import type { Query } from "../src/engine.ts";
 import { createSyntheticSales } from "../src/synth.ts";
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.includes("?url")) {
+      return { url: 'data:text/javascript,export default "stub"', shortCircuit: true };
+    }
+    return nextResolve(specifier, context);
+  },
+});
 
 async function columnsOf(query: Query): Promise<Column[]> {
   const described = await query(`DESCRIBE "data"`);
@@ -492,4 +505,228 @@ test("D143: the applied profile carries the date facts that refine the grain", a
   const setup = guessSetup(applied);
   assert.equal(setup.grain, "year");
   assert.deepEqual(refineGuess(setup, applied), { grain: "month" });
+});
+
+// T418: when Calculate is blocked because Sales holds mixed number styles,
+// the hint beside Calculate names the same example value and file row the
+// Data check names, so the two never disagree. T384: a sheet row is proved
+// by the sheet now loaded, so replacing the table names no row.
+
+type ProfileQuery = Awaited<ReturnType<typeof openDatabase>>;
+
+/** Describes the loaded table, profiles it, and returns the profiled columns. */
+async function profileLoaded(query: ProfileQuery, table = "data"): Promise<Column[]> {
+  const columns = (await query(`DESCRIBE ${table}`)).map((row) => ({
+    name: String(row.column_name),
+    type: String(row.column_type),
+  }));
+  let profiled = columns;
+  await profileFile(query, columns, () => true, (profile) => {
+    profiled = profile.columns;
+  });
+  return profiled;
+}
+
+function knownPeriods(values: readonly string[]): Periods {
+  const view = periodView({ load: 1, periodColumn: "period", grain: "value", filters: [] });
+  return periodsFor(view, { view, values });
+}
+
+function salesProblem(columns: Column[]) {
+  return fileProblem({
+    columns,
+    rows: 2,
+    periodColumn: "period",
+    periods: knownPeriods(["2025", "2026"]),
+    unitsColumn: "",
+    salesColumn: "",
+  });
+}
+
+/** Stages a CSV at a path the database can read, then returns the profiled columns. */
+async function stagedCsv(query: ProfileQuery, name: string, content: string): Promise<Column[]> {
+  const file = new File([content], name);
+  const directory = await mkdtemp("/tmp/bridgekit-mixed-");
+  const source = path.join(directory, name);
+  await writeFile(source, content);
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  await stageCsvAndSwap(query, file, "data", source);
+  return profileLoaded(query, "data");
+}
+
+/** Stages a workbook's flattened sheet, then returns the profiled columns. */
+async function stagedWorkbook(query: ProfileQuery, name: string, rows: (string | number)[][]): Promise<Column[]> {
+  const { default: ExcelJS } = await import("exceljs");
+  const { firstSheetAsCsv } = await import("../src/app/sheet.ts");
+  const { stageExcelAndSwap } = await import("../src/app/db.ts");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("sales");
+  for (const row of rows) sheet.addRow(row);
+  const flat = await firstSheetAsCsv(new File([await workbook.xlsx.writeBuffer()], name));
+  const directory = await mkdtemp("/tmp/bridgekit-mixed-");
+  const flatPath = path.join(directory, `${name}.csv`);
+  await writeFile(flatPath, flat.csv);
+  await stageExcelAndSwap(query, "data", flatPath, flat.holes, flat.dataRows);
+  return profileLoaded(query, "data");
+}
+
+test("T418: a CSV whose first amount is US names the comma value and row in both places", async () => {
+  const query = await openDatabase();
+  const columns = await stagedCsv(query, "us-first.csv", 'period,amount\n2025,"1,000.50"\n2026,"1.300,75"\n');
+  const { decimalCommaNote } = await import("../src/app/numbers.ts");
+  assert.equal(
+    await decimalCommaNote(query, "data"),
+    "amount mixes number styles, such as 1.300,75 in row 3, so it was read as text.",
+  );
+  assert.deepEqual(salesProblem(columns), {
+    kind: "reason",
+    message: 'Sales must be a column of numbers, and "amount" holds text, such as "1.300,75" in row 3.',
+  });
+});
+
+test("T418: a CSV whose first amount is decimal comma names the US value and row in both places", async () => {
+  const query = await openDatabase();
+  const columns = await stagedCsv(query, "comma-first.csv", 'period,amount\n2025,"1.300,75"\n2026,"1,000.50"\n');
+  const { decimalCommaNote } = await import("../src/app/numbers.ts");
+  assert.equal(
+    await decimalCommaNote(query, "data"),
+    "amount mixes number styles, such as 1,000.50 in row 3, so it was read as text.",
+  );
+  assert.deepEqual(salesProblem(columns), {
+    kind: "reason",
+    message: 'Sales must be a column of numbers, and "amount" holds text, such as "1,000.50" in row 3.',
+  });
+});
+
+test("T418: a workbook whose first amount is US names the comma value and row in both places", async () => {
+  const query = await openDatabase();
+  const columns = await stagedWorkbook(query, "us-first.xlsx", [
+    ["period", "amount"],
+    ["2025", "1,000.50"],
+    ["2026", "1.300,75"],
+  ]);
+  const { decimalCommaNote } = await import("../src/app/numbers.ts");
+  assert.equal(
+    await decimalCommaNote(query, "data"),
+    "amount mixes number styles, such as 1.300,75 in row 3, so it was read as text.",
+  );
+  assert.deepEqual(salesProblem(columns), {
+    kind: "reason",
+    message: 'Sales must be a column of numbers, and "amount" holds text, such as "1.300,75" in row 3.',
+  });
+});
+
+test("T418: a workbook whose first amount is decimal comma names the US value and row in both places", async () => {
+  const query = await openDatabase();
+  const columns = await stagedWorkbook(query, "comma-first.xlsx", [
+    ["period", "amount"],
+    ["2025", "1.300,75"],
+    ["2026", "1,000.50"],
+  ]);
+  const { decimalCommaNote } = await import("../src/app/numbers.ts");
+  assert.equal(
+    await decimalCommaNote(query, "data"),
+    "amount mixes number styles, such as 1,000.50 in row 3, so it was read as text.",
+  );
+  assert.deepEqual(salesProblem(columns), {
+    kind: "reason",
+    message: 'Sales must be a column of numbers, and "amount" holds text, such as "1,000.50" in row 3.',
+  });
+});
+
+test("T418: a bare mixed-styles mark names no example, as the Data check does", async () => {
+  const query = await openDatabase();
+  await query(`CREATE TABLE data AS SELECT * FROM (VALUES
+    ('2025', 'A-100', '100'),
+    ('2025', 'B-200', '110'),
+    ('2026', 'A-100', 'n/a'),
+    ('2026', 'B-200', '130')
+  ) v(period, product, net_sales)`);
+  await query(`COMMENT ON COLUMN data.net_sales IS 'mixed number styles'`);
+  const columns = await profileLoaded(query, "data");
+  assert.deepEqual(salesProblem(columns), {
+    kind: "reason",
+    message: 'Sales must be a column of numbers, and "net_sales" holds text.',
+  });
+});
+
+test("T384: replacing a workbook table with the same count names no row", async () => {
+  const query = await openDatabase();
+  const columns = await stagedWorkbook(query, "blank.xlsx", [
+    ["period", "Product", "units", "NET_SALES"],
+    ["2025", "A-100", 10, 100],
+    [],
+    ["2025", "A-100", 10, 110],
+    ["2026", "A-100", 10, "n/a"],
+    ["2026", "A-100", 10, 130],
+  ]);
+  assert.deepEqual(
+    fileProblem({
+      columns,
+      rows: 4,
+      periodColumn: "period",
+      periods: knownPeriods(["2025", "2026"]),
+      unitsColumn: "units",
+      salesColumn: "",
+    }),
+    {
+      kind: "reason",
+      message: 'Sales must be a column of numbers, and "NET_SALES" holds text, such as "n/a" in row 5.',
+    },
+  );
+  await query(`CREATE OR REPLACE TABLE data AS SELECT * FROM (VALUES
+    ('2025', 'A-100', 1, '100'),
+    ('2025', 'B-200', 2, '110'),
+    ('2026', 'A-100', 3, 'missing'),
+    ('2026', 'B-200', 4, '130')
+  ) v(period, product, units, net_sales)`);
+  const replaced = await profileLoaded(query, "data");
+  assert.deepEqual(
+    fileProblem({
+      columns: replaced,
+      rows: 4,
+      periodColumn: "period",
+      periods: knownPeriods(["2025", "2026"]),
+      unitsColumn: "units",
+      salesColumn: "",
+    }),
+    {
+      kind: "reason",
+      message: 'Sales must be a column of numbers, and "net_sales" holds text, such as "missing".',
+    },
+  );
+});
+
+test("T384: a second workbook with the same count names its own new row", async () => {
+  const query = await openDatabase();
+  const first = await stagedWorkbook(query, "first.xlsx", [
+    ["period", "Product", "units", "NET_SALES"],
+    ["2025", "A-100", 10, 100],
+    ["2025", "A-100", 10, 110],
+    ["2026", "A-100", 10, "n/a"],
+    ["2026", "A-100", 10, 130],
+  ]);
+  const problem = {
+    rows: 4,
+    periodColumn: "period",
+    periods: knownPeriods(["2025", "2026"]),
+    unitsColumn: "units",
+    salesColumn: "",
+  };
+  assert.deepEqual(fileProblem({ columns: first, ...problem }), {
+    kind: "reason",
+    message: 'Sales must be a column of numbers, and "NET_SALES" holds text, such as "n/a" in row 4.',
+  });
+  const second = await stagedWorkbook(query, "second.xlsx", [
+    ["period", "Product", "units", "NET_SALES"],
+    [],
+    ["2025", "A-100", 10, 100],
+    ["2025", "A-100", 10, 110],
+    ["2026", "A-100", 10, "n/a"],
+    ["2026", "A-100", 10, 130],
+  ]);
+  assert.deepEqual(fileProblem({ columns: second, ...problem }), {
+    kind: "reason",
+    message: 'Sales must be a column of numbers, and "NET_SALES" holds text, such as "n/a" in row 5.',
+  });
 });
