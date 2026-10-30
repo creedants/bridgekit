@@ -876,6 +876,31 @@ const FEWEST_MIXED_RECORDS = 3;
 
 /** A field that reads as a plain measure: an optional sign, digits, and decimal or grouping marks. */
 const MEASURE_FIELD = /^[+-]?\d+(?:[.,]\d+)*$/;
+const TRAILING_MINUS_FIELD = /^(.*\S)-$/u;
+const BRACKETS_FIELD = /^\((.*)\)$/u;
+const MEASURE_MARKS_FIELD = /[,$\s'\u2019]/gu;
+const MEASURE_SHAPE_FIELD = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/u;
+const MARKER_AT_START_FIELD = new RegExp(MARKER_AT_START, "u");
+const MARKER_AT_END_FIELD = new RegExp(MARKER_AT_END, "u");
+
+/**
+ * A field that reads as a formatted measure. The loader reads a number in SQL:
+ * money() drops one currency marker at either end and folds grouping marks,
+ * and northAmerican() ignores grouping, spaces and dollar signs and treats
+ * brackets and a trailing minus as the sign before it casts. The pre-load guard
+ * has no database, so this repeats that reading from the same patterns.
+ */
+function readsAsFormattedMeasure(field: string): boolean {
+  let text = field.trim();
+  const bracketed = BRACKETS_FIELD.exec(text);
+  if (bracketed !== null) text = `-${bracketed[1]}`;
+  text = text.replace(TRAILING_MINUS_FIELD, "-$1");
+  text = text.replace(MARKER_AT_START_FIELD, "$1$3").replace(MARKER_AT_END_FIELD, "$1");
+  text = text.replace(MEASURE_MARKS_FIELD, "");
+  const wrapped = BRACKETS_FIELD.exec(text);
+  if (wrapped !== null) text = `-${wrapped[1]}`;
+  return MEASURE_SHAPE_FIELD.test(text) && Number.isFinite(Number(text));
+}
 
 /**
  * The prefix's logical records, split with the sniffed quote and escape so a
@@ -1085,9 +1110,9 @@ export function mixedSeparatorSentence(
     if (parts.length !== header || !parts.every((field) => field.trim() !== "")) continue;
     const width = widths[index];
     // Keep the short-record exception limited to a sniffed separator in the
-    // first other-separator part and no later plain-measure part. Other
-    // candidate records retain the refusal.
-    if (width < header && parts[0].includes(delimiter) && !parts.slice(1).some((field) => MEASURE_FIELD.test(field.trim()))) continue;
+    // first other-separator part and no later measure part. Other candidate
+    // records retain the refusal.
+    if (width < header && parts[0].includes(delimiter) && !parts.slice(1).some((field) => MEASURE_FIELD.test(field.trim()) || readsAsFormattedMeasure(field))) continue;
     return MIXED_SEPARATOR_SENTENCE;
   }
   return null;
