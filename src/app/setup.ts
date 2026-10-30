@@ -137,9 +137,10 @@ const CONNECTOR_WORDS = new Set(["per", "je", "pro", "for", "each"]);
 /**
  * A price word and a unit word name a unit price when they sit side by side, as
  * in Kosten/Stk, or when only connector words join them and the price comes
- * first, as in price for each unit. A unit word first with a connector between
- * is a unit price only when the price word ends the name, so Stk Preis is one
- * while Units for Rate Card, a count named by a category, is not.
+ * first, as in price for each unit. In this word-pair check, a unit word first
+ * with a connector between matches only when the price word ends the name.
+ * Thus Stk Preis matches and Units for Rate Card does not. The German-name
+ * fallback below can also classify a name as a unit price.
  */
 const isUnitPrice = (name: string) => {
   const parts = words(name);
