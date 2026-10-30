@@ -1087,3 +1087,47 @@ test("the real load keeps the punctuation short row and refuses a foreign record
   const [count] = await query("SELECT count(*)::DOUBLE AS n FROM data");
   assert.equal(Number(count.n), 102);
 });
+
+test("T439: leading blank lines keep the mixed-style row physical", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { decimalCommaNote } = await import("../src/app/numbers.ts");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const text = '\n\nperiod,amount\n2025,"1,000.50"\n2026,"1.300,75"\n';
+  const directory = await mkdtemp("/tmp/bridgekit-t439-");
+  const filePath = path.join(directory, "blanks-mixed.csv");
+  await writeFile(filePath, text);
+  const query = await openDatabase();
+  await stageCsvAndSwap(query, new File([text], "blanks-mixed.csv"), "data", filePath);
+  assert.equal(
+    await decimalCommaNote(query, "data"),
+    "amount mixes number styles, such as 1.300,75 in row 5, so it was read as text.",
+  );
+});
+
+test("T400: a quoted header name holding commas counts as one field", async () => {
+  const { headerFieldCount } = await import("../src/app/numbers.ts");
+  const name = `"${Array.from({ length: 10002 }, () => "a").join(",")}"`;
+  const prefix = `${name},b,c,d\n1,2,3,4\n`;
+  assert.equal(
+    headerFieldCount(prefix, ",", { delimiter: ",", quote: '"', escape: '"', header: true, skipRows: 0, comment: "" }, false),
+    4,
+  );
+});
+
+test("T400: a correctly quoted wide header loads instead of refusing as too wide", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const name = `"${Array.from({ length: 10002 }, () => "a").join(",")}"`;
+  const text = `${name},b,c,d\n1,2,3,4\n`;
+  const directory = await mkdtemp("/tmp/bridgekit-t400-");
+  const filePath = path.join(directory, "quoted-wide.csv");
+  await writeFile(filePath, text);
+  const query = await openDatabase();
+  await stageCsvAndSwap(query, new File([text], "quoted-wide.csv"), "data", filePath);
+  assert.equal((await query("DESCRIBE data")).length, 4);
+  assert.equal(Number((await query("SELECT count(*)::DOUBLE AS n FROM data"))[0].n), 1);
+});

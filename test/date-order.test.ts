@@ -531,3 +531,52 @@ test("a bad time stays text with no date note", async () => {
   assert.equal(String(described.find((row) => String(row.column_name) === "day")?.column_type), "VARCHAR");
   assert.equal(await dateOrderNote(query, "bad_time"), null);
 });
+
+test("T439: a CSV with two blank lines before its header loads with the header and rows", async () => {
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const text = "\n\nperiod,product,units,sales\n2025,A-100,10,100\n2026,A-100,12,120\n";
+  const directory = await mkdtemp("/tmp/bridgekit-t439-");
+  const filePath = path.join(directory, "blanks.csv");
+  await writeFile(filePath, text);
+  const query = await openDatabase();
+  await stageCsvAndSwap(query, new File([text], "blanks.csv"), "data", filePath);
+  const described = await query("DESCRIBE data");
+  assert.deepEqual(
+    described.map((row) => String(row.column_name)),
+    ["period", "product", "units", "sales"],
+  );
+  const rows = await query("SELECT period, product, units, sales FROM data ORDER BY rowid");
+  assert.equal(rows.length, 2);
+  assert.equal(Number(rows[0].period), 2025);
+  assert.equal(Number(rows[1].period), 2026);
+});
+
+test("T439: a header-only file after blank lines is still refused with no data rows", async () => {
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { NO_DATA_ROWS } = await import("../src/app/sheet.ts");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const text = "\n\nperiod,product,units,sales\n";
+  const directory = await mkdtemp("/tmp/bridgekit-t439-");
+  const filePath = path.join(directory, "header-only.csv");
+  await writeFile(filePath, text);
+  const query = await openDatabase();
+  await assert.rejects(
+    stageCsvAndSwap(query, new File([text], "header-only.csv"), "data", filePath),
+    (error: unknown) => (error as Error).message === NO_DATA_ROWS,
+  );
+});
+
+test("T434: a date column whose first failure is a bad time names the later impossible date", async () => {
+  const file = await csvPath("period,day\n2025,13/04/2026 25:00\n2026,31/02/2026 12:00\n2027,15/03/2026 12:00\n");
+  const query = await openDatabase();
+  await readCsvTable(query, "mixed_fail", file);
+  const described = await query("DESCRIBE mixed_fail");
+  assert.equal(String(described.find((row) => String(row.column_name) === "day")?.column_type), "VARCHAR");
+  assert.equal(
+    await dateOrderNote(query, "mixed_fail"),
+    "day has a date that does not exist, such as 31/02/2026 12:00, so it was read as text.",
+  );
+});
