@@ -85,6 +85,35 @@ export function sourceCaption(source: string, rows: number, columns: number): st
   return `${source} · ${whole(rows)} ${agree(rows, "row")} · ${whole(columns)} ${agree(columns, "column")}`;
 }
 
+/** The workbook's other-sheets sentence from a table comment, the same sentence Data check uses. */
+export function workbookSheetNote(comment: unknown): string | null {
+  const text = comment == null ? "" : String(comment);
+  const prefix = "sheet:";
+  if (!text.startsWith(prefix)) return null;
+  const body = text.slice(prefix.length);
+  const cut = body.lastIndexOf("|");
+  if (cut < 0) return null;
+  const name = body.slice(0, cut);
+  const others = Number(body.slice(cut + 1));
+  if (name === "" || !(others > 0)) return null;
+  const rest = others === 1 ? "the other sheet was not" : `the other ${others} sheets were not`;
+  return `The workbook's first sheet, "${name}", was loaded; ${rest}.`;
+}
+
+/** The workbook's other-sheets sentence for the loaded table, or null when the load left no such note. */
+export async function loadSheetNote(q: Query, table: string): Promise<string | null> {
+  const [row] = await q(
+    `SELECT comment FROM duckdb_tables() WHERE schema_name = current_schema() AND table_name = '${table.replaceAll("'", "''")}'`,
+  );
+  return workbookSheetNote(row?.comment);
+}
+
+/** A setup for Save setup to file, without the in-session guess markers. */
+export function persistedSetupForFile(setup: Setup): Omit<Setup, "fresh" | "salesFromValues"> {
+  const { fresh: _fresh, salesFromValues: _salesFromValues, ...persisted } = setup;
+  return persisted;
+}
+
 function previewCell(type: string, value: unknown): string {
   if (value === null || value === undefined) return "";
   const normalized = type.trim().toUpperCase();
@@ -250,6 +279,7 @@ export function App() {
   const [omitNames, setOmitNames] = useState(false);
   const [formulaBlanks, setFormulaBlanks] = useState(0);
   const [setupError, setSetupError] = useState("");
+  const [sheetNote, setSheetNote] = useState<string | null>(null);
   // exportExcel saves its file itself, so the Excel export keeps a guard of its own.
   const [exportGuard] = useState(() => makeGuard());
   // A demonstration sample must not overwrite a setup saved for a file with the same columns.
@@ -279,7 +309,8 @@ export function App() {
   async function task(kind: TaskKind, label: string, work: () => Promise<void>): Promise<boolean> {
     const id = ++taskRef.current;
     setTasks((running) => new Map([...running].filter(([key]) => key !== kind)).set(kind, { label, id }));
-    setError("");
+    // A refused load's error stays through the fallback's period rebuild until the user acts.
+    if (kind !== "periods") setError("");
     try {
       await work();
       return true;
@@ -344,11 +375,13 @@ export function App() {
     const described = await q(`DESCRIBE ${quote(TABLE)}`);
     const found = described.map((row) => ({ name: String(row.column_name), type: String(row.column_type) }));
     const [count] = await q(`SELECT count(*)::DOUBLE AS n FROM ${quote(TABLE)}`);
+    const note = await loadSheetNote(q, TABLE).catch(() => null);
     if (!current()) return;
     const saved = preset ? null : loadSavedSetup(found);
     setColumns(found);
     setRowCount(Number(count.n));
     setSource(name);
+    setSheetNote(note);
     setFromSample(!!preset);
     setLoad(load);
     published.current = load;
@@ -458,7 +491,13 @@ export function App() {
         salesColumn: setup.salesColumn,
       })
     : { kind: "none" };
-  const gate = calculateGate({ setup, prior, current, problem });
+  const gate = calculateGate({
+    setup,
+    prior,
+    current,
+    problem,
+    months: setup ? columns.find((c) => c.name === setup.periodColumn)?.facts?.months : undefined,
+  });
   const ready = gate.ready;
   const canCalculate = ready && !busy && periodsCurrent;
 
@@ -679,6 +718,7 @@ export function App() {
               ? sourceCaption(source, rowCount, columns.length)
               : "No data loaded"}
         </span>
+        {sheetNote && phase.kind !== "reading" && <span className="hint">{sheetNote}</span>}
         <span className="status" aria-live="polite">{status}</span>
         <nav>
           {filePicker}
@@ -793,9 +833,7 @@ export function App() {
               <p className="row">
                 <button
                   className="quiet"
-                  onClick={() =>
-                    saveOnce(SETUP_FILE, JSON.stringify(setup, null, 2), "application/json")
-                  }
+                  onClick={() => saveOnce(SETUP_FILE, JSON.stringify(persistedSetupForFile(setup), null, 2), "application/json")}
                 >
                   Save setup to file
                 </button>

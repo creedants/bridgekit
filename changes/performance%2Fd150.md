@@ -1,0 +1,6 @@
+Four small follow-ups in `src/app/App.tsx` from the D143 and D144 reviews.
+
+- T421: the gate call passes the chosen period column's month count, so a file whose period column spans at least two months but gives one period under Year advises `With these settings "<column>" gives only one period, so choose Month in Compare by.` One month keeps the base sentence. `test/app-round2.test.ts` covers the gate branch and the wiring.
+- T419: a workbook with other sheets shows the existing Data check sentence where the file is loaded, beside the file name in the top bar. The sentence is unchanged: `The workbook's first sheet, "Sales", was loaded; the other sheet was not.` `test/app-round2.test.ts` checks the sentence builder and the placement.
+- T423: Save setup to file exports the setup without the in-session guess markers `fresh` and `salesFromValues`. Loading a setup file saved by main still works through `restoredSetup`. `test/app-round2.test.ts` checks the exported shape and the button wiring.
+- T425: the task runner no longer clears the error banner for a `periods` rebuild, so a refused load's error stays shown through the fallback's period rebuild until the user acts. Other tasks still clear the banner and a failed task still reports its own error. `test/app-round2.test.ts` checks the guard.
