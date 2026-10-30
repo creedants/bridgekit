@@ -4,6 +4,7 @@ import { magicLink, organization } from "better-auth/plugins";
 import type { RateLimit } from "./cloudflare.ts";
 import { sendEmail } from "./email.ts";
 import type { Env } from "./env.ts";
+import { paddleAccount } from "./paddle.ts";
 import { deleteSoleWorkspaces, freeSeats, MAX_WORKSPACES_PER_USER, SEAT_LIMIT_SENTENCE, WORKSPACE_LIMIT_SENTENCE, workspaceCount } from "./workspace.ts";
 
 const AUTH_BASE_PATH = "/api/auth";
@@ -73,7 +74,7 @@ export function authOptions(env: Env, seatsFor: (workspaceId: string) => Promise
     // and is still answered by Better Auth, exactly as before.
     onAPIError: { throw: true },
     account: { accountLinking: { enabled: true, trustedProviders: ["google"] } },
-    user: { deleteUser: { enabled: true, beforeDelete: (user) => deleteSoleWorkspaces(env.DB, user.id) } },
+    user: { deleteUser: { enabled: true, beforeDelete: (user) => deleteSoleWorkspaces(env.DB, user.id, paddleAccount(env)) } },
     plugins: [
       magicLink({
         expiresIn: 15 * 60,
