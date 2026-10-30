@@ -136,7 +136,7 @@ function structKey(alias: string | null, columns: string[]): string {
 
 function validate(config: BridgeConfig): void {
   if (config.levels.length === 0) throw new Error("At least one level is required");
-  const reserved = /^(q0|s0|q1|s1|z0|z1|g0|g1|rs0|rs1|r0|match_level|surviving_level|status|ref_price|volume|price|new_config|discontinued|no_units|price_list|price_discount|price_sales|cost_rate|(ref|mix)_\d+|[qsp][01]_l\d+)$/i;
+  const reserved = /^(q0|s0|q1|s1|z0|z1|g0|g1|rs0|rs1|r0|match_level|surviving_level|status|ref_price|volume|price|new_config|discontinued|no_units|price_list|price_discount|price_sales|cost_rate|e[qs][01]|(ref|mix)_\d+|[qsp][01]_l\d+)$/i;
   const seen = new Set<string>();
   for (const level of config.levels) {
     if (level.columns.length === 0) throw new Error(`Level "${level.name}" has no columns`);
@@ -288,6 +288,15 @@ export function cellsSql(config: BridgeConfig): string {
   CASE WHEN match_level < ${k} THEN ${rest} ELSE 0 END AS new_config,
   (q1 - q0) * (ref_${k} - ${survivingRef}) AS discontinued`;
 
+  const exactMeasure = exactMeasureDecimalSql(config);
+  const exactUnits = exactDecimalSql(config.unitsColumn);
+  const exactBad = config.costColumn
+    ? `(${unreadableSql(config.salesColumn)} OR ${unreadableSql(config.costColumn)})`
+    : unreadableSql(config.salesColumn);
+  const exactCell = (value: string, bad: string, which: string) =>
+    `CASE WHEN count(*) FILTER (WHERE ${period} = ${which} AND ${hasUnits} AND ${bad}) > 0 THEN NULL
+    ELSE coalesce(sum(${value}) FILTER (WHERE ${period} = ${which} AND ${hasUnits}), ${ZERO_DECIMAL}) END`;
+
   return `
 WITH cells AS MATERIALIZED (
   SELECT ${allColumns.join(", ")},
@@ -295,6 +304,10 @@ WITH cells AS MATERIALIZED (
     coalesce(sum(${measure}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE AS s0,
     round(coalesce(sum(${units}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE, 6) AS q1,
     coalesce(sum(${measure}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE AS s1,
+    ${exactCell(exactMeasure, exactBad, prior)} AS es0,
+    ${exactCell(exactUnits, unreadableSql(config.unitsColumn), prior)} AS eq0,
+    ${exactCell(exactMeasure, exactBad, current)} AS es1,
+    ${exactCell(exactUnits, unreadableSql(config.unitsColumn), current)} AS eq1,
     coalesce(sum(${measure}) FILTER (WHERE ${period} = ${prior} AND NOT ${hasUnits}), 0)::DOUBLE AS z0,
     coalesce(sum(${measure}) FILTER (WHERE ${period} = ${current} AND NOT ${hasUnits}), 0)::DOUBLE AS z1${
       gross
@@ -326,7 +339,7 @@ referenced AS (
   FROM priced
 ),
 priced_effects AS (
-SELECT ${allColumns.join(", ")}, q0, s0, q1, s1, z0, z1,${gross ? " g0, g1," : ""}${cost ? " rs0, rs1," : ""} match_level, surviving_level,
+SELECT ${allColumns.join(", ")}, q0, s0, q1, s1, es0, eq0, es1, eq1, z0, z1,${gross ? " g0, g1," : ""}${cost ? " rs0, rs1," : ""} match_level, surviving_level,
   ${Array.from({ length: k + 1 }, (_, j) => `ref_${j}`).join(", ")},
   CASE WHEN q1 = 0 AND q0 <> 0 THEN 'discontinued' WHEN q0 <= 0 THEN 'new' ELSE 'continuing' END AS status,
   ${effects},
@@ -613,6 +626,35 @@ function nanosSql(column: string): string {
   return `(CASE WHEN ${readableSql(column)} THEN CAST(ROUND(CAST(${ident(column)} AS DOUBLE) * 1000000000) AS HUGEINT) END)`;
 }
 
+/** A value present in the file that the exact decimal reading cannot take. */
+function unreadableSql(column: string): string {
+  return `(${ident(column)} IS NOT NULL AND NOT ${readableSql(column)})`;
+}
+
+/**
+ * A source value as an exact decimal with nine decimal places, or NULL when the
+ * value is blank, non-finite or at least 1e19. The VARCHAR step prints the
+ * DOUBLE as its shortest decimal that round-trips, which is the decimal the file
+ * held (2.94, 0.0315, 301500000.3015015); a direct DOUBLE to DECIMAL cast would
+ * print the binary expansion's error instead. So each row is exact to nine
+ * decimals. The DOUBLE cannot hold a typed decimal finer than its own
+ * resolution at that magnitude (about 1e-8 at 10 million, 1e-4 at 1e12), so
+ * digits already lost by the loader cannot be recovered, and a tenth decimal
+ * place is rounded away.
+ */
+function exactDecimalSql(column: string): string {
+  return `(CASE WHEN ${readableSql(column)} THEN CAST(CAST(${ident(column)} AS VARCHAR) AS DECIMAL(38,9)) END)`;
+}
+
+const ZERO_DECIMAL = "CAST(0 AS DECIMAL(38,9))";
+
+/** The measure in exact decimals: sales, or sales minus cost with blanks counting zero as measureSql has it. */
+function exactMeasureDecimalSql(config: BridgeConfig): string {
+  const sales = exactDecimalSql(config.salesColumn);
+  if (!config.costColumn) return sales;
+  return `(coalesce(${sales}, ${ZERO_DECIMAL}) - coalesce(${exactDecimalSql(config.costColumn)}, ${ZERO_DECIMAL}))`;
+}
+
 /** Sales in integer billionths, or sales minus cost on margin. Each column is rounded to billionths before subtraction; on margin, blanks contribute zero as in measureSql. */
 function exactMeasureSql(config: BridgeConfig): string {
   const sales = nanosSql(config.salesColumn);
@@ -741,16 +783,20 @@ function decimalParts(text: string): { negative: boolean; digits: bigint; scale:
 }
 
 /**
- * The bucket an exactly-at-edge configuration belongs to, decided on its exact
- * decimal sales and units, or null when the change is not exactly an edge.
- * Every edge is 100 + e percent of the prior unit price, so the compared
- * quantities are 200 x current sales x prior units against twice that percent x
- * prior sales x current units, where 200 clears the half-percent edge. Both
- * sides are whole numbers at a common power of ten, so an edge compares equal
- * however the division would have rounded it, and any other change compares
- * unequal and keeps the band the double comparison gives it. Null also covers a
- * value that is not a plain finite decimal, where the caller uses the same
- * double comparison.
+ * The bucket an exactly-at-edge configuration belongs to, decided on the exact
+ * decimal sums of the cell's source measure and units, or null when the change
+ * is not exactly an edge. Those sums come from the cells table (es0, eq0, es1,
+ * eq1): each source row read as the shortest decimal its DOUBLE prints, summed
+ * as DECIMAL(38,9), so they are exact to nine decimal places. Every edge is
+ * 100 + e percent of the prior unit price, so the compared quantities are
+ * 200 x current sales x prior units against twice that percent x prior sales x
+ * current units, where 200 clears the half-percent edge. Both sides are whole
+ * numbers at a common power of ten, so an edge compares equal however the
+ * division would have rounded it, and any other change compares unequal and
+ * keeps the band the double comparison gives it. Null also covers a value that
+ * is not a plain finite decimal, including a cell whose exact columns are NULL
+ * because a source value was unreadable; the caller then uses the same double
+ * comparison.
  */
 function exactBucket(s0: string, q0: string, s1: string, q1: string): number | null {
   const parsed = [s0, q0, s1, q1].map(decimalParts);
@@ -760,6 +806,9 @@ function exactBucket(s0: string, q0: string, s1: string, q1: string): number | n
   const [priorSales, priorUnits, currentSales, currentUnits] = [p0, pq0, p1, pq1].map(
     (part) => (part.negative ? -1n : 1n) * part.digits * 10n ** BigInt(scale - part.scale),
   );
+  // A zero here means the nine-decimal sums lost a value that the DOUBLE cell
+  // still holds, so the exact test cannot speak for this cell.
+  if (priorSales === 0n || priorUnits === 0n || currentUnits === 0n) return null;
   const left = 200n * currentSales * priorUnits;
   const index = PRICE_BUCKETS.slice(0, -1).findIndex(
     ([edge]) => left === BigInt(2 * (100 + edge)) * priorSales * currentUnits,
@@ -785,9 +834,9 @@ export async function priceDistribution(
   // 10% change, and still under the window's 5e-7 until the price has moved
   // more than five millionfold. So this window is only a net: it catches every
   // change that could be exactly at an edge, and each is then tested on the
-  // cell's exact decimal sales and units. A change outside the net is that far
-  // from every edge, where the double comparison is right. The window decides
-  // nothing itself.
+  // exact per-cell sums of the source measure and units. A change outside the
+  // net is that far from every edge, where the double comparison is right. The
+  // window decides nothing itself.
   const nearEdge = `round((${change}) * 100, 6) IN (${PRICE_BUCKETS.slice(0, -1)
     .map(([edge]) => edge)
     .join(", ")})`;
@@ -804,7 +853,8 @@ export async function priceDistribution(
      ${matched} AND NOT (${nearEdge}) GROUP BY 1`,
   );
   const near = await query(
-    `SELECT s0::VARCHAR AS s0, q0::VARCHAR AS q0, s1::VARCHAR AS s1, q1::VARCHAR AS q1,
+    `SELECT CAST(es0 AS VARCHAR) AS es0, CAST(eq0 AS VARCHAR) AS eq0,
+       CAST(es1 AS VARCHAR) AS es1, CAST(eq1 AS VARCHAR) AS eq1,
        s1 AS sales, price AS price_effect, ${bucket} AS fallback
      ${matched} AND (${nearEdge})`,
   );
@@ -818,7 +868,9 @@ export async function priceDistribution(
     priceEffect[i] += Number(row.price_effect);
   }
   for (const row of near) {
-    const i = exactBucket(String(row.s0), String(row.q0), String(row.s1), String(row.q1)) ?? Number(row.fallback);
+    // A cell whose exact sums are NULL for an unreadable value keeps base's
+    // band, as does any value exactBucket cannot read as a decimal.
+    const i = exactBucket(String(row.es0), String(row.eq0), String(row.es1), String(row.eq1)) ?? Number(row.fallback);
     cells[i] += 1;
     sales[i] += Number(row.sales);
     priceEffect[i] += Number(row.price_effect);

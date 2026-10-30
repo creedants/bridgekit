@@ -1,10 +1,27 @@
 import assert from "node:assert/strict";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { registerHooks } from "node:module";
+import path from "node:path";
 import { test } from "node:test";
 import { openDatabase } from "../src/duckdb.ts";
 import { runBridge, drill, unmatched, dataCheck, priceDistribution, sensitivity, trend, priceRealization, priceGaps, accountBridge, measureSql, periodMoney, tieOutLines, type BridgeConfig, type BridgeResult, type Level, type Query, type TieOutLine } from "../src/engine.ts";
 import { PERIOD, VIEW, quote, viewSql, type Setup } from "../src/app/setup.ts";
 import { whole } from "../src/app/format.ts";
 import { createSyntheticSales } from "../src/synth.ts";
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.includes("?url")) {
+      return { url: 'data:text/javascript,export default "stub"', shortCircuit: true };
+    }
+    return nextResolve(specifier, context);
+  },
+});
+
+// The CSV loader imports the browser wasm bundles by URL, which this runner
+// cannot fetch, so stubs replace those URLs the way test/date-order.test.ts
+// does it.
+const { readCsvTable } = await import("../src/app/db.ts");
 
 function effect(result: BridgeResult, key: string): number {
   const found = result.effects.find((e) => e.key === key);
@@ -331,10 +348,10 @@ test("a change of exactly a bucket bound is filed in the bucket its label names"
 test("a change that is not exactly a bound keeps its own bucket", async () => {
   const query = await openDatabase();
   // Prior unit prices 999.9999 and 9999.9999, 3 prior units and 7 current
-  // units. Each change is past its bound by 5e-8 of a percent or more, which is
-  // 500 times the division's error at these prices, so it must not join the
-  // bucket nearer no change. The nine-figure pairs are past the bound by just
-  // 1e-10 of a percent, still 1,000 times the error.
+  // units. The first four changes are past their bounds by at least 5e-8 of a
+  // percentage point. The nine-figure pairs are past by about 1e-10 of a
+  // percentage point. None is an exact edge, so none may join the bucket
+  // nearer no change.
   const cases: [number, number, string][] = [
     [999.9999, 1004.9999, "Up 0.5% to 2%"],
     [999.9999, 994.9999, "Down 0.5% to 2%"],
@@ -347,6 +364,68 @@ test("a change that is not exactly a bound keeps its own bucket", async () => {
   for (const [prior, current, expected] of cases) {
     assert.equal(await bucketForPair(query, prior, current, 3, 7), expected, `${prior} to ${current}`);
   }
+});
+
+/** The band one CSV file's configurations land in, loaded the way a person's file takes. */
+async function bucketOfCsv(text: string): Promise<string> {
+  const directory = await mkdtemp("/tmp/bridgekit-edge-");
+  const file = path.join(directory, "edge.csv");
+  await writeFile(file, text);
+  const query = await openDatabase();
+  await readCsvTable(query, "data", file);
+  const config: BridgeConfig = {
+    table: "data", periodColumn: "year", prior: "2025", current: "2026",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+  };
+  await runBridge(query, config);
+  const hit = (await priceDistribution(query, config)).buckets.filter((bucket) => bucket.cells > 0);
+  assert.equal(hit.length, 1, `landed in ${hit.map((b) => b.label).join(", ") || "no bucket"}`);
+  return hit[0].label;
+}
+
+test("a four-decimal CSV at an exact 5% edge is filed in Up 2% to 5%", async () => {
+  // The stored current cell sums to 0.07350000000000001, one unit in the last
+  // place above the typed 0.0735, so a test on the cell DOUBLE cannot see the
+  // edge.
+  assert.equal(
+    await bucketOfCsv(
+      "year,product,units,sales\n2025,A-100,1,0.01\n2025,A-100,2,0.02\n2026,A-100,3,0.0315\n2026,A-100,4,0.042\n",
+    ),
+    "Up 2% to 5%",
+  );
+});
+
+test("an ordinary two-decimal CSV at an exact -2% edge is filed in Down 0.5% to 2%", async () => {
+  // The stored current cell sums to 6.859999999999999, one unit in the last
+  // place below the typed 6.86.
+  assert.equal(
+    await bucketOfCsv(
+      "year,product,units,sales\n2025,A-100,1,1.00\n2025,A-100,2,2.00\n2026,A-100,3,2.94\n2026,A-100,4,3.92\n",
+    ),
+    "Down 0.5% to 2%",
+  );
+});
+
+test("a CSV at an exact -5% edge keeps the band nearer no change when the cell sum drifts", async () => {
+  // 8.40 and 16.80 typed; the stored prior cell sums to 25.200000000000003
+  // while the typed rows sum to 25.20.
+  assert.equal(
+    await bucketOfCsv(
+      "year,product,units,sales\n2025,A-100,1,8.40\n2025,A-100,2,16.80\n2026,A-100,3,23.94\n2026,A-100,4,31.92\n",
+    ),
+    "Down 2% to 5%",
+  );
+});
+
+test("a CSV at an exact 10% edge is filed under the band its label names when the prior sum drifts", async () => {
+  // 12.34 and 24.68 typed; the stored prior cell sums to 37.019999999999996.
+  assert.equal(
+    await bucketOfCsv(
+      "year,product,units,sales\n2025,A-100,1,12.34\n2025,A-100,2,24.68\n2026,A-100,3,40.722\n2026,A-100,4,54.296\n",
+    ),
+    "Up 5% to 10%",
+  );
 });
 
 test("trend bridges each pair of consecutive periods", async () => {
@@ -769,7 +848,14 @@ test("cell rows match the previous cells SQL", async () => {
       type: String(row.type),
     }));
     const oldColumns = (await query(`SELECT name FROM pragma_table_info('old_cells')`)).map((row) => String(row.name));
-    assert.deepEqual(columns.map((column) => column.name), oldColumns, `${shape.label} columns`);
+    // The exact source sums are the only columns the previous cells SQL did not
+    // build; every other column and every row value must still match it.
+    const exactColumns = ["es0", "eq0", "es1", "eq1"];
+    const compared = columns.filter((column) => !exactColumns.includes(column.name));
+    assert.deepEqual(compared.map((column) => column.name), oldColumns, `${shape.label} columns`);
+    for (const name of exactColumns) {
+      assert.ok(columns.some((column) => column.name === name), `${shape.label} has ${name}`);
+    }
 
     const keys = shape.config.levels.flatMap((level) => level.columns);
     const order = keys.map((key) => ident(key)).join(", ");
@@ -779,7 +865,7 @@ test("cell rows match the previous cells SQL", async () => {
     assert.ok(fresh.length > 0, `${shape.label} produced no cells`);
 
     for (let i = 0; i < fresh.length; i++) {
-      for (const column of columns) {
+      for (const column of compared) {
         const actual = fresh[i][column.name];
         const expected = previous[i][column.name];
         const actualNumber = asNumber(actual);
