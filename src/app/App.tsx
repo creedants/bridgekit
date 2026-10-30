@@ -83,7 +83,8 @@ function describeError(error: unknown): string {
 
 /**
  * The banner above the workspace. A failed task's error gives way to the next
- * visitor action or task start; a refused load's outlives the rebuilds its hold names.
+ * visitor setup change, load or task start; a refused load's outlives the
+ * rebuilds its hold names.
  */
 type Banner = { text: string; refusal: boolean };
 
@@ -346,9 +347,9 @@ export function App() {
   }
   const query = () => db().then((d) => d.query);
 
-  /** A setup change, a new load or a task start ends whatever banner is on screen, a refusal included. */
+  /** Ends whatever banner is on screen, a refusal included: a visitor's setup change or load, and an unheld task start. */
   const clearBanner = () => setBanner(null);
-  /** A failure's own error replaces the banner; it ends at the next setup change, load or task start. */
+  /** A failure's own error replaces the banner; it ends at the next visitor setup change, load or task start. */
   const showFailure = (text: string) => setBanner({ text, refusal: false });
 
   // Each kind of task keeps its own label, so one finishing cannot clear another's.
