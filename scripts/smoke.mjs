@@ -1702,7 +1702,7 @@ async function drive(browser, origin, rows) {
       ).then(JSON.parse);
     const tipShowsUnitCost = () =>
       browser.evalJs(
-        `(() => { const box = document.querySelector('.bridge .waterfall .chart'); if (!box) return false; return [...box.querySelectorAll('div')].some((d) => d.innerHTML.includes('<b>Unit cost</b>')); })()`,
+        `(() => { const box = document.querySelector('.bridge .waterfall .chart'); if (!box) return false; return [...box.querySelectorAll('div')].some((d) => { if (!d.innerHTML.includes('<b>Unit cost</b>')) return false; const r = d.getBoundingClientRect(); if (r.width === 0 || r.height === 0) return false; return parseFloat(getComputedStyle(d).opacity || '1') > 0; }); })()`,
       );
     let unitX = null;
     for (let i = 0; i < 48 && unitX === null; i++) {
@@ -1718,6 +1718,11 @@ async function drive(browser, origin, rows) {
       }
     }
     if (unitX === null) fail("unit cost click: the Unit cost bar never showed its tooltip");
+    // The open tooltip would eat the clicks, so park the pointer off the
+    // chart and let it close before sweeping. The sweep sends no moves.
+    await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: canvasRect.left - 10, y: canvasRect.top - 10 });
+    await browser.sleep(500);
+    if (await tipShowsUnitCost()) fail("unit cost click: the Unit cost tooltip never closed before clicking");
     // One column holds one bar: the totals live in their own columns, so any
     // click in this column that opens Movers went through the Unit cost bar.
     let unitCost = null;
