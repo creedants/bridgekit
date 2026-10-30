@@ -1027,10 +1027,9 @@ export function mixedSeparatorSentence(
     const parts = splitOutsideQuotes(kept[index], other, quote, escape);
     if (parts.length !== header || !parts.every((field) => field.trim() !== "")) continue;
     const width = widths[index];
-    // A foreign record's period never holds the sniffed separator, so a short
-    // record whose first other-separator part does is punctuation plus omitted
-    // trailing cells, unless a later part reads as the measure a foreign record
-    // would carry, which loses data and stays refused.
+    // Keep the short-record exception limited to a sniffed separator in the
+    // first other-separator part and no later plain-measure part. Other
+    // candidate records retain the refusal.
     if (width < header && parts[0].includes(delimiter) && !parts.slice(1).some((field) => MEASURE_FIELD.test(field.trim()))) continue;
     return MIXED_SEPARATOR_SENTENCE;
   }
