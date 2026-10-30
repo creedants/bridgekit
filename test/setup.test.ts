@@ -2578,3 +2578,50 @@ test("T430: a count-named Units does not hide that a guessed Sales came from its
     sentence: 'No column of numbers is named like sales, so Sales is "alpha" because its values look like money.',
   });
 });
+
+test("T429: a tax column is never offered as the alternative Sales", () => {
+  const file: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "units", type: "BIGINT", facts: fact(216) },
+    { name: "Umsatzsteuer", type: "DOUBLE", facts: fact(5_400) },
+    { name: "alpha", type: "DOUBLE", facts: fact(5_600) },
+  ];
+  const guess = guessSetup(file);
+  assert.equal(guess.salesColumn, "");
+  const setup = { ...guess, ...refineGuess(guess, file) };
+  assert.equal(setup.salesColumn, "alpha");
+  assert.equal(setup.salesFromValues, "alpha");
+  assert.deepEqual(measureNote(file, setup), {
+    role: "sales",
+    sentence: 'No column of numbers is named like sales, so Sales is "alpha" because its values look like money.',
+  });
+});
+
+test("T429: no hint without the value fallback when only a tax column reads as money", () => {
+  const file: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "units", type: "BIGINT", facts: fact(216) },
+    { name: "Umsatzsteuer", type: "DOUBLE", facts: fact(5_400) },
+    { name: "alpha", type: "DOUBLE", facts: fact(5_600) },
+  ];
+  const guess = guessSetup(file);
+  const setup = { ...guess, ...refineGuess(guess, file) };
+  assert.equal(measureNote(file, { ...setup, salesFromValues: undefined }), null);
+});
+
+test("T429: the alternative Sales skips a tax column for the next money name", () => {
+  const file: Column[] = [
+    { name: "units", type: "BIGINT", facts: fact(216) },
+    { name: "sales", type: "DOUBLE", facts: fact(5_600) },
+    { name: "Umsatzsteuer", type: "DOUBLE", facts: fact(5_400) },
+    { name: "revenue", type: "DOUBLE", facts: fact(5_500) },
+  ];
+  const setup = guessSetup(file);
+  assert.equal(setup.salesColumn, "sales");
+  assert.deepEqual(measureNote(file, setup), {
+    role: "sales",
+    sentence: 'Sales is "sales", but "revenue" also looks like money; choose it in Sales if you meant that one.',
+  });
+});
