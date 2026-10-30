@@ -516,6 +516,36 @@ test("a workspace with no subscription is deleted without asking Paddle", async 
   assert.deepEqual((await db.prepare(`SELECT id FROM organization ORDER BY id`).all<{ id: string }>()).results.map((r) => r.id), ["w1"]);
 });
 
+test("a retry after a refused cancel does not ask Paddle to cancel the same subscription twice", async () => {
+  const db = await seeded();
+  await db.prepare(`INSERT INTO organization (id, name, slug, createdAt) VALUES ('w2', 'Solo', 'solo', ?), ('w3', 'Solo two', 'solo-two', ?)`).bind(now, now).run();
+  await db
+    .prepare(`INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES ('m3', 'w2', 'u1', 'owner', ?), ('m4', 'w3', 'u1', 'owner', ?)`)
+    .bind(now, now)
+    .run();
+  await applySubscription(db, subscription({ workspaceId: "w2", subscriptionId: "sub_2" }));
+  await applySubscription(db, subscription({ workspaceId: "w3", subscriptionId: "sub_3", occurredAt: "2026-10-05T00:00:00.000000Z" }));
+  const sent: string[] = [];
+  const refusesOne = (async (url: string | URL) => {
+    const id = String(url).split("/subscriptions/")[1]?.split("/")[0] ?? "";
+    sent.push(id);
+    return id === "sub_3" ? new Response("{}", { status: 500 }) : Response.json({ data: {} });
+  }) as typeof fetch;
+
+  await refusesDeletion(deleteSoleWorkspaces(db, "u1", paddleAccount(refusesOne)));
+  assert.ok(sent.includes("sub_2") && sent.includes("sub_3"), "both live subscriptions were offered to Paddle");
+  const stored = await db.prepare(`SELECT organizationId, status FROM subscription ORDER BY organizationId`).all<{ organizationId: string; status: string }>();
+  assert.deepEqual(stored.results, [
+    { organizationId: "w2", status: "canceled" },
+    { organizationId: "w3", status: "active" },
+  ]);
+
+  sent.length = 0;
+  await refusesDeletion(deleteSoleWorkspaces(db, "u1", paddleAccount(refusesOne)));
+  assert.deepEqual(sent, ["sub_3"]);
+  assert.ok(await db.prepare(`SELECT id FROM organization WHERE id = 'w3'`).first(), "the refused workspace stays");
+});
+
 test("page counts keep the path and referring site only, and skip bots and non-pages", async () => {
   const db = testDatabase();
   const html = new Response("<html>", { headers: { "content-type": "text/html; charset=utf-8" } });
