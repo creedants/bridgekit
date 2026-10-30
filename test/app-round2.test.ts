@@ -1041,6 +1041,8 @@ test("the banner stays through the fallback's refinement until a visitor change"
     // The refusal is on screen while the profile lands, the moment the refinement
     // used to clear it.
     assert.equal(harnessBanner(container), "This file has no data rows.", "the refusal is on screen before the profile lands");
+    // The first load already built a month view, so count only the refinement's own.
+    database.monthViews = 0;
     releaseProfile();
 
     const compare = () => {

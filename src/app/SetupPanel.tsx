@@ -45,6 +45,8 @@ export function SetupPanel(props: {
   /** Values that name a total row, which would count amounts twice. */
   totalRows: TotalRow[];
   onChange: (patch: Partial<Setup>) => void;
+  /** The profile's own refinement of the guess, which is not a visitor's setup change. */
+  onRefine: (patch: Partial<Setup>) => void;
   onPrior: (value: string) => void;
   onCurrent: (value: string) => void;
 }) {
@@ -90,7 +92,7 @@ export function SetupPanel(props: {
     if (refined.current === factsSignature) return;
     refined.current = factsSignature;
     const patch = refineGuess(setup, columns);
-    if (Object.keys(patch).length > 0) onChange(patch);
+    if (Object.keys(patch).length > 0) props.onRefine(patch);
   }, [factsSignature]);
   const [coverage, setCoverage] = useState<{ key: string; rows: PeriodCoverage[] } | null>(null);
   const coverageKey = [
