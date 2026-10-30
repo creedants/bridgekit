@@ -2828,3 +2828,59 @@ test("Preis je Stk is a unit price, never Units or Sales", () => {
   assert.equal(priced.salesColumn, "sales");
   assert.equal(measureNote(withSales, priced), null);
 });
+
+test("a price word and a unit word with only connectors between them are never Units or Sales", () => {
+  const names = [
+    "Preis pro Stk",
+    "Preis je Stk",
+    "Kosten je Stk",
+    "Preis Stk",
+    "Stk Preis",
+    "Preis je Stück",
+    "price per unit",
+    "price for each unit",
+    "cost / unit",
+    "Kosten/Stk",
+  ];
+  for (const name of names) {
+    const lone: Column[] = [
+      { name: "period", type: "VARCHAR" },
+      { name: "product", type: "VARCHAR" },
+      { name, type: "DOUBLE", facts: fact(6_100) },
+    ];
+    const loneGuess = guessSetup(lone);
+    assert.equal(loneGuess.unitsColumn, "", name);
+    assert.equal(loneGuess.salesColumn, "", name);
+    const loneSetup = { ...loneGuess, ...refineGuess(loneGuess, lone) };
+    assert.equal(loneSetup.unitsColumn, "", name);
+    assert.equal(loneSetup.salesColumn, "", name);
+    assert.equal(loneSetup.salesFromValues, undefined, name);
+    assert.equal(measureNote(lone, loneSetup), null, name);
+
+    const beside: Column[] = [...lone, { name: "alpha", type: "DOUBLE", facts: fact(5_600) }];
+    const besideGuess = guessSetup(beside);
+    assert.equal(besideGuess.unitsColumn, "", name);
+    assert.equal(besideGuess.salesColumn, "", name);
+    const besideSetup = { ...besideGuess, ...refineGuess(besideGuess, beside) };
+    assert.equal(besideSetup.salesColumn, "", name);
+    assert.equal(besideSetup.salesFromValues, undefined, name);
+
+    const counted: Column[] = [
+      { name: "units", type: "BIGINT", facts: fact(216) },
+      ...beside,
+    ];
+    const countGuess = guessSetup(counted);
+    assert.equal(countGuess.unitsColumn, "units", name);
+    assert.equal(countGuess.salesColumn, "", name);
+    const countSetup = { ...countGuess, ...refineGuess(countGuess, counted) };
+    assert.equal(countSetup.salesColumn, "alpha", name);
+    assert.equal(countSetup.salesFromValues, "alpha", name);
+    assert.equal(measureNote(counted, countSetup)?.sentence.includes(name), false, name);
+
+    const withSales: Column[] = [...lone, { name: "sales", type: "DOUBLE", facts: fact(5_600) }];
+    const priced = guessSetup(withSales);
+    assert.equal(priced.unitsColumn, "", name);
+    assert.equal(priced.salesColumn, "sales", name);
+    assert.equal(measureNote(withSales, priced), null, name);
+  }
+});
