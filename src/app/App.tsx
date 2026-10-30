@@ -10,7 +10,7 @@ import {
 } from "./db.ts";
 import { exportExcel, lazyChunk, type ChunkSentences } from "./exportExcel.ts";
 import { isPastedTable, makeGuard, saveOnce, shorten } from "./files.ts";
-import { fileProblem, periodView, periodsFor, type FileProblem, type Periods } from "./fileProblems.ts";
+import { fileProblem, periodView, periodsFor, type FileProblem, type Periods, type PeriodView } from "./fileProblems.ts";
 import { whole } from "./format.ts";
 import { findTotalRows, profileFile, type TotalRow } from "./profile.ts";
 import { loadPeriodList } from "./periods.ts";
@@ -81,8 +81,55 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * The banner above the workspace. A failed task's error gives way to the next
+ * visitor setup change, load or task start; a refused load's outlives the
+ * rebuilds its hold names.
+ */
+type Banner = { text: string; refusal: boolean };
+
 export function sourceCaption(source: string, rows: number, columns: number): string {
   return `${source} · ${whole(rows)} ${agree(rows, "row")} · ${whole(columns)} ${agree(columns, "column")}`;
+}
+
+/** The workbook's other-sheets sentence from a table comment, the same sentence Data check uses. */
+export function workbookSheetNote(comment: unknown): string | null {
+  const text = comment == null ? "" : String(comment);
+  const prefix = "sheet:";
+  if (!text.startsWith(prefix)) return null;
+  const body = text.slice(prefix.length);
+  const cut = body.lastIndexOf("|");
+  if (cut < 0) return null;
+  const name = body.slice(0, cut);
+  const others = Number(body.slice(cut + 1));
+  if (name === "" || !(others > 0)) return null;
+  const rest = others === 1 ? "the other sheet was not" : `the other ${others} sheets were not`;
+  return `The workbook's first sheet, "${name}", was loaded; ${rest}.`;
+}
+
+/** The workbook's other-sheets sentence for the loaded table, or null when the load left no such note. */
+export async function loadSheetNote(q: Query, table: string): Promise<string | null> {
+  const [row] = await q(
+    `SELECT comment FROM duckdb_tables() WHERE schema_name = current_schema() AND table_name = '${table.replaceAll("'", "''")}'`,
+  );
+  return workbookSheetNote(row?.comment);
+}
+
+/** A setup for Save setup to file, without the in-session guess markers. */
+export function persistedSetupForFile(setup: Setup): Omit<Setup, "fresh" | "salesFromValues"> {
+  const { fresh: _fresh, salesFromValues: _salesFromValues, ...persisted } = setup;
+  return persisted;
+}
+
+/** The view a setup and load produce, the key the period list is stored under. */
+export function viewOf(load: number, setup: Setup): PeriodView {
+  return periodView({
+    load,
+    periodColumn: setup.periodColumn,
+    grain: setup.grain,
+    fiscalYearStart: setup.fiscalYearStart,
+    filters: setup.filters,
+  });
 }
 
 function previewCell(type: string, value: unknown): string {
@@ -169,6 +216,28 @@ export function createTableOwner(): { claim(): Claim; owner(): Claim | null } {
   };
 }
 
+/**
+ * A refused load's banner survives the automatic work that follows it: the
+ * fallback's own period rebuild, and the rebuild an automatic profile refinement
+ * starts. The hold names the views those rebuilds will produce, so no other
+ * rebuild keeps it.
+ */
+export function createRefusalHold() {
+  const held = new Set<PeriodView>();
+  return {
+    /** This view's rebuild keeps the banner: the fallback's, or the refinement's own. */
+    hold(view: PeriodView): void {
+      held.add(view);
+    },
+    /** A task start for this view. True only for a rebuild the refusal was held for. */
+    spend(view: PeriodView | null): boolean {
+      if (view === null || !held.has(view)) return false;
+      held.delete(view);
+      return true;
+    },
+  };
+}
+
 /** What a paste does. Wrong shape is refused; nothing displayed loads at once; displayed data asks first. */
 export function pasteIntent(text: string, displayedLoad: number): "refuse" | "load" | "ask" {
   if (!isPastedTable(text)) return "refuse";
@@ -225,7 +294,7 @@ export function App() {
   const [phase, dispatch] = useReducer(nextPhase, location.search, initialPhase);
   const engineState = useEngine();
   const [tasks, setTasks] = useState<ReadonlyMap<TaskKind, { label: string; id: number }>>(new Map());
-  const [error, setError] = useState("");
+  const [banner, setBanner] = useState<Banner | null>(null);
   const [notice, setNotice] = useState("");
   const [source, setSource] = useState("");
   const [fromSample, setFromSample] = useState(false);
@@ -250,12 +319,15 @@ export function App() {
   const [omitNames, setOmitNames] = useState(false);
   const [formulaBlanks, setFormulaBlanks] = useState(0);
   const [setupError, setSetupError] = useState("");
+  const [sheetNote, setSheetNote] = useState<string | null>(null);
   // exportExcel saves its file itself, so the Excel export keeps a guard of its own.
   const [exportGuard] = useState(() => makeGuard());
   // A demonstration sample must not overwrite a setup saved for a file with the same columns.
   const writesSetup = useRef(true);
   // The loaded table's owner, so a load an earlier pick replaced never writes.
   const [tables] = useState(createTableOwner);
+  // The one rebuild a refused load's banner is allowed to survive.
+  const [refusalHold] = useState(createRefusalHold);
   // What each table number holds, so the page can name the rows that are in the table.
   const loads = useRef(new Map<number, { name: string; preset?: Sample; blanks: number }>());
   // The load whose name, columns and setup afterLoad last put in state, for the refused-load fallback.
@@ -275,16 +347,22 @@ export function App() {
   }
   const query = () => db().then((d) => d.query);
 
+  /** Ends whatever banner is on screen, a refusal included: a visitor's setup change or load, and an unheld task start. */
+  const clearBanner = () => setBanner(null);
+  /** A failure's own error replaces the banner; it ends at the next visitor setup change, load or task start. */
+  const showFailure = (text: string) => setBanner({ text, refusal: false });
+
   // Each kind of task keeps its own label, so one finishing cannot clear another's.
-  async function task(kind: TaskKind, label: string, work: () => Promise<void>): Promise<boolean> {
+  async function task(kind: TaskKind, label: string, work: () => Promise<void>, keepError = false): Promise<boolean> {
     const id = ++taskRef.current;
     setTasks((running) => new Map([...running].filter(([key]) => key !== kind)).set(kind, { label, id }));
-    setError("");
+    // A refused load's banner stays through the rebuilds its hold names, and no other task keeps it.
+    if (!keepError) clearBanner();
     try {
       await work();
       return true;
     } catch (e) {
-      setError(describeError(e));
+      showFailure(describeError(e));
       return false;
     } finally {
       setTasks((running) => {
@@ -307,7 +385,7 @@ export function App() {
     const meta = { name, preset, blanks: 0 };
     loads.current.set(claim.n, meta);
     dispatch({ type: "read", load: claim.n, ...read });
-    setError("");
+    clearBanner();
     try {
       const outcome = await claim.write(write);
       if (outcome.status === "superseded") return;
@@ -317,7 +395,7 @@ export function App() {
       dispatch({ type: "loaded", load: claim.n });
     } catch (e) {
       if (!claim.current()) return;
-      setError(describeError(e));
+      setBanner({ text: describeError(e), refusal: true });
       try {
         // A refused load leaves the table as the last write made it, so a load that
         // landed while this one waited is the one the page has to name.
@@ -328,7 +406,7 @@ export function App() {
             : undefined;
         if (held && shown) {
           setFormulaBlanks(shown.blanks);
-          await afterLoad(held.n, shown.name, shown.preset, () => claim.current());
+          await afterLoad(held.n, shown.name, shown.preset, () => claim.current(), true);
         }
       } finally {
         dispatch({ type: "failed", load: claim.n });
@@ -336,7 +414,7 @@ export function App() {
     }
   }
 
-  async function afterLoad(load: number, name: string, preset: Sample | undefined, current: () => boolean) {
+  async function afterLoad(load: number, name: string, preset: Sample | undefined, current: () => boolean, keepRefusal = false) {
     // The table has already been replaced, so a run from the file before it must
     // not survive a load that a newer load superseded.
     setRun(null);
@@ -344,15 +422,20 @@ export function App() {
     const described = await q(`DESCRIBE ${quote(TABLE)}`);
     const found = described.map((row) => ({ name: String(row.column_name), type: String(row.column_type) }));
     const [count] = await q(`SELECT count(*)::DOUBLE AS n FROM ${quote(TABLE)}`);
+    const note = await loadSheetNote(q, TABLE).catch(() => null);
     if (!current()) return;
     const saved = preset ? null : loadSavedSetup(found);
     setColumns(found);
     setRowCount(Number(count.n));
     setSource(name);
+    setSheetNote(note);
     setFromSample(!!preset);
     setLoad(load);
     published.current = load;
-    setSetup(preset?.setup ?? saved ?? guessSetup(found));
+    const next = preset?.setup ?? saved ?? guessSetup(found);
+    setSetup(next);
+    // A refused load's banner survives this fallback rebuild; onRefine holds the refinement's.
+    if (keepRefusal) refusalHold.hold(viewOf(load, next));
     setSuggestedPeriods(preset?.periods ?? null);
     writesSetup.current = preset?.savesSetup ?? true;
     setNotice(saved ? "Restored the setup you last used with these columns." : "");
@@ -379,7 +462,7 @@ export function App() {
 
   const loadFile = (file: File) => {
     if (/\.parquet$/i.test(file.name)) {
-      setError(PARQUET_REFUSAL);
+      showFailure(PARQUET_REFUSAL);
       return;
     }
     prefetchResults();
@@ -395,11 +478,10 @@ export function App() {
 
   // Rebuild the filtered view and the period list whenever they could change.
   // The load count stands in for the file name, so a second file with the same name still re-reads.
-  const view = setup
-    ? periodView({ load, periodColumn: setup.periodColumn, grain: setup.grain, fiscalYearStart: setup.fiscalYearStart, filters: setup.filters })
-    : null;
+  const view = setup ? viewOf(load, setup) : null;
   useEffect(() => {
     if (view === null || !setup) return;
+    const keepError = refusalHold.spend(view);
     const ticket = periodReads.start();
     if (!setup.periodColumn) {
       dispatchPeriodViews({ type: "noPeriodColumn", view });
@@ -418,7 +500,7 @@ export function App() {
       const next = carryPeriods(periodsRef.current, values, suggestedPeriods ?? null);
       setPrior(next.prior);
       setCurrent(next.current);
-    });
+    }, keepError);
   }, [view]);
 
   const offeredPeriods = periodViews.list ? [...periodViews.list.values] : [];
@@ -458,7 +540,13 @@ export function App() {
         salesColumn: setup.salesColumn,
       })
     : { kind: "none" };
-  const gate = calculateGate({ setup, prior, current, problem });
+  const gate = calculateGate({
+    setup,
+    prior,
+    current,
+    problem,
+    months: setup ? columns.find((c) => c.name === setup.periodColumn)?.facts?.months : undefined,
+  });
   const ready = gate.ready;
   const canCalculate = ready && !busy && periodsCurrent;
 
@@ -517,13 +605,13 @@ export function App() {
   // After a calculation, bring its result or its error into view and hand it focus.
   useEffect(() => {
     if (!scrollAfterRun.current) return;
-    const target = error ? errorRef.current : resultsRef.current?.querySelector<HTMLElement>(".results-title");
+    const target = banner ? errorRef.current : resultsRef.current?.querySelector<HTMLElement>(".results-title");
     if (!target) return;
     scrollAfterRun.current = false;
     const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
     target.scrollIntoView({ block: "start", behavior: still ? "auto" : "smooth" });
     target.focus({ preventScroll: true });
-  }, [run?.id, error, phase]);
+  }, [run?.id, banner, phase]);
 
   useEffect(() => scheduleSpeculative(prefetchResults, RESULTS_PREFETCH_SETTLE_MS), []);
 
@@ -583,7 +671,7 @@ export function App() {
       e.preventDefault();
       const intent = pasteIntent(text, displayed.current);
       if (intent === "refuse") {
-        setError(NOT_A_TABLE);
+        showFailure(NOT_A_TABLE);
         return;
       }
       if (intent === "ask" && !confirm("Replace the loaded data with the pasted cells?")) return;
@@ -679,6 +767,7 @@ export function App() {
               ? sourceCaption(source, rowCount, columns.length)
               : "No data loaded"}
         </span>
+        {sheetNote && phase.kind !== "reading" && <span className="hint">{sheetNote}</span>}
         <span className="status" aria-live="polite">{status}</span>
         <nav>
           {filePicker}
@@ -701,7 +790,7 @@ export function App() {
         </nav>
       </header>
 
-      {error && <p className="error" role="alert" ref={errorRef} tabIndex={-1}>{error}</p>}
+      {banner && <p className="error" role="alert" ref={errorRef} tabIndex={-1}>{banner.text}</p>}
 
       {shown.kind === "loading" ? (
         <main className="empty">
@@ -761,7 +850,18 @@ export function App() {
               query={query}
               rollups={rollups}
               totalRows={totalRows}
-              onChange={(patch) => setSetup((s) => (s ? { ...s, ...patch } : s))}
+              onChange={(patch) => {
+                clearBanner();
+                setSetup((s) => (s ? { ...s, ...patch } : s));
+              }}
+              onRefine={(patch) => {
+                // The profile's own refinement is no visitor action, so a refused
+                // load's banner survives it and the rebuild its new view starts.
+                const next = { ...setup, ...patch };
+                const nextView = viewOf(load, next);
+                if (banner?.refusal && nextView !== view) refusalHold.hold(nextView);
+                setSetup(next);
+              }}
               onPrior={setPrior}
               onCurrent={setCurrent}
             />
@@ -793,9 +893,7 @@ export function App() {
               <p className="row">
                 <button
                   className="quiet"
-                  onClick={() =>
-                    saveOnce(SETUP_FILE, JSON.stringify(setup, null, 2), "application/json")
-                  }
+                  onClick={() => saveOnce(SETUP_FILE, JSON.stringify(persistedSetupForFile(setup), null, 2), "application/json")}
                 >
                   Save setup to file
                 </button>
@@ -821,8 +919,10 @@ export function App() {
                   setup={setup}
                   bridge={fresh ? { summary: summarize(fresh.result, fresh.config), setup } : null}
                   onUseSetup={(saved) => {
-                    if (isValidSetup(saved, columns)) setSetup(restoredSetup(saved));
-                    else setError("That saved setup does not match the columns in this data.");
+                    if (isValidSetup(saved, columns)) {
+                      clearBanner();
+                      setSetup(restoredSetup(saved));
+                    } else showFailure("That saved setup does not match the columns in this data.");
                   }}
                 />
               </Suspense>
