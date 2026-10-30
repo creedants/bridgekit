@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { amountsNote, dataCheck, periodMoney, runBridge, type BridgeConfig, type Query } from "../engine.ts";
 import { summarize } from "../summary.ts";
 import { resolveSample, type Sample } from "../synth.ts";
@@ -44,6 +44,7 @@ import {
   type Column,
   type EngineState,
   type LoadSource,
+  type Phase,
   type Setup,
 } from "./setup.ts";
 import { agree, SetupPanel } from "./SetupPanel.tsx";
@@ -124,6 +125,67 @@ function setEngine(next: EngineState): void {
   for (const watcher of engineWatchers) watcher();
 }
 
+/**
+ * One load's right to replace the loaded table. `write` runs in claim order, and a
+ * claim that a newer pick replaced skips its work entirely.
+ */
+export interface Claim {
+  readonly n: number;
+  current(): boolean;
+  write<T>(work: () => Promise<T>): Promise<WriteOutcome<T>>;
+}
+
+export type WriteOutcome<T> = { status: "wrote"; value: T } | { status: "superseded" };
+
+/**
+ * Owns the one loaded table. `claim()` is called in the pick handler, so claim
+ * order is pick order, and each table number is the phase's load number.
+ */
+export function createTableOwner(): { claim(): Claim; owner(): Claim | null } {
+  let count = 0;
+  let newest: Claim | null = null;
+  let held: Claim | null = null;
+  let tail: Promise<unknown> = Promise.resolve();
+  return {
+    claim() {
+      const claim: Claim = {
+        n: ++count,
+        current: () => newest === claim,
+        write<T>(work: () => Promise<T>): Promise<WriteOutcome<T>> {
+          const turn = tail.then(async (): Promise<WriteOutcome<T>> => {
+            if (!claim.current()) return { status: "superseded" };
+            const value = await work();
+            held = claim;
+            return { status: "wrote", value };
+          });
+          tail = turn.catch(() => undefined);
+          return turn;
+        },
+      };
+      newest = claim;
+      return claim;
+    },
+    owner: () => held,
+  };
+}
+
+/** What a paste does. Wrong shape is refused; nothing displayed loads at once; displayed data asks first. */
+export function pasteIntent(text: string, displayedLoad: number): "refuse" | "load" | "ask" {
+  if (!isPastedTable(text)) return "refuse";
+  return displayedLoad === 0 ? "load" : "ask";
+}
+
+/**
+ * The load whose data the visitor has been shown. It moves only when the page
+ * commits to the workspace phase, the render that draws the workspace; publishing
+ * metadata in afterLoad and the sample's auto-run loading view do not count. A
+ * newer reading load, a refused load's fallback and a superseded load leave it
+ * nonzero, so the question is still asked.
+ */
+export function visibleLoad(shown: number, phase: Phase): number {
+  return phase.kind === "workspace" ? phase.load : shown;
+}
+
 /** Opens the page's database. db.ts caches the open and forgets a failed one, so a later call retries. */
 function startEngine(): Promise<BrowserDatabase> {
   const opening = openBrowserDatabase();
@@ -192,8 +254,14 @@ export function App() {
   const [exportGuard] = useState(() => makeGuard());
   // A demonstration sample must not overwrite a setup saved for a file with the same columns.
   const writesSetup = useRef(true);
-  // Labels the newest load, so work started for an earlier file can tell it is stale.
-  const loadRef = useRef(0);
+  // The loaded table's owner, so a load an earlier pick replaced never writes.
+  const [tables] = useState(createTableOwner);
+  // What each table number holds, so the page can name the rows that are in the table.
+  const loads = useRef(new Map<number, { name: string; preset?: Sample; blanks: number }>());
+  // The load whose name, columns and setup afterLoad last put in state, for the refused-load fallback.
+  const published = useRef(0);
+  // The load the visitor has actually been shown, which the paste question reads.
+  const displayed = useRef(0);
   const taskRef = useRef(0);
   const scrollAfterRun = useRef(false);
   const resultsRef = useRef<HTMLDivElement>(null);
@@ -228,24 +296,47 @@ export function App() {
     }
   }
 
+  /** Runs one load. `write` replaces the table and resolves the formulas with no saved result. */
   async function readData(
     read: { source: LoadSource; fileName?: string; label: string },
-    work: (thisLoad: number) => Promise<void>,
+    name: string,
+    preset: Sample | undefined,
+    write: () => Promise<number>,
   ) {
-    const thisLoad = ++loadRef.current;
-    dispatch({ type: "read", load: thisLoad, ...read });
+    const claim = tables.claim();
+    const meta = { name, preset, blanks: 0 };
+    loads.current.set(claim.n, meta);
+    dispatch({ type: "read", load: claim.n, ...read });
     setError("");
     try {
-      await work(thisLoad);
-      dispatch({ type: "loaded", load: thisLoad });
+      const outcome = await claim.write(write);
+      if (outcome.status === "superseded") return;
+      meta.blanks = outcome.value;
+      setFormulaBlanks(outcome.value);
+      await afterLoad(claim.n, name, preset, () => claim.current());
+      dispatch({ type: "loaded", load: claim.n });
     } catch (e) {
-      if (loadRef.current !== thisLoad) return;
+      if (!claim.current()) return;
       setError(describeError(e));
-      dispatch({ type: "failed", load: thisLoad });
+      try {
+        // A refused load leaves the table as the last write made it, so a load that
+        // landed while this one waited is the one the page has to name.
+        const held = tables.owner();
+        const shown =
+          held && published.current !== 0 && held.n !== claim.n && held.n !== published.current
+            ? loads.current.get(held.n)
+            : undefined;
+        if (held && shown) {
+          setFormulaBlanks(shown.blanks);
+          await afterLoad(held.n, shown.name, shown.preset, () => claim.current());
+        }
+      } finally {
+        dispatch({ type: "failed", load: claim.n });
+      }
     }
   }
 
-  async function afterLoad(thisLoad: number, name: string, preset?: Sample) {
+  async function afterLoad(load: number, name: string, preset: Sample | undefined, current: () => boolean) {
     // The table has already been replaced, so a run from the file before it must
     // not survive a load that a newer load superseded.
     setRun(null);
@@ -253,24 +344,25 @@ export function App() {
     const described = await q(`DESCRIBE ${quote(TABLE)}`);
     const found = described.map((row) => ({ name: String(row.column_name), type: String(row.column_type) }));
     const [count] = await q(`SELECT count(*)::DOUBLE AS n FROM ${quote(TABLE)}`);
-    if (loadRef.current !== thisLoad) return;
+    if (!current()) return;
     const saved = preset ? null : loadSavedSetup(found);
     setColumns(found);
     setRowCount(Number(count.n));
     setSource(name);
     setFromSample(!!preset);
-    setLoad(thisLoad);
+    setLoad(load);
+    published.current = load;
     setSetup(preset?.setup ?? saved ?? guessSetup(found));
     setSuggestedPeriods(preset?.periods ?? null);
     writesSetup.current = preset?.savesSetup ?? true;
     setNotice(saved ? "Restored the setup you last used with these columns." : "");
     setSetupError("");
     const previewRows = await q(`SELECT * FROM ${quote(TABLE)} LIMIT 8`);
-    if (loadRef.current !== thisLoad) return;
+    if (!current()) return;
     setPreview(previewRows);
     setRollups([]);
     // Profiling is a convenience; the tool works without it.
-    profileFile(q, found, () => loadRef.current === thisLoad, (profile) => {
+    profileFile(q, found, current, (profile) => {
       setColumns(profile.columns);
       setRollups(profile.rollups);
     }).catch(() => {});
@@ -279,10 +371,9 @@ export function App() {
   const loadSample = () => {
     prefetchResults();
     const { sample, rows } = resolveSample(new URLSearchParams(location.search).get("sample"));
-    return readData({ source: "sample", label: SAMPLE_LABEL }, async (thisLoad) => {
+    return readData({ source: "sample", label: SAMPLE_LABEL }, sample.label, sample, async () => {
       await sample.create(await query(), rows, TABLE);
-      setFormulaBlanks(0);
-      await afterLoad(thisLoad, sample.label, sample);
+      return 0;
     });
   };
 
@@ -294,10 +385,12 @@ export function App() {
     prefetchResults();
     const bare = withoutSample(location.href);
     if (bare) history.replaceState(history.state, "", bare);
-    return readData({ source: "file", fileName: file.name, label: `Reading ${file.name}…` }, async (thisLoad) => {
-      setFormulaBlanks(await (await db()).loadFile(file, TABLE));
-      await afterLoad(thisLoad, file.name);
-    });
+    return readData(
+      { source: "file", fileName: file.name, label: `Reading ${file.name}…` },
+      file.name,
+      undefined,
+      async () => (await db()).loadFile(file, TABLE),
+    );
   };
 
   // Rebuild the filtered view and the period list whenever they could change.
@@ -434,13 +527,16 @@ export function App() {
 
   useEffect(() => scheduleSpeculative(prefetchResults, RESULTS_PREFETCH_SETTLE_MS), []);
 
-  // Start the engine download once the first frame is painted. A link to /app/?sample
-  // starts its load then too, so it opens with the sample already calculated.
+  // The engine files are several megabytes, so they download when the page is
+  // idle and not on a connection that asked to save data.
+  useEffect(() => scheduleSpeculative(() => void startEngine().catch(() => {})), []);
+
+  // A link to /app/?sample starts its load once the first frame is painted, so it
+  // opens with the sample already calculated. That load opens the engine itself.
   useEffect(() => {
     let timer = 0;
     const frame = requestAnimationFrame(() => {
       timer = window.setTimeout(() => {
-        void startEngine().catch(() => {});
         if (sampleLinkRead.current || phase.kind !== "reading" || phase.load !== 0) return;
         sampleLinkRead.current = true;
         loadSample();
@@ -470,6 +566,13 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  // The workspace phase is the first render that shows this load's data, so the
+  // marker advances on that commit and not when a load publishes its metadata. A
+  // layout effect records it before paint, so a paste in the same frame still asks.
+  useLayoutEffect(() => {
+    displayed.current = visibleLoad(displayed.current, phase);
+  }, [phase]);
+
   // Cells copied from a spreadsheet arrive as tab-separated text; load them like a file.
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
@@ -478,10 +581,12 @@ export function App() {
       const text = e.clipboardData?.getData("text/plain") ?? "";
       if (text === "") return;
       e.preventDefault();
-      if (!isPastedTable(text)) {
+      const intent = pasteIntent(text, displayed.current);
+      if (intent === "refuse") {
         setError(NOT_A_TABLE);
         return;
       }
+      if (intent === "ask" && !confirm("Replace the loaded data with the pasted cells?")) return;
       loadFile(new File([text], "Pasted cells.tsv", { type: "text/tab-separated-values" }));
     };
     window.addEventListener("paste", onPaste);
