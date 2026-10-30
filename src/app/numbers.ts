@@ -995,7 +995,7 @@ function trailingPartial(prefix: string, quote: string, escape: string): string 
  * record survives. Used to keep a third-separator file that already has
  * columns under its sniffed separator from ever falling back to a comma or
  * semicolon check. A truncated prefix that holds only part of the header is
- * judged on what it holds: the sole header record is never discarded, and a
+ * judged on what it holds. The sole header record is never discarded, and a
  * prefix with no complete header counts its unfinished tail with quoting
  * respected.
  */
