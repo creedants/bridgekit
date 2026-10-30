@@ -51,6 +51,9 @@ function devCommentary(apiKey: string | undefined): Plugin {
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, import.meta.dirname, "");
+  if (process.env.VITE_WORKSPACES === "1" && !env.VITE_PADDLE_CLIENT_TOKEN) {
+    console.warn("VITE_PADDLE_CLIENT_TOKEN is unset, so the Paddle checkout will not load.");
+  }
   return {
     plugins: [
       react(),
