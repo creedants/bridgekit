@@ -1,24 +1,29 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { bridgeBy, measureName, type BridgeBy, type BridgeConfig, type BridgePanel, type Query } from "../engine.ts";
-import { whole } from "./format.ts";
+import * as echarts from "echarts/core";
+import { bridgeBy, measureName, type BridgeBy, type BridgeConfig, type Query } from "../engine.ts";
+import { compact, signedCompact, whole } from "./format.ts";
 import {
   attemptSplit,
-  betweenLine,
   createSplitRunner,
+  drawGrid,
   focusPlace,
   IDLE_SPLIT_PHASE,
   paintSplit,
-  panelStatusLabel,
   panelTitle,
+  pictureLayout,
   reduceSplitPhase,
-  sharedScale,
-  steps,
+  showSplit,
+  shownSplit,
+  PICTURE_CELL_HEIGHT,
+  PICTURE_CELL_WIDTH,
+  type DrawnGrid,
+  type PanelBlock,
   type SplitEvent,
   type SplitPhase,
   type Step,
   type ValueScale,
 } from "./small-bridges.ts";
-import { BridgeChart, Legend, Waterfall } from "./Waterfall.tsx";
+import { BridgeChart, bridgeOption, chartTheme, labelPlan, Legend, Waterfall } from "./Waterfall.tsx";
 import type { Run } from "./Results.tsx";
 
 /** The limit `bridgeBy` uses by default: at most 12 value panels, then the remainder. */
@@ -57,6 +62,7 @@ export function SmallBridges(props: { run: Run; query: () => Promise<Query>; fre
   const configRef = useRef(config);
   const queryRef = useRef(props.query);
   const freshRef = useRef(props.fresh);
+  const resultRef = useRef(props.run.result);
   const selectRef = useRef<HTMLSelectElement>(null);
   const backRef = useRef<HTMLButtonElement>(null);
   const triggers = useRef(new Map<number, HTMLButtonElement>());
@@ -64,12 +70,15 @@ export function SmallBridges(props: { run: Run; query: () => Promise<Query>; fre
   configRef.current = config;
   queryRef.current = props.query;
   freshRef.current = props.fresh;
+  resultRef.current = props.run.result;
   openRef.current = open;
 
   const applyPhase = useCallback((event: SplitEvent): SplitPhase => {
     const next = reduceSplitPhase(phaseRef.current, event);
     phaseRef.current = next;
     setPhase(next);
+    // The only writer of the published grid: exports read it through shownSplit.
+    showSplit(resultRef.current, next);
     return next;
   }, []);
 
@@ -177,30 +186,30 @@ function Grid(props: {
 }) {
   const priorLabel = String(props.config.prior);
   const currentLabel = String(props.config.current);
-  // One pass builds every panel's bars and the one axis they all stand on.
-  const drawn = useMemo(
-    () => props.by.panels.map((panel) => ({ panel, bars: panel.result ? steps(panel.result, priorLabel, currentLabel) : null })),
-    [props.by, priorLabel, currentLabel],
-  );
-  const scale = useMemo(() => sharedScale(drawn.flatMap((d) => (d.bars ? [d.bars] : []))), [drawn]);
+  // The one derivation of the grid's blocks and shared axis.
+  const grid = useMemo(() => drawGrid(props.by, priorLabel, currentLabel), [props.by, priorLabel, currentLabel]);
   return (
     <>
       <Legend />
       <div className="panels">
-        {drawn.map((d, index) => (
-          <Panel
-            key={panelTitle(d.panel)}
-            panel={d.panel}
-            bars={d.bars}
-            scale={scale}
-            index={index}
-            config={props.config}
-            onOpen={props.onOpen}
-            triggers={props.triggers}
-          />
-        ))}
+        {grid.blocks.map((block, index) =>
+          block.kind === "bridge" ? (
+            <Panel
+              key={block.title}
+              title={block.title}
+              bars={block.bars}
+              scale={grid.scale}
+              index={index}
+              config={props.config}
+              onOpen={props.onOpen}
+              triggers={props.triggers}
+            />
+          ) : (
+            <FiguresPanel key={block.title} block={block} config={props.config} />
+          ),
+        )}
       </div>
-      <p className="hint">{betweenLine(props.by)}</p>
+      <p className="hint">{grid.between}</p>
     </>
   );
 }
@@ -211,7 +220,7 @@ function Grid(props: {
  * no bridge of its own has no button and shows its figures instead.
  */
 const Panel = memo(function Panel(props: {
-  panel: BridgePanel;
+  title: string;
   bars: Step[] | null;
   scale: ValueScale;
   index: number;
@@ -219,8 +228,6 @@ const Panel = memo(function Panel(props: {
   onOpen: (index: number) => void;
   triggers: Map<number, HTMLButtonElement>;
 }) {
-  const title = panelTitle(props.panel);
-  const status = panelStatusLabel(props.panel.status);
   return (
     <div className="panel">
       {props.bars ? (
@@ -232,34 +239,151 @@ const Panel = memo(function Panel(props: {
           }}
           onClick={() => props.onOpen(props.index)}
         >
-          {title}
+          {props.title}
         </button>
       ) : (
-        <span className="panel-title">{title}</span>
+        <span className="panel-title">{props.title}</span>
       )}
       {props.bars ? (
-        <BridgeChart bars={props.bars} priorSales={props.panel.priorSales} scale={props.scale} slim ariaLabel={`Bridge for ${title}`} />
-      ) : (
-        <div className="panel-figures">
-          {status && <p className="panel-status">{status}</p>}
-          <table>
-            <tbody>
-              <tr>
-                <th>Prior {measureName(props.config).toLowerCase()}</th>
-                <td className="num">{whole(props.panel.priorSales)}</td>
-              </tr>
-              <tr>
-                <th>Current {measureName(props.config).toLowerCase()}</th>
-                <td className="num">{whole(props.panel.currentSales)}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      )}
+        <BridgeChart bars={props.bars} priorSales={props.bars[0]?.high ?? 0} scale={props.scale} slim ariaLabel={`Bridge for ${props.title}`} />
+      ) : null}
     </div>
   );
 });
 
+/** A value with no bridge of its own, showing its two figures instead of a chart. */
+function FiguresPanel(props: {
+  block: Extract<PanelBlock, { kind: "figures" }>;
+  config: BridgeConfig;
+}) {
+  return (
+    <div className="panel">
+      <span className="panel-title">{props.block.title}</span>
+      <div className="panel-figures">
+        {props.block.status && <p className="panel-status">{props.block.status}</p>}
+        <table>
+          <tbody>
+            <tr>
+              <th>Prior {measureName(props.config).toLowerCase()}</th>
+              <td className="num">{whole(props.block.prior)}</td>
+            </tr>
+            <tr>
+              <th>Current {measureName(props.config).toLowerCase()}</th>
+              <td className="num">{whole(props.block.current)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/** The grid's fixed column count on the composite picture. */
+export const SPLIT_PICTURE_COLUMNS = 3;
+
+function loadPictureImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("the grid chart could not be drawn"));
+    image.src = url;
+  });
+}
+
+/**
+ * The ready grid drawn off screen at a fixed width, with titles, figures and
+ * the between line, at pixel ratio 2. Null when no grid is ready for this run.
+ */
+export async function splitPicture(run: Run): Promise<HTMLCanvasElement | null> {
+  const by = shownSplit(run.result);
+  if (!by) return null;
+  const priorLabel = String(run.config.prior);
+  const currentLabel = String(run.config.current);
+  const grid: DrawnGrid = drawGrid(by, priorLabel, currentLabel);
+  const layout = pictureLayout(
+    { width: SPLIT_PICTURE_COLUMNS * PICTURE_CELL_WIDTH, height: 0 },
+    grid,
+    SPLIT_PICTURE_COLUMNS,
+  );
+  const ratio = 2;
+  const canvas = document.createElement("canvas");
+  canvas.width = layout.width * ratio;
+  canvas.height = layout.height * ratio;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  context.scale(ratio, ratio);
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, layout.width, layout.height);
+  const theme = chartTheme();
+  const font = (size: number, weight = "") => `${weight ? `${weight} ` : ""}${size}px ${theme.font}`;
+  // One holder off screen for every chart drawn in turn.
+  const holder = document.createElement("div");
+  holder.style.cssText = "position:fixed;left:-10000px;top:0;";
+  document.body.appendChild(holder);
+  try {
+    for (let index = 0; index < grid.blocks.length; index += 1) {
+      const block = grid.blocks[index];
+      const cell = layout.cells[index];
+      context.fillStyle = theme.text;
+      context.font = font(15, "600");
+      context.fillText(block.title, cell.x + 12, cell.y + 20);
+      if (block.kind === "bridge") {
+        const chartWidth = cell.width - 24;
+        const chartHeight = cell.height - 60;
+        const box = document.createElement("div");
+        box.style.width = `${chartWidth}px`;
+        box.style.height = `${chartHeight}px`;
+        holder.appendChild(box);
+        const chart = echarts.init(box, null, { width: chartWidth, height: chartHeight });
+        try {
+          const labels = block.bars.map((bar) => bar.label);
+          const values = block.bars.map((bar) =>
+            bar.kind === "total" ? compact(bar.value) : signedCompact(bar.value),
+          );
+          chart.setOption(
+            bridgeOption({
+              bars: block.bars,
+              plan: labelPlan(labels, values, chartWidth),
+              scale: grid.scale,
+              width: chartWidth,
+              theme,
+              priorSales: 1,
+              touch: () => false,
+              selectable: () => false,
+            }),
+          );
+          const image = await loadPictureImage(
+            chart.getDataURL({ type: "png", pixelRatio: ratio, backgroundColor: "#ffffff" }),
+          );
+          context.drawImage(image, cell.x + 12, cell.y + 30, chartWidth, chartHeight);
+        } finally {
+          chart.dispose();
+          box.remove();
+        }
+      } else {
+        let y = cell.y + 44;
+        context.font = font(13);
+        if (block.status) {
+          context.fillText(block.status, cell.x + 12, y);
+          y += 22;
+        }
+        const measure = measureName(run.config).toLowerCase();
+        context.fillText(`Prior ${measure}: ${whole(block.prior)}`, cell.x + 12, y);
+        context.fillText(`Current ${measure}: ${whole(block.current)}`, cell.x + 12, y + 22);
+      }
+    }
+    context.fillStyle = theme.text2;
+    context.font = font(13);
+    const top = layout.cells.length > 0 ? layout.cells[0].y : 0;
+    const gridBottom = top + Math.ceil(grid.blocks.length / SPLIT_PICTURE_COLUMNS) * PICTURE_CELL_HEIGHT;
+    layout.between.forEach((line, i) => {
+      context.fillText(line, 12, gridBottom + 30 + i * 24);
+    });
+  } finally {
+    holder.remove();
+  }
+  return canvas;
+}
 /**
  * The chosen value's bridge at full size, on its own axis like the main bridge.
  * Nothing inside it drills down, so the chart is not clickable and its tooltip

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { exportExcel, finiteOrBlank } from "../src/app/exportExcel.ts";
 import { toExportCsv } from "../src/app/files.ts";
-import type { BridgeConfig, BridgeResult, DataCheck, Level, Query, TieOut } from "../src/engine.ts";
+import type { BridgeBy, BridgeConfig, BridgeResult, DataCheck, Level, Query, TieOut } from "../src/engine.ts";
 
 test("finiteOrBlank keeps everything except a number that is not finite", () => {
   assert.equal(finiteOrBlank(12.5), 12.5);
@@ -693,4 +693,127 @@ test("tied By groups keep the limit-5000 rows and order with a cap note only ove
       assert.equal(sheet.getRow(5002).getCell(1).value, expectedNote, `the note follows 5000 data rows at ${total}`);
     }
   }
+});
+
+test("a workbook exported with a split holds the grid as its own last sheet", async () => {
+  const { default: ExcelJS } = await import("exceljs");
+  const captured: { blob?: Blob } = {};
+  const realDocument = (globalThis as any).document;
+  const realCreate = URL.createObjectURL;
+  const realRevoke = URL.revokeObjectURL;
+  (globalThis as any).document = { createElement: () => ({ href: "", download: "", click() {} }) };
+  (URL as any).createObjectURL = (blob: Blob) => {
+    captured.blob = blob;
+    return "blob:split";
+  };
+  (URL as any).revokeObjectURL = () => {};
+  const config: BridgeConfig = {
+    table: "sales",
+    periodColumn: "period",
+    prior: "2025",
+    current: "2026",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+  };
+  const panelBridge: BridgeResult = {
+    priorSales: 1000,
+    currentSales: 1200,
+    effects: [{ key: "volume", label: "Volume", value: Number.NaN }],
+    coverage: [],
+    cellsTable: "",
+  };
+  const result: BridgeResult = {
+    priorSales: 1000,
+    currentSales: 1250,
+    effects: [
+      { key: "volume", label: "Volume", value: 0 },
+      { key: "mix_1", label: "Mix: Product", value: 0 },
+      { key: "price", label: "Price (like-for-like)", value: 250 },
+      { key: "new_config", label: "New configurations", value: 0 },
+      { key: "discontinued", label: "Discontinued configurations", value: 0 },
+      { key: "no_units", label: "Sales with no units", value: 0 },
+    ],
+    coverage: [],
+    cellsTable: "bridge_cells",
+  };
+  const check: DataCheck = {
+    rows: 0,
+    priorRows: 0,
+    currentRows: 0,
+    otherPeriodRows: 0,
+    blankPeriodRows: 0,
+    blankMeasureRows: 0,
+    negativeUnitRows: 0,
+    negativeSalesRows: 0,
+    zeroUnitSalesRows: 0,
+  };
+  const tieOut: TieOut = {
+    prior: { period: "2025", inFile: 1000, afterFilters: 1000 },
+    current: { period: "2026", inFile: 1250, afterFilters: 1250 },
+  };
+  const split: BridgeBy = {
+    column: "region",
+    total: result,
+    between: [{ key: "volume", label: "Volume", value: 250 }],
+    panels: [
+      {
+        combined: false,
+        value: "East",
+        values: 1,
+        status: "continuing",
+        priorSales: 1000,
+        currentSales: 1200,
+        change: 200,
+        result: panelBridge,
+      },
+      {
+        combined: false,
+        value: null,
+        values: 1,
+        status: "new",
+        priorSales: 0,
+        currentSales: 50,
+        change: 50,
+        result: null,
+      },
+    ],
+  };
+  const query: Query = async () => [markerRow];
+  try {
+    await exportExcel(query, config, result, check, tieOut, ["Source: split.csv"], undefined, split);
+  } finally {
+    (globalThis as any).document = realDocument;
+    URL.createObjectURL = realCreate;
+    URL.revokeObjectURL = realRevoke;
+  }
+  assert.ok(captured.blob, "the export downloaded a workbook");
+  const bytes = new Uint8Array(await captured.blob.arrayBuffer());
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(bytes as any);
+  const names = workbook.worksheets.map((sheet) => sheet.name);
+  assert.equal(names.at(-1), "Small bridges");
+  const sheet = workbook.getWorksheet("Small bridges")!;
+  assert.equal(sheet.getRow(1).getCell(1).value, "Split by: region");
+  const labels = new Set<string>();
+  sheet.eachRow((row) => labels.add(String(row.getCell(1).value ?? "")));
+  assert.ok(labels.has("East"), "the sheet holds every value title");
+  assert.ok(labels.has("(blank)"), "the sheet holds the blank value title");
+  assert.ok(labels.has("New"), "the sheet holds the status word");
+  assert.ok(labels.has("Volume"), "the sheet holds the step labels");
+  let last = "";
+  sheet.eachRow((row) => {
+    const text = String(row.getCell(1).value ?? "");
+    if (text) last = text;
+  });
+  assert.ok(last.includes("Volume"), "the between line closes the sheet");
+  let blanks = 0;
+  let nonFinite = 0;
+  sheet.eachRow((row) => {
+    const value = row.getCell(2).value;
+    if (value === null || value === "") blanks += 1;
+    if (typeof value === "number" && !Number.isFinite(value)) nonFinite += 1;
+  });
+  assert.ok(blanks > 0, "a step with no finite value stays blank");
+  assert.equal(nonFinite, 0, "no cell holds NaN or Infinity");
 });

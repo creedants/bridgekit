@@ -142,6 +142,28 @@ export interface ChartTheme {
   bg: string;
 }
 
+/** Reads the page's colour and font tokens from the document. */
+export function chartTheme(): ChartTheme {
+  return {
+    font: token("--font"),
+    total: token("--total"),
+    up: token("--up"),
+    down: token("--down"),
+    text: token("--text"),
+    text2: token("--text-2"),
+    text3: token("--text-3"),
+    lineStrong: token("--line-strong"),
+    grid: token("--grid"),
+    bg: token("--bg"),
+  };
+}
+
+/** The chart's PNG bytes at pixel ratio 2 on white, or null when it has no chart. */
+export function chartPng(chart: echarts.ECharts | null): Uint8Array<ArrayBuffer> | null {
+  const url = chart?.getDataURL({ type: "png", pixelRatio: 2, backgroundColor: "#ffffff" });
+  return url ? Uint8Array.from(atob(url.slice(url.indexOf(",") + 1)), (c) => c.charCodeAt(0)) : null;
+}
+
 const valueText = (bar: Step) => (bar.kind === "total" ? compact(bar.value) : signedCompact(bar.value));
 
 /**
@@ -294,18 +316,7 @@ export function BridgeChart(props: {
 
   useEffect(() => {
     if (!element.current) return;
-    const theme: ChartTheme = {
-      font: token("--font"),
-      total: token("--total"),
-      up: token("--up"),
-      down: token("--down"),
-      text: token("--text"),
-      text2: token("--text-2"),
-      text3: token("--text-3"),
-      lineStrong: token("--line-strong"),
-      grid: token("--grid"),
-      bg: token("--bg"),
-    };
+    const theme = chartTheme();
     const width = element.current.clientWidth;
     const measure = canvasMeasure(theme.font);
     const planAt = (w: number) => labelPlan(bars.map((b) => b.label), bars.map(valueText), w, measure);
@@ -412,6 +423,8 @@ export function Waterfall(props: {
   controls?: React.ReactNode;
   /** The chart's accessible name. The main bridge keeps the sentence it has always used. */
   ariaLabel?: string;
+  /** Draws the grid below the main bridge on the downloaded picture. Absent or null keeps the main bridge alone. */
+  below?: () => Promise<HTMLCanvasElement | null>;
 }) {
   const chartRef = useRef<echarts.ECharts>(null);
   const bars = steps(props.result, props.priorLabel, props.currentLabel);
@@ -427,9 +440,24 @@ export function Waterfall(props: {
             onClick={() =>
               saveOnce(
                 `bridge-${props.priorLabel}-to-${props.currentLabel}.png`,
-                () => {
-                  const url = chartRef.current?.getDataURL({ type: "png", pixelRatio: 2, backgroundColor: "#ffffff" });
-                  return url ? Uint8Array.from(atob(url.slice(url.indexOf(",") + 1)), (c) => c.charCodeAt(0)) : null;
+                async () => {
+                  const main = chartPng(chartRef.current);
+                  if (!main) return null;
+                  const extra = (await props.below?.()) ?? null;
+                  if (!extra) return main;
+                  const top = await createImageBitmap(new Blob([main.buffer as ArrayBuffer], { type: "image/png" }));
+                  const canvas = document.createElement("canvas");
+                  canvas.width = Math.max(top.width, extra.width);
+                  canvas.height = top.height + extra.height;
+                  const context = canvas.getContext("2d");
+                  if (!context) return main;
+                  context.fillStyle = "#ffffff";
+                  context.fillRect(0, 0, canvas.width, canvas.height);
+                  context.drawImage(top, 0, 0);
+                  context.drawImage(extra, 0, top.height);
+                  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+                  if (!blob) return main;
+                  return new Uint8Array(await blob.arrayBuffer());
                 },
                 "image/png",
               )
