@@ -2657,3 +2657,25 @@ test("T450: the value fallback skips a larger count-named column for the next qu
   assert.equal(setup.salesColumn, "alpha");
   assert.equal(setup.salesFromValues, "alpha");
 });
+
+test("T449: a numeric trailing note is never offered as the alternative Sales", () => {
+  const file: Column[] = [
+    { name: "units", type: "BIGINT", facts: fact(216) },
+    { name: "sales", type: "DOUBLE", facts: fact(5_600) },
+    { name: "revenue note", type: "DOUBLE", facts: fact(5_500) },
+  ];
+  const setup = guessSetup(file);
+  assert.equal(setup.salesColumn, "sales");
+  assert.equal(measureNote(file, setup), null);
+});
+
+test("T449: a unit-price column is never offered as the alternative Sales", () => {
+  const file: Column[] = [
+    { name: "units", type: "BIGINT", facts: fact(216) },
+    { name: "sales", type: "DOUBLE", facts: fact(5_600) },
+    { name: "Sales Volumenpreis", type: "DOUBLE", facts: fact(5_500) },
+  ];
+  const setup = guessSetup(file);
+  assert.equal(setup.salesColumn, "sales");
+  assert.equal(measureNote(file, setup), null);
+});
