@@ -887,7 +887,7 @@ const MEASURE_SHAPE_FIELD = new RegExp(
   `^[+-]?(?:${DIGITS_FIELD}(?:\\.(?:${DIGITS_FIELD})?)?|\\.${DIGITS_FIELD})(?:[eE][+-]?${DIGITS_FIELD})?$`,
   "u",
 );
-const MEASURE_SPACE_FIELD = /[$,\x20\t\n\r\f\v]/gu;
+const MEASURE_SPACE_FIELD = /[$,\x20\t\n\r\f]/gu;
 const MARKER_AT_START_FIELD = new RegExp(MARKER_AT_START, "u");
 const MARKER_AT_END_FIELD = new RegExp(MARKER_AT_END, "u");
 const MARKED_PARENS_FIELD = new RegExp(MARKED_PARENS, "u");
@@ -898,12 +898,12 @@ const CURRENCY_FIELD = /[\p{Sc}$]/u;
  * money() unwraps a marked bracket pair, drops one currency marker at either
  * end, treats a trailing minus as the sign, folds grouping marks only inside a
  * whole group shape, and keeps a currency code glued to the digits as text,
- * while northAmerican() then ignores commas, ASCII whitespace and dollar signs
- * and treats remaining brackets as the sign. The pre-load guard has no
- * database, so this repeats that reading from the same pattern constants, and
- * counts a cell only when it carries currency, grouping, bracket or
- * trailing-minus formatting as well, so a bare exponent, underscore or leading
- * dot keeps its plain-measure decision.
+ * while northAmerican() then ignores commas, spaces, tabs, line breaks, form
+ * feeds and dollar signs and treats remaining brackets as the sign. The
+ * pre-load guard has no database, so this repeats that reading from the same
+ * pattern constants, and counts a cell only when it carries currency, grouping,
+ * bracket or trailing-minus formatting as well, so a bare exponent, underscore
+ * or leading dot keeps its plain-measure decision.
  */
 function readsAsFormattedMeasure(field: string): boolean {
   let text = field.trim();
