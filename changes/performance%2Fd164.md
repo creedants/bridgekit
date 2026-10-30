@@ -1,0 +1,2 @@
+- A magic-link sign-in sent to the address Better Auth serves when `BETTER_AUTH_URL` carries a path now spends the same sign-in limit as the usual one, and answers the same 429 once the limit is spent. `server/auth.ts` matches the route Better Auth's own endpoint declares, so the limit follows the route wherever the configured auth URL places it.
+- A sign-in whose body, content type or method the limit does not cover is unchanged, and so is the route at `https://pvmbridge.com`, where the auth URL has no path.
