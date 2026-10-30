@@ -444,12 +444,12 @@ function policyHeaders(rawHeaders) {
 
 /**
  * Enforcing Content-Security-Policy meta elements in the document head.
- * Chrome ignores a meta tag in a script, a style, or outside the head, and
- * flow content such as a div closes the head, so a later meta sits in the
- * body and is ignored too. A meta with no head at all is outside the head
- * the same way. Neither shape is produced by the repo; both fail the run
- * rather than pass it, because the census below would miss or overcount them
- * against the composition the build has to serve.
+ * This scanner handles the explicit head emitted by the repository. Flow
+ * content such as a div closes that head, so a later meta is ignored.
+ * Chrome can also create an implicit head and enforce its meta policies;
+ * this scanner misses those. The build emits an explicit head, and its
+ * required policy composition makes unsupported implicit-head pages fail
+ * conservatively instead of passing with an incomplete census.
  */
 function policyMetas(html) {
   // Elements the parser keeps inside the head. Anything else opens the body
@@ -1432,9 +1432,23 @@ async function drive(browser, origin, rows) {
     sameTotals(totalsByFormat.csv, expectedAmounts, "file paths: csv totals differ from the engine in Node");
     console.log("ok  file paths: csv and xlsx give equal totals matching the engine in Node");
 
-    // Excel-then-CSV and Excel-then-paste keep the same totals with no
-    // refusal: the T310 registration failed the third load with
-    // "File already registered" instead of replacing the file.
+    // Excel-then-CSV and Excel-then-paste replace the file inside one page
+    // and one database instance: the T310 registration drops the last upload
+    // before registering the next, so the replacement loads with the same
+    // totals instead of failing with "File already registered".
+    const setDataFileHere = async (path) => {
+      const { root } = await browser.send("DOM.getDocument");
+      const { nodeId } = await browser.send("DOM.querySelector", { nodeId: root.nodeId, selector: "input[type=file][accept*=csv]" });
+      await browser.send("DOM.setFileInputFiles", { nodeId, files: [path] });
+      await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent");
+    };
+    const pasteHere = async () => {
+      const asked = await answerDialog(DEBUG_PORT, true, () => browser.evalJs(
+        `(async () => { const text = ${JSON.stringify(toTsvText(FIXTURE_HEADER, fixtures.rows))}; const data = { getData: (t) => (t === "text/plain" ? text : "") }; const event = new Event("paste", { bubbles: true, cancelable: true }); Object.defineProperty(event, "clipboardData", { value: data }); document.body.dispatchEvent(event); })()`,
+      ));
+      if (asked !== "Replace the loaded data with the pasted cells?") fail(`excel-then-paste: the paste asked ${JSON.stringify(asked)}`);
+      await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent");
+    };
     const reloadTotals = async (step, load) => {
       await load();
       await addFixtureLevels();
@@ -1445,16 +1459,12 @@ async function drive(browser, origin, rows) {
       }
       sameTotals(await readBridge(step), totalsByFormat.csv, `${step}: totals differ from the csv load`);
     };
-    await reloadTotals("excel-then-csv", () => setDataFile(fixtures.xlsxPath));
-    await reloadTotals("csv-then-csv", () => setDataFile(fixtures.csvPath));
-    await reloadTotals("excel-then-paste", async () => {
-      await browser.goto(`${origin}/app/`);
-      await browser.evalJs(
-        `(async () => { const text = ${JSON.stringify(toTsvText(FIXTURE_HEADER, fixtures.rows))}; const data = { getData: (t) => (t === "text/plain" ? text : "") }; const event = new Event("paste", { bubbles: true, cancelable: true }); Object.defineProperty(event, "clipboardData", { value: data }); document.body.dispatchEvent(event); })()`,
-      );
-      await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent");
-    });
-    console.log("ok  excel-then-csv and excel-then-paste: repeated loads replace the file with the same totals");
+    await browser.goto(`${origin}/app/`);
+    await reloadTotals("excel-then-csv: excel", () => setDataFileHere(fixtures.xlsxPath));
+    await reloadTotals("excel-then-csv", () => setDataFileHere(fixtures.csvPath));
+    await reloadTotals("excel-then-paste: excel", () => setDataFileHere(fixtures.xlsxPath));
+    await reloadTotals("excel-then-paste", pasteHere);
+    console.log("ok  excel-then-csv and excel-then-paste: replacements in one page keep the same totals");
 
     const pickerAccepts = JSON.parse(
       await browser.evalJs("JSON.stringify([...document.querySelectorAll('input[type=file][accept*=csv]')].map((i) => i.accept))"),
@@ -1659,7 +1669,9 @@ async function drive(browser, origin, rows) {
     }
     if (marginHint.includes("Prices exclude sales with no units.")) fail("margin labels: the Movers hint still talks about prices");
     console.log("ok  margin labels: Movers names the unit-margin figures");
-    // A Unit cost bar click opens Movers sorted by Price and unit cost.
+    // The Unit cost bar opens Movers sorted by Price and unit cost. The bar
+    // is found by its own tooltip label and the click lands on that bar, so
+    // disabling only its mapping fails this check.
     await browser.evalJs(`T.tab("Bridge")`);
     await browser.sleep(800);
     await browser.evalJs("document.querySelector('.bridge .waterfall canvas').scrollIntoView({ block: 'center' })");
@@ -1671,12 +1683,32 @@ async function drive(browser, origin, rows) {
       browser.evalJs(
         `(() => { const tab = document.querySelector('.tabs [aria-selected="true"]'); const sel = [...document.querySelectorAll('label')].find((l) => l.firstChild && l.firstChild.textContent.trim().startsWith('Sort by'))?.querySelector('select'); return JSON.stringify({ tab: tab ? tab.textContent.trim() : '', sort: sel ? sel.value : '' }); })()`,
       ).then(JSON.parse);
+    const tipShowsUnitCost = () =>
+      browser.evalJs(
+        `(() => { const box = document.querySelector('.bridge .waterfall .chart'); if (!box) return false; return [...box.querySelectorAll('div')].some((d) => d.innerHTML.includes('<b>Unit cost</b>')); })()`,
+      );
+    let unitX = null;
+    let unitY = null;
+    for (let i = 0; i < 48 && unitX === null; i++) {
+      const x = canvasRect.left + (canvasRect.width * (i + 0.5)) / 48;
+      for (const fraction of [0.35, 0.5, 0.65]) {
+        const y = canvasRect.top + canvasRect.height * fraction;
+        await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+        await browser.sleep(150);
+        if (await tipShowsUnitCost()) {
+          unitX = x;
+          unitY = y;
+          break;
+        }
+      }
+    }
+    if (unitX === null) fail("unit cost click: the Unit cost bar never showed its tooltip");
     let unitCost = null;
-    for (let i = 1; i < 12; i++) {
-      const x = canvasRect.left + (canvasRect.width * i) / 12;
-      const y = canvasRect.top + canvasRect.height / 2;
-      await browser.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-      await browser.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+    const foundFraction = (unitY - canvasRect.top) / canvasRect.height;
+    for (const fraction of [foundFraction, 0.3, 0.4, 0.5, 0.6, 0.7]) {
+      const y = canvasRect.top + canvasRect.height * fraction;
+      await browser.send("Input.dispatchMouseEvent", { type: "mousePressed", x: unitX, y, button: "left", clickCount: 1 });
+      await browser.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: unitX, y, button: "left", clickCount: 1 });
       await browser.sleep(400);
       const state = await moverSort();
       if (state.tab === "Movers" && state.sort === "price") {
@@ -1686,8 +1718,8 @@ async function drive(browser, origin, rows) {
       await browser.evalJs(`T.tab("Bridge")`);
       await browser.sleep(400);
     }
-    if (!unitCost) fail("unit cost click: no waterfall bar opened Movers sorted by Price and unit cost");
-    console.log("ok  unit cost click: a waterfall bar opens Movers sorted by Price and unit cost");
+    if (!unitCost) fail("unit cost click: clicking the Unit cost bar did not open Movers sorted by Price and unit cost");
+    console.log("ok  unit cost click: the Unit cost bar opens Movers sorted by Price and unit cost");
 
     // The trusted clicks above grant user activation, so this navigation opens
     // the tool's leave-page question. Accept it once; the fresh page starts
