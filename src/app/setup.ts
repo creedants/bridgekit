@@ -132,11 +132,21 @@ const priceWords = new Set(["price", "cost", "rate", "preis", "kosten"]);
 const noteWords = new Set(["note", "notes", "comment", "comments"]);
 const across = (left: string, right: string) =>
   (unitWords.has(left) && priceWords.has(right)) || (priceWords.has(left) && unitWords.has(right));
+/** Words that join a price to a unit, as in Preis pro Stk, price for each unit or Kosten/Stk. */
+const CONNECTOR_WORDS = new Set(["per", "je", "pro", "for", "each"]);
+/**
+ * A price word and a unit word in either order name a unit price when nothing
+ * but connector words stands between them, however many. A count word with
+ * other words before the price, such as Units Sold at Full Price, names a
+ * quantity instead and is left out.
+ */
 const isUnitPrice = (name: string) => {
   const parts = words(name);
-  for (let i = 0; i < parts.length - 1; i++) {
-    if (across(parts[i], parts[i + 1])) return true;
-    if ((parts[i + 1] === "per" || parts[i + 1] === "je") && across(parts[i], parts[i + 2] ?? "")) return true;
+  for (let i = 0; i < parts.length; i++) {
+    for (let j = i + 1; j < parts.length; j++) {
+      if (j > i + 1 && !CONNECTOR_WORDS.has(parts[j - 1])) break;
+      if (across(parts[i], parts[j])) return true;
+    }
   }
   // German compounds join the words: Stückpreis is one token, so the pair
   // check above never fires. A bare Stück or Menge names no price and stays pickable.
