@@ -2884,3 +2884,30 @@ test("a price word and a unit word with only connectors between them are never U
     assert.equal(measureNote(withSales, priced), null, name);
   }
 });
+
+test("a count named by a price category stays Units, not a unit price", () => {
+  for (const name of [
+    "Units for Rate Card",
+    "Units for Price Band",
+    "Units for each Price Tier",
+    "Units for Rate Plan",
+  ]) {
+    const file: Column[] = [
+      { name: "period", type: "VARCHAR" },
+      { name: "product", type: "VARCHAR" },
+      { name, type: "DOUBLE", facts: fact(6_100) },
+    ];
+    const guess = guessSetup(file);
+    assert.equal(guess.unitsColumn, name, name);
+    assert.equal(guess.salesColumn, "", name);
+    const setup = { ...guess, ...refineGuess(guess, file) };
+    assert.equal(setup.unitsColumn, name, name);
+    assert.equal(setup.salesColumn, "", name);
+    assert.equal(setup.salesFromValues, undefined, name);
+
+    const withSales: Column[] = [...file, { name: "sales", type: "DOUBLE", facts: fact(5_600) }];
+    const priced = guessSetup(withSales);
+    assert.equal(priced.unitsColumn, name, name);
+    assert.equal(priced.salesColumn, "sales", name);
+  }
+});
