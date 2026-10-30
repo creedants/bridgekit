@@ -1,0 +1,1 @@
+- A CSV whose first 64 KB read as UTF-8 but whose later bytes are not UTF-8 now shows the existing file-encoding sentence instead of a raw database message, whatever wording the database uses. The decision reads the file's own bytes after a failed read, so a successful load does no extra pass, and any other file error keeps its own message.
