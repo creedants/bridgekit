@@ -177,10 +177,10 @@ export function pasteIntent(text: string, displayedLoad: number): "refuse" | "lo
 
 /**
  * The load whose data the visitor has been shown. It moves only when the page
- * commits to the workspace phase, the render that draws a load's name, columns
- * and rows; publishing metadata in afterLoad and the sample's auto-run loading
- * view do not count. A newer reading load, a refused load's fallback and a
- * superseded load keep the earlier value.
+ * commits to the workspace phase, the render that draws the workspace; publishing
+ * metadata in afterLoad and the sample's auto-run loading view do not count. A
+ * newer reading load, a refused load's fallback and a superseded load leave it
+ * nonzero, so the question is still asked.
  */
 export function visibleLoad(shown: number, phase: Phase): number {
   return phase.kind === "workspace" ? phase.load : shown;
