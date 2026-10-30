@@ -216,7 +216,7 @@ export default function WorkspacePanel(props: {
 
       <details className="danger">
         <summary>Delete account</summary>
-        <p className="hint">Deletes your account. Workspaces where you are the only member are deleted with everything saved in them.</p>
+        <p className="hint">Deletes your account. Workspaces where you are the only member are deleted with everything saved in them. A paid subscription is cancelled first; if it cannot be cancelled, nothing is deleted.</p>
         <button
           disabled={busy}
           onClick={() => {
