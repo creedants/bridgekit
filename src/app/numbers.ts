@@ -876,6 +876,57 @@ const FEWEST_MIXED_RECORDS = 3;
 
 /** A field that reads as a plain measure: an optional sign, digits, and decimal or grouping marks. */
 const MEASURE_FIELD = /^[+-]?\d+(?:[.,]\d+)*$/;
+const TRAILING_MINUS_FIELD = /^(.*\S)-$/u;
+const BRACKETS_FIELD = /^\((.*)\)$/u;
+const MARK_FIELD = "[\u00A0\u202F'\u2019]";
+const GLUED_CODE_FIELD = new RegExp(`^[+-]?${CODE}[+-]?\\d+$|^[+-]?\\d+${CODE}$`, "u");
+const MARK_GROUPS_FIELD = new RegExp(`^-?\\d{1,3}(?:${MARK_FIELD}\\d{3})+([.,]\\d+)?$`, "u");
+const SPACE_GROUPS_FIELD = new RegExp(`^-?\\d{1,3}(?:(?:${MARK_FIELD}| )\\d{3})+([.,]\\d+)?$`, "u");
+const DIGITS_FIELD = "\\d(?:_?\\d)*";
+const MEASURE_SHAPE_FIELD = new RegExp(
+  `^[+-]?(?:${DIGITS_FIELD}(?:\\.(?:${DIGITS_FIELD})?)?|\\.${DIGITS_FIELD})(?:[eE][+-]?${DIGITS_FIELD})?$`,
+  "u",
+);
+const MEASURE_SPACE_FIELD = /[$,\x20\t\n\r\f]/gu;
+const MARKER_AT_START_FIELD = new RegExp(MARKER_AT_START, "u");
+const MARKER_AT_END_FIELD = new RegExp(MARKER_AT_END, "u");
+const MARKED_PARENS_FIELD = new RegExp(MARKED_PARENS, "u");
+const CURRENCY_FIELD = /[\p{Sc}$]/u;
+
+/**
+ * A field that reads as a formatted measure. The loader reads a number in SQL:
+ * money() unwraps a marked bracket pair, drops one currency marker at either
+ * end, treats a trailing minus as the sign, folds grouping marks only inside a
+ * whole group shape, and keeps a currency code glued to the digits as text,
+ * while northAmerican() then ignores commas, spaces, tabs, line breaks, form
+ * feeds and dollar signs and treats remaining brackets as the sign. The
+ * pre-load guard has no database, so this repeats that reading from the same
+ * currency and marker constants and JavaScript copies of the group patterns,
+ * and counts a cell only when it carries currency, grouping,
+ * bracket or trailing-minus formatting as well, so a bare exponent, underscore
+ * or leading dot keeps its plain-measure decision.
+ */
+function readsAsFormattedMeasure(field: string): boolean {
+  let text = field.trim();
+  const markedParens = MARKED_PARENS_FIELD.test(text);
+  if (markedParens) text = `-${text.slice(1, -1)}`;
+  const trailingMinus = TRAILING_MINUS_FIELD.test(text);
+  text = text.replace(TRAILING_MINUS_FIELD, "-$1");
+  if (GLUED_CODE_FIELD.test(text)) return false;
+  const beforeMarker = text;
+  text = text.replace(MARKER_AT_START_FIELD, "$1$3").replace(MARKER_AT_END_FIELD, "$1");
+  const marker = beforeMarker !== text;
+  const grouped = MARK_GROUPS_FIELD.test(beforeMarker) || SPACE_GROUPS_FIELD.test(beforeMarker);
+  if ((beforeMarker === text ? MARK_GROUPS_FIELD : SPACE_GROUPS_FIELD).test(text)) {
+    const separator = text.includes(",") ? "." : ",";
+    text = text.replace(new RegExp(MARK_FIELD, "gu"), separator).replaceAll(" ", separator);
+  }
+  text = text.replace(MEASURE_SPACE_FIELD, "");
+  const wrapped = BRACKETS_FIELD.exec(text);
+  if (wrapped !== null) text = `-${wrapped[1]}`;
+  const formatted = markedParens || trailingMinus || marker || grouped || wrapped !== null || CURRENCY_FIELD.test(beforeMarker);
+  return formatted && MEASURE_SHAPE_FIELD.test(text) && Number.isFinite(Number(text.replaceAll("_", "")));
+}
 
 /**
  * The prefix's logical records, split with the sniffed quote and escape so a
@@ -1085,9 +1136,9 @@ export function mixedSeparatorSentence(
     if (parts.length !== header || !parts.every((field) => field.trim() !== "")) continue;
     const width = widths[index];
     // Keep the short-record exception limited to a sniffed separator in the
-    // first other-separator part and no later plain-measure part. Other
-    // candidate records retain the refusal.
-    if (width < header && parts[0].includes(delimiter) && !parts.slice(1).some((field) => MEASURE_FIELD.test(field.trim()))) continue;
+    // first other-separator part and no later measure part. Other candidate
+    // records retain the refusal.
+    if (width < header && parts[0].includes(delimiter) && !parts.slice(1).some((field) => MEASURE_FIELD.test(field.trim()) || readsAsFormattedMeasure(field))) continue;
     return MIXED_SEPARATOR_SENTENCE;
   }
   return null;
