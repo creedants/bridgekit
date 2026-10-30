@@ -496,3 +496,38 @@ test("an untimed day-first column becomes a DATE, not a timestamp", async () => 
     ["2026-04-03", "2026-03-31", "2026-04-01"],
   );
 });
+
+test("an impossible slash value beside a valid month-first date gets no both-orders note", async () => {
+  const file = await csvPath("period,day\n2025,99/04/2026\n2026,04/13/2026\n");
+  const query = await openDatabase();
+  await readCsvTable(query, "bad_proof", file);
+  const described = await query("DESCRIBE bad_proof");
+  assert.equal(String(described.find((row) => String(row.column_name) === "day")?.column_type), "VARCHAR");
+  assert.equal(
+    await dateOrderNote(query, "bad_proof"),
+    "day has a date that does not exist, such as 99/04/2026, so it was read as text.",
+  );
+});
+
+test("a month name without a space after the comma reads as a date", async () => {
+  const file = await csvPath('period,day\n2025,"April 13,2026"\n2026,"April 13,2026"\n');
+  const query = await openDatabase();
+  await readCsvTable(query, "tight_comma", file);
+  const described = await query("DESCRIBE tight_comma");
+  assert.equal(String(described.find((row) => String(row.column_name) === "day")?.column_type), "DATE");
+  const rows = await query("SELECT CAST(day AS VARCHAR) AS day FROM tight_comma ORDER BY rowid");
+  assert.deepEqual(
+    rows.map((row) => String(row.day)),
+    ["2026-04-13", "2026-04-13"],
+  );
+  assert.equal(await dateOrderNote(query, "tight_comma"), null);
+});
+
+test("a bad time stays text with no date note", async () => {
+  const file = await csvPath("period,day\n2025,04/13/2026 25:00\n2026,04/14/2026 12:00\n");
+  const query = await openDatabase();
+  await readCsvTable(query, "bad_time", file);
+  const described = await query("DESCRIBE bad_time");
+  assert.equal(String(described.find((row) => String(row.column_name) === "day")?.column_type), "VARCHAR");
+  assert.equal(await dateOrderNote(query, "bad_time"), null);
+});

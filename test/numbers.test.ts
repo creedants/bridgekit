@@ -955,8 +955,8 @@ test("a file whose rows use two separators is named", async () => {
   );
   const qa = `PERIOD;REGION;MODEL;SIZE;UNITS;NET_SALES\n${qaRows.join("\n")}\n`;
   assert.equal(mixedSeparatorSentence(qa, ";"), MIXED_SEPARATOR_SENTENCE);
-  const roundOne = "period,product;region;units,sales\n2025,A-100;North;10,1000\n2026,B-200;South;20,2000\n";
-  assert.equal(mixedSeparatorSentence(roundOne, ","), MIXED_SEPARATOR_SENTENCE);
+  const alternating = "period,product,units,sales\n2025,A-100,10,100\n2025;A-100;10;100\n2026,B-200,20,200\n2026;B-200;20;200\n";
+  assert.equal(mixedSeparatorSentence(alternating, ","), MIXED_SEPARATOR_SENTENCE);
 });
 
 test("a file with one separator stays silent, including quoted marks and short rows", async () => {
@@ -965,6 +965,15 @@ test("a file with one separator stays silent, including quoted marks and short r
   assert.equal(mixedSeparatorSentence(decimalCommas, ";"), null);
   const decimalQuantities = "period;units;sales\n2025;10,50;100,50\n2026;12,50;144,50\n2025;5,50;60,50\n2026;6,50;90,50\n";
   assert.equal(mixedSeparatorSentence(decimalQuantities, ";"), null);
+  const decimalText = "period;product;units;sales\n2025;A,100;10,50;100,50\n2026;A,100;12,50;144,50\n2025;B,200;5,50;60,50\n2026;B,200;6,50;90,50\n";
+  assert.equal(mixedSeparatorSentence(decimalText, ";"), null);
+  const semicolonsInCell = "period,product,units,sales,note\n2025,A;B;C;D;E,10,100,north\n2026,F;G;H;I;J,12,120,south\n";
+  assert.equal(mixedSeparatorSentence(semicolonsInCell, ","), null);
+  const bothMarksInCells = "period,product;region;units,sales\n2025,A-100;North;10,1000\n2026,B-200;South;20,2000\n";
+  assert.equal(mixedSeparatorSentence(bothMarksInCells, ","), null);
+  const oneColumn = "note\na,b\nc;d\ne,f\ng;h\ni\n";
+  assert.equal(mixedSeparatorSentence(oneColumn, ","), null);
+  assert.equal(mixedSeparatorSentence(oneColumn, ";"), null);
   const lines = ["period,product,units,sales,note"];
   for (let index = 0; index < 4; index++) lines.push(`2025,A-100,${10 + index},${100 + index},"North\na;b;c;d;e\nSouth"`);
   assert.equal(mixedSeparatorSentence(`${lines.join("\n")}\n`, ","), null);
@@ -976,4 +985,6 @@ test("a file with one separator stays silent, including quoted marks and short r
   assert.equal(mixedSeparatorSentence(ragged, ","), null);
   const tabbed = "period\tregion\tunits\n2025\tNorth\t10\n2026\tSouth\t12\n";
   assert.equal(mixedSeparatorSentence(tabbed, "\t"), null);
+  const tabbedMarks = "period\tproduct\tunits\n2025\tA,100; X\t10\n2026\tB,200; Y\t12\n";
+  assert.equal(mixedSeparatorSentence(tabbedMarks, "\t"), null);
 });

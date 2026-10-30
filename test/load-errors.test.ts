@@ -326,3 +326,112 @@ test("a flagged non-finite column becomes text when the raw reread cannot line u
   );
   assert.ok(rows.every((row) => typeof row.sales === "string"));
 });
+
+test("a semicolon file with commas in product text and decimal-comma numbers loads", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap, refuseMixedSeparators } = await import("../src/app/db.ts");
+  const { readCsvFile } = await import("../src/app/encoding.ts");
+  const text =
+    "period;product;units;sales\n2025;A,100;10,50;100,50\n2026;A,100;12,50;144,50\n2025;B,200;5,50;60,50\n2026;B,200;6,50;90,50\n";
+  const { file, path } = await written(text, "decimal-text.csv");
+  const query = await openDatabase();
+  await refuseMixedSeparators(query, file, await readCsvFile(file), path);
+  await stageCsvAndSwap(query, file, "data", path);
+  const types = Object.fromEntries((await query("DESCRIBE data")).map((row) => [String(row.column_name), String(row.column_type)]));
+  assert.equal(types.product, "VARCHAR");
+  assert.equal(types.units, "DOUBLE");
+  assert.equal(types.sales, "DOUBLE");
+  const [sums] = await query("SELECT count(*)::DOUBLE AS n, sum(units) AS u, sum(sales) AS s FROM data");
+  assert.equal(Number(sums.n), 4);
+  assert.equal(Number(sums.u), 35);
+  assert.equal(Number(sums.s), 396);
+});
+
+test("a comma file with four semicolons inside one text cell loads", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap, refuseMixedSeparators } = await import("../src/app/db.ts");
+  const { readCsvFile } = await import("../src/app/encoding.ts");
+  const lines = ["period,product,units,sales,note"];
+  for (const [year, product, units, sales] of [
+    [2025, "A;B;C;D;E", 10, 100],
+    [2026, "F;G;H;I;J", 12, 120],
+    [2025, "K;L;M;N;O", 5, 50],
+    [2026, "P;Q;R;S;T", 6, 60],
+  ] as const) {
+    lines.push(`${year},${product},${units},${sales},north`);
+  }
+  const text = `${lines.join("\n")}\n`;
+  const { file, path } = await written(text, "semicolons-in-cell.csv");
+  const query = await openDatabase();
+  await refuseMixedSeparators(query, file, await readCsvFile(file), path);
+  await stageCsvAndSwap(query, file, "data", path);
+  const [sums] = await query("SELECT count(*)::DOUBLE AS n, sum(sales) AS s FROM data");
+  assert.equal(Number(sums.n), 4);
+  assert.equal(Number(sums.s), 330);
+  const rows = await query("SELECT product FROM data ORDER BY product");
+  assert.deepEqual(
+    rows.map((row) => String(row.product)),
+    ["A;B;C;D;E", "F;G;H;I;J", "K;L;M;N;O", "P;Q;R;S;T"],
+  );
+});
+
+test("a tab file holding both marks loads", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap, refuseMixedSeparators } = await import("../src/app/db.ts");
+  const { readCsvFile } = await import("../src/app/encoding.ts");
+  const lines = ["period\tproduct\tunits", "2025\tA,100; X\t10", "2026\tB,200; Y\t12", "2025\tC,300; Z\t5", "2026\tD,400; W\t6"];
+  const text = `${lines.join("\n")}\n`;
+  const { file, path } = await written(text, "tabbed-marks.tsv");
+  const query = await openDatabase();
+  await refuseMixedSeparators(query, file, await readCsvFile(file), path);
+  await stageCsvAndSwap(query, file, "data", path);
+  const [sums] = await query("SELECT count(*)::DOUBLE AS n, sum(units) AS u FROM data");
+  assert.equal(Number(sums.n), 4);
+  assert.equal(Number(sums.u), 33);
+});
+
+test("a one-column file holding both marks loads", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap, refuseMixedSeparators } = await import("../src/app/db.ts");
+  const { readCsvFile } = await import("../src/app/encoding.ts");
+  const text = 'note\n"a,b;c"\n"d;e,f"\nplain\n"2026,01;x"\n';
+  const { file, path } = await written(text, "one-column.csv");
+  const query = await openDatabase();
+  await refuseMixedSeparators(query, file, await readCsvFile(file), path);
+  await stageCsvAndSwap(query, file, "data", path);
+  const rows = await query("SELECT note FROM data ORDER BY rowid");
+  assert.deepEqual(
+    rows.map((row) => String(row.note)),
+    ["a,b;c", "d;e,f", "plain", "2026,01;x"],
+  );
+});
+
+test("a file with ragged trailing fields loads", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap, refuseMixedSeparators } = await import("../src/app/db.ts");
+  const { readCsvFile } = await import("../src/app/encoding.ts");
+  const text = "period,region,units,sales\n2025,North,10,100\n2026,South,11\n2027,North,12,120\n";
+  const { file, path } = await written(text, "ragged.csv");
+  const query = await openDatabase();
+  await refuseMixedSeparators(query, file, await readCsvFile(file), path);
+  await stageCsvAndSwap(query, file, "data", path);
+  const [sums] = await query("SELECT count(*)::DOUBLE AS n, sum(sales) AS s FROM data");
+  assert.equal(Number(sums.n), 3);
+  assert.equal(Number(sums.s), 220);
+});
+
+test("a file whose 64 KB prefix ends inside a quoted record loads", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap, refuseMixedSeparators } = await import("../src/app/db.ts");
+  const { readCsvFile } = await import("../src/app/encoding.ts");
+  const big = Array.from({ length: 3600 }, () => "North\na;b;c;d;e\nSouth").join("\n");
+  const text = `period,product,units,sales,note\n2025,A-100,10,100,"${big}"\n2026,B-200,12,120,south\n`;
+  assert.ok(text.length > 65536);
+  const { file, path } = await written(text, "cut-quote.csv");
+  const query = await openDatabase();
+  await refuseMixedSeparators(query, file, await readCsvFile(file), path);
+  await stageCsvAndSwap(query, file, "data", path);
+  const [sums] = await query("SELECT count(*)::DOUBLE AS n, sum(sales) AS s FROM data");
+  assert.equal(Number(sums.n), 2);
+  assert.equal(Number(sums.s), 220);
+});
