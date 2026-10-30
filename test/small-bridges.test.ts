@@ -205,8 +205,47 @@ test("a stale split calculates nothing, and the grid for that same column stays"
   assert.equal(gridAction("", false, ""), "clear");
   assert.equal(gridAction("design", false, ""), "calculate");
   assert.equal(gridAction("design", true, "design"), "keep");
-  assert.equal(gridAction("finish", true, "design"), "clear");
+  assert.equal(gridAction("finish", true, "design"), "keep");
   assert.equal(gridAction("design", true, ""), "clear");
+});
+
+test("a fresh inputs event for the shown column keeps the ready grid", () => {
+  const column = "customer";
+  const grid: BridgeBy = { column, total: bridge(0, []), panels: [], between: [] };
+  const calculating = reduceSplitPhase(IDLE_SPLIT_PHASE, { type: "inputs", column, stale: false });
+  const ready = reduceSplitPhase(calculating, {
+    type: "settled",
+    request: column,
+    outcome: { status: "grid", result: grid },
+    displayed: column,
+    stale: false,
+  });
+  // Unticking and re-ticking a filter brings the setup back to this bridge, so nothing is recalculated.
+  const kept = reduceSplitPhase(ready, { type: "inputs", column, stale: false });
+  assert.equal(kept, ready);
+  assert.deepEqual(paintSplit({ phase: kept, column, stale: false }), { view: "grid", grid });
+  assert.equal(gridAction(column, false, column), "keep");
+});
+
+test("while the bridge is out of date, another column keeps the grid that belongs to it", () => {
+  const column = "customer";
+  const grid: BridgeBy = { column, total: bridge(0, []), panels: [], between: [] };
+  const calculating = reduceSplitPhase(IDLE_SPLIT_PHASE, { type: "inputs", column, stale: false });
+  const ready = reduceSplitPhase(calculating, {
+    type: "settled",
+    request: column,
+    outcome: { status: "grid", result: grid },
+    displayed: column,
+    stale: false,
+  });
+  const other = reduceSplitPhase(ready, { type: "inputs", column: "sku", stale: true });
+  assert.equal(other, ready);
+  assert.deepEqual(paintSplit({ phase: other, column: "sku", stale: true }), { view: "nothing" });
+  const back = reduceSplitPhase(other, { type: "inputs", column, stale: true });
+  assert.equal(back, ready);
+  assert.deepEqual(paintSplit({ phase: back, column, stale: true }), { view: "grid", grid });
+  assert.equal(gridAction("sku", true, column), "keep");
+  assert.equal(gridAction("sku", true, ""), "clear");
 });
 
 test("opening a panel focuses the way back, and closing focuses the panel or the select", () => {
