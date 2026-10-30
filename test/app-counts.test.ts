@@ -53,7 +53,7 @@ function run(check: Partial<typeof CHECK>): Run {
 }
 
 async function warnings(check: Partial<typeof CHECK>): Promise<string[]> {
-  const { checkWarnings } = await import("../src/app/Results.tsx");
+  const { checkWarnings } = await import("../src/app/results/Check.tsx");
   return checkWarnings(run(check));
 }
 
@@ -105,7 +105,7 @@ test("the loaded file line says one row and one column", async () => {
 });
 
 test("the account note says one value for one group", async () => {
-  const { accountNote } = await import("../src/app/Results.tsx");
+  const { accountNote } = await import("../src/app/results/Accounts.tsx");
   assert.equal(accountNote(1, "North"), "1 North value");
   assert.equal(accountNote(2, "North"), "2 North values");
 });

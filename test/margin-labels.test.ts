@@ -220,7 +220,21 @@ test("a sales report keeps the sales headings it shows today", () => {
   assert.equal(html.includes("Margin"), false, "the sales report names margin");
 });
 
-const resultsSource = readFileSync(new URL("../src/app/Results.tsx", import.meta.url), "utf8");
+const resultsSource = [
+  "../src/app/Results.tsx",
+  "../src/app/results/shared.tsx",
+  "../src/app/results/Summary.tsx",
+  "../src/app/results/Accounts.tsx",
+  "../src/app/results/Trend.tsx",
+  "../src/app/results/SetupCheck.tsx",
+  "../src/app/results/PriceChanges.tsx",
+  "../src/app/results/PriceGaps.tsx",
+  "../src/app/results/Movers.tsx",
+  "../src/app/results/Unmatched.tsx",
+  "../src/app/results/Check.tsx",
+]
+  .map((path) => readFileSync(new URL(path, import.meta.url), "utf8"))
+  .join("\n");
 
 /**
  * The two wordings of one Results-tab label. Each test also reads the tab's
