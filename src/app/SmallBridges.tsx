@@ -77,8 +77,10 @@ export function SmallBridges(props: { run: Run; query: () => Promise<Query>; fre
     const next = reduceSplitPhase(phaseRef.current, event);
     phaseRef.current = next;
     setPhase(next);
-    // The only writer of the published grid: exports read it through shownSplit.
-    showSplit(resultRef.current, next);
+    // The one writer of the published grid. Exports see only what the shell
+    // paints, so a grid cached for another column stays unpublished while the
+    // select hides it, and comes back when the select returns to its column.
+    showSplit(resultRef.current, next, wanted.current, !freshRef.current);
     return next;
   }, []);
 

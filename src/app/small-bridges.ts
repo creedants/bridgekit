@@ -556,11 +556,22 @@ export function drawGrid(by: BridgeBy, priorLabel: string, currentLabel: string)
 let shown: { owner: BridgeResult; grid: BridgeBy } | null = null;
 
 /**
- * Publishes the ready grid for `owner`, and clears any earlier one for any
- * other phase. Idempotent: publishing the same ready grid twice keeps it.
+ * The grid exports may read for this phase on screen: the painted grid when the
+ * select shows its column, and nothing while the paint hides it. The phase keeps
+ * the grid either way, so returning to its column publishes it again.
  */
-export function showSplit(owner: BridgeResult, phase: SplitPhase): void {
-  shown = phase.kind === "ready" ? { owner, grid: phase.grid } : null;
+export function publishedGrid(phase: SplitPhase, column: string, stale: boolean): BridgeBy | null {
+  const paint = paintSplit({ phase, column, stale });
+  return paint.view === "grid" ? paint.grid : null;
+}
+
+/**
+ * Publishes the grid exports may read for `owner`, and clears any earlier one
+ * for any other phase. Idempotent: publishing the same ready grid twice keeps it.
+ */
+export function showSplit(owner: BridgeResult, phase: SplitPhase, column: string, stale: boolean): void {
+  const grid = publishedGrid(phase, column, stale);
+  shown = grid === null ? null : { owner, grid };
 }
 
 /** The published grid, or null when it belongs to another run or no grid is ready. */
