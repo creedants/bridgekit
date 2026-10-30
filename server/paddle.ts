@@ -15,11 +15,24 @@
  *   https://developer.paddle.com/build/transactions/default-payment-link
  */
 
+import type { Env } from "./env.ts";
+
 export const PADDLE_API = {
   sandbox: "https://sandbox-api.paddle.com",
   live: "https://api.paddle.com",
 } as const;
 export type PaddleEnvironment = keyof typeof PADDLE_API;
+
+/** The seat price ids a checkout may use, from the one configured price. */
+export function seatPrices(env: Env): readonly string[] | undefined {
+  return env.PADDLE_PRICE_ID ? [env.PADDLE_PRICE_ID] : undefined;
+}
+
+/** The deployment's Paddle account, or null when no API key is set. */
+export function paddleAccount(env: Env): PaddleAccount | null {
+  if (!env.PADDLE_API_KEY) return null;
+  return { apiKey: env.PADDLE_API_KEY, environment: env.PADDLE_ENVIRONMENT === "live" ? "live" : "sandbox", seatPriceIds: seatPrices(env) };
+}
 
 /**
  * How old a signed delivery may be. Paddle retries any non-200 answer with
