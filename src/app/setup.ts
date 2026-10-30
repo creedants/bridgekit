@@ -127,7 +127,7 @@ const words = (name: string) =>
     .filter((part) => part !== "")
     .flatMap((part) => part.split(/(?<=[a-z0-9])(?=[A-Z])/))
     .map((word) => fold(word));
-const unitWords = new Set(["unit", "units", "menge", "stuck", "stueck", "anzahl", "absatz"]);
+const unitWords = new Set(["unit", "units", "menge", "stuck", "stueck", "anzahl", "absatz", "stk"]);
 const priceWords = new Set(["price", "cost", "rate", "preis", "kosten"]);
 const noteWords = new Set(["note", "notes", "comment", "comments"]);
 const across = (left: string, right: string) =>
@@ -144,19 +144,21 @@ const isUnitPrice = (name: string) => {
   return PRICE_DE.test(folded) && UNITS_PATTERN.test(folded);
 };
 const isTrailingNote = (name: string) => noteWords.has(words(name).at(-1) ?? "");
-/** A count name, unless a currency word takes it out; "Sales (Currency Units)" reads as money. */
-const countName = (name: string) => COUNT_PATTERN.test(fold(name)) && !CURRENCY_PATTERN.test(fold(name));
+/** A count name, unless a currency word takes it out; "Sales (Currency Units)" reads as money. "stk" only counts as a whole word, so Selbstkosten stays out. */
+const countName = (name: string) =>
+  (COUNT_PATTERN.test(fold(name)) || words(name).some((word) => unitWords.has(word))) && !CURRENCY_PATTERN.test(fold(name));
+/** Never Sales by name: a trailing note, a tax name or a unit price. */
+const neverSales = (name: string) => isTrailingNote(name) || TAX_DE.test(fold(name)) || isUnitPrice(name);
+/** Never Sales by name, plus count names, for the by-name guess and the value fallback. */
+const notSalesByName = (name: string) => neverSales(name) || countName(name);
 
 /** First numeric column the guess would take as Sales by name, in file order. */
 function salesByName(columns: readonly Column[], unitsColumn: string): string {
   return columns.find(
     (column) =>
       isNumeric(column.type) &&
-      !isTrailingNote(column.name) &&
       column.name !== unitsColumn &&
-      !TAX_DE.test(fold(column.name)) &&
-      !isUnitPrice(column.name) &&
-      !countName(column.name) &&
+      !notSalesByName(column.name) &&
       salesPattern.test(fold(column.name)),
   )?.name ?? "";
 }
@@ -213,7 +215,7 @@ export function guessSetup(columns: Column[]): Setup {
   const periodColumn =
     date?.name ?? find(/year|annee|année|jahr|jaar|año|period|month|quarter|date|fiscal|exercice/i, columns);
   const unitsColumn = unitsName(withoutNotes.filter((column) => column.name !== periodColumn && !isUnitPrice(column.name)));
-  const net = find(/net/i, withoutNotes.filter((column) => column.name !== unitsColumn && !isUnitPrice(column.name)));
+  const net = find(/net/i, withoutNotes.filter((column) => column.name !== unitsColumn && !neverSales(column.name)));
   const held = net ? "" : netSalesHeldAsText(columns);
   // The sales-stem fallback shares its rule with the measure hint below.
   const byName = salesByName(columns, unitsColumn);
@@ -311,8 +313,7 @@ export function refineGuess(setup: Setup, columns: readonly Column[]): Partial<S
       for (const column of columns) {
         if (!isNumeric(column.type) || column.name === setup.periodColumn || column.name === setup.unitsColumn) continue;
         if (notMoney(column.name)) continue;
-        if (TAX_DE.test(fold(column.name))) continue;
-        if (countName(column.name)) continue;
+        if (notSalesByName(column.name)) continue;
         const sum = column.facts?.sum;
         if (sum === undefined || sum < unitsSum * 2) continue;
         if (best === undefined || sum > best.sum) best = { name: column.name, sum };
