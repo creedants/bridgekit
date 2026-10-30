@@ -435,8 +435,8 @@ async function readCancelState(response: Response, subscriptionId: string): Prom
  * grants Pro through (see hasPro). The subscription is read first, so one whose
  * cancel Paddle already holds, from an earlier attempt or scheduled in the
  * portal, is settled and gets no second request. Both answers must name the
- * subscription and report one of those outcomes, so a malformed answer refuses
- * the cancel and the account deletion goes with it.
+ * subscription and report a known status. The cancel answer must also report
+ * a canceled subscription or a scheduled cancel; otherwise deletion is refused.
  */
 export async function cancelSubscription(options: CancelSubscriptionOptions): Promise<void> {
   const doFetch = options.fetch ?? fetch;
