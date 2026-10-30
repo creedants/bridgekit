@@ -1,0 +1,48 @@
+
+> bridgekit@0.0.1 smoke:preview
+> node scripts/smoke.mjs --serve preview
+
+serving dist/ with vite preview on http://127.0.0.1:4173
+policy: 0 headers, 1 meta tag
+starting chromium from PATH (set CHROMIUM to start another browser)
+ok  canary: a worker, a shared worker and the page each asked http://127.0.0.1:44967 by fetch and by XMLHttpRequest, and each attempt was refused by the policy and reported
+ok  cold parquet: refused with one plain sentence before any database work
+ok  blocked parquet: refused with one plain sentence while database assets are unavailable
+ok  picker record: the refusal added no request ({"page":9,"worker":2} to {"page":9,"worker":2}, 11 to 11)
+ok  blocked drop record: the refusal added no request ({"page":8} to {"page":8}, 8 to 8)
+browser: Chrome/155.0.8059.84
+ok  sku sample: keeps the saved setup for its columns and writes nothing while remembering is on
+ok  budget sample: keeps the saved setup for its columns and writes nothing while remembering is on
+sample loaded and calculated in 10565 ms
+bridge adds up: 57908260 + effects = 70449538
+ok  bridge totals check catches an unbalanced bridge
+ok  Movers
+ok  Accounts
+ok  Price changes
+ok  Price gaps
+ok  Trend
+ok  Unmatched
+ok  Setup check
+ok  Data check
+ok  Bridge
+ok  results heading: one visible h1 on every tab, hidden in print
+ok  data check: with no filter, nothing is excluded and the file's money is the bridge's
+ok  Excel export (8172679 bytes in 5637 ms)
+ok  a file load drops ?sample from the address
+ok  Calculate names the one missing part
+ok  data check: with a customer filter, the excluded money (253965, 318583) is removed from the file total and the lines tie out
+ok  storage: nothing in sessionStorage, cookies, IndexedDB, caches, private file system or service workers
+ok  remember setup (default off): stores nothing
+ok  remember setup: ticking stores the column mapping only
+ok  clear data asks first, and Cancel keeps the data
+ok  clear data returns to the empty tool
+ok  remember setup: restored on the next load, without filter selections
+ok  remember setup: unticking deletes what was stored
+ok  remember setup: staying off survives a reload
+ok  sku sample: Sample data (made-up product sales), 7 bridge lines, 18160591 to 17147185
+ok  budget sample: Sample data (made-up budget and actual sales), 7 bridge lines, 50756 to 52142
+ok  samples: sku and budget store nothing while remembering is off
+ok  file paths: csv and xlsx give equal totals matching the engine in Node
+ok  server stopped
+FAIL: excel-then-csv: File already registered: upload.csv
+T321-HEAD SMOKE EXIT: 1
