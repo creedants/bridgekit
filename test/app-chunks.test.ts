@@ -285,6 +285,12 @@ test("a Results component that loads after the run is set reaches the page throu
   }
 });
 
+test("the page's render takes Results from the hook, not from the chunk getter", () => {
+  const source = readFileSync(new URL("../src/app/App.tsx", import.meta.url), "utf8");
+  assert.match(source, /const Results = useResultsView\(resultsChunk\);/, "the render holds Results in state");
+  assert.doesNotMatch(source, /resultsChunk\.loaded/, "no render reads the untracked getter");
+});
+
 test("a Results chunk loaded before mount shows Results on the first render", async () => {
   const React = await import("react");
   const { renderToStaticMarkup } = await import("react-dom/server");
