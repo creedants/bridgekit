@@ -941,6 +941,27 @@ function splitOutsideQuotes(record: string, separator: string, quote: string, es
 }
 
 /**
+ * True when every kept logical record holds the header's field count under the
+ * given delimiter, with the sniffed quote, escape, skipped rows and comment.
+ * A consistent file is never a mixed file, whatever its cells hold, including
+ * a tab file whose cells hold commas and semicolons.
+ */
+export function hasConsistentRecords(prefix: string, delimiter: string, dialect?: CsvDialect): boolean {
+  const quote = dialect?.quote ?? '"';
+  const escape = dialect?.escape ?? '"';
+  const skipRows = dialect?.skipRows ?? 0;
+  const comment = dialect?.comment ?? "";
+  const kept = logicalRecords(prefix, quote, escape)
+    .slice(skipRows)
+    .filter((record) => record.trim() !== "" && (comment === "" || !record.trimStart().startsWith(comment)));
+  if (kept.length === 0) return true;
+  const widths = kept.map((record) => splitOutsideQuotes(record, delimiter, quote, escape).length);
+  const header = widths[0];
+  if (header < 2) return false;
+  return widths.every((width) => width === header);
+}
+
+/**
  * The sentence for a file whose logical records do not all hold the header's
  * field count under the sniffed separator while the other separator gives an
  * odd record that count with every part filled, decided from the first 64 KB

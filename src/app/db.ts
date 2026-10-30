@@ -9,6 +9,7 @@ import {
   applyDotColumns,
   convertFormattedNumbers,
   CSV_OPTIONS,
+  hasConsistentRecords,
   mixedSeparatorSentence,
   MAX_COLUMNS_READ,
   planDotColumns,
@@ -700,6 +701,7 @@ export async function refuseMixedSeparators(query: Query, file: File, reading: C
     comment: sniffed?.comment ?? "",
   };
   const tried = delimiter === ";" || delimiter === "," ? [delimiter] : [",", ";"];
+  if (tried.length === 2 && hasConsistentRecords(prefix, delimiter, dialect)) return;
   for (const candidate of tried) {
     const sentence = mixedSeparatorSentence(prefix, candidate, { ...dialect, delimiter: candidate });
     if (sentence !== null) throw new Error(sentence);

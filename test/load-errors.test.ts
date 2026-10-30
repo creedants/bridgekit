@@ -379,15 +379,15 @@ test("a tab file holding both marks loads", async () => {
   const { openDatabase } = await import("../src/duckdb.ts");
   const { stageCsvAndSwap, refuseMixedSeparators } = await import("../src/app/db.ts");
   const { readCsvFile } = await import("../src/app/encoding.ts");
-  const lines = ["period\tproduct\tunits", "2025\tA,100; X\t10", "2026\tB,200; Y\t12", "2025\tC,300; Z\t5", "2026\tD,400; W\t6"];
+  const lines = ["period\tprice, eur\tunits", "2025\tsmall; red\t10", "2026\tbig; blue\t12", "2025\ttiny; green\t5"];
   const text = `${lines.join("\n")}\n`;
   const { file, path } = await written(text, "tabbed-marks.tsv");
   const query = await openDatabase();
   await refuseMixedSeparators(query, file, await readCsvFile(file), path);
   await stageCsvAndSwap(query, file, "data", path);
   const [sums] = await query("SELECT count(*)::DOUBLE AS n, sum(units) AS u FROM data");
-  assert.equal(Number(sums.n), 4);
-  assert.equal(Number(sums.u), 33);
+  assert.equal(Number(sums.n), 3);
+  assert.equal(Number(sums.u), 27);
 });
 
 test("a one-column file holding both marks loads", async () => {
