@@ -1071,8 +1071,6 @@ test("a later part the loader reads as a formatted measure keeps the refusal", a
     ["CAD200", false],
     ["100EUR", false],
     ["'100", false],
-    ["1_000", true],
-    ["100.", true],
     ["1'000 000", false],
     ["12\u00A05", false],
     ["large", false],
@@ -1082,6 +1080,44 @@ test("a later part the loader reads as a formatted measure keeps the refusal", a
     assert.equal(Boolean(row.ok), refused, `the loader's reading of ${form}`);
     const text = `${header}\n2026,Q4;A-100;${form};large\n${good}\n`;
     assert.equal(mixedSeparatorSentence(text, ","), refused ? MIXED_SEPARATOR_SENTENCE : null, form);
+  }
+});
+
+test("a bracketed group in a product cell loads instead of refusing the file", async () => {
+  const { mixedSeparatorSentence } = await import("../src/app/numbers.ts");
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const query = await openDatabase();
+  const forms = ["(1'000)", "(1\u2019000)", "(1\u00A0000)", "(1'000,50)"];
+  for (const form of forms) {
+    const text = `period,product,units,sales\n2025,A-100,10,100\n2026,A-100,12,144\n2025,A;B;${form};D\n2026,B-200,6,90\n`;
+    assert.equal(mixedSeparatorSentence(text, ","), null, form);
+    const loaded = await guardMixed(query, text, "bracketed-short.csv");
+    await stageCsvAndSwap(query, loaded.file, "data", loaded.filePath);
+    const columns = (await query("DESCRIBE data")).map((row) => String(row.column_name));
+    assert.deepEqual(columns, ["period", "product", "units", "sales"], form);
+    const [count] = await query("SELECT count(*)::DOUBLE AS n FROM data");
+    assert.equal(Number(count.n), 4, form);
+    const [sums] = await query("SELECT sum(sales) AS s FROM data");
+    assert.equal(Number(sums.s), 334, form);
+  }
+});
+
+test("a bare exponent, underscore or trailing dot in a product cell loads instead of refusing the file", async () => {
+  const { mixedSeparatorSentence } = await import("../src/app/numbers.ts");
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const query = await openDatabase();
+  const forms = ["1e5", "1_000", ".5", "100."];
+  for (const form of forms) {
+    const text = `period,product,units,sales\n2025,A-100,10,100\n2026,A-100,12,144\n2025,A;B;${form};D\n2026,B-200,6,90\n`;
+    assert.equal(mixedSeparatorSentence(text, ","), null, form);
+    const loaded = await guardMixed(query, text, "bare-short.csv");
+    await stageCsvAndSwap(query, loaded.file, "data", loaded.filePath);
+    const columns = (await query("DESCRIBE data")).map((row) => String(row.column_name));
+    assert.deepEqual(columns, ["period", "product", "units", "sales"], form);
+    const [count] = await query("SELECT count(*)::DOUBLE AS n FROM data");
+    assert.equal(Number(count.n), 4, form);
+    const [sums] = await query("SELECT sum(sales) AS s FROM data");
+    assert.equal(Number(sums.s), 334, form);
   }
 });
 
