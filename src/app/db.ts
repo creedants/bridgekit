@@ -162,31 +162,33 @@ export async function readCsvTable(
   path: string,
   skipMonthFirst = false,
   order: DateOrder = "month first",
+  skip = 0,
 ): Promise<void> {
   const escaped = path.replaceAll("'", "''");
   const delimiter = (await sniffDialect(query, path))?.delimiter || ",";
   // Raw text decides the dots before the database types them: an all-dotted
   // column would otherwise load as decimals (9.600 as 9.6).
-  const dots = await planDotColumns(query, path, delimiter).catch(() => []);
+  const dots = await planDotColumns(query, path, delimiter, skip).catch(() => []);
   const thousands = dots.filter((reading) => reading.thousands).map((reading) => reading.column);
+  const skipText = skipOption(skip);
   try {
     await query(
-      `CREATE OR REPLACE TABLE ${quote(table)} AS SELECT * FROM read_csv('${escaped}', ${CSV_OPTIONS}${typeOverrides(thousands)})`,
+      `CREATE OR REPLACE TABLE ${quote(table)} AS SELECT * FROM read_csv('${escaped}', ${CSV_OPTIONS}${skipText}${typeOverrides(thousands)})`,
     );
   } catch (error) {
     if (!isConversionError(error)) throw error;
     // A value past the sniff sample can break the date type the sample chose.
     // Read every date column as text and let convertDateColumns decide from
     // every value, so no raw engine error reaches the user for a date shape.
-    const text = [...thousands, ...(await dateTypedColumns(query, path))];
+    const text = [...thousands, ...(await dateTypedColumns(query, path, skip))];
     await query(
-      `CREATE OR REPLACE TABLE ${quote(table)} AS SELECT * FROM read_csv('${escaped}', ${CSV_OPTIONS}${typeOverrides(text)})`,
+      `CREATE OR REPLACE TABLE ${quote(table)} AS SELECT * FROM read_csv('${escaped}', ${CSV_OPTIONS}${skipText}${typeOverrides(text)})`,
     );
   }
-  await restoreNonFinite(query, table, path);
+  await restoreNonFinite(query, table, path, skip);
   await applyDotColumns(query, table, dots);
   if (!skipMonthFirst) {
-    const { ambiguous, loaded } = await ambiguousDateColumns(query, table, path);
+    const { ambiguous, loaded } = await ambiguousDateColumns(query, table, path, skip);
     for (const column of ambiguous) {
       const name = quote(table);
       const field = quote(column);
@@ -574,13 +576,21 @@ async function markMissingDate(
   failed: string,
   shape: DateShape,
 ): Promise<void> {
-  const [row] = await query(`SELECT arg_min(trim(${field}), rowid) AS value FROM ${name} WHERE ${failed}`);
-  if (row?.value == null) return;
-  const example = String(row.value);
-  if (!calendarImpossible(example, shape.format, shape.normalize)) return;
-  await query(
-    `COMMENT ON COLUMN ${name}.${field} IS ${textLiteral(`${MISSING_DATE_MARK}:${example}`)}`,
-  );
+  // A column can fail for more than one reason: a bad time fails but is not
+  // an impossible calendar date. The note names the first impossible date by
+  // row order, so every failing value is read in row order until one proves
+  // impossible. Columns that already get a note keep the same note, because
+  // their first failing value is already the first impossible one.
+  const rows = await query(`SELECT trim(${field}) AS value FROM ${name} WHERE ${failed} ORDER BY rowid`);
+  for (const row of rows) {
+    if (row?.value == null) continue;
+    const example = String(row.value);
+    if (!calendarImpossible(example, shape.format, shape.normalize)) continue;
+    await query(
+      `COMMENT ON COLUMN ${name}.${field} IS ${textLiteral(`${MISSING_DATE_MARK}:${example}`)}`,
+    );
+    return;
+  }
 }
 
 // A value read_csv typed as a number may hold NaN or an infinity, which a
@@ -595,7 +605,7 @@ const NON_FINITE_TYPES = ["DOUBLE", "FLOAT"];
  * column becomes text instead, which keeps NaN and the infinities out of a
  * numeric column and lets the file problems message name them.
  */
-async function restoreNonFinite(query: Query, table: string, path: string): Promise<void> {
+async function restoreNonFinite(query: Query, table: string, path: string, skip = 0): Promise<void> {
   const described = await query(`DESCRIBE ${quote(table)}`);
   const numeric = described
     .filter((row) => NON_FINITE_TYPES.includes(String(row.column_type)))
@@ -606,7 +616,8 @@ async function restoreNonFinite(query: Query, table: string, path: string): Prom
   const flagged = new Set(numeric.filter((_, index) => Number(counted?.[`f${index}`]) > 0));
   if (flagged.size === 0) return;
   const escaped = path.replaceAll("'", "''");
-  const [raw] = await query(`SELECT count(*)::DOUBLE AS n FROM read_csv('${escaped}', all_varchar=true, ${CSV_OPTIONS})`);
+  const skipText = skipOption(skip);
+  const [raw] = await query(`SELECT count(*)::DOUBLE AS n FROM read_csv('${escaped}', all_varchar=true, ${CSV_OPTIONS}${skipText})`);
   if (Number(raw?.n) !== Number(counted?.n)) {
     for (const column of flagged) {
       await query(
@@ -622,7 +633,7 @@ async function restoreNonFinite(query: Query, table: string, path: string): Prom
     })
     .join(", ");
   await query(
-    `CREATE OR REPLACE TABLE ${quote(table)} AS SELECT ${selected} FROM ${quote(table)} AS t POSITIONAL JOIN (SELECT * FROM read_csv('${escaped}', all_varchar=true, ${CSV_OPTIONS})) AS r`,
+    `CREATE OR REPLACE TABLE ${quote(table)} AS SELECT ${selected} FROM ${quote(table)} AS t POSITIONAL JOIN (SELECT * FROM read_csv('${escaped}', all_varchar=true, ${CSV_OPTIONS}${skipText})) AS r`,
   );
 }
 
@@ -632,9 +643,9 @@ function isConversionError(error: unknown): boolean {
 }
 
 /** The columns read_csv typed as a date, a timestamp or a time. */
-async function dateTypedColumns(query: Query, path: string): Promise<string[]> {
+async function dateTypedColumns(query: Query, path: string, skip = 0): Promise<string[]> {
   const escaped = path.replaceAll("'", "''");
-  const described = await query(`DESCRIBE SELECT * FROM read_csv('${escaped}', ${CSV_OPTIONS})`);
+  const described = await query(`DESCRIBE SELECT * FROM read_csv('${escaped}', ${CSV_OPTIONS}${skipOption(skip)})`);
   return described
     .filter((row) => /^(DATE|TIMESTAMP|TIME)/i.test(String(row.column_type)))
     .map((row) => String(row.column_name));
@@ -650,9 +661,10 @@ export async function readLoadedTable(
   path: string,
   isExcel: boolean,
   order: DateOrder = "month first",
+  skip = 0,
 ): Promise<void> {
   try {
-    await readCsvTable(query, table, path, isExcel, order);
+    await readCsvTable(query, table, path, isExcel, order, skip);
   } catch (error) {
     throw csvEncodingFailure(error);
   }
@@ -668,16 +680,42 @@ export async function requireDataRows(query: Query, table: string): Promise<void
 }
 
 /**
- * Checks the first physical line in the prefix by counting delimiter characters
- * plus one. Quoted delimiters are counted too; characters past the end of the
- * prefix are not inspected.
+ * Counts the leading blank lines in a CSV prefix: empty lines, or lines that
+ * hold only whitespace, commas, semicolons or the sniffed separator. The
+ * header is the first line after them. A line with letters or digits ends the
+ * blank run.
  */
-function headerTooWide(prefix: string, delimiter: string): boolean {
+export function leadingBlankLines(prefix: string, delimiter = ""): number {
+  const lines = prefix.split(/\r\n|\n|\r/);
+  let blanks = 0;
+  for (const line of lines) {
+    let blank = true;
+    for (const char of line) {
+      if (delimiter !== "" && char === delimiter) continue;
+      if (/[\s,;]/.test(char)) continue;
+      blank = false;
+      break;
+    }
+    if (blank) blanks += 1;
+    else break;
+  }
+  return blanks;
+}
+
+/** The read_csv skip option for leading blank lines, or "" when there are none. */
+function skipOption(skip: number): string {
+  return skip > 0 ? `, skip=${skip}` : "";
+}
+
+/**
+ * Checks the header line after leading blank lines by counting CSV fields
+ * with quoting respected. Characters past the end of the prefix are not
+ * inspected; a truncated prefix that holds only part of the header is judged
+ * on what it holds.
+ */
+function headerTooWide(prefix: string, delimiter: string, dialect?: CsvDialect, truncated = false): boolean {
   if (delimiter === "") return false;
-  const end = prefix.search(/[\r\n]/);
-  let fields = 1;
-  for (const char of end < 0 ? prefix : prefix.slice(0, end)) if (char === delimiter) fields += 1;
-  return fields > MAX_COLUMNS_READ;
+  return headerFieldCount(prefix, delimiter, dialect, truncated) > MAX_COLUMNS_READ;
 }
 
 /**
@@ -695,12 +733,13 @@ export async function refuseMixedSeparators(query: Query, file: File, reading: C
   // nothing, so both marks are tried when the sniff names neither of them.
   const sniffed = await sniffDialect(query, path);
   const delimiter = sniffed?.delimiter || ",";
+  const leading = leadingBlankLines(prefix, delimiter);
   const dialect: CsvDialect = {
     delimiter,
     quote: sniffed?.quote ?? '"',
     escape: sniffed?.escape ?? '"',
     header: sniffed?.header ?? true,
-    skipRows: sniffed?.skipRows ?? 0,
+    skipRows: leading,
     comment: sniffed?.comment ?? "",
   };
   const tried = delimiter === ";" || delimiter === "," ? [delimiter] : [",", ";"];
@@ -730,13 +769,22 @@ export async function stageCsvAndSwap(
 ): Promise<void> {
   if (file.size === 0) throw new Error(NO_DATA_ROWS);
   const prefix = new TextDecoder().decode(new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer()));
-  const dialect = await sniffDialect(query, readablePath);
-  if (headerTooWide(prefix, dialect?.delimiter || ",")) {
+  const sniffed = await sniffDialect(query, readablePath);
+  const leading = leadingBlankLines(prefix, sniffed?.delimiter || ",");
+  const dialectForWidth: CsvDialect = {
+    delimiter: sniffed?.delimiter || ",",
+    quote: sniffed?.quote ?? '"',
+    escape: sniffed?.escape ?? '"',
+    header: sniffed?.header ?? true,
+    skipRows: leading,
+    comment: sniffed?.comment ?? "",
+  };
+  if (headerTooWide(prefix, dialectForWidth.delimiter, dialectForWidth, file.size > CSV_PREFIX_BYTES)) {
     throw new Error(TOO_MANY_COLUMNS_SENTENCE);
   }
   const staging = `${table}__staging`;
-  const source: SourceRows = { kind: "csv", file, dialect };
-  await readLoadedTable(query, staging, readablePath, false, order);
+  const source: SourceRows = { kind: "csv", file, dialect: dialectForWidth };
+  await readLoadedTable(query, staging, readablePath, false, order, leading);
   await convertFormattedNumbers(query, staging, source);
   // No mixed-separator check: a record split by another separator can match a valid sparse record byte for byte.
   await requireDataRows(query, staging);
@@ -819,6 +867,7 @@ async function ambiguousDateColumns(
   query: Query,
   table: string,
   path: string,
+  skip = 0,
 ): Promise<{ ambiguous: string[]; loaded?: DateOrder }> {
   const described = await query(`DESCRIBE ${quote(table)}`);
   const names = described.map((row) => String(row.column_name));
@@ -827,7 +876,7 @@ async function ambiguousDateColumns(
     .map((row) => String(row.column_name));
   if (dates.length === 0) return { ambiguous: [] };
   const escaped = path.replaceAll("'", "''");
-  const source = `read_csv('${escaped}', all_varchar=true, ${CSV_OPTIONS})`;
+  const source = `read_csv('${escaped}', all_varchar=true, ${CSV_OPTIONS}${skipOption(skip)})`;
   const sourceNames = (await query(`DESCRIBE SELECT * FROM ${source}`)).map((row) => String(row.column_name));
   if (sourceNames.length !== names.length || sourceNames.some((name, index) => name !== names[index])) {
     return { ambiguous: [] };
