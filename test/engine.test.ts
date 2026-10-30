@@ -269,6 +269,58 @@ test("a gross column splits price into list price and discounts", async () => {
   near(distribution.averageChange, 35 / 1400);
 });
 
+/** The bucket the engine files one price pair under, one unit in each period. */
+async function bucketForPair(query: Query, prior: number, current: number): Promise<string> {
+  await query(`DROP TABLE IF EXISTS price_pair`);
+  await query(`CREATE TABLE price_pair AS SELECT * FROM (VALUES
+    ('p0', 'A-100', 1, ${prior}), ('p1', 'A-100', 1, ${current})) v(period, product, units, sales)`);
+  const config: BridgeConfig = {
+    table: "price_pair", periodColumn: "period", prior: "p0", current: "p1",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+  };
+  await runBridge(query, config);
+  const hit = (await priceDistribution(query, config)).buckets.filter((bucket) => bucket.cells > 0);
+  assert.equal(hit.length, 1, `${prior} to ${current} landed in ${hit.map((b) => b.label).join(", ") || "no bucket"}`);
+  return hit[0].label;
+}
+
+test("a change of exactly a bucket bound is filed in the bucket its label names", async () => {
+  const query = await openDatabase();
+  // Each bound at exactly the bound, then one cent either side on the current
+  // price. At these base prices a cent is 0.1% or less, so the neighbours sit
+  // clearly inside their own buckets and must not move.
+  const cases: [number, number, string][] = [
+    [10.0, 11.0, "Up 5% to 10%"],
+    [10.0, 11.01, "Up more than 10%"],
+    [10.0, 10.99, "Up 5% to 10%"],
+    [10.0, 9.0, "Down 5% to 10%"],
+    [10.0, 8.99, "Down more than 10%"],
+    [10.0, 9.01, "Down 5% to 10%"],
+    [20.0, 21.0, "Up 2% to 5%"],
+    [20.0, 21.01, "Up 5% to 10%"],
+    [20.0, 20.99, "Up 2% to 5%"],
+    [20.0, 19.0, "Down 2% to 5%"],
+    [20.0, 18.99, "Down 5% to 10%"],
+    [20.0, 19.01, "Down 2% to 5%"],
+    [50.0, 51.0, "Up 0.5% to 2%"],
+    [50.0, 51.01, "Up 2% to 5%"],
+    [50.0, 50.99, "Up 0.5% to 2%"],
+    [50.0, 49.0, "Down 0.5% to 2%"],
+    [50.0, 48.99, "Down 2% to 5%"],
+    [50.0, 49.01, "Down 0.5% to 2%"],
+    [200.0, 201.0, "No change (within 0.5%)"],
+    [200.0, 201.01, "Up 0.5% to 2%"],
+    [200.0, 200.99, "No change (within 0.5%)"],
+    [200.0, 199.0, "No change (within 0.5%)"],
+    [200.0, 198.99, "Down 0.5% to 2%"],
+    [200.0, 199.01, "No change (within 0.5%)"],
+  ];
+  for (const [prior, current, expected] of cases) {
+    assert.equal(await bucketForPair(query, prior, current), expected, `${prior} to ${current}`);
+  }
+});
+
 test("trend bridges each pair of consecutive periods", async () => {
   const query = await openDatabase();
   await query(`CREATE TABLE t AS SELECT * FROM (VALUES
