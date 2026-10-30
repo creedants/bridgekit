@@ -10,7 +10,7 @@ import {
 } from "./db.ts";
 import { exportExcel, lazyChunk, type ChunkSentences } from "./exportExcel.ts";
 import { isPastedTable, makeGuard, saveOnce, shorten } from "./files.ts";
-import { fileProblem, periodView, periodsFor, type FileProblem, type Periods } from "./fileProblems.ts";
+import { fileProblem, periodView, periodsFor, type FileProblem, type Periods, type PeriodView } from "./fileProblems.ts";
 import { whole } from "./format.ts";
 import { findTotalRows, profileFile, type TotalRow } from "./profile.ts";
 import { loadPeriodList } from "./periods.ts";
@@ -114,6 +114,17 @@ export function persistedSetupForFile(setup: Setup): Omit<Setup, "fresh" | "sale
   return persisted;
 }
 
+/** The view a setup and load produce, the key the period list is stored under. */
+export function viewOf(load: number, setup: Setup): PeriodView {
+  return periodView({
+    load,
+    periodColumn: setup.periodColumn,
+    grain: setup.grain,
+    fiscalYearStart: setup.fiscalYearStart,
+    filters: setup.filters,
+  });
+}
+
 function previewCell(type: string, value: unknown): string {
   if (value === null || value === undefined) return "";
   const normalized = type.trim().toUpperCase();
@@ -195,6 +206,26 @@ export function createTableOwner(): { claim(): Claim; owner(): Claim | null } {
       return claim;
     },
     owner: () => held,
+  };
+}
+
+/**
+ * A refused load's banner survives the one period rebuild its fallback starts.
+ * The hold names the view that rebuild will produce, so no other rebuild keeps it.
+ */
+export function createRefusalHold() {
+  let held: PeriodView | null = null;
+  return {
+    /** The fallback is putting the held load back; its rebuild of this view keeps the banner. */
+    hold(view: PeriodView): void {
+      held = view;
+    },
+    /** A task start for this view. True only for the rebuild the refusal was held for. */
+    spend(view: PeriodView | null): boolean {
+      const keep = held !== null && held === view;
+      held = null;
+      return keep;
+    },
   };
 }
 
@@ -286,6 +317,8 @@ export function App() {
   const writesSetup = useRef(true);
   // The loaded table's owner, so a load an earlier pick replaced never writes.
   const [tables] = useState(createTableOwner);
+  // The one rebuild a refused load's banner is allowed to survive.
+  const [refusalHold] = useState(createRefusalHold);
   // What each table number holds, so the page can name the rows that are in the table.
   const loads = useRef(new Map<number, { name: string; preset?: Sample; blanks: number }>());
   // The load whose name, columns and setup afterLoad last put in state, for the refused-load fallback.
@@ -306,11 +339,11 @@ export function App() {
   const query = () => db().then((d) => d.query);
 
   // Each kind of task keeps its own label, so one finishing cannot clear another's.
-  async function task(kind: TaskKind, label: string, work: () => Promise<void>): Promise<boolean> {
+  async function task(kind: TaskKind, label: string, work: () => Promise<void>, keepError = false): Promise<boolean> {
     const id = ++taskRef.current;
     setTasks((running) => new Map([...running].filter(([key]) => key !== kind)).set(kind, { label, id }));
-    // A refused load's error stays through the fallback's period rebuild until the user acts.
-    if (kind !== "periods") setError("");
+    // A refused load's banner stays through the fallback's own rebuild, and no other task keeps it.
+    if (!keepError) setError("");
     try {
       await work();
       return true;
@@ -359,7 +392,7 @@ export function App() {
             : undefined;
         if (held && shown) {
           setFormulaBlanks(shown.blanks);
-          await afterLoad(held.n, shown.name, shown.preset, () => claim.current());
+          await afterLoad(held.n, shown.name, shown.preset, () => claim.current(), true);
         }
       } finally {
         dispatch({ type: "failed", load: claim.n });
@@ -367,7 +400,7 @@ export function App() {
     }
   }
 
-  async function afterLoad(load: number, name: string, preset: Sample | undefined, current: () => boolean) {
+  async function afterLoad(load: number, name: string, preset: Sample | undefined, current: () => boolean, keepRefusal = false) {
     // The table has already been replaced, so a run from the file before it must
     // not survive a load that a newer load superseded.
     setRun(null);
@@ -385,7 +418,10 @@ export function App() {
     setFromSample(!!preset);
     setLoad(load);
     published.current = load;
-    setSetup(preset?.setup ?? saved ?? guessSetup(found));
+    const next = preset?.setup ?? saved ?? guessSetup(found);
+    setSetup(next);
+    // A refused load's banner survives this fallback rebuild and no other.
+    if (keepRefusal) refusalHold.hold(viewOf(load, next));
     setSuggestedPeriods(preset?.periods ?? null);
     writesSetup.current = preset?.savesSetup ?? true;
     setNotice(saved ? "Restored the setup you last used with these columns." : "");
@@ -428,11 +464,10 @@ export function App() {
 
   // Rebuild the filtered view and the period list whenever they could change.
   // The load count stands in for the file name, so a second file with the same name still re-reads.
-  const view = setup
-    ? periodView({ load, periodColumn: setup.periodColumn, grain: setup.grain, fiscalYearStart: setup.fiscalYearStart, filters: setup.filters })
-    : null;
+  const view = setup ? viewOf(load, setup) : null;
   useEffect(() => {
     if (view === null || !setup) return;
+    const keepError = refusalHold.spend(view);
     const ticket = periodReads.start();
     if (!setup.periodColumn) {
       dispatchPeriodViews({ type: "noPeriodColumn", view });
@@ -451,7 +486,7 @@ export function App() {
       const next = carryPeriods(periodsRef.current, values, suggestedPeriods ?? null);
       setPrior(next.prior);
       setCurrent(next.current);
-    });
+    }, keepError);
   }, [view]);
 
   const offeredPeriods = periodViews.list ? [...periodViews.list.values] : [];
@@ -801,7 +836,10 @@ export function App() {
               query={query}
               rollups={rollups}
               totalRows={totalRows}
-              onChange={(patch) => setSetup((s) => (s ? { ...s, ...patch } : s))}
+              onChange={(patch) => {
+                setSetup((s) => (s ? { ...s, ...patch } : s));
+                setError("");
+              }}
               onPrior={setPrior}
               onCurrent={setCurrent}
             />
@@ -859,8 +897,10 @@ export function App() {
                   setup={setup}
                   bridge={fresh ? { summary: summarize(fresh.result, fresh.config), setup } : null}
                   onUseSetup={(saved) => {
-                    if (isValidSetup(saved, columns)) setSetup(restoredSetup(saved));
-                    else setError("That saved setup does not match the columns in this data.");
+                    if (isValidSetup(saved, columns)) {
+                      setSetup(restoredSetup(saved));
+                      setError("");
+                    } else setError("That saved setup does not match the columns in this data.");
                   }}
                 />
               </Suspense>
