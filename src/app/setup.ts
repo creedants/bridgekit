@@ -262,7 +262,7 @@ export function measureNote(
       sentence: `Sales is "${sales}", but "${other.name}" also looks like money; choose it in Sales if you meant that one.`,
     };
   }
-  if (setup.salesFromValues === sales && !numeric.some(money)) {
+  if (setup.salesFromValues === sales && !numeric.some((column) => money(column) && !countName(column.name))) {
     return {
       role: "sales",
       sentence: `No column of numbers is named like sales, so Sales is "${sales}" because its values look like money.`,

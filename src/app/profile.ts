@@ -143,7 +143,12 @@ let stampsIssued = 0;
  * through SQL has no entry; replacing a loaded table through SQL keeps its
  * existing entry.
  */
-const uploadsByTable = new Map<string, { readonly stamp: string; readonly rows: SourceRows }>();
+/**
+ * The last upload into each table name: its stamp, where its rows came from,
+ * and the loaded table's oid. A table replaced through SQL keeps the stamp
+ * but gets a new oid, so its rows read as unavailable and name no row.
+ */
+const uploadsByTable = new Map<string, { readonly stamp: string; readonly rows: SourceRows; readonly oid?: string }>();
 
 /** The connection variable that names `table`'s current upload stamp. */
 function stampVariable(table: string): string {
@@ -175,6 +180,50 @@ export async function swapWithSourceRows(
     await query(`SET VARIABLE ${stampVariable(table)} = ${restore}`).catch(() => {});
     throw error;
   }
+  // The oid is read after the swap, outside the restoring catch: a table
+  // replaced through SQL later gets a new oid, which is the stale-row proof.
+  // Without an oid the entry stays, and the origin reads as unavailable.
+  try {
+    const [row] = await query(
+      `SELECT min(table_oid)::VARCHAR AS oid FROM duckdb_columns()
+       WHERE schema_name = current_schema() AND table_name = '${table.replaceAll("'", "''")}'`,
+    );
+    if (row?.oid != null) uploadsByTable.set(table, { stamp, rows, oid: String(row.oid) });
+  } catch {
+    // The origin reads as unavailable and names no row.
+  }
+}
+
+/** The mixed-styles mark convertFormattedNumbers leaves on a column it kept as text. */
+const MIXED_STYLES_MARK = "mixed number styles";
+
+/**
+ * The mixed-styles mark's example and file row, when the comment proves one.
+ * A bare mark names no example.
+ */
+function markedExample(comment: string): UnreadCell | undefined {
+  const mark = comment.split("; ").find((part) => part.startsWith(`${MIXED_STYLES_MARK}:`));
+  if (mark === undefined) return undefined;
+  const body = mark.slice(MIXED_STYLES_MARK.length + 1);
+  const cut = body.lastIndexOf("|");
+  if (cut < 0) return undefined;
+  const row = Number(body.slice(cut + 1));
+  if (!Number.isInteger(row) || row <= 0) return undefined;
+  return { value: body.slice(0, cut), row };
+}
+
+/** True when the comment carries the mixed-styles mark, with or without an example. */
+function hasMixedMark(comment: string): boolean {
+  return comment.split("; ").some((part) => part === MIXED_STYLES_MARK || part.startsWith(`${MIXED_STYLES_MARK}:`));
+}
+
+/** Each commented column's comment, so a mixed-styles mark can stand in for a scan. */
+async function columnComments(query: Query): Promise<Map<string, string>> {
+  const rows = await query(
+    `SELECT column_name, comment FROM duckdb_columns()
+     WHERE schema_name = current_schema() AND table_name = '${TABLE.replaceAll("'", "''")}' AND comment IS NOT NULL`,
+  );
+  return new Map(rows.map((row) => [String(row.column_name), String(row.comment ?? "")]));
 }
 
 /** A first unread cell before the file's own row is known. */
@@ -393,17 +442,29 @@ type RowOrigin =
 /**
  * The table's origin, read only when a sentence is about to name a row. A
  * missing stamp means this connection never loaded a file into the table, so
- * the loaded ordinals are the only numbering there is. A stamp with no matching
- * entry means an upload whose source is gone, which names no row.
+ * the loaded ordinals are the only numbering there is. A stamp with no
+ * matching entry, an entry with no oid, or an oid the table no longer
+ * carries means an upload whose source is gone, which names no row.
  */
 async function rowOrigin(query: Query, table: string): Promise<RowOrigin> {
   const [row] = await query(`SELECT getvariable('${stampVariable(table)}') AS stamp`);
   const stamp = row?.stamp;
   if (stamp == null) return { kind: "counted" };
   const entry = uploadsByTable.get(table);
-  return entry !== undefined && typeof stamp === "string" && entry.stamp === stamp
-    ? { kind: "file", rows: entry.rows }
-    : { kind: "unavailable" };
+  if (entry === undefined || typeof stamp !== "string" || entry.stamp !== stamp || entry.oid === undefined) {
+    return { kind: "unavailable" };
+  }
+  let oid: string | undefined;
+  try {
+    const [current] = await query(
+      `SELECT min(table_oid)::VARCHAR AS oid FROM duckdb_columns()
+       WHERE schema_name = current_schema() AND table_name = '${table.replaceAll("'", "''")}'`,
+    );
+    oid = current?.oid == null ? undefined : String(current.oid);
+  } catch {
+    oid = undefined;
+  }
+  return oid === entry.oid ? { kind: "file", rows: entry.rows } : { kind: "unavailable" };
 }
 
 /**
@@ -450,9 +511,20 @@ export async function profileFile(
 ): Promise<void> {
   const { distinct, facts } = await columnProfile(query, columns);
   const measures = new Set(measureColumns(columns));
+  // A mixed-styles mark already names the Data check's example, so it wins
+  // over a scan. A mark with a row is used directly. A bare mark means no
+  // example.
+  const comments = await columnComments(query).catch(() => new Map<string, string>());
+  const marked = new Map<string, UnreadCell>();
   const candidates: UnreadCandidate[] = [];
   for (const column of columns) {
     if (!measures.has(column.name) || isNumeric(column.type) || isDate(column.type)) continue;
+    const comment = comments.get(column.name);
+    if (comment !== undefined && hasMixedMark(comment)) {
+      const example = markedExample(comment);
+      if (example !== undefined) marked.set(column.name, example);
+      continue;
+    }
     const cell = await firstUnreadIn(query, column.name).catch(() => undefined);
     if (cell !== undefined) candidates.push(cell);
   }
@@ -463,7 +535,7 @@ export async function profileFile(
       : await rowOrigin(query, TABLE)
           .then((origin) => locateRows(origin, candidates))
           .catch(() => candidates.map(() => undefined));
-  const unread = new Map<string, UnreadCell>();
+  const unread = new Map<string, UnreadCell>(marked);
   candidates.forEach((cell, index) => {
     const row = located[index];
     unread.set(cell.column, row === undefined ? { value: cell.value } : { value: cell.value, row });
