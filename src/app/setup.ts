@@ -147,6 +147,20 @@ const isTrailingNote = (name: string) => noteWords.has(words(name).at(-1) ?? "")
 /** A count name, unless a currency word takes it out; "Sales (Currency Units)" reads as money. */
 const countName = (name: string) => COUNT_PATTERN.test(fold(name)) && !CURRENCY_PATTERN.test(fold(name));
 
+/** First numeric column the guess would take as Sales by name, in file order. */
+function salesByName(columns: readonly Column[], unitsColumn: string): string {
+  return columns.find(
+    (column) =>
+      isNumeric(column.type) &&
+      !isTrailingNote(column.name) &&
+      column.name !== unitsColumn &&
+      !TAX_DE.test(fold(column.name)) &&
+      !isUnitPrice(column.name) &&
+      !countName(column.name) &&
+      salesPattern.test(fold(column.name)),
+  )?.name ?? "";
+}
+
 /**
  * First non-numeric, non-date column with a whole "net" word and a money word,
  * excluding trailing notes, unit prices and quantity names. German, French,
@@ -201,17 +215,8 @@ export function guessSetup(columns: Column[]): Setup {
   const unitsColumn = unitsName(withoutNotes.filter((column) => column.name !== periodColumn && !isUnitPrice(column.name)));
   const net = find(/net/i, withoutNotes.filter((column) => column.name !== unitsColumn && !isUnitPrice(column.name)));
   const held = net ? "" : netSalesHeldAsText(columns);
-  // The sales-stem fallback excludes columns containing the German tax marker,
-  // the column already taken for Units, unit prices, and names that count what
-  // was sold: a money word there describes the quantity, not the money.
-  const salesCandidates = withoutNotes.filter(
-    (column) =>
-      column.name !== unitsColumn &&
-      !TAX_DE.test(fold(column.name)) &&
-      !isUnitPrice(column.name) &&
-      !countName(column.name),
-  );
-  const byName = find(salesPattern, salesCandidates);
+  // The sales-stem fallback shares its rule with the measure hint below.
+  const byName = salesByName(columns, unitsColumn);
   const salesColumn = net || (held ? "" : byName);
   const grossColumn = find(/gross|list/i, withoutNotes);
   return {
@@ -238,31 +243,28 @@ export function measureNote(
 ): { role: "sales"; sentence: string } | null {
   const sales = setup.salesColumn;
   if (!sales) return null;
-  const numeric = columns.filter((column) => isNumeric(column.type));
   if (notMoney(sales)) {
     return {
       role: "sales",
       sentence: `Sales is "${sales}", whose name suggests a price, so check that it is the total amount sold.`,
     };
   }
-  const money = (column: Column) => salesPattern.test(fold(column.name));
   // A gross or list column has the optional Gross sales picker of its own, so it
   // is not offered as the alternative Sales column.
-  const other = numeric.find(
-    (column) =>
-      column.name !== sales &&
-      column.name !== setup.unitsColumn &&
-      column.name !== setup.grossColumn &&
-      !/gross|list/i.test(fold(column.name)) &&
-      money(column),
+  const other = salesByName(
+    columns.filter(
+      (column) =>
+        column.name !== sales && column.name !== setup.grossColumn && !/gross|list/i.test(fold(column.name)),
+    ),
+    setup.unitsColumn,
   );
-  if (other) {
+  if (other !== "") {
     return {
       role: "sales",
-      sentence: `Sales is "${sales}", but "${other.name}" also looks like money; choose it in Sales if you meant that one.`,
+      sentence: `Sales is "${sales}", but "${other}" also looks like money; choose it in Sales if you meant that one.`,
     };
   }
-  if (setup.salesFromValues === sales && !numeric.some((column) => money(column) && !countName(column.name))) {
+  if (setup.salesFromValues === sales && salesByName(columns, setup.unitsColumn) === "") {
     return {
       role: "sales",
       sentence: `No column of numbers is named like sales, so Sales is "${sales}" because its values look like money.`,
