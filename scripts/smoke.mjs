@@ -1682,9 +1682,10 @@ async function drive(browser, origin, rows) {
     }
     if (marginHint.includes("Prices exclude sales with no units.")) fail("margin labels: the Movers hint still talks about prices");
     console.log("ok  margin labels: Movers names the unit-margin figures");
-    // The Unit cost bar opens Movers sorted by Price and unit cost. The bar
-    // is found by its own tooltip label and the click lands on that bar, so
-    // disabling only its mapping fails this check.
+    // The Unit cost bar opens Movers sorted by Price and unit cost. The bar's
+    // column is found by its own tooltip label, then clicks sweep that column
+    // from top to bottom, so only that bar can answer: any hit opens Movers
+    // through its own mapping, and disabling only its mapping fails this check.
     await browser.evalJs(`T.tab("Bridge")`);
     await browser.sleep(800);
     await browser.evalJs("document.querySelector('.bridge .waterfall canvas').scrollIntoView({ block: 'center' })");
@@ -1692,6 +1693,9 @@ async function drive(browser, origin, rows) {
     const canvasRect = JSON.parse(
       await browser.evalJs("JSON.stringify(document.querySelector('.bridge .waterfall canvas').getBoundingClientRect().toJSON())"),
     );
+    // Park the pointer off the chart so no stale tooltip answers the search.
+    await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: canvasRect.left - 10, y: canvasRect.top - 10 });
+    await browser.sleep(300);
     const moverSort = () =>
       browser.evalJs(
         `(() => { const tab = document.querySelector('.tabs [aria-selected="true"]'); const sel = [...document.querySelectorAll('label')].find((l) => l.firstChild && l.firstChild.textContent.trim().startsWith('Sort by'))?.querySelector('select'); return JSON.stringify({ tab: tab ? tab.textContent.trim() : '', sort: sel ? sel.value : '' }); })()`,
@@ -1701,7 +1705,6 @@ async function drive(browser, origin, rows) {
         `(() => { const box = document.querySelector('.bridge .waterfall .chart'); if (!box) return false; return [...box.querySelectorAll('div')].some((d) => d.innerHTML.includes('<b>Unit cost</b>')); })()`,
       );
     let unitX = null;
-    let unitY = null;
     for (let i = 0; i < 48 && unitX === null; i++) {
       const x = canvasRect.left + (canvasRect.width * (i + 0.5)) / 48;
       for (const fraction of [0.35, 0.5, 0.65]) {
@@ -1710,16 +1713,16 @@ async function drive(browser, origin, rows) {
         await browser.sleep(150);
         if (await tipShowsUnitCost()) {
           unitX = x;
-          unitY = y;
           break;
         }
       }
     }
     if (unitX === null) fail("unit cost click: the Unit cost bar never showed its tooltip");
+    // One column holds one bar: the totals live in their own columns, so any
+    // click in this column that opens Movers went through the Unit cost bar.
     let unitCost = null;
-    const foundFraction = (unitY - canvasRect.top) / canvasRect.height;
-    for (const fraction of [foundFraction, 0.3, 0.4, 0.5, 0.6, 0.7]) {
-      const y = canvasRect.top + canvasRect.height * fraction;
+    for (let k = 0; k < 40 && !unitCost; k++) {
+      const y = canvasRect.top + (canvasRect.height * (k + 0.5)) / 40;
       await browser.send("Input.dispatchMouseEvent", { type: "mousePressed", x: unitX, y, button: "left", clickCount: 1 });
       await browser.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: unitX, y, button: "left", clickCount: 1 });
       await browser.sleep(400);
