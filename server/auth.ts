@@ -130,7 +130,8 @@ export async function limitMagicLinkSignIn(request: Request, rateLimit: RateLimi
   // path. The endpoint's own route, signInMagicLink.path, does not move with
   // it, so the route is matched as the end of the request path, the way
   // server/worker.ts matches its two email routes. A path Better Auth would
-  // answer 404 is counted too, which costs the caller only its own slot.
+  // answer 404 is answered here first, with 415 for a body that is not JSON
+  // and 429 once the limit is spent, which costs the caller only its own slot.
   if (request.method !== "POST" || !new URL(request.url).pathname.endsWith(signInMagicLink.path)) return null;
   const mediaType = request.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
   if (mediaType !== "application/json") return Response.json({ message: "Content-Type must be application/json." }, { status: 415 });
