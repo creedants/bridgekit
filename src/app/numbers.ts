@@ -860,6 +860,9 @@ export const MIXED_SEPARATOR_SENTENCE = 'This file mixes ";" and "," as separato
 const OTHER_SEPARATOR: Record<string, string> = { ",": ";", ";": "," };
 const FEWEST_MIXED_RECORDS = 3;
 
+/** A field that reads as a plain measure: an optional sign, digits, and decimal or grouping marks. */
+const MEASURE_FIELD = /^[+-]?\d+(?:[.,]\d+)*$/;
+
 /**
  * The prefix's logical records, split with the sniffed quote and escape so a
  * quoted line break stays inside its record. Blank records are kept for the
@@ -986,9 +989,16 @@ export function hasConsistentRecords(prefix: string, delimiter: string, dialect?
  * The sentence for a file whose logical records do not all hold the header's
  * field count under the sniffed separator while the other separator gives an
  * odd record that count with every part filled, decided from the first 64 KB
- * with the sniffed quote, escape, skipped rows and comment. Punctuation inside
- * cells is never evidence on its own: a file whose every kept record holds the
- * header count is never refused, whatever its cells hold. A one-column file
+ * with the sniffed quote, escape, skipped rows and comment. A short record
+ * whose other-separator split reaches the header count with every part
+ * filled reads as punctuation plus omitted trailing cells rather than a
+ * foreign record when its first other-separator part holds the sniffed
+ * separator and no later part reads as a measure, so that record is skipped
+ * and the rest are still checked. A later part that reads as a measure keeps
+ * the refusal, because a foreign record would carry its values there and
+ * dropping them loses sales. Punctuation inside cells is never evidence on
+ * its own: a file whose every kept record holds the header count is never
+ * refused, whatever its cells hold. A one-column file
  * and a file with fewer than three complete kept records stay silent. An
  * unfinished quoted record is ignored; earlier complete records are checked.
  */
@@ -1015,7 +1025,13 @@ export function mixedSeparatorSentence(
   for (let index = 1; index < kept.length; index++) {
     if (widths[index] === header) continue;
     const parts = splitOutsideQuotes(kept[index], other, quote, escape);
-    if (parts.length === header && parts.every((field) => field.trim() !== "")) return MIXED_SEPARATOR_SENTENCE;
+    if (parts.length !== header || !parts.every((field) => field.trim() !== "")) continue;
+    const width = widths[index];
+    // Keep the short-record exception limited to a sniffed separator in the
+    // first other-separator part and no later plain-measure part. Other
+    // candidate records retain the refusal.
+    if (width < header && parts[0].includes(delimiter) && !parts.slice(1).some((field) => MEASURE_FIELD.test(field.trim()))) continue;
+    return MIXED_SEPARATOR_SENTENCE;
   }
   return null;
 }
