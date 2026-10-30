@@ -1036,6 +1036,48 @@ test("a punctuation short row loads while a foreign record stays refused", async
   assert.equal(mixedSeparatorSentence(`${header}\n${good}\n${quoted}\n`, ","), MIXED_SEPARATOR_SENTENCE);
 });
 
+const datedRows = Array.from({ length: 100 }, (_, index) =>
+  index % 2 === 0 ? '"Oct 1, 2025",A-100,10,100' : '"Oct 1, 2026",A-100,10,100',
+).join("\n");
+const datedSemicolonRows = Array.from({ length: 100 }, (_, index) =>
+  index % 2 === 0 ? '"Oct 1, 2025";A-100;10;100' : '"Oct 1, 2026";A-100;10;100',
+).join("\n");
+
+test("a dated period or numeric period with a formatted measure is refused", async () => {
+  const { mixedSeparatorSentence } = await import("../src/app/numbers.ts");
+  const header = "period,product,units,sales";
+  const dated = `${header}\nOct 1, 2026;A-100;$100;$10000\n${datedRows}\n`;
+  assert.equal(mixedSeparatorSentence(dated, ","), MIXED_SEPARATOR_SENTENCE);
+  const quarter = `${header}\n2026,Q4;A-100;$100;$10000\n${datedRows}\n`;
+  assert.equal(mixedSeparatorSentence(quarter, ","), MIXED_SEPARATOR_SENTENCE);
+  const mirror = `period;product;units;sales\n2026;Q4,A-100,$100,$10000\n${datedSemicolonRows}\n`;
+  assert.equal(mixedSeparatorSentence(mirror, ";"), MIXED_SEPARATOR_SENTENCE);
+});
+
+test("a later part the loader reads as a formatted measure keeps the refusal", async () => {
+  const { mixedSeparatorSentence } = await import("../src/app/numbers.ts");
+  const query = await openDatabase();
+  const header = "period,product,units,sales";
+  const good = ["2025,A-100,10,100", "2026,A-100,10,100", "2025,A-100,12,144", "2026,A-100,6,90"].join("\n");
+  const forms: [string, boolean][] = [
+    ["$100", true],
+    ["100 $", true],
+    ["1,000", true],
+    ["1.000,50", true],
+    ["(100)", true],
+    ["12%", false],
+    ["€100", true],
+    ["100 EUR", true],
+    ["large", false],
+  ];
+  for (const [form, refused] of forms) {
+    const [row] = await query(`SELECT ${readsAsNumber(sqlText(form))} AS ok`);
+    assert.equal(Boolean(row.ok), refused, `the loader's reading of ${form}`);
+    const text = `${header}\n2026,Q4;A-100;${form};large\n${good}\n`;
+    assert.equal(mixedSeparatorSentence(text, ","), refused ? MIXED_SEPARATOR_SENTENCE : null, form);
+  }
+});
+
 async function guardMixed(query: Query, text: string, name: string): Promise<{ file: File; filePath: string }> {
   const { refuseMixedSeparators } = await import("../src/app/db.ts");
   const { readCsvFile } = await import("../src/app/encoding.ts");
@@ -1086,6 +1128,13 @@ test("the real load keeps the punctuation short row and refuses a foreign record
   await stageCsvAndSwap(query, last.file, "data", last.filePath);
   const [count] = await query("SELECT count(*)::DOUBLE AS n FROM data");
   assert.equal(Number(count.n), 102);
+});
+
+test("the real load refuses a dated period with a formatted measure", async () => {
+  const query = await openDatabase();
+  const refused = (error: unknown) => (error as Error).message === MIXED_SEPARATOR_SENTENCE;
+  const dated = `period,product,units,sales\nOct 1, 2026;A-100;$100;$10000\n${datedRows}\n`;
+  await assert.rejects(guardMixed(query, dated, "dated-foreign.csv"), refused);
 });
 
 test("T439: leading blank lines keep the mixed-style row physical", async () => {
