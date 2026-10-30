@@ -33,6 +33,7 @@ import {
   steps,
   viewsInstalled,
   wrapBetweenLine,
+  type SplitPhase,
   type Step,
 } from "../src/app/small-bridges.ts";
 import { compact } from "../src/app/format.ts";
@@ -580,23 +581,66 @@ test("drawGrid publishes one block per panel with the grid's shared scale", () =
   assert.equal(grid.between, betweenLine(by));
 });
 
+/** A ready phase for column, as the split runner settles one on a fresh bridge. */
+function readyPhase(column: string, grid: BridgeBy): SplitPhase {
+  const calculating = reduceSplitPhase(IDLE_SPLIT_PHASE, { type: "inputs", column, stale: false });
+  return reduceSplitPhase(calculating, {
+    type: "settled",
+    request: column,
+    outcome: { status: "grid", result: grid },
+    displayed: column,
+    stale: false,
+  });
+}
+
 test("showSplit publishes the ready grid only for its own run", () => {
   const owner = bridge(1000, []);
   const other = bridge(1000, []);
   const by = splitResult();
-  showSplit(owner, { kind: "ready", column: "finish", grid: by });
+  showSplit(owner, { kind: "ready", column: "finish", grid: by }, "finish", false);
   assert.equal(shownSplit(owner), by);
   // Another run's result never reads this run's grid.
   assert.equal(shownSplit(other), null);
   // Publishing the same ready grid again keeps it.
-  showSplit(owner, { kind: "ready", column: "finish", grid: by });
+  showSplit(owner, { kind: "ready", column: "finish", grid: by }, "finish", false);
   assert.equal(shownSplit(owner), by);
   // Any other phase clears it.
-  showSplit(owner, { kind: "calculating", column: "finish" });
+  showSplit(owner, { kind: "calculating", column: "finish" }, "finish", false);
   assert.equal(shownSplit(owner), null);
-  showSplit(owner, { kind: "ready", column: "finish", grid: by });
-  showSplit(other, IDLE_SPLIT_PHASE);
+  showSplit(owner, { kind: "ready", column: "finish", grid: by }, "finish", false);
+  showSplit(other, IDLE_SPLIT_PHASE, "finish", false);
   assert.equal(shownSplit(owner), null);
+});
+
+test("while another column is selected, no grid is published for the export", () => {
+  const owner = bridge(1000, []);
+  const grid: BridgeBy = { column: "customer", total: bridge(0, []), panels: [], between: [] };
+  const ready = readyPhase("customer", grid);
+  showSplit(owner, ready, "customer", false);
+  assert.equal(shownSplit(owner), grid);
+  const other = reduceSplitPhase(ready, { type: "inputs", column: "sku", stale: true });
+  assert.equal(other, ready);
+  showSplit(owner, other, "sku", true);
+  assert.equal(shownSplit(owner), null);
+  assert.deepEqual(paintSplit({ phase: other, column: "sku", stale: true }), { view: "nothing" });
+});
+
+test("returning to the first column publishes the cached grid with no split query", () => {
+  const owner = bridge(1000, []);
+  const grid: BridgeBy = { column: "customer", total: bridge(0, []), panels: [], between: [] };
+  const ready = readyPhase("customer", grid);
+  // Another column is selected while the notice shows, so exports have no grid.
+  showSplit(owner, IDLE_SPLIT_PHASE, "customer", true);
+  assert.equal(shownSplit(owner), null);
+  const other = reduceSplitPhase(ready, { type: "inputs", column: "sku", stale: true });
+  assert.equal(other, ready);
+  showSplit(owner, other, "sku", true);
+  // Back on the first column the cached phase is painted again, with no new split.
+  const back = reduceSplitPhase(other, { type: "inputs", column: "customer", stale: true });
+  assert.equal(back, ready);
+  assert.equal(gridAction("customer", true, "customer"), "keep");
+  showSplit(owner, back, "customer", true);
+  assert.equal(shownSplit(owner), grid);
 });
 
 test("pictureLayout stacks the grid below the main bridge in rows of the column count", () => {
