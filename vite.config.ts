@@ -1,4 +1,5 @@
 import react from "@vitejs/plugin-react";
+import type { IncomingMessage } from "node:http";
 import { resolve } from "node:path";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import { applyFeatureBlocks } from "./scripts/feature-blocks.ts";
@@ -25,7 +26,9 @@ function featureBlocks(enabled: Record<string, boolean>): Plugin {
 
 // In development, serves the AI commentary endpoint from this server when
 // ANTHROPIC_API_KEY is set (for example in .env.local), so the opt-in feature
-// can be tried locally. Production hosts mount the same handler.
+// can be tried locally. Production hosts mount the same handler. The route
+// answers its own server's origin only, the way the Worker's /api/commentary
+// does, so a page on another site cannot spend the key.
 function devCommentary(apiKey: string | undefined): Plugin {
   return {
     name: "dev-commentary",
@@ -33,6 +36,14 @@ function devCommentary(apiKey: string | undefined): Plugin {
     configureServer(server) {
       if (!apiKey) return;
       server.middlewares.use("/api/commentary", async (req, res) => {
+        if (!fromThisServer(req)) {
+          res.writeHead(403, {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "no-store",
+          });
+          res.end(JSON.stringify({ error: "Requests must come from this site." }));
+          return;
+        }
         const { handleCommentary } = await server.ssrLoadModule("/server/commentary.ts");
         const chunks: Buffer[] = [];
         for await (const chunk of req) chunks.push(chunk as Buffer);
@@ -48,6 +59,19 @@ function devCommentary(apiKey: string | undefined): Plugin {
     },
   };
 }
+
+/** True when a dev-server request carries the origin of the server that received it. */
+function fromThisServer(req: IncomingMessage): boolean {
+  const { origin, host } = req.headers;
+  if (typeof origin !== "string" || typeof host !== "string") return false;
+  try {
+    const url = new URL(origin);
+    return url.host === host && (url.protocol === "http:" || url.protocol === "https:");
+  } catch {
+    return false;
+  }
+}
+
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, import.meta.dirname, "");
