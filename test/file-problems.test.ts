@@ -12,7 +12,7 @@ import {
   type FileProblemInput,
   type Periods,
 } from "../src/app/fileProblems.ts";
-import type { Column } from "../src/app/setup.ts";
+import { guessSetup, refineGuess, type Column } from "../src/app/setup.ts";
 import { profileFile } from "../src/app/profile.ts";
 import { openDatabase } from "../src/duckdb.ts";
 
@@ -504,6 +504,32 @@ test("a withheld net_sales is named rather than the network column the promoted 
     kind: "reason",
     message: 'Sales must be a column of numbers, and "net_sales" holds text.',
   });
+});
+
+test("T428: a withheld text net sales keeps its message when a number column could fill Sales", () => {
+  const columns: Column[] = [
+    text("period"),
+    text("product"),
+    { name: "units", type: "INTEGER", facts: { sum: 44 } },
+    text("net sales"),
+    { name: "alpha", type: "DOUBLE", facts: { sum: 5_400 } },
+  ];
+  const guess = guessSetup(columns);
+  const refined = { ...guess, ...refineGuess(guess, columns) };
+  assert.equal(refined.salesColumn, "");
+  assert.deepEqual(
+    fileProblem(
+      input({
+        columns,
+        rows: 4,
+        periodColumn: "period",
+        periods: ["2025", "2026"],
+        unitsColumn: refined.unitsColumn,
+        salesColumn: refined.salesColumn,
+      }),
+    ),
+    { kind: "reason", message: 'Sales must be a column of numbers, and "net sales" holds text.' },
+  );
 });
 
 test("an empty Sales beside a numeric net_revenue gets no text net_sales message", () => {

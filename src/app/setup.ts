@@ -302,7 +302,7 @@ export function refineGuess(setup: Setup, columns: readonly Column[]): Partial<S
   ) {
     patch.grain = "month";
   }
-  if (!setup.salesColumn) {
+  if (!setup.salesColumn && netSalesHeldAsText(columns) === "") {
     const unitsSum = columns.find((column) => column.name === setup.unitsColumn)?.facts?.sum;
     if (unitsSum !== undefined) {
       let best: { name: string; sum: number } | undefined;
