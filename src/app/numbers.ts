@@ -882,7 +882,12 @@ const MARK_FIELD = "[\u00A0\u202F'\u2019]";
 const GLUED_CODE_FIELD = new RegExp(`^[+-]?${CODE}[+-]?\\d+$|^[+-]?\\d+${CODE}$`, "u");
 const MARK_GROUPS_FIELD = new RegExp(`^-?\\d{1,3}(?:${MARK_FIELD}\\d{3})+([.,]\\d+)?$`, "u");
 const SPACE_GROUPS_FIELD = new RegExp(`^-?\\d{1,3}(?:(?:${MARK_FIELD}| )\\d{3})+([.,]\\d+)?$`, "u");
-const MEASURE_SHAPE_FIELD = /^[+-]?(?:\d[\d_]*(?:\.\d[\d_]*)?|\.\d[\d_]*)(?:[eE][+-]?\d[\d_]*)?$/u;
+const DIGITS_FIELD = "\\d(?:_?\\d)*";
+const MEASURE_SHAPE_FIELD = new RegExp(
+  `^[+-]?(?:${DIGITS_FIELD}(?:\\.(?:${DIGITS_FIELD})?)?|\\.${DIGITS_FIELD})(?:[eE][+-]?${DIGITS_FIELD})?$`,
+  "u",
+);
+const MEASURE_SPACE_FIELD = /[$,\x20\t\n\r\f\v]/gu;
 const MARKER_AT_START_FIELD = new RegExp(MARKER_AT_START, "u");
 const MARKER_AT_END_FIELD = new RegExp(MARKER_AT_END, "u");
 
@@ -901,12 +906,13 @@ function readsAsFormattedMeasure(field: string): boolean {
   if (bracketed !== null) text = `-${bracketed[1]}`;
   text = text.replace(TRAILING_MINUS_FIELD, "-$1");
   if (GLUED_CODE_FIELD.test(text)) return false;
+  const marked = text;
   text = text.replace(MARKER_AT_START_FIELD, "$1$3").replace(MARKER_AT_END_FIELD, "$1");
-  if (MARK_GROUPS_FIELD.test(text) || SPACE_GROUPS_FIELD.test(text)) {
+  if ((marked === text ? MARK_GROUPS_FIELD : SPACE_GROUPS_FIELD).test(text)) {
     const separator = text.includes(",") ? "." : ",";
     text = text.replace(new RegExp(MARK_FIELD, "gu"), separator).replaceAll(" ", separator);
   }
-  text = text.replace(/[,$\s]/gu, "");
+  text = text.replace(MEASURE_SPACE_FIELD, "");
   const wrapped = BRACKETS_FIELD.exec(text);
   if (wrapped !== null) text = `-${wrapped[1]}`;
   return MEASURE_SHAPE_FIELD.test(text) && Number.isFinite(Number(text.replaceAll("_", "")));

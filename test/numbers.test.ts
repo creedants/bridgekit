@@ -1072,6 +1072,9 @@ test("a later part the loader reads as a formatted measure keeps the refusal", a
     ["100EUR", false],
     ["'100", false],
     ["1_000", true],
+    ["100.", true],
+    ["1'000 000", false],
+    ["12\u00A05", false],
     ["large", false],
   ];
   for (const [form, refused] of forms) {
