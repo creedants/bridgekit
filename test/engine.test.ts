@@ -1176,6 +1176,52 @@ test("money tie-out rounds this four- and five-decimal fixture to the expected w
   });
 });
 
+test("money tie-out keeps its whole dollars when three-decimal inputs would not", async () => {
+  const query = await openDatabase();
+  const setup: Setup = {
+    periodColumn: "year",
+    grain: "value",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+    filters: [],
+  };
+  // Three units each, at unit prices written with four and five decimals:
+  // 3.4166 and 3.41673 in 2025, 3.5833 and 3.58336 in 2026.
+  await loadFile(
+    query,
+    "year INTEGER, product VARCHAR, all_group VARCHAR, units INTEGER, sales DOUBLE",
+    `(2025, 'A-100', 'all', 3, 10.2498),
+     (2025, 'A-101', 'all', 3, 10.25019),
+     (2026, 'A-100', 'all', 3, 10.7499),
+     (2026, 'A-101', 'all', 3, 10.75008)`,
+    setup,
+  );
+  const base: Omit<BridgeConfig, "levels"> = {
+    table: VIEW, periodColumn: PERIOD, prior: 2025, current: 2026,
+    unitsColumn: "units", salesColumn: "sales",
+  };
+  const byProduct: BridgeConfig = { ...base, levels: [{ name: "Product", columns: ["product"] }] };
+  const byGroup: BridgeConfig = { ...base, levels: [{ name: "Group", columns: ["all_group"] }] };
+
+  const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
+  const atThreeDecimals = (values: number[]) =>
+    values.reduce((total, value) => total + Math.round(value * 1000) / 1000, 0);
+  const prior = [10.2498, 10.25019];
+  const current = [10.7499, 10.75008];
+  // The file holds 20.49999 and 21.49998, so the bridge shows 20 and 21. The
+  // same rows rounded to three decimals hold 20.500 and 21.500 and show 21 and
+  // 22, so the whole-dollar answer depends on the digits past three decimals.
+  assert.deepEqual([whole(sum(prior)), whole(sum(current))], ["20", "21"]);
+  assert.deepEqual([whole(atThreeDecimals(prior)), whole(atThreeDecimals(current))], ["21", "22"]);
+
+  await checkBoth(query, "three-decimal boundary money", "Sales", byProduct, byGroup, {
+    lines: [20, 0, 20, 21, 0, 21],
+    inFile: [20, 21],
+    noFilter: true,
+  });
+});
+
 test("money tie-out's excluded line is the difference of the two displayed totals", async () => {
   const query = await openDatabase();
   const setup: Setup = {
