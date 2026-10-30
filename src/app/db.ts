@@ -681,14 +681,22 @@ export async function requireDataRows(query: Query, table: string): Promise<void
 
 /**
  * Counts the leading blank lines in a CSV prefix: empty lines, or lines that
- * hold only whitespace or separators. The header is the first line after
- * them. A line with letters or digits ends the blank run.
+ * hold only whitespace, commas, semicolons or the sniffed separator. The
+ * header is the first line after them. A line with letters or digits ends the
+ * blank run.
  */
-export function leadingBlankLines(prefix: string): number {
+export function leadingBlankLines(prefix: string, delimiter = ""): number {
   const lines = prefix.split(/\r\n|\n|\r/);
   let blanks = 0;
   for (const line of lines) {
-    if (/^[\s,;]*$/.test(line)) blanks += 1;
+    let blank = true;
+    for (const char of line) {
+      if (delimiter !== "" && char === delimiter) continue;
+      if (/[\s,;]/.test(char)) continue;
+      blank = false;
+      break;
+    }
+    if (blank) blanks += 1;
     else break;
   }
   return blanks;
@@ -725,7 +733,7 @@ export async function refuseMixedSeparators(query: Query, file: File, reading: C
   // nothing, so both marks are tried when the sniff names neither of them.
   const sniffed = await sniffDialect(query, path);
   const delimiter = sniffed?.delimiter || ",";
-  const leading = leadingBlankLines(prefix);
+  const leading = leadingBlankLines(prefix, delimiter);
   const dialect: CsvDialect = {
     delimiter,
     quote: sniffed?.quote ?? '"',
@@ -762,7 +770,7 @@ export async function stageCsvAndSwap(
   if (file.size === 0) throw new Error(NO_DATA_ROWS);
   const prefix = new TextDecoder().decode(new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer()));
   const sniffed = await sniffDialect(query, readablePath);
-  const leading = leadingBlankLines(prefix);
+  const leading = leadingBlankLines(prefix, sniffed?.delimiter || ",");
   const dialectForWidth: CsvDialect = {
     delimiter: sniffed?.delimiter || ",",
     quote: sniffed?.quote ?? '"',

@@ -385,7 +385,7 @@ type FieldMode = "start" | "unquoted" | "quoted" | "escaped" | "quoteSeen";
 interface SlotScan {
   /** Loaded records after the header, which the table's row count must equal. */
   readonly dataRecords: number;
-  /** The asked record's row in the file, counting skipped and empty slots from 1. */
+  /** The asked record's physical line in the file, counting every line break from 1. */
   row?: number;
   /** That record's asked field, as the reader captured it. */
   text?: string;
@@ -396,8 +396,10 @@ interface SlotScan {
  * file's rows: a line break outside a quoted field ends one slot, a completely
  * empty slot is a row the loader skips, and a break inside quotes belongs to
  * its record. Slots skipped by the sniffer and the header are counted but not
- * loaded. Undefined when the text ends inside a quoted field, or a closing
- * quote is followed by something the reader would refuse.
+ * loaded. The reported row is the physical line the record starts on, counting
+ * breaks inside quoted fields with CRLF as one. Undefined when the text ends
+ * inside a quoted field, or a closing quote is followed by something the
+ * reader would refuse.
  */
 async function scanCsvSlot(file: Blob, dialect: CsvDialect, ordinal: number, field: number): Promise<SlotScan | undefined> {
   const delimiter = dialect.delimiter;
@@ -414,7 +416,8 @@ async function scanCsvSlot(file: Blob, dialect: CsvDialect, ordinal: number, fie
   let column = 0;
   let mode: FieldMode = "start";
   let carryCR = false;
-  let recordRow = 1;
+  let physicalLine = 1;
+  let recordPhysical = 1;
   let wanted = false;
   let captured = "";
   let row: number | undefined;
@@ -427,7 +430,7 @@ async function scanCsvSlot(file: Blob, dialect: CsvDialect, ordinal: number, fie
   const endSlot = () => {
     if (!empty) {
       if (wanted) {
-        row = recordRow;
+        row = recordPhysical;
         text = captured;
       }
       if (slot > skipped) loaded += 1;
@@ -454,14 +457,19 @@ async function scanCsvSlot(file: Blob, dialect: CsvDialect, ordinal: number, fie
         carryCR = false;
         if (char === "\n") continue;
       }
-      if (!insideQuotes() && (char === "\r" || char === "\n")) {
-        endSlot();
-        carryCR = char === "\r";
-        continue;
+      const isBreak = char === "\r" || char === "\n";
+      if (isBreak) {
+        physicalLine += 1;
+        if (!insideQuotes()) {
+          endSlot();
+          carryCR = char === "\r";
+          continue;
+        }
+        if (char === "\r") carryCR = true;
       }
       if (empty) {
         empty = false;
-        recordRow = slot;
+        recordPhysical = physicalLine;
         wanted = slot > skipped && loaded - headerOffset === ordinal;
         captured = "";
       }
@@ -950,10 +958,46 @@ function splitOutsideQuotes(record: string, separator: string, quote: string, es
 }
 
 /**
+ * The unfinished tail after the last complete record break, with quoting
+ * respected so a break inside quotes does not end a record. Empty when the
+ * prefix ends on a record boundary. Used only to judge a truncated prefix
+ * that holds no complete header.
+ */
+function trailingPartial(prefix: string, quote: string, escape: string): string {
+  let quoted = false;
+  const useQuotes = quote !== "";
+  const doubled = escape === "" || escape === quote;
+  let lastBreakEnd = 0;
+  for (let index = 0; index < prefix.length; index++) {
+    const char = prefix[index];
+    if (useQuotes && char === quote) {
+      if (quoted && doubled && prefix[index + 1] === quote) {
+        index += 1;
+        continue;
+      }
+      quoted = !quoted;
+      continue;
+    }
+    if (useQuotes && !doubled && quoted && char === escape) {
+      if (index + 1 < prefix.length) index += 1;
+      continue;
+    }
+    if (!quoted && (char === "\n" || char === "\r")) {
+      if (char === "\r" && prefix[index + 1] === "\n") index += 1;
+      lastBreakEnd = index + 1;
+    }
+  }
+  return prefix.slice(lastBreakEnd);
+}
+
+/**
  * The header's field count under the given delimiter, or 0 when no kept
  * record survives. Used to keep a third-separator file that already has
  * columns under its sniffed separator from ever falling back to a comma or
- * semicolon check.
+ * semicolon check. A truncated prefix that holds only part of the header is
+ * judged on what it holds: the sole header record is never discarded, and a
+ * prefix with no complete header counts its unfinished tail with quoting
+ * respected.
  */
 export function headerFieldCount(prefix: string, delimiter: string, dialect?: CsvDialect, truncated = false): number {
   const quote = dialect?.quote ?? '"';
@@ -963,7 +1007,14 @@ export function headerFieldCount(prefix: string, delimiter: string, dialect?: Cs
   const kept = logicalRecords(prefix, quote, escape)
     .slice(skipRows)
     .filter((record) => record.trim() !== "" && (comment === "" || !record.trimStart().startsWith(comment)));
-  if (truncated && kept.length > 0) kept.pop();
+  if (truncated) {
+    if (kept.length > 1) kept.pop();
+    else if (kept.length === 0) {
+      const tail = trailingPartial(prefix, quote, escape);
+      if (tail.trim() === "" || (comment !== "" && tail.trimStart().startsWith(comment))) return 0;
+      return splitOutsideQuotes(tail, delimiter, quote, escape).length;
+    }
+  }
   if (kept.length === 0) return 0;
   return splitOutsideQuotes(kept[0], delimiter, quote, escape).length;
 }
