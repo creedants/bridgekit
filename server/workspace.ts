@@ -1,7 +1,9 @@
+import { APIError } from "better-auth/api";
 import { columnsKey, isValidSetup, MAX_COLUMN_NAME, MAX_COLUMNS, type Setup } from "../src/app/setup.ts";
 import { parseSummary, type BridgeSummary } from "../src/summary.ts";
 import type { D1Database } from "./cloudflare.ts";
 import {
+  cancelSubscription,
   chooseSubscription,
   hasPro,
   listWorkspaceSubscriptions,
@@ -52,6 +54,13 @@ export const MAX_WORKSPACES_PER_USER = 3;
 /** What a refused creation and a refused invitation answer with. */
 export const WORKSPACE_LIMIT_SENTENCE = `You can own up to ${MAX_WORKSPACES_PER_USER} workspaces, so delete one before creating another.`;
 export const SEAT_LIMIT_SENTENCE = "This workspace has no free seat, so cancel a pending invitation or add seats.";
+/**
+ * What a refused account deletion answers with when Paddle cannot cancel a
+ * live subscription. server/auth.ts and server/worker.ts are outside this
+ * module, so the sentence lives here; better-call answers a thrown APIError
+ * with its message, which carries it to the caller without a translator.
+ */
+export const SUBSCRIPTION_CANCEL_SENTENCE = "We could not cancel your subscription, so your account has not been deleted; try again later.";
 
 /**
  * How many invitation emails a workspace may send in a rolling 24 hours. The
@@ -458,14 +467,36 @@ async function storesSameState(db: D1Database, change: SubscriptionChange): Prom
   return row !== null;
 }
 
-/** Before an account is deleted: workspaces it is the only member of go with it, saved items included. */
-export async function deleteSoleWorkspaces(db: D1Database, userId: string): Promise<void> {
-  await db
-    .prepare(
-      `DELETE FROM organization WHERE id IN (
-         SELECT organizationId FROM member WHERE userId = ?
-         AND organizationId NOT IN (SELECT organizationId FROM member WHERE userId <> ?))`,
-    )
-    .bind(userId, userId)
-    .run();
+const SOLE_WORKSPACE_IDS = `SELECT organizationId FROM member WHERE userId = ? AND organizationId NOT IN (SELECT organizationId FROM member WHERE userId <> ?)`;
+
+/**
+ * Before an account is deleted: workspaces it is the only member of go with
+ * it, saved items included. A live subscription is cancelled at Paddle first,
+ * because deleting the row alone would leave it billing a workspace nobody can
+ * reach. A refused cancel stops the whole deletion, so nothing is half gone.
+ * The row is marked canceled once Paddle accepts, so a retry of the same
+ * deletion sends no second request.
+ */
+export async function deleteSoleWorkspaces(db: D1Database, userId: string, paddle: PaddleAccount | null = null): Promise<void> {
+  const { results } = await db.prepare(SOLE_WORKSPACE_IDS).bind(userId, userId).all<{ organizationId: string }>();
+  for (const { organizationId } of results) {
+    const row = await db
+      .prepare(`SELECT paddleSubscriptionId, status FROM subscription WHERE organizationId = ?`)
+      .bind(organizationId)
+      .first<{ paddleSubscriptionId: string; status: SubscriptionStatus }>();
+    if (!row || row.status === "canceled") continue;
+    if (!paddle) throw new APIError("SERVICE_UNAVAILABLE", { message: SUBSCRIPTION_CANCEL_SENTENCE });
+    try {
+      await cancelSubscription({
+        apiKey: paddle.apiKey,
+        environment: paddle.environment,
+        subscriptionId: row.paddleSubscriptionId,
+        fetch: paddle.fetch,
+      });
+    } catch {
+      throw new APIError("SERVICE_UNAVAILABLE", { message: SUBSCRIPTION_CANCEL_SENTENCE });
+    }
+    await db.prepare(`UPDATE subscription SET status = 'canceled' WHERE organizationId = ?`).bind(organizationId).run();
+  }
+  await db.prepare(`DELETE FROM organization WHERE id IN (${SOLE_WORKSPACE_IDS})`).bind(userId, userId).run();
 }

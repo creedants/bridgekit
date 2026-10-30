@@ -377,6 +377,45 @@ export async function createPortalSession(options: PortalSessionOptions): Promis
   return { portalUrl };
 }
 
+/** Thrown when Paddle cannot cancel a subscription, so its billing must be kept. */
+export class PaddleCancelError extends Error {}
+
+export interface CancelSubscriptionOptions {
+  apiKey: string;
+  environment: PaddleEnvironment;
+  subscriptionId: string;
+  /** For tests. */
+  fetch?: typeof fetch;
+}
+
+/**
+ * Cancels a subscription at the end of its paid period. The app keeps Pro
+ * until currentPeriodEnd, so cancelling immediately would forfeit time the
+ * customer already paid for.
+ */
+export async function cancelSubscription(options: CancelSubscriptionOptions): Promise<void> {
+  const doFetch = options.fetch ?? fetch;
+  let response: Response;
+  try {
+    response = await doFetch(
+      `${PADDLE_API[options.environment]}/subscriptions/${encodeURIComponent(options.subscriptionId)}/cancel`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${options.apiKey}`,
+          "content-type": "application/json",
+          "paddle-version": "1",
+        },
+        body: JSON.stringify({ effective_from: "next_billing_period" }),
+        redirect: "manual",
+      },
+    );
+  } catch {
+    throw new PaddleCancelError("Paddle could not be reached.");
+  }
+  if (!response.ok) throw new PaddleCancelError(`Paddle returned ${response.status} when cancelling a subscription.`);
+}
+
 export async function createCheckout(options: CheckoutOptions): Promise<{ transactionId: string; checkoutUrl: string }> {
   if (!Number.isInteger(options.seats) || options.seats < 1) throw new Error("Seats must be a whole number of at least 1.");
   const body: Record<string, unknown> = {
