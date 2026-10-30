@@ -6,7 +6,7 @@ import type { Fetcher } from "../server/cloudflare.ts";
 import { EMAIL_NOT_SET_UP } from "../server/email.ts";
 import type { Env } from "../server/env.ts";
 import { SIGNATURE_TOLERANCE_SECONDS } from "../server/paddle.ts";
-import { plan } from "../server/workspace.ts";
+import { plan, SUBSCRIPTION_CANCEL_SENTENCE } from "../server/workspace.ts";
 import app, { HTML_PAGE } from "../server/worker.ts";
 import { testDatabase } from "./support/d1.ts";
 
@@ -1226,6 +1226,81 @@ test("a signed webhook body that is not JSON is refused as invalid JSON", async 
   });
   assert.equal(ignored.status, 200);
   assert.deepEqual(await ignored.json(), { result: "ignored" });
+});
+
+const CANCEL_URL = "https://sandbox-api.paddle.com/subscriptions/sub_review/cancel";
+
+/**
+ * Answers the one Paddle cancel request a deletion may send, and throws on any
+ * other request so a stray one fails the test instead of leaving the machine.
+ * The workspace must still exist when Paddle is asked.
+ */
+function installCancelFetch(db: Env["DB"], workspaceId: string, answer: () => Response): { calls: { method: string; url: string }[]; restore(): void } {
+  const calls: { method: string; url: string }[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: Request | string | URL, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : input instanceof URL ? input.href : String(input);
+    const method = input instanceof Request ? input.method : (init?.method ?? "GET");
+    calls.push({ method, url });
+    assert.ok(await db.prepare("SELECT id FROM organization WHERE id = ?").bind(workspaceId).first(), "the workspace exists when Paddle is asked");
+    if (url === CANCEL_URL) return answer();
+    throw new Error(`unexpected request to ${url}`);
+  }) as typeof fetch;
+  return {
+    calls,
+    restore() {
+      globalThis.fetch = original;
+    },
+  };
+}
+
+function deleteAccount(env: Env, cookie: string): Promise<Response> {
+  return call(`${ORIGIN}/api/auth/delete-user`, env, {
+    method: "POST",
+    headers: { cookie, origin: ORIGIN, "content-type": "application/json" },
+    body: "{}",
+  });
+}
+
+test("deleting an account cancels the workspace's live subscription before the rows go", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, { PADDLE_API_KEY: "pdl_sdbx_key", PADDLE_ENVIRONMENT: "sandbox" });
+  const paddle = installCancelFetch(db, workspaceId, () => Response.json({ data: {} }));
+  let response: Response;
+  try {
+    response = await deleteAccount(env, cookie);
+  } finally {
+    paddle.restore();
+  }
+  assert.equal(response.status, 200, await response.text());
+  assert.deepEqual(paddle.calls, [{ method: "POST", url: CANCEL_URL }]);
+  assert.deepEqual(await counts(db, ["user", "organization", "member", "subscription"]), {
+    user: 0,
+    organization: 0,
+    member: 0,
+    subscription: 0,
+  });
+});
+
+test("a refused Paddle cancel keeps the account, the workspace and the subscription, and says why", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, { PADDLE_API_KEY: "pdl_sdbx_key", PADDLE_ENVIRONMENT: "sandbox" });
+  const paddle = installCancelFetch(db, workspaceId, () => new Response("{}", { status: 500 }));
+  let response: Response;
+  try {
+    response = await deleteAccount(env, cookie);
+  } finally {
+    paddle.restore();
+  }
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { message: SUBSCRIPTION_CANCEL_SENTENCE });
+  assert.deepEqual(paddle.calls, [{ method: "POST", url: CANCEL_URL }]);
+  assert.deepEqual(await counts(db, ["user", "organization", "member"]), { user: 1, organization: 1, member: 1 });
+  const subscription = await db
+    .prepare("SELECT status FROM subscription WHERE organizationId = ?")
+    .bind(workspaceId)
+    .first<{ status: string }>();
+  assert.equal(subscription?.status, "active");
 });
 
 const OWNER = "owner@example.invalid";
