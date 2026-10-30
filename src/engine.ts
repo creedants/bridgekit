@@ -728,7 +728,7 @@ const PRICE_BUCKETS: [number, string][] = [
   [Infinity, "Up more than 10%"],
 ];
 
-/** One amount as an exact decimal: value = sign x digits x 10^negative(scale). */
+/** One amount as an exact decimal: value = sign x digits / 10^scale. */
 function decimalParts(text: string): { negative: boolean; digits: bigint; scale: number } | null {
   const match = /^([-+]?)(\d+)(?:\.(\d+))?(?:[eE]([-+]?\d+))?$/.exec(text.trim());
   if (!match) return null;
@@ -741,14 +741,16 @@ function decimalParts(text: string): { negative: boolean; digits: bigint; scale:
 }
 
 /**
- * The bucket for one matched configuration, decided on its exact decimal sales
- * and units. Every edge is 100 + e percent of the prior unit price, so the
- * compared quantities are 200 x current sales x prior units against twice that
- * percent x prior sales x current units, where 200 clears the half-percent
- * edge. Both sides are whole numbers at a common power of ten, so the
- * comparison keeps the last decimal digit the division would round away and is
- * exact at an edge. Null means a value was not a plain finite decimal, and the
- * caller falls back to the double comparison.
+ * The bucket an exactly-at-edge configuration belongs to, decided on its exact
+ * decimal sales and units, or null when the change is not exactly an edge.
+ * Every edge is 100 + e percent of the prior unit price, so the compared
+ * quantities are 200 x current sales x prior units against twice that percent x
+ * prior sales x current units, where 200 clears the half-percent edge. Both
+ * sides are whole numbers at a common power of ten, so an edge compares equal
+ * however the division would have rounded it, and any other change compares
+ * unequal and keeps the band the double comparison gives it. Null also covers a
+ * value that is not a plain finite decimal, where the caller uses the same
+ * double comparison.
  */
 function exactBucket(s0: string, q0: string, s1: string, q1: string): number | null {
   const parsed = [s0, q0, s1, q1].map(decimalParts);
@@ -759,11 +761,12 @@ function exactBucket(s0: string, q0: string, s1: string, q1: string): number | n
     (part) => (part.negative ? -1n : 1n) * part.digits * 10n ** BigInt(scale - part.scale),
   );
   const left = 200n * currentSales * priorUnits;
-  const index = PRICE_BUCKETS.slice(0, -1).findIndex(([edge]) => {
-    const right = BigInt(2 * (100 + edge)) * priorSales * currentUnits;
-    return edge > 0 ? left <= right : left < right;
-  });
-  return index === -1 ? PRICE_BUCKETS.length - 1 : index;
+  const index = PRICE_BUCKETS.slice(0, -1).findIndex(
+    ([edge]) => left === BigInt(2 * (100 + edge)) * priorSales * currentUnits,
+  );
+  if (index === -1) return null;
+  // An edge belongs to the band nearer no change.
+  return PRICE_BUCKETS[index][0] > 0 ? index : index + 1;
 }
 
 /**
@@ -777,12 +780,12 @@ export async function priceDistribution(
   const k = config.levels.length;
   const change = "(s1 / q1) / (s0 / q0) - 1";
   // The band edges are whole tenths of a percent, so a change within 5e-7 of a
-  // percent of one rounds to it at six decimals. The division's own error is
-  // about 1e-13 of a percent, 40,000 times smaller, so this window is only a
-  // net: it catches every change that could be at an edge, and each is then
-  // decided exactly from the cell's decimal sales and units. A change outside
-  // the net is that much further from every edge, so the double comparison
-  // decides it correctly. Nothing inside the net is snapped by the window.
+  // percent of one rounds to it at six decimals. The division's error is about
+  // 1e-13 of a percent, 40,000 times smaller, so this window is only a net: it
+  // catches every change that could be exactly at an edge, and each is then
+  // tested on the cell's exact decimal sales and units. A change outside the
+  // net is that far from every edge, where the double comparison is right. The
+  // window itself decides nothing.
   const nearEdge = `round((${change}) * 100, 6) IN (${PRICE_BUCKETS.slice(0, -1)
     .map(([edge]) => edge)
     .join(", ")})`;
