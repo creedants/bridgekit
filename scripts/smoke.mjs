@@ -1451,10 +1451,20 @@ async function drive(browser, origin, rows) {
     };
     const reloadTotals = async (step, load) => {
       await load();
+      try {
+        await browser.waitFor(`!!document.querySelector('.error') || !!document.querySelector('select[aria-label="Add attribute"]')`);
+      } catch {
+        fail(`${step}: the setup never came back after the replacement load`);
+      }
       if (await browser.evalJs("!!document.querySelector('.error')")) {
         fail(`${step}: ${(await browser.evalJs("document.querySelector('.error').textContent.trim()")).trim()}`);
       }
-      await addFixtureLevels();
+      for (const column of ["model", "customer"]) {
+        const present = await browser.evalJs(
+          `[...document.querySelectorAll('.levels input[aria-label="Attribute name"]')].some((input) => input.value === ${JSON.stringify(column)})`,
+        );
+        if (!present) await addAttribute(column);
+      }
       await waitReady();
       await calculate();
       if (await browser.evalJs("!!document.querySelector('.error')")) {
