@@ -38,7 +38,7 @@ export function makeDownloader(
   };
 }
 
-/** The tool's save buttons except Excel go through here; Excel keeps its own guard. */
+/** Every save button goes through here, so a second click during a build saves nothing. */
 export const saveOnce: Download = makeDownloader(download);
 
 const escapeCsv = (value: unknown) => {

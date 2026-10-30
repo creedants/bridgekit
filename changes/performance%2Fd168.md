@@ -1,0 +1,5 @@
+- Results is now a React state value set when the Results chunk's load resolves, so a render that follows the load shows the component instead of reading a value React does not track. The first render still reads an already-loaded chunk directly, and a failed load leaves the page waiting exactly as before, with the failure sentence still raised by Calculate.
+- The Excel workbook is built inside the shared save guard, so one click builds one workbook and a second click during a build is dropped before it starts a second build. A build that fails or saves nothing frees the file name at once. Excel's own guard is gone.
+- The workbook's bytes, file name, busy message and exported content are unchanged.
+- `LazyChunk.loaded` stays. A chunk that resolved before the component mounted has no other synchronous source for the first render, so the getter still seeds the state.
+- `src/app/App.tsx` reads Results through the new hook and composes the export with the shared guard. `src/app/exportExcel.ts` splits the workbook build from the download and owns the file name and MIME type. `src/app/files.ts` updates the comment over the shared guard.

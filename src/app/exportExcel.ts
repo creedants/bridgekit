@@ -218,7 +218,7 @@ function sheetName(base: string, usedNames: Set<string>): string {
   return name;
 }
 
-export async function exportExcel(
+export async function workbookBytes(
   query: Query,
   config: BridgeConfig,
   result: BridgeResult,
@@ -227,7 +227,7 @@ export async function exportExcel(
   description: string[],
   tools: ExcelTools = excelTools,
   split: BridgeBy | null = shownSplit(result),
-): Promise<void> {
+): Promise<BlobPart> {
   const ExcelJS = await tools.load();
   const workbook = new ExcelJS.Workbook();
   workbook.calcProperties.fullCalcOnLoad = true;
@@ -473,9 +473,25 @@ export async function exportExcel(
   }
 
   const buffer = await workbook.xlsx.writeBuffer();
-  download(
-    `bridge-${config.prior}-to-${config.current}.xlsx`,
-    buffer,
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  );
+  return buffer;
+}
+
+/** The workbook's file name for a bridge. */
+export function excelFileName(config: Pick<BridgeConfig, "prior" | "current">): string {
+  return `bridge-${config.prior}-to-${config.current}.xlsx`;
+}
+
+export const EXCEL_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+export async function exportExcel(
+  query: Query,
+  config: BridgeConfig,
+  result: BridgeResult,
+  check: DataCheck,
+  tieOut: TieOut,
+  description: string[],
+  tools: ExcelTools = excelTools,
+  split: BridgeBy | null = shownSplit(result),
+): Promise<void> {
+  download(excelFileName(config), await workbookBytes(query, config, result, check, tieOut, description, tools, split), EXCEL_TYPE);
 }
