@@ -6,7 +6,7 @@ import type { Fetcher } from "../server/cloudflare.ts";
 import { EMAIL_NOT_SET_UP } from "../server/email.ts";
 import type { Env } from "../server/env.ts";
 import { SIGNATURE_TOLERANCE_SECONDS } from "../server/paddle.ts";
-import { plan, SUBSCRIPTION_CANCEL_SENTENCE } from "../server/workspace.ts";
+import { plan, SUBSCRIPTION_CANCEL_SENTENCE, syncSubscription } from "../server/workspace.ts";
 import app, { HTML_PAGE } from "../server/worker.ts";
 import { testDatabase } from "./support/d1.ts";
 
@@ -1228,23 +1228,41 @@ test("a signed webhook body that is not JSON is refused as invalid JSON", async 
   assert.deepEqual(await ignored.json(), { result: "ignored" });
 });
 
-const CANCEL_URL = "https://sandbox-api.paddle.com/subscriptions/sub_review/cancel";
+const SUBSCRIPTIONS_URL = "https://sandbox-api.paddle.com/subscriptions";
+const READ_URL = `${SUBSCRIPTIONS_URL}/sub_review`;
+const CANCEL_URL = `${READ_URL}/cancel`;
+
+/** A subscription entity as Paddle's read endpoint answers an open subscription. */
+const openSubscriptionAnswer = (id: string) => Response.json({ data: { id, status: "active", scheduled_change: null } });
+
+/** A subscription entity as Paddle answers a cancel accepted for the end of the period. */
+const scheduledCancelAnswer = (id: string) =>
+  Response.json({ data: { id, status: "active", scheduled_change: { action: "cancel", effective_at: "2026-11-01T00:00:00Z" } } });
 
 /**
- * Answers the one Paddle cancel request a deletion may send, and throws on any
- * other request so a stray one fails the test instead of leaving the machine.
- * The workspace must still exist when Paddle is asked.
+ * Answers the subscription read and cancel requests one account deletion may
+ * send, with one answer per method and subscription id, and throws on any other
+ * request so a stray one fails the test instead of leaving the machine. Each
+ * workspace named in `workspaces` must still exist when Paddle is asked, so a
+ * refused cancel cannot pass by deleting rows first.
  */
-function installCancelFetch(db: Env["DB"], workspaceId: string, answer: () => Response): { calls: { method: string; url: string }[]; restore(): void } {
+function installCancelFetch(
+  db: Env["DB"],
+  workspaces: Record<string, string>,
+  answer: (method: string, subscriptionId: string) => Response,
+): { calls: { method: string; url: string }[]; restore(): void } {
   const calls: { method: string; url: string }[] = [];
   const original = globalThis.fetch;
   globalThis.fetch = (async (input: Request | string | URL, init?: RequestInit) => {
     const url = input instanceof Request ? input.url : input instanceof URL ? input.href : String(input);
     const method = input instanceof Request ? input.method : (init?.method ?? "GET");
     calls.push({ method, url });
+    const [subscriptionId = "", action = "", ...rest] = url.startsWith(`${SUBSCRIPTIONS_URL}/`) ? url.slice(SUBSCRIPTIONS_URL.length + 1).split("/") : [""];
+    const workspaceId = workspaces[subscriptionId];
+    const expected = action === "" ? "GET" : action === "cancel" && rest.length === 0 ? "POST" : "";
+    if (!workspaceId || method !== expected) throw new Error(`unexpected request to ${url}`);
     assert.ok(await db.prepare("SELECT id FROM organization WHERE id = ?").bind(workspaceId).first(), "the workspace exists when Paddle is asked");
-    if (url === CANCEL_URL) return answer();
-    throw new Error(`unexpected request to ${url}`);
+    return answer(method, subscriptionId);
   }) as typeof fetch;
   return {
     calls,
@@ -1265,7 +1283,9 @@ function deleteAccount(env: Env, cookie: string): Promise<Response> {
 test("deleting an account cancels the workspace's live subscription before the rows go", async () => {
   const { db, cookie, workspaceId } = await session();
   const env = mailEnv(db, { PADDLE_API_KEY: "pdl_sdbx_key", PADDLE_ENVIRONMENT: "sandbox" });
-  const paddle = installCancelFetch(db, workspaceId, () => Response.json({ data: {} }));
+  const paddle = installCancelFetch(db, { sub_review: workspaceId }, (method) =>
+    method === "POST" ? scheduledCancelAnswer("sub_review") : openSubscriptionAnswer("sub_review"),
+  );
   let response: Response;
   try {
     response = await deleteAccount(env, cookie);
@@ -1273,7 +1293,10 @@ test("deleting an account cancels the workspace's live subscription before the r
     paddle.restore();
   }
   assert.equal(response.status, 200, await response.text());
-  assert.deepEqual(paddle.calls, [{ method: "POST", url: CANCEL_URL }]);
+  assert.deepEqual(paddle.calls, [
+    { method: "GET", url: READ_URL },
+    { method: "POST", url: CANCEL_URL },
+  ]);
   assert.deepEqual(await counts(db, ["user", "organization", "member", "subscription"]), {
     user: 0,
     organization: 0,
@@ -1285,7 +1308,9 @@ test("deleting an account cancels the workspace's live subscription before the r
 test("a refused Paddle cancel keeps the account, the workspace and the subscription, and says why", async () => {
   const { db, cookie, workspaceId } = await session();
   const env = mailEnv(db, { PADDLE_API_KEY: "pdl_sdbx_key", PADDLE_ENVIRONMENT: "sandbox" });
-  const paddle = installCancelFetch(db, workspaceId, () => new Response("{}", { status: 500 }));
+  const paddle = installCancelFetch(db, { sub_review: workspaceId }, (method) =>
+    method === "POST" ? new Response("{}", { status: 500 }) : openSubscriptionAnswer("sub_review"),
+  );
   let response: Response;
   try {
     response = await deleteAccount(env, cookie);
@@ -1294,13 +1319,186 @@ test("a refused Paddle cancel keeps the account, the workspace and the subscript
   }
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(), { message: SUBSCRIPTION_CANCEL_SENTENCE });
-  assert.deepEqual(paddle.calls, [{ method: "POST", url: CANCEL_URL }]);
+  assert.deepEqual(paddle.calls, [
+    { method: "GET", url: READ_URL },
+    { method: "POST", url: CANCEL_URL },
+  ]);
   assert.deepEqual(await counts(db, ["user", "organization", "member"]), { user: 1, organization: 1, member: 1 });
   const subscription = await db
     .prepare("SELECT status FROM subscription WHERE organizationId = ?")
     .bind(workspaceId)
     .first<{ status: string }>();
   assert.equal(subscription?.status, "active");
+});
+
+test("a cancel answer that is not JSON keeps every row", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, { PADDLE_API_KEY: "pdl_sdbx_key", PADDLE_ENVIRONMENT: "sandbox" });
+  const paddle = installCancelFetch(db, { sub_review: workspaceId }, (method) =>
+    method === "GET" ? openSubscriptionAnswer("sub_review") : new Response("not json"),
+  );
+  let response: Response;
+  try {
+    response = await deleteAccount(env, cookie);
+  } finally {
+    paddle.restore();
+  }
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { message: SUBSCRIPTION_CANCEL_SENTENCE });
+  assert.deepEqual(await counts(db, ["user", "organization", "member"]), { user: 1, organization: 1, member: 1 });
+  const subscription = await db
+    .prepare("SELECT status FROM subscription WHERE organizationId = ?")
+    .bind(workspaceId)
+    .first<{ status: string }>();
+  assert.equal(subscription?.status, "active");
+  assert.deepEqual(paddle.calls, [
+    { method: "GET", url: READ_URL },
+    { method: "POST", url: CANCEL_URL },
+  ]);
+});
+
+test("a cancel answer with no subscription entity keeps every row", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, { PADDLE_API_KEY: "pdl_sdbx_key", PADDLE_ENVIRONMENT: "sandbox" });
+  const paddle = installCancelFetch(db, { sub_review: workspaceId }, (method) =>
+    method === "GET" ? openSubscriptionAnswer("sub_review") : Response.json({ data: {} }),
+  );
+  let response: Response;
+  try {
+    response = await deleteAccount(env, cookie);
+  } finally {
+    paddle.restore();
+  }
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { message: SUBSCRIPTION_CANCEL_SENTENCE });
+  assert.deepEqual(await counts(db, ["user", "organization", "member"]), { user: 1, organization: 1, member: 1 });
+  const subscription = await db
+    .prepare("SELECT status FROM subscription WHERE organizationId = ?")
+    .bind(workspaceId)
+    .first<{ status: string }>();
+  assert.equal(subscription?.status, "active");
+  assert.deepEqual(paddle.calls, [
+    { method: "GET", url: READ_URL },
+    { method: "POST", url: CANCEL_URL },
+  ]);
+});
+
+test("a retry after reconciliation sends no second cancel for a subscription Paddle already holds", async () => {
+  const syncEvent = {
+    eventId: "evt_sync",
+    occurredAt: "2026-10-30T00:00:00Z",
+    workspaceId: "w1",
+    subscriptionId: "sub_a",
+    customerId: PADDLE_CUSTOMER,
+  };
+  const db = database();
+  const cookie = await signIn(db, OWNER);
+  const user = await db.prepare("SELECT id FROM user").first<{ id: string }>();
+  assert.ok(user, "the sign-in wrote no user");
+  const at = "2026-10-12T00:00:00Z";
+  await db
+    .prepare(`INSERT INTO organization (id, name, slug, createdAt) VALUES ('w1', 'One', 'one', ?), ('w2', 'Two', 'two', ?)`)
+    .bind(at, at)
+    .run();
+  await db
+    .prepare(`INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES ('m1', 'w1', ?, 'owner', ?), ('m2', 'w2', ?, 'owner', ?)`)
+    .bind(user.id, at, user.id, at)
+    .run();
+  await db
+    .prepare(
+      `INSERT INTO subscription VALUES ('w1', 'sub_a', ?, 'active', ?, 2, '2099-01-01T00:00:00Z', ?), ('w2', 'sub_b', ?, 'active', ?, 2, '2099-01-01T00:00:00Z', ?)`,
+    )
+    .bind(PADDLE_CUSTOMER, SEAT_PRICE, at, PADDLE_CUSTOMER, SEAT_PRICE, at)
+    .run();
+
+  const env = mailEnv(db, { PADDLE_API_KEY: "pdl_sdbx_key", PADDLE_ENVIRONMENT: "sandbox" });
+  const statuses = () => db.prepare(`SELECT organizationId, status FROM subscription ORDER BY organizationId`).all<{ organizationId: string; status: string }>();
+
+  // w2 refuses, so the first attempt stops with w1's cancel sent and its row marked canceled.
+  const stageOne = installCancelFetch(db, { sub_a: "w1", sub_b: "w2" }, (method, subscriptionId) => {
+    if (method === "GET") return openSubscriptionAnswer(subscriptionId);
+    return subscriptionId === "sub_a" ? scheduledCancelAnswer("sub_a") : new Response("{}", { status: 500 });
+  });
+  let first: Response;
+  try {
+    first = await deleteAccount(env, cookie);
+  } finally {
+    stageOne.restore();
+  }
+  assert.equal(first.status, 503);
+  assert.deepEqual(await first.json(), { message: SUBSCRIPTION_CANCEL_SENTENCE });
+  assert.deepEqual(await counts(db, ["user", "organization", "member", "subscription"]), {
+    user: 1,
+    organization: 2,
+    member: 2,
+    subscription: 2,
+  });
+  assert.deepEqual((await statuses()).results, [
+    { organizationId: "w1", status: "canceled" },
+    { organizationId: "w2", status: "active" },
+  ]);
+  assert.ok(await db.prepare("SELECT id FROM organization WHERE id = 'w1'").first(), "w1 stays after the refusal");
+
+  // Paddle's own reconciliation writes w1 back to active while the cancel it holds is scheduled.
+  const listFake = installPaddleSubscriptions([
+    paddleEntity("w1", { id: "sub_a", scheduled_change: { action: "cancel", effective_at: "2026-11-01T00:00:00Z" } }),
+  ]);
+  try {
+    const outcome = await syncSubscription(db, syncEvent, { apiKey: "pdl_test_key", environment: "sandbox", fetch: globalThis.fetch }, new Date(syncEvent.occurredAt));
+    assert.equal(outcome, "applied");
+  } finally {
+    listFake.restore();
+  }
+  assert.equal((await statuses()).results.find((row) => row.organizationId === "w1")?.status, "active");
+
+  // The retry reads w1's cancel from Paddle rather than trusting the row, so it sends no second one.
+  const stageTwo = installCancelFetch(db, { sub_a: "w1", sub_b: "w2" }, (method, subscriptionId) => {
+    if (method === "GET") return subscriptionId === "sub_a" ? scheduledCancelAnswer("sub_a") : openSubscriptionAnswer("sub_b");
+    return subscriptionId === "sub_a"
+      ? Response.json({ error: { code: "subscription_locked_pending_changes" } }, { status: 400 })
+      : scheduledCancelAnswer("sub_b");
+  });
+  let second: Response;
+  try {
+    second = await deleteAccount(env, cookie);
+  } finally {
+    stageTwo.restore();
+  }
+  assert.equal(second.status, 200, await second.text());
+  assert.deepEqual(await counts(db, ["user", "organization", "member", "subscription"]), {
+    user: 0,
+    organization: 0,
+    member: 0,
+    subscription: 0,
+  });
+  assert.deepEqual(stageTwo.calls.filter((call) => call.method === "POST" && call.url.includes("/sub_a/")), []);
+  const postA = [...stageOne.calls, ...stageTwo.calls].filter((call) => call.method === "POST" && call.url === `${SUBSCRIPTIONS_URL}/sub_a/cancel`);
+  assert.equal(postA.length, 1);
+  assert.equal(stageOne.calls.filter((call) => call.method === "POST" && call.url === `${SUBSCRIPTIONS_URL}/sub_b/cancel`).length, 1);
+  assert.equal(stageTwo.calls.filter((call) => call.method === "POST" && call.url === `${SUBSCRIPTIONS_URL}/sub_b/cancel`).length, 1);
+});
+
+test("a subscription cancelled in the portal before the delete takes no cancel request", async () => {
+  const { db, cookie, workspaceId } = await session();
+  const env = mailEnv(db, { PADDLE_API_KEY: "pdl_sdbx_key", PADDLE_ENVIRONMENT: "sandbox" });
+  const paddle = installCancelFetch(db, { sub_review: workspaceId }, (method) => {
+    assert.equal(method, "GET", "a cancel was sent for a subscription Paddle already holds");
+    return Response.json({ data: { id: "sub_review", status: "active", scheduled_change: { action: "cancel", effective_at: "2026-11-12T00:00:00Z" } } });
+  });
+  let response: Response;
+  try {
+    response = await deleteAccount(env, cookie);
+  } finally {
+    paddle.restore();
+  }
+  assert.equal(response.status, 200, await response.text());
+  assert.deepEqual(await counts(db, ["user", "organization", "member", "subscription"]), {
+    user: 0,
+    organization: 0,
+    member: 0,
+    subscription: 0,
+  });
+  assert.deepEqual(paddle.calls, [{ method: "GET", url: READ_URL }]);
 });
 
 const OWNER = "owner@example.invalid";
@@ -1692,6 +1890,7 @@ type PaddleEntity = {
   custom_data: { workspace_id: string };
   current_billing_period: { starts_at: string; ends_at: string | null } | null;
   created_at: string;
+  scheduled_change?: { action: string; effective_at?: string } | null;
 };
 
 function paddleEntity(workspaceId: string, fields: Partial<PaddleEntity> & { id: string }): PaddleEntity {

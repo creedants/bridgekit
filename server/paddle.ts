@@ -401,32 +401,71 @@ export interface CancelSubscriptionOptions {
   fetch?: typeof fetch;
 }
 
+/** What one Paddle answer about a subscription settles. */
+interface CancelState {
+  status: SubscriptionStatus;
+  /** Paddle already holds a cancel, so no further cancel request is needed. */
+  settled: boolean;
+}
+
 /**
- * Cancels a subscription at the end of its paid period. The app keeps Pro
- * until currentPeriodEnd, so cancelling immediately would forfeit time the
- * customer already paid for.
+ * Reads a Paddle answer about one subscription. Only a JSON body whose `data`
+ * names this subscription with a status we know is readable. Anything else
+ * throws, so a malformed answer refuses the cancel instead of counting as one.
+ */
+async function readCancelState(response: Response, subscriptionId: string): Promise<CancelState> {
+  let json: unknown;
+  try {
+    json = await response.json();
+  } catch {
+    throw new PaddleCancelError("Paddle returned a subscription answer that was not JSON.");
+  }
+  const data = isRecord(json) ? json.data : undefined;
+  if (!isRecord(data) || data.id !== subscriptionId) throw new PaddleCancelError("Paddle returned another subscription.");
+  const status = data.status;
+  if (typeof status !== "string" || !STATUSES.includes(status)) throw new PaddleCancelError("Paddle returned an unknown subscription status.");
+  const scheduled = isRecord(data.scheduled_change) ? data.scheduled_change : undefined;
+  return { status: status as SubscriptionStatus, settled: status === "canceled" || scheduled?.action === "cancel" };
+}
+
+/**
+ * Cancels a subscription. A paused subscription is cancelled immediately,
+ * because Paddle refuses a scheduled cancellation for one; every other live
+ * status is cancelled at the end of the paid period, which is what the app
+ * grants Pro through (see hasPro). The subscription is read first, so one whose
+ * cancel Paddle already holds, from an earlier attempt or scheduled in the
+ * portal, is settled and gets no second request. Both answers must name the
+ * subscription and report one of those outcomes, so a malformed answer refuses
+ * the cancel and the account deletion goes with it.
  */
 export async function cancelSubscription(options: CancelSubscriptionOptions): Promise<void> {
   const doFetch = options.fetch ?? fetch;
+  const url = `${PADDLE_API[options.environment]}/subscriptions/${encodeURIComponent(options.subscriptionId)}`;
+  const headers = { authorization: `Bearer ${options.apiKey}`, "paddle-version": "1" };
+  let read: Response;
+  try {
+    read = await doFetch(url, { headers, redirect: "manual" });
+  } catch {
+    throw new PaddleCancelError("Paddle could not be reached.");
+  }
+  if (!read.ok) throw new PaddleCancelError(`Paddle returned ${read.status} when reading a subscription.`);
+  const current = await readCancelState(read, options.subscriptionId);
+  if (current.settled) return;
   let response: Response;
   try {
-    response = await doFetch(
-      `${PADDLE_API[options.environment]}/subscriptions/${encodeURIComponent(options.subscriptionId)}/cancel`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${options.apiKey}`,
-          "content-type": "application/json",
-          "paddle-version": "1",
-        },
-        body: JSON.stringify({ effective_from: "next_billing_period" }),
-        redirect: "manual",
-      },
-    );
+    response = await doFetch(`${url}/cancel`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ effective_from: current.status === "paused" ? "immediately" : "next_billing_period" }),
+      redirect: "manual",
+    });
   } catch {
     throw new PaddleCancelError("Paddle could not be reached.");
   }
   if (!response.ok) throw new PaddleCancelError(`Paddle returned ${response.status} when cancelling a subscription.`);
+  if (!(await readCancelState(response, options.subscriptionId)).settled) {
+    throw new PaddleCancelError("Paddle did not report the subscription as cancelled.");
+  }
 }
 
 export async function createCheckout(options: CheckoutOptions): Promise<{ transactionId: string; checkoutUrl: string }> {

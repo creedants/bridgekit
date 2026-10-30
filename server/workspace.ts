@@ -473,10 +473,11 @@ const SOLE_WORKSPACE_IDS = `SELECT organizationId FROM member WHERE userId = ? A
  * Before an account is deleted: workspaces it is the only member of go with
  * it, saved items included. A live subscription is cancelled at Paddle first,
  * because deleting the row alone would leave it billing a workspace nobody can
- * reach. A refused cancel stops the whole deletion, so nothing is half gone.
- * The row is marked canceled once Paddle accepts, so a retry of the same
- * deletion sends no second request. Workspaces come in id order, so a retry
- * walks them in the same order.
+ * reach. Paddle is read before each cancel, so one whose cancel Paddle already
+ * holds, from an earlier attempt or scheduled in the portal, is settled and
+ * sends no second request, whatever the stored row says. A refused cancel stops
+ * the whole deletion, so nothing is half gone. Workspaces come in id order, so
+ * a retry walks them in the same order.
  */
 export async function deleteSoleWorkspaces(db: D1Database, userId: string, paddle: PaddleAccount | null = null): Promise<void> {
   const { results } = await db.prepare(SOLE_WORKSPACE_IDS).bind(userId, userId).all<{ organizationId: string }>();

@@ -375,23 +375,90 @@ test("createPortalSession throws when Paddle errors or omits the URL", async () 
   assert.deepEqual(await createPortalSession({ ...base, fetch: flat }), { portalUrl: "https://paddle.com/portal/flat" });
 });
 
-test("cancelSubscription posts the cancel at the end of the paid period", async () => {
-  const calls: { url: string; init: RequestInit }[] = [];
-  const fakeFetch = (async (url: string, init: RequestInit) => {
-    calls.push({ url, init });
-    return Response.json({ data: {} });
+/** A subscription entity as Paddle's read and cancel endpoints answer it. */
+function subscriptionAnswer(id: string, over: Record<string, unknown> = {}): Response {
+  return Response.json({ data: { id, status: "active", scheduled_change: null, ...over } });
+}
+
+test("a paused subscription is cancelled immediately and a live one at the end of its period", async () => {
+  for (const [status, effective] of [
+    ["active", "next_billing_period"],
+    ["trialing", "next_billing_period"],
+    ["past_due", "next_billing_period"],
+    ["paused", "immediately"],
+  ] as const) {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fakeFetch = (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      if (init.method !== "POST") return subscriptionAnswer("sub_1", { status });
+      return effective === "immediately"
+        ? subscriptionAnswer("sub_1", { status: "canceled", current_billing_period: null })
+        : subscriptionAnswer("sub_1", { scheduled_change: { action: "cancel", effective_at: "2026-11-01T00:00:00Z" } });
+    }) as unknown as typeof fetch;
+
+    await cancelSubscription({ apiKey: "pdl_sdbx_key", environment: "sandbox", subscriptionId: "sub_1", fetch: fakeFetch });
+
+    assert.equal(calls.length, 2, `${status} took ${calls.length} requests`);
+    assert.deepEqual(calls[0], {
+      url: "https://sandbox-api.paddle.com/subscriptions/sub_1",
+      init: { headers: { authorization: "Bearer pdl_sdbx_key", "paddle-version": "1" }, redirect: "manual" },
+    });
+    assert.deepEqual(calls[1], {
+      url: "https://sandbox-api.paddle.com/subscriptions/sub_1/cancel",
+      init: {
+        method: "POST",
+        headers: { authorization: "Bearer pdl_sdbx_key", "paddle-version": "1", "content-type": "application/json" },
+        body: JSON.stringify({ effective_from: effective }),
+        redirect: "manual",
+      },
+    });
+  }
+});
+
+test("a cancel answer that is not JSON, empty, or reporting no cancel is refused", async () => {
+  const answers = [
+    new Response("not json"),
+    Response.json({ data: {} }),
+    Response.json({ data: { id: "sub_1", status: "active", scheduled_change: null } }),
+  ];
+  for (const answer of answers) {
+    const fakeFetch = (async (_url: string, init: RequestInit) => {
+      if (init.method === "POST") return answer;
+      return subscriptionAnswer("sub_1");
+    }) as unknown as typeof fetch;
+    await assert.rejects(
+      cancelSubscription({ apiKey: "k", environment: "sandbox", subscriptionId: "sub_1", fetch: fakeFetch }),
+      PaddleCancelError,
+    );
+  }
+});
+
+test("a subscription Paddle already holds a cancel for gets no second request", async () => {
+  for (const read of [
+    subscriptionAnswer("sub_1", { scheduled_change: { action: "cancel", effective_at: "2026-11-01T00:00:00Z" } }),
+    subscriptionAnswer("sub_1", { status: "canceled", current_billing_period: null }),
+  ]) {
+    const calls: string[] = [];
+    const fakeFetch = (async (url: string) => {
+      calls.push(String(url));
+      return read;
+    }) as unknown as typeof fetch;
+    await cancelSubscription({ apiKey: "k", environment: "sandbox", subscriptionId: "sub_1", fetch: fakeFetch });
+    assert.deepEqual(calls, ["https://sandbox-api.paddle.com/subscriptions/sub_1"]);
+  }
+});
+
+test("a read answer naming another subscription is refused", async () => {
+  const calls: string[] = [];
+  const fakeFetch = (async (url: string) => {
+    calls.push(String(url));
+    return subscriptionAnswer("sub_other", { scheduled_change: { action: "cancel" } });
   }) as unknown as typeof fetch;
-  await cancelSubscription({ apiKey: "pdl_sdbx_key", environment: "sandbox", subscriptionId: "sub_1", fetch: fakeFetch });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, "https://sandbox-api.paddle.com/subscriptions/sub_1/cancel");
-  assert.equal(calls[0].init.method, "POST");
-  assert.deepEqual(calls[0].init.headers, {
-    authorization: "Bearer pdl_sdbx_key",
-    "content-type": "application/json",
-    "paddle-version": "1",
-  });
-  assert.equal(calls[0].init.redirect, "manual");
-  assert.deepEqual(JSON.parse(String(calls[0].init.body)), { effective_from: "next_billing_period" });
+  await assert.rejects(
+    cancelSubscription({ apiKey: "k", environment: "sandbox", subscriptionId: "sub_1", fetch: fakeFetch }),
+    PaddleCancelError,
+  );
+  assert.deepEqual(calls, ["https://sandbox-api.paddle.com/subscriptions/sub_1"]);
 });
 
 test("cancelSubscription rejects when Paddle errors or cannot be reached", async () => {
@@ -399,6 +466,12 @@ test("cancelSubscription rejects when Paddle errors or cannot be reached", async
   const failing = (async () => new Response("{}", { status: 500 })) as unknown as typeof fetch;
   await assert.rejects(
     cancelSubscription({ ...base, fetch: failing }),
+    (error: unknown) => error instanceof PaddleCancelError && error.message === "Paddle returned 500 when reading a subscription.",
+  );
+  const refusesCancel = (async (_url: string, init: RequestInit) =>
+    init.method === "POST" ? new Response("{}", { status: 500 }) : subscriptionAnswer("sub_1")) as unknown as typeof fetch;
+  await assert.rejects(
+    cancelSubscription({ ...base, fetch: refusesCancel }),
     (error: unknown) => error instanceof PaddleCancelError && error.message === "Paddle returned 500 when cancelling a subscription.",
   );
   const offline = (async () => {

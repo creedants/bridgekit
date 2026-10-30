@@ -74,6 +74,19 @@ const rejects = (promise: Promise<unknown>, status: number, message?: string) =>
 
 const paddleAccount = (fake: typeof fetch): PaddleAccount => ({ apiKey: "pdl_sdbx_key", environment: "sandbox", fetch: fake });
 
+/** A subscription entity as Paddle's read endpoint answers an open subscription. */
+const openSubscription = (id: string) => Response.json({ data: { id, status: "active", scheduled_change: null } });
+
+/** A subscription entity as Paddle answers a cancel accepted for the end of the period. */
+const scheduledCancel = (id: string) =>
+  Response.json({ data: { id, status: "active", scheduled_change: { action: "cancel", effective_at: "2026-11-01T00:00:00Z" } } });
+
+/** Answers every read as open and every cancel as accepted. */
+const cancelsEverything = (async (url: string | URL, init?: RequestInit) => {
+  const id = String(url).split("/subscriptions/")[1]?.split("/")[0] ?? "";
+  return init?.method === "POST" ? scheduledCancel(id) : openSubscription(id);
+}) as typeof fetch;
+
 const refusesDeletion = (promise: Promise<unknown>) =>
   assert.rejects(promise, (error: unknown) => error instanceof Error && error.message === SUBSCRIPTION_CANCEL_SENTENCE);
 
@@ -430,8 +443,7 @@ test("deleting an account removes the workspaces it is alone in, with their save
   await db.prepare(`INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES ('m3', 'w2', 'u1', 'owner', ?)`).bind(now).run();
   await applySubscription(db, subscription({ workspaceId: "w2" }));
   await saveSetup(db, "u1", "w2", { name: "Mine", columns, setup });
-  const ok = (async () => Response.json({ data: {} })) as unknown as typeof fetch;
-  await deleteSoleWorkspaces(db, "u1", paddleAccount(ok));
+  await deleteSoleWorkspaces(db, "u1", paddleAccount(cancelsEverything));
   const left = await db.prepare(`SELECT id FROM organization ORDER BY id`).all<{ id: string }>();
   assert.deepEqual(left.results.map((r) => r.id), ["w1"]);
   assert.equal((await db.prepare(`SELECT count(*) AS n FROM saved_setup`).first<{ n: number }>())?.n, 0);
@@ -448,10 +460,11 @@ test("deleting an account cancels the workspace's live subscription before the r
     // failed cancel can still leave the rows in place.
     assert.ok(await db.prepare(`SELECT id FROM organization WHERE id = 'w2'`).first(), "workspace still exists when Paddle is asked");
     sent.push({ method: init?.method ?? "GET", url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined });
-    return Response.json({ data: {} });
+    return init?.method === "POST" ? scheduledCancel("sub_2") : openSubscription("sub_2");
   }) as typeof fetch;
   await deleteSoleWorkspaces(db, "u1", { apiKey: "pdl_sdbx_key", environment: "sandbox", fetch: fake });
   assert.deepEqual(sent, [
+    { method: "GET", url: "https://sandbox-api.paddle.com/subscriptions/sub_2", body: undefined },
     { method: "POST", url: "https://sandbox-api.paddle.com/subscriptions/sub_2/cancel", body: { effective_from: "next_billing_period" } },
   ]);
   assert.equal(await db.prepare(`SELECT id FROM organization WHERE id = 'w2'`).first(), null);
@@ -495,7 +508,7 @@ test("a workspace whose subscription is already canceled is deleted without aski
   let calls = 0;
   const fake = (async () => {
     calls += 1;
-    return Response.json({ data: {} });
+    return openSubscription("sub_2");
   }) as unknown as typeof fetch;
   await deleteSoleWorkspaces(db, "u1", paddleAccount(fake));
   assert.equal(calls, 0);
@@ -509,7 +522,7 @@ test("a workspace with no subscription is deleted without asking Paddle", async 
   let calls = 0;
   const fake = (async () => {
     calls += 1;
-    return Response.json({ data: {} });
+    return openSubscription("sub_2");
   }) as unknown as typeof fetch;
   await deleteSoleWorkspaces(db, "u1", paddleAccount(fake));
   assert.equal(calls, 0);
@@ -526,10 +539,11 @@ test("a retry after a refused cancel does not ask Paddle to cancel the same subs
   await applySubscription(db, subscription({ workspaceId: "w2", subscriptionId: "sub_2" }));
   await applySubscription(db, subscription({ workspaceId: "w3", subscriptionId: "sub_3", occurredAt: "2026-10-05T00:00:00.000000Z" }));
   const sent: string[] = [];
-  const refusesOne = (async (url: string | URL) => {
+  const refusesOne = (async (url: string | URL, init?: RequestInit) => {
     const id = String(url).split("/subscriptions/")[1]?.split("/")[0] ?? "";
     sent.push(id);
-    return id === "sub_3" ? new Response("{}", { status: 500 }) : Response.json({ data: {} });
+    if (id === "sub_3") return new Response("{}", { status: 500 });
+    return init?.method === "POST" ? scheduledCancel(id) : openSubscription(id);
   }) as typeof fetch;
 
   await refusesDeletion(deleteSoleWorkspaces(db, "u1", paddleAccount(refusesOne)));
