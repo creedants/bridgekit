@@ -467,7 +467,7 @@ async function storesSameState(db: D1Database, change: SubscriptionChange): Prom
   return row !== null;
 }
 
-const SOLE_WORKSPACE_IDS = `SELECT organizationId FROM member WHERE userId = ? AND organizationId NOT IN (SELECT organizationId FROM member WHERE userId <> ?)`;
+const SOLE_WORKSPACE_IDS = `SELECT organizationId FROM member WHERE userId = ? AND organizationId NOT IN (SELECT organizationId FROM member WHERE userId <> ?) ORDER BY organizationId`;
 
 /**
  * Before an account is deleted: workspaces it is the only member of go with
@@ -475,7 +475,8 @@ const SOLE_WORKSPACE_IDS = `SELECT organizationId FROM member WHERE userId = ? A
  * because deleting the row alone would leave it billing a workspace nobody can
  * reach. A refused cancel stops the whole deletion, so nothing is half gone.
  * The row is marked canceled once Paddle accepts, so a retry of the same
- * deletion sends no second request.
+ * deletion sends no second request. Workspaces come in id order, so a retry
+ * walks them in the same order.
  */
 export async function deleteSoleWorkspaces(db: D1Database, userId: string, paddle: PaddleAccount | null = null): Promise<void> {
   const { results } = await db.prepare(SOLE_WORKSPACE_IDS).bind(userId, userId).all<{ organizationId: string }>();
