@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { applyFeatureBlocks } from "../scripts/feature-blocks.ts";
+import { signedWhole } from "../src/app/format.ts";
+import { openDatabase } from "../src/duckdb.ts";
+import { runBridge } from "../src/engine.ts";
+import { roundBridge } from "../src/summary.ts";
+import { resolveSample } from "../src/synth.ts";
 
 const ORIGIN = "https://pvmbridge.com";
 const GITHUB = "https://github.com/creedants/bridgekit";
@@ -1119,4 +1124,47 @@ test("the privacy page says who is responsible for the data in every build", () 
       `privacy.html in the ${build} build puts Who is responsible after If this changes: move it before that heading`,
     );
   }
+});
+
+test("the home page sample figures match the engine sample bridge", async () => {
+  const query = await openDatabase();
+  const { sample, rows } = resolveSample(null);
+  await sample.create(query, rows, "sales");
+  const config = {
+    table: "sales",
+    periodColumn: sample.setup.periodColumn,
+    prior: 2025,
+    current: 2026,
+    unitsColumn: sample.setup.unitsColumn,
+    salesColumn: sample.setup.salesColumn,
+    levels: sample.setup.levels,
+  };
+  const result = await runBridge(query, config);
+  const shown = roundBridge(
+    result.priorSales,
+    result.currentSales,
+    result.effects.map((effect) => effect.value),
+  );
+  const byKey = new Map(result.effects.map((effect, index) => [effect.key, shown.values[index]]));
+  const html = readPage("index.html");
+  const hero = /<b>Change<\/b><strong>([^<]+)<\/strong>/.exec(html);
+  assert.ok(hero, "index.html has no Change KPI: keep the hero Change tile");
+  assert.equal(
+    hero[1],
+    signedWhole(shown.current - shown.prior),
+    `index.html hero Change reads ${hero[1]} but the engine sample bridge shows ${signedWhole(shown.current - shown.prior)}: use the engine figure`,
+  );
+  const order = ["volume", "mix_1", "mix_2", "mix_3", "mix_4", "price", "new_config", "discontinued"];
+  const expected = order.map((key) => signedWhole(byKey.get(key) ?? NaN));
+  const cells = [...html.matchAll(/<td class="amt">([\s\S]*?)<\/td>/g)].map((match) => match[1]);
+  assert.equal(cells.length, 4, `index.html has ${cells.length} amount cells: keep the four rows`);
+  const actual = cells.flatMap((cell) =>
+    [...cell.matchAll(/<b>([^<]+)<\/b>/g)].map((match) => match[1]),
+  );
+  assert.equal(
+    actual.length,
+    expected.length,
+    `index.html has ${actual.length} step amounts: keep the eight sample amounts`,
+  );
+  assert.deepEqual(actual, expected, "index.html step amounts differ from the engine sample bridge: use the engine figures");
 });
