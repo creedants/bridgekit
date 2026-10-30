@@ -815,9 +815,15 @@ async function readDotColumn(
  * one dot, reads dots as thousands. Otherwise the values stay as read, with a
  * data-check sentence saying they were read as decimals.
  */
-export async function planDotColumns(query: Query, path: string, delimiter: string): Promise<DotReading[]> {
+export async function planDotColumns(
+  query: Query,
+  path: string,
+  delimiter: string,
+  skip = 0,
+): Promise<DotReading[]> {
   const escaped = path.replaceAll("'", "''");
-  const raw = `(SELECT * FROM read_csv('${escaped}', all_varchar=true, ${CSV_OPTIONS}))`;
+  const skipOption = skip > 0 ? `, skip=${skip}` : "";
+  const raw = `(SELECT * FROM read_csv('${escaped}', all_varchar=true, ${CSV_OPTIONS}${skipOption}))`;
   const names = (await query(`DESCRIBE SELECT * FROM ${raw}`)).map((row) => String(row.column_name));
   const readings: DotReading[] = [];
   for (const column of names) {
