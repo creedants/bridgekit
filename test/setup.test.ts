@@ -2544,6 +2544,24 @@ test("D143: only a fresh guess refines, and a fiscal start that already splits t
   assert.deepEqual(refineGuess(guess, file), { grain: "month" });
 });
 
+test("T428: a withheld text net sales keeps Sales empty through the value fallback", () => {
+  const file: Column[] = [
+    { name: "period", type: "VARCHAR" },
+    { name: "product", type: "VARCHAR" },
+    { name: "units", type: "BIGINT", facts: fact(44) },
+    { name: "net sales", type: "VARCHAR" },
+    { name: "alpha", type: "DOUBLE", facts: fact(5_400) },
+  ];
+  const guess = guessSetup(file);
+  assert.equal(guess.salesColumn, "");
+  assert.equal(netSalesHeldAsText(file), "net sales");
+  const refined = { ...guess, ...refineGuess(guess, file) };
+  assert.equal(refined.salesColumn, "");
+  assert.equal(refined.salesFromValues, undefined);
+  const small: Column[] = file.map((column) => (column.name === "alpha" ? { ...column, facts: fact(80) } : column));
+  assert.deepEqual(refineGuess(guessSetup(small), small), {});
+});
+
 test("T430: a count-named Units does not hide that a guessed Sales came from its values", () => {
   const file: Column[] = [
     { name: "period", type: "VARCHAR" },
