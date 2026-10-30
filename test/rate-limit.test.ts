@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { limitMagicLinkSignIn } from "../server/auth.ts";
 import type { Fetcher, RateLimit } from "../server/cloudflare.ts";
 import { EMAIL_NOT_SET_UP } from "../server/email.ts";
 import type { Env } from "../server/env.ts";
@@ -73,7 +74,7 @@ function database(): Env["DB"] {
   };
 }
 
-function bindings(db: Env["DB"], rateLimit: RateLimit | undefined, mail: "local" | "none" = "local"): Env {
+function bindings(db: Env["DB"], rateLimit: RateLimit | undefined, mail: "local" | "none" = "local", authUrl = ORIGIN): Env {
   const assets: Fetcher = {
     async fetch() {
       return new Response("missing", { status: 500 });
@@ -82,7 +83,7 @@ function bindings(db: Env["DB"], rateLimit: RateLimit | undefined, mail: "local"
   const env: Env = {
     ASSETS: assets,
     DB: db,
-    BETTER_AUTH_URL: ORIGIN,
+    BETTER_AUTH_URL: authUrl,
     BETTER_AUTH_SECRET: "0122456789abcdef0122456789abcdef",
     ACCOUNTS: "on",
   };
@@ -137,6 +138,7 @@ async function withWorker<T>(
   rateLimit: RateLimit | undefined,
   run: (env: Env, db: Env["DB"], lines: string[], urls: string[]) => Promise<T>,
   mail: "local" | "none" = "local",
+  authUrl = ORIGIN,
 ): Promise<T> {
   const db = database();
   const logs = captureConsole();
@@ -148,7 +150,7 @@ async function withWorker<T>(
     return original(input, init);
   };
   try {
-    return await run(bindings(db, rateLimit, mail), db, logs.lines, urls);
+    return await run(bindings(db, rateLimit, mail, authUrl), db, logs.lines, urls);
   } finally {
     globalThis.fetch = original;
     logs.restore();
@@ -254,6 +256,73 @@ async function limited(): Promise<void> {
     await assertNoRateLimitTable(db);
     assertQuiet(lines, urls, [CLIENT]);
   });
+}
+
+/** A base URL whose path keeps the auth routes under the Worker's /api/auth mount. */
+const MOVED_PREFIX = "/api/auth/app";
+
+/**
+ * Better Auth mounts its endpoints under the pathname of its base URL, so a
+ * BETTER_AUTH_URL that carries a path moves the magic-link sign-in route. The
+ * moved route owes the same limit and the same 429 as the route it moved from.
+ */
+async function movedRoute(): Promise<void> {
+  const limit = readLimiter().simple.limit;
+  const calls: LimitCall[] = [];
+  const authUrl = `${ORIGIN}${MOVED_PREFIX}`;
+  await withWorker(limiter(limit, calls), async (env, db, lines, urls) => {
+    const moved = `${authUrl}/sign-in/magic-link`;
+    const accepted = [];
+    for (let index = 0; index < limit; index += 1) {
+      const response = await signIn(env, validBody(`moved${index}@example.invalid`), jsonHeaders({ "cf-connecting-ip": CLIENT }), moved);
+      accepted.push({ status: response.status, body: await response.json() });
+    }
+    const before = { rows: await countRows(db, "verification"), emails: emailCount(lines) };
+    const refused = await signIn(env, validBody("moved-over@example.invalid"), jsonHeaders({ "cf-connecting-ip": CLIENT }), moved);
+    assert.deepEqual(
+      {
+        accepted,
+        refusal: { status: refused.status, body: await refused.json(), retryAfter: refused.headers.get("x-retry-after") },
+        calls,
+        rows: await countRows(db, "verification"),
+        emails: emailCount(lines),
+      },
+      {
+        accepted: Array.from({ length: limit }, () => ({ status: 200, body: { status: true } })),
+        refusal: { status: 429, body: TOO_MANY, retryAfter: null },
+        calls: [...Array.from({ length: limit }, () => ({ key: CLIENT, success: true })), { key: CLIENT, success: false }],
+        rows: before.rows,
+        emails: before.emails,
+      },
+    );
+    assert.equal(before.rows, limit);
+    assert.equal(before.emails, limit);
+    await assertNoRateLimitTable(db);
+    assertQuiet(lines, urls, [CLIENT]);
+  }, "local", authUrl);
+}
+
+/**
+ * The limiter itself, for a base path the Worker does not mount under /api:
+ * the moved route spends a slot and answers the same 429 the unmoved one does.
+ */
+async function movedAnywhere(): Promise<void> {
+  const limit = readLimiter().simple.limit;
+  const calls: LimitCall[] = [];
+  const rateLimit = limiter(limit, calls);
+  const moved = `${ORIGIN}/app/sign-in/magic-link`;
+  const outcomes = [];
+  for (let index = 0; index <= limit; index += 1) {
+    const refusal = await limitMagicLinkSignIn(
+      new Request(moved, { method: "POST", headers: jsonHeaders({ "cf-connecting-ip": CLIENT }), body: validBody(`elsewhere${index}@example.invalid`) }),
+      rateLimit,
+    );
+    outcomes.push(refusal === null ? null : { status: refusal.status, body: await refusal.json(), retryAfter: refusal.headers.get("x-retry-after") });
+  }
+  assert.deepEqual(outcomes, [
+    ...Array.from({ length: limit }, () => null),
+    { status: 429, body: TOO_MANY, retryAfter: null },
+  ]);
 }
 
 async function jsonx(): Promise<void> {
@@ -1076,6 +1145,8 @@ else if (isolated === "rejected") test("a rejected sign-in address does not spen
 else if (isolated === "missing-ip") test("a sign-in with no client address is refused", missingIp);
 else if (isolated === "unbound") test("sign-in has no limit when the binding is absent", unbound);
 else if (isolated === "refused-mail") test("a sign-in refused for no email does not spend a limit slot", refusedForNoMail);
+else if (isolated === "moved") test("a moved sign-in route keeps the sign-in limit", movedRoute);
+else if (isolated === "moved-anywhere") test("the limiter covers the sign-in route under any base path", movedAnywhere);
 else if (isolated) throw new Error(`unknown rate limit case ${isolated}`);
 else {
   test("wrangler.jsonc declares the magic-link rate limit", () => {
@@ -1104,6 +1175,8 @@ else {
   test("a sign-in with no client address is refused", () => runIsolated("missing-ip"));
   test("sign-in has no limit when the binding is absent", () => runIsolated("unbound"));
   test("a sign-in refused for no email does not spend a limit slot", () => runIsolated("refused-mail"));
+  test("a moved sign-in route keeps the sign-in limit", () => runIsolated("moved"));
+  test("the limiter covers the sign-in route under any base path", () => runIsolated("moved-anywhere"));
   test("the sixth commentary request from one Pro member is refused", commentaryLimited);
   test("a refused commentary body does not spend a slot", commentaryBadBody);
   test("commentary has no limit when the binding is absent", commentaryUnbound);
