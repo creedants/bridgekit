@@ -986,7 +986,12 @@ export function hasConsistentRecords(prefix: string, delimiter: string, dialect?
  * The sentence for a file whose logical records do not all hold the header's
  * field count under the sniffed separator while the other separator gives an
  * odd record that count with every part filled, decided from the first 64 KB
- * with the sniffed quote, escape, skipped rows and comment. Punctuation inside
+ * with the sniffed quote, escape, skipped rows and comment. A short record
+ * whose other-separator split reaches the header count with every part
+ * filled is still punctuation plus omitted trailing cells, not a foreign
+ * record, when one of its first sniffed-width other parts holds the sniffed
+ * separator, so that record is skipped and the rest are still checked.
+ * Punctuation inside
  * cells is never evidence on its own: a file whose every kept record holds the
  * header count is never refused, whatever its cells hold. A one-column file
  * and a file with fewer than three complete kept records stay silent. An
@@ -1015,7 +1020,10 @@ export function mixedSeparatorSentence(
   for (let index = 1; index < kept.length; index++) {
     if (widths[index] === header) continue;
     const parts = splitOutsideQuotes(kept[index], other, quote, escape);
-    if (parts.length === header && parts.every((field) => field.trim() !== "")) return MIXED_SEPARATOR_SENTENCE;
+    if (parts.length !== header || !parts.every((field) => field.trim() !== "")) continue;
+    const width = widths[index];
+    if (width < header && parts.slice(0, width).some((field) => field.includes(delimiter))) continue;
+    return MIXED_SEPARATOR_SENTENCE;
   }
   return null;
 }

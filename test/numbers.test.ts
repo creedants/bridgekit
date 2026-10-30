@@ -983,6 +983,8 @@ test("a file with one separator stays silent, including quoted marks and short r
   assert.equal(mixedSeparatorSentence(oneMark, ","), null);
   const ragged = "period,region,units,sales\n2025,North,10,100\n2026,South,11\n2027,North,12,120\n";
   assert.equal(mixedSeparatorSentence(ragged, ","), null);
+  const omittedTrailing = "period,product,units,sales\n2025,A-100,10,100\n2026,A-100,12,144\n2025,A;B;C;D\n2026,B-200,6,90\n";
+  assert.equal(mixedSeparatorSentence(omittedTrailing, ","), null);
   const tabbed = "period\tregion\tunits\n2025\tNorth\t10\n2026\tSouth\t12\n";
   assert.equal(mixedSeparatorSentence(tabbed, "\t"), null);
   const tabbedMarks = "period\tproduct\tunits\n2025\tA,100; X\t10\n2026\tB,200; Y\t12\n";
