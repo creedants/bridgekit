@@ -1704,20 +1704,35 @@ async function drive(browser, origin, rows) {
       browser.evalJs(
         `(() => { const box = document.querySelector('.bridge .waterfall .chart'); if (!box) return false; return [...box.querySelectorAll('div')].some((d) => { if (!d.innerHTML.includes('<b>Unit cost</b>')) return false; const r = d.getBoundingClientRect(); if (r.width === 0 || r.height === 0) return false; return parseFloat(getComputedStyle(d).opacity || '1') > 0; }); })()`,
       );
-    let unitX = null;
-    for (let i = 0; i < 48 && unitX === null; i++) {
-      const x = canvasRect.left + (canvasRect.width * (i + 0.5)) / 48;
-      for (const fraction of [0.35, 0.5, 0.65]) {
-        const y = canvasRect.top + canvasRect.height * fraction;
-        await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-        await browser.sleep(150);
-        if (await tipShowsUnitCost()) {
-          unitX = x;
-          break;
+    const sweepHits = async (xs) => {
+      const hits = [];
+      for (const x of xs) {
+        for (const fraction of [0.35, 0.5, 0.65]) {
+          const y = canvasRect.top + canvasRect.height * fraction;
+          await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+          await browser.sleep(150);
+          if (await tipShowsUnitCost()) {
+            hits.push(x);
+            break;
+          }
         }
       }
-    }
-    if (unitX === null) fail("unit cost click: the Unit cost bar never showed its tooltip");
+      return hits;
+    };
+    const xs = [];
+    for (let i = 0; i < 48; i++) xs.push(canvasRect.left + (canvasRect.width * (i + 0.5)) / 48);
+    // Sweep both ways: a tooltip that trails the pointer shifts each run the
+    // other way, so only their overlap is the Unit cost slice itself.
+    const forward = await sweepHits(xs);
+    const backward = await sweepHits([...xs].reverse());
+    const lo = Math.max(forward[0] ?? Infinity, backward[backward.length - 1] ?? Infinity);
+    const hi = Math.min(forward[forward.length - 1] ?? -Infinity, backward[0] ?? -Infinity);
+    if (!(lo <= hi)) fail("unit cost click: the Unit cost bar never showed its tooltip");
+    const unitX = (lo + hi) / 2;
+    // Hover the middle and confirm it still reads Unit cost before trusting it.
+    await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: unitX, y: canvasRect.top + canvasRect.height / 2 });
+    await browser.sleep(300);
+    if (!(await tipShowsUnitCost())) fail("unit cost click: the Unit cost bar never showed its tooltip");
     // The open tooltip would eat the clicks, so park the pointer off the
     // chart and let it close before sweeping. The sweep sends no moves.
     await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: canvasRect.left - 10, y: canvasRect.top - 10 });
