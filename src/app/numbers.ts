@@ -860,6 +860,9 @@ export const MIXED_SEPARATOR_SENTENCE = 'This file mixes ";" and "," as separato
 const OTHER_SEPARATOR: Record<string, string> = { ",": ";", ";": "," };
 const FEWEST_MIXED_RECORDS = 3;
 
+/** A field that reads as a plain measure: an optional sign, digits, and decimal or grouping marks. */
+const MEASURE_FIELD = /^[+-]?\d+(?:[.,]\d+)*$/;
+
 /**
  * The prefix's logical records, split with the sniffed quote and escape so a
  * quoted line break stays inside its record. Blank records are kept for the
@@ -989,10 +992,13 @@ export function hasConsistentRecords(prefix: string, delimiter: string, dialect?
  * with the sniffed quote, escape, skipped rows and comment. A short record
  * whose other-separator split reaches the header count with every part
  * filled reads as punctuation plus omitted trailing cells rather than a
- * foreign record when one of its first sniffed-width other parts holds the
- * sniffed separator, so that record is skipped and the rest are still
- * checked. Punctuation inside cells is never evidence on its own: a file whose every kept record holds the
- * header count is never refused, whatever its cells hold. A one-column file
+ * foreign record when its first other-separator part holds the sniffed
+ * separator and no later part reads as a measure, so that record is skipped
+ * and the rest are still checked. A later part that reads as a measure keeps
+ * the refusal, because a foreign record would carry its values there and
+ * dropping them loses sales. Punctuation inside cells is never evidence on
+ * its own: a file whose every kept record holds the header count is never
+ * refused, whatever its cells hold. A one-column file
  * and a file with fewer than three complete kept records stay silent. An
  * unfinished quoted record is ignored; earlier complete records are checked.
  */
@@ -1021,7 +1027,11 @@ export function mixedSeparatorSentence(
     const parts = splitOutsideQuotes(kept[index], other, quote, escape);
     if (parts.length !== header || !parts.every((field) => field.trim() !== "")) continue;
     const width = widths[index];
-    if (width < header && parts.slice(0, width).some((field) => field.includes(delimiter))) continue;
+    // A foreign record's period never holds the sniffed separator, so a short
+    // record whose first other-separator part does is punctuation plus omitted
+    // trailing cells, unless a later part reads as the measure a foreign record
+    // would carry, which loses data and stays refused.
+    if (width < header && parts[0].includes(delimiter) && !parts.slice(1).some((field) => MEASURE_FIELD.test(field.trim()))) continue;
     return MIXED_SEPARATOR_SENTENCE;
   }
   return null;
