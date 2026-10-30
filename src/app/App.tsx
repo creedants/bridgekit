@@ -80,24 +80,20 @@ const RESULTS_PREFETCH_SETTLE_MS = 150;
 /**
  * The Results component once its chunk loads, else null. The mount reads the
  * already-resolved value so a chunk loaded before mount shows Results on the
- * first render; every later resolution arrives through state, so the render
- * tracks it. A failed load leaves it null, as before.
+ * first render; every later resolution, from whichever caller started it,
+ * arrives through state, so the render tracks it. This starts no load of its
+ * own: the page's prefetch, a load, and Calculate still decide when the chunk
+ * downloads. A failed load leaves it null, as before.
  */
 export function useResultsView(chunk: LazyChunk<ResultsView>): ResultsView | null {
   const [view, setView] = useState<ResultsView | null>(() => chunk.loaded ?? null);
   useEffect(() => {
-    if (view !== null) return;
-    let live = true;
-    chunk.load().then(
-      (loaded) => {
-        if (live) setView(() => loaded);
-      },
-      () => {},
-    );
-    return () => {
-      live = false;
-    };
-  }, [chunk, view]);
+    const install = (loaded: ResultsView) => setView(() => loaded);
+    const stop = chunk.subscribe(install);
+    // A load can resolve between the mount read and this subscription.
+    if (chunk.loaded !== undefined) install(chunk.loaded);
+    return stop;
+  }, [chunk]);
   return view;
 }
 

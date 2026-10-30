@@ -249,8 +249,12 @@ test("a Results component that loads after the run is set reaches the page throu
   const Loaded: ResultsView = () => React.createElement("span", null, MARKER);
   let settle: (module: unknown) => void = () => {};
   const gate = new Promise<unknown>((resolve) => (settle = resolve));
+  let imports = 0;
   const chunk: LazyChunk<ResultsView> = lazyChunk({
-    importer: () => gate,
+    importer: () => {
+      imports += 1;
+      return gate;
+    },
     parse: parsedResults,
     sentences: SENTENCES,
   });
@@ -267,13 +271,18 @@ test("a Results component that loads after the run is set reaches the page throu
   const root = createRoot(container as unknown as Element);
   try {
     await React.act(async () => root.render(React.createElement(Probe)));
+    await flush();
+
     assert.equal(renderedText(container), WAITING, "the page waits while the chunk is still loading");
     assert.equal(seen, null);
     assert.equal(chunk.loaded, undefined);
+    assert.equal(imports, 0, "mounting starts no load of its own; the page still decides when the chunk downloads");
 
+    // A load the page starts, as Calculate's does.
+    const loading = chunk.load();
     await React.act(async () => {
       settle({ Results: Loaded });
-      await gate;
+      await loading;
     });
     await flush();
 
@@ -289,6 +298,15 @@ test("the page's render takes Results from the hook, not from the chunk getter",
   const source = readFileSync(new URL("../src/app/App.tsx", import.meta.url), "utf8");
   assert.match(source, /const Results = useResultsView\(resultsChunk\);/, "the render holds Results in state");
   assert.doesNotMatch(source, /resultsChunk\.loaded/, "no render reads the untracked getter");
+});
+
+test("the export's guard wraps the labelled build, so a refused click never reaches the task", () => {
+  const source = readFileSync(new URL("../src/app/App.tsx", import.meta.url), "utf8");
+  assert.ok(source.includes("saveOnce("), "the export goes through the shared guard");
+  const guard = source.indexOf("excelFileName(job.config)");
+  const build = source.indexOf('task("export"');
+  assert.ok(guard > 0 && build > guard, "the build starts inside the guard, not before it");
+  assert.doesNotMatch(source, /makeGuard/, "the page keeps no guard of its own");
 });
 
 test("a Results chunk loaded before mount shows Results on the first render", async () => {
@@ -314,14 +332,16 @@ test("a Results chunk loaded before mount shows Results on the first render", as
   assert.match(html, new RegExp(MARKER), "the first render holds the loaded Results component");
 });
 
-test("a Results chunk whose load fails leaves it null and raises no unhandled rejection", async () => {
+test("a failed load leaves it null, and a retry the page starts later still reaches the page", async () => {
   const doc = installHarnessDom();
   const React = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { useResultsView } = await appModule();
 
+  const Loaded: ResultsView = () => React.createElement("span", null, MARKER);
   const chunk: LazyChunk<ResultsView> = lazyChunk({
     importer: () => Promise.reject(new Error("chunk offline")),
+    freshCopy: async () => ({ Results: Loaded }),
     parse: parsedResults,
     sentences: SENTENCES,
   });
@@ -343,6 +363,15 @@ test("a Results chunk whose load fails leaves it null and raises no unhandled re
   try {
     await React.act(async () => root.render(React.createElement(Probe)));
     await flush();
+
+    const failed = chunk.load().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await React.act(async () => {
+      await failed;
+    });
+    await flush();
     // An unhandled rejection is reported on a later turn of the loop.
     await React.act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -352,6 +381,16 @@ test("a Results chunk whose load fails leaves it null and raises no unhandled re
     assert.equal(seen, null);
     assert.equal(chunk.loaded, undefined);
     assert.deepEqual(unhandled, [], "the failure stays silent on this path");
+
+    // Calculate loads the chunk again on the next click, and that retry can succeed.
+    const retried = chunk.load();
+    await React.act(async () => {
+      await retried;
+    });
+    await flush();
+
+    assert.equal(renderedText(container), MARKER, "a retry the page started after the failure reaches the page");
+    assert.equal(seen, Loaded);
   } finally {
     process.off("unhandledRejection", onUnhandled);
     await React.act(async () => root.unmount());
