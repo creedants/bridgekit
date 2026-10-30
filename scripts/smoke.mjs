@@ -7,15 +7,17 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { get as httpGet } from "node:http";
+import { createServer as createHttpServer, get as httpGet } from "node:http";
 import { get as httpsGet } from "node:https";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { open } from "./cdp.mjs";
 import { openDatabase } from "../src/duckdb.ts";
-import { runBridge } from "../src/engine.ts";
+import { bridgeBy, runBridge } from "../src/engine.ts";
 import { whole, signedWhole } from "../src/app/format.ts";
+import { panelTitle } from "../src/app/small-bridges.ts";
 import { PERIOD, VIEW, viewSql } from "../src/app/setup.ts";
 import {
   FIXTURE_HEADER,
@@ -30,9 +32,23 @@ import {
 /** @typedef {{ kind: "preview" } | { kind: "wrangler" } | { kind: "url", origin: string }} Target */
 /** @typedef {{ origin: string, stop: () => Promise<void> }} Server */
 
-const DEBUG_PORT = 9360;
+/** Assigned per run just before the browsers start, so two runs never share a debugging port. */
+let DEBUG_PORT = 0;
 /** The cross-tab scenario keeps no record, so it opens its own browser beside the recorded ones. */
-const SECOND_TAB_PORT = 9361;
+let SECOND_TAB_PORT = 0;
+
+/** A free loopback port, so two smoke runs on one machine never collide on a hardcoded port. */
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address !== null ? address.port : 0;
+      server.close((error) => (error ? reject(error) : resolve(port)));
+    });
+  });
+}
 const CHROMIUM = process.env.CHROMIUM || "chromium";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const bin = (name) => join(root, "node_modules/.bin", name);
@@ -307,6 +323,18 @@ async function serve(target) {
  * Why this attempt could carry data off this origin, or null. A blocked attempt still counts: the code tried.
  * @param {import("./cdp.mjs").NetworkRecord} record
  */
+/**
+ * The lens the bridge-totals check reads through: prior plus effects minus
+ * current, with one unit of tolerance per effect line. The isolated fault
+ * case in drive() fails the run when this lens stops seeing an unbalanced
+ * bridge, so a neutered assertion cannot pass silently.
+ */
+function bridgeResidual(amounts) {
+  const [prior, ...effects] = amounts;
+  const current = effects.pop();
+  return prior + effects.reduce((a, b) => a + b, 0) - current;
+}
+
 function leak({ url, method, hasBody, blocked }, origin, { devServer }) {
   if (/^(blob|data):/.test(url)) return null;
   const to = URL.canParse(url) ? new URL(url) : null;
@@ -416,9 +444,18 @@ function policyHeaders(rawHeaders) {
 
 /**
  * Enforcing Content-Security-Policy meta elements in the document head.
- * Chrome ignores a meta tag in a script, a style, or outside the head.
+ * Chrome ignores a meta tag in a script, a style, or outside the head, and
+ * flow content such as a div closes the head, so a later meta sits in the
+ * body and is ignored too. A meta with no head at all is outside the head
+ * the same way. Neither shape is produced by the repo; both fail the run
+ * rather than pass it, because the census below would miss or overcount them
+ * against the composition the build has to serve.
  */
 function policyMetas(html) {
+  // Elements the parser keeps inside the head. Anything else opens the body
+  // and ends the region a meta policy can live in.
+  const headContent = new Set(["title", "base", "link", "meta", "style", "script", "noscript", "template"]);
+  const tagName = (at) => /^<([A-Za-z0-9]+)/.exec(source.slice(at, at + 16))?.[1].toLowerCase() ?? "";
   const source = String(html).replace(/<!--[\s\S]*?-->/g, "");
   const lower = source.toLowerCase();
   let inHead = false;
@@ -480,6 +517,10 @@ function policyMetas(html) {
         cursor = end + 1;
         continue;
       }
+    }
+    if (inHead && next + 1 < source.length && source[next + 1] !== "/" && source[next + 1] !== "!") {
+      const name = tagName(next);
+      if (name && name !== "head" && name !== "html" && !headContent.has(name)) inHead = false;
     }
     if (inHead && lower.startsWith("<meta", next) && boundaryOf(next + 1, "meta")) {
       const end = skipTag(next);
@@ -782,6 +823,196 @@ async function answerDialog(port, accept, click) {
   }
 }
 
+/** Clicks a download button and returns the file it produced as base64. */
+async function captureDownload(browser, text) {
+  return browser.evalJs(`(async () => {
+    let blob = null; const original = URL.createObjectURL;
+    URL.createObjectURL = (b) => { blob = b; return original(b); };
+    const click = () => [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === ${JSON.stringify(text)}).click();
+    // A save inside the button's own cooldown is dropped without a file, so
+    // retry until the cooldown expires.
+    const deadline = Date.now() + 120000;
+    while (!blob && Date.now() < deadline) {
+      click();
+      for (let i = 0; i < 6 && !blob; i++) await new Promise(r => setTimeout(r, 200));
+    }
+    URL.createObjectURL = original;
+    if (!blob) return "";
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += 32768) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 32768));
+    return btoa(binary);
+  })()`);
+}
+
+/** The width and height from a PNG's IHDR chunk. */
+function pngSize(base64, where) {
+  const bytes = Buffer.from(base64, "base64");
+  if (bytes.length < 24 || bytes.subarray(1, 4).toString() !== "PNG" || bytes.subarray(12, 16).toString() !== "IHDR") {
+    fail(`${where}: no PNG was downloaded`);
+  }
+  return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+}
+
+/**
+ * The split grid in both exports. Captures the no-split sheets and picture,
+ * chooses the first Split by column, waits for the grid, and checks the Excel
+ * sheet and the picture against it. Setting Split back to None restores the
+ * no-split sheets.
+ */
+async function splitExports(browser, nodeQuery, csvPath, setup) {
+  const { default: ExcelJS } = await import("exceljs");
+  await browser.evalJs(`T.tab("Bridge")`);
+  await browser.waitFor("!!document.querySelector('.bridge .waterfall canvas')");
+  const loadWorkbook = async (step) => {
+    const base64 = await captureDownload(browser, "Export Excel");
+    if (!base64) fail(`${step}: no workbook was exported`);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(Buffer.from(base64, "base64"));
+    return workbook;
+  };
+  const plainNames = (await loadWorkbook("split exports without a split")).worksheets.map((ws) => ws.name);
+  if (plainNames.includes("Small bridges")) fail("split exports: Small bridges is present with no Split by column");
+  const plainPng = pngSize(await captureDownload(browser, "Download PNG"), "split exports without a split");
+  const column = await browser.evalJs(
+    "[...document.querySelectorAll('.split select option')].map((o) => o.value).find((v) => v !== '') ?? ''",
+  );
+  if (!column) fail("split exports: the Split by select offers no column");
+  await browser.evalJs(`T.set(document.querySelector('.split select'), ${JSON.stringify(column)})`);
+  await browser.waitFor("document.querySelectorAll('.panels .panel').length > 0 && !/Calculating/.test(document.body.innerText)");
+  const panels = JSON.parse(
+    await browser.evalJs(
+      "JSON.stringify([...document.querySelectorAll('.panels .panel')].map((p) => ({ title: p.querySelector('.panel-title').textContent.trim(), figures: p.querySelector('.panel-figures') ? p.querySelector('.panel-figures').innerText : '' })))",
+    ),
+  );
+  if (!panels.length) fail("split exports: the grid shows no panels");
+  const between = await browser.evalJs("document.querySelector('.split .panels + .hint').textContent.trim()");
+  // The engine's own split of the same column, on the same file and setup.
+  await nodeQuery(`CREATE OR REPLACE TABLE data AS SELECT * FROM read_csv('${csvPath}', header=true)`);
+  await nodeQuery(viewSql(setup));
+  const by = await bridgeBy(
+    nodeQuery,
+    {
+      table: VIEW,
+      periodColumn: PERIOD,
+      prior: "2024",
+      current: "2025",
+      unitsColumn: setup.unitsColumn,
+      salesColumn: setup.salesColumn,
+      levels: setup.levels,
+    },
+    column,
+  );
+  const expectedTitles = by.panels.map((panel) => panelTitle(panel));
+  if (panels.map((p) => p.title).join("|") !== expectedTitles.join("|")) {
+    fail(`split exports: the grid shows ${panels.map((p) => p.title).join(", ")}, the engine has ${expectedTitles.join(", ")}`);
+  }
+  console.log(`ok  split exports: the grid shows ${panels.length} values of ${column}`);
+  const workbook = await loadWorkbook("split exports");
+  const names = workbook.worksheets.map((ws) => ws.name);
+  if (names.at(-1) !== "Small bridges") {
+    fail(`split exports: the last sheet is ${JSON.stringify(names.at(-1))}, expected Small bridges (has ${names.join(", ")})`);
+  }
+  const sheet = workbook.getWorksheet("Small bridges");
+  if (sheet.getRow(1).getCell(1).value !== `Split by: ${column}`) {
+    fail(`split exports: the Small bridges heading is ${JSON.stringify(sheet.getRow(1).getCell(1).value)}, expected Split by: ${column}`);
+  }
+  const labels = new Set();
+  const numerics = new Set();
+  sheet.eachRow((row) => {
+    labels.add(String(row.getCell(1).value ?? ""));
+    const value = row.getCell(2).value;
+    if (typeof value === "number") numerics.add(value);
+  });
+  for (const panel of panels) {
+    if (!labels.has(panel.title)) fail(`split exports: the Small bridges sheet is missing ${JSON.stringify(panel.title)}`);
+  }
+  let last = "";
+  sheet.eachRow((row) => {
+    const text = String(row.getCell(1).value ?? "");
+    if (text) last = text;
+  });
+  if (last !== between) fail(`split exports: the sheet between line is ${JSON.stringify(last)}, the page shows ${JSON.stringify(between)}`);
+  // One figure matches its panel: a figures panel's own numbers, or the first
+  // bridged value's prior sales from the engine.
+  const figures = panels.find((p) => p.figures);
+  if (figures) {
+    const amounts = [...figures.figures.matchAll(/-?\d[\d,]*/g)].map((m) => Number(m[0].split(",").join("")));
+    if (!amounts.length) fail(`split exports: panel ${JSON.stringify(figures.title)} shows no figure`);
+    if (!amounts.some((amount) => numerics.has(amount))) {
+      fail(`split exports: panel ${JSON.stringify(figures.title)} shows ${amounts.join(", ")}, none in the Small bridges sheet`);
+    }
+  } else {
+    const first = by.panels.find((panel) => panel.result);
+    if (!first) fail("split exports: the engine bridged no value of the split column");
+    if (!numerics.has(first.result.priorSales)) {
+      fail(`split exports: the Small bridges sheet is missing the prior sales of ${JSON.stringify(panelTitle(first))}`);
+    }
+  }
+  console.log("ok  split exports: the Small bridges sheet holds every value title and one matching figure");
+  const splitPng = pngSize(await captureDownload(browser, "Download PNG"), "split exports");
+  if (!(splitPng.height > plainPng.height)) {
+    fail(`split exports: the picture with the grid is ${splitPng.width}x${splitPng.height}, no taller than ${plainPng.width}x${plainPng.height} without it`);
+  }
+  console.log(`ok  split exports: the picture grows from ${plainPng.height} to ${splitPng.height} px tall with the grid below it`);
+  await browser.evalJs("T.set(document.querySelector('.split select'), '')");
+  await browser.waitFor("!document.querySelector('.panels')");
+  const restored = (await loadWorkbook("split exports after reset")).worksheets.map((ws) => ws.name);
+  if (restored.join("|") !== plainNames.join("|")) {
+    fail(`split exports: sheets after reset are ${restored.join(", ")}, expected ${plainNames.join(", ")}`);
+  }
+  console.log("ok  split exports: setting Split back to None restores the no-split sheets");
+}
+
+/**
+ * A paste that lands before the first workspace asks nothing. The confirm
+ * recorder is installed with the paste trigger before the sample finishes
+ * loading; the paste fires on the first sight of the named phase. If the
+ * workspace wins the race, the attempt reloads and tries again.
+ */
+async function pendingPaste(browser, origin) {
+  const tsv = "period\tproduct\tregion\tunits\tsales\n2025\tA-100\tNorth\t100\t1000\n2026\tA-100\tNorth\t110\t1210\n2026\tB-200\tNorth\t50\t550\n";
+  for (const [name, phaseText] of [
+    ["preview query", "Making the sample data"],
+    ["calculating sample", "Calculating the sample bridge"],
+  ]) {
+    let pasted = false;
+    for (let attempt = 1; attempt <= 3 && !pasted; attempt++) {
+      await browser.goto(`${origin}/app/?sample=sku`);
+      await browser.evalJs(`(() => {
+        window.__asked = [];
+        window.confirm = (message) => { window.__asked.push(message); return true; };
+        window.__pasted = false;
+        window.__observer = new MutationObserver(() => {
+          if (window.__pasted || !document.body.innerText.includes(${JSON.stringify(phaseText)})) return;
+          window.__pasted = true;
+          const data = { getData: (t) => (t === "text/plain" ? ${JSON.stringify(tsv)} : "") };
+          const event = new Event("paste", { bubbles: true, cancelable: true });
+          Object.defineProperty(event, "clipboardData", { value: data });
+          document.body.dispatchEvent(event);
+        });
+        window.__observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+        return true;
+      })()`);
+      try {
+        await browser.waitFor("window.__pasted === true && document.querySelector('.source')?.textContent.includes('Pasted cells')", 600);
+        pasted = true;
+      } catch {
+        const workspace = await browser.evalJs("!!document.querySelector('.kpis')");
+        if (workspace) continue;
+        throw new Error(`pending paste: the ${name} phase never showed and no workspace either`);
+      }
+    }
+    if (!pasted) fail(`pending paste: the paste never landed during the ${name} phase in 3 attempts`);
+    const asked = JSON.parse(await browser.evalJs("JSON.stringify(window.__asked)"));
+    if (asked.length) fail(`pending paste: a paste during the ${name} phase asked ${JSON.stringify(asked)}`);
+    // A paste is a fresh file load, so the tool lands on the setup form for
+    // the pasted cells, not on a calculated bridge.
+    await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.error')");
+    console.log(`ok  pending paste: a paste during the ${name} phase asks nothing and loads`);
+  }
+}
+
 async function drive(browser, origin, rows) {
   console.log(`browser: ${(await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/version`)).json()).Browser}`);
   await browser.size(1360, 1000);
@@ -832,14 +1063,21 @@ async function drive(browser, origin, rows) {
   const bridgeTotals = async (step) => {
     const rows = JSON.parse(await browser.evalJs(bridgeRowsJs));
     const amounts = rows.map((row) => parseBridgeAmount(row.amount, `${step}: ${row.label || "row"}`));
+    const residual = bridgeResidual(amounts);
+    if (Math.abs(residual) > amounts.length - 2) fail(`${step}: bridge does not add up (off by ${residual})`);
     const [prior, ...effects] = amounts;
     const current = effects.pop();
-    const residual = prior + effects.reduce((a, b) => a + b, 0) - current;
-    if (Math.abs(residual) > effects.length) fail(`${step}: bridge does not add up (off by ${residual})`);
-    return { rows, prior, current };
+    return { rows, prior, current, amounts };
   };
   const sampleTotals = await bridgeTotals("sample");
   console.log(`bridge adds up: ${sampleTotals.prior} + effects = ${sampleTotals.current}`);
+  // Isolated fault case for the totals lens: the sample figures with the
+  // current line moved must not add up. A lens that passes this fails the run.
+  {
+    const moved = [...sampleTotals.amounts.slice(0, -1), sampleTotals.current + sampleTotals.amounts.length];
+    if (Math.abs(bridgeResidual(moved)) <= moved.length - 2) fail("bridge totals check would pass a bridge that does not add up");
+    console.log("ok  bridge totals check catches an unbalanced bridge");
+  }
 
   // The money tie-out on the Data check tab, read from its own table so a row
   // count can never be mistaken for a money line. Every figure is whole dollars.
@@ -1169,7 +1407,6 @@ async function drive(browser, origin, rows) {
     const STALE_NOTICE = "The setup changed since this bridge was calculated";
     const staleNoticeShown = `document.body.innerText.includes(${JSON.stringify(STALE_NOTICE)})`;
     const omitNamesBox = `[...document.querySelectorAll('.summary label.check input')].find((i) => i.closest('label').textContent.includes('Leave the file name'))`;
-    const reactProp = (el, prop) => `(() => { const node = ${el}; if (!node) return undefined; const key = Object.keys(node).find((k) => k.startsWith('__reactProps$')); return key ? node[key][${JSON.stringify(prop)}] : undefined; })()`;
     const readBridge = async (step) => {
       const rows = JSON.parse(await browser.evalJs(bridgeRowsJs));
       return rows.map((row) => parseBridgeAmount(row.amount, `${step}: ${row.label || "row"}`));
@@ -1194,6 +1431,30 @@ async function drive(browser, origin, rows) {
     sameTotals(totalsByFormat.xlsx, totalsByFormat.csv, "file paths: xlsx totals differ from csv");
     sameTotals(totalsByFormat.csv, expectedAmounts, "file paths: csv totals differ from the engine in Node");
     console.log("ok  file paths: csv and xlsx give equal totals matching the engine in Node");
+
+    // Excel-then-CSV and Excel-then-paste keep the same totals with no
+    // refusal: the T310 registration failed the third load with
+    // "File already registered" instead of replacing the file.
+    const reloadTotals = async (step, load) => {
+      await load();
+      await addFixtureLevels();
+      await waitReady();
+      await calculate();
+      if (await browser.evalJs("!!document.querySelector('.error')")) {
+        fail(`${step}: ${(await browser.evalJs("document.querySelector('.error').textContent.trim()")).trim()}`);
+      }
+      sameTotals(await readBridge(step), totalsByFormat.csv, `${step}: totals differ from the csv load`);
+    };
+    await reloadTotals("excel-then-csv", () => setDataFile(fixtures.xlsxPath));
+    await reloadTotals("csv-then-csv", () => setDataFile(fixtures.csvPath));
+    await reloadTotals("excel-then-paste", async () => {
+      await browser.goto(`${origin}/app/`);
+      await browser.evalJs(
+        `(async () => { const text = ${JSON.stringify(toTsvText(FIXTURE_HEADER, fixtures.rows))}; const data = { getData: (t) => (t === "text/plain" ? text : "") }; const event = new Event("paste", { bubbles: true, cancelable: true }); Object.defineProperty(event, "clipboardData", { value: data }); document.body.dispatchEvent(event); })()`,
+      );
+      await browser.waitFor("!!document.querySelector('aside') && !document.querySelector('.status').textContent");
+    });
+    console.log("ok  excel-then-csv and excel-then-paste: repeated loads replace the file with the same totals");
 
     const pickerAccepts = JSON.parse(
       await browser.evalJs("JSON.stringify([...document.querySelectorAll('input[type=file][accept*=csv]')].map((i) => i.accept))"),
@@ -1251,6 +1512,7 @@ async function drive(browser, origin, rows) {
     await calculate();
     sameTotals(await readBridge("pasted cells"), totalsByFormat.csv, "pasted cells: totals differ from the csv load");
     console.log("ok  pasted cells: tab-separated text through the paste path gives the same totals");
+    await pendingPaste(browser, origin);
 
     await setDataFile(fixtures.formattedPath);
     await addAttribute("product");
@@ -1397,6 +1659,84 @@ async function drive(browser, origin, rows) {
     }
     if (marginHint.includes("Prices exclude sales with no units.")) fail("margin labels: the Movers hint still talks about prices");
     console.log("ok  margin labels: Movers names the unit-margin figures");
+    // A Unit cost bar click opens Movers sorted by Price and unit cost.
+    await browser.evalJs(`T.tab("Bridge")`);
+    await browser.sleep(800);
+    await browser.evalJs("document.querySelector('.bridge .waterfall canvas').scrollIntoView({ block: 'center' })");
+    await browser.sleep(300);
+    const canvasRect = JSON.parse(
+      await browser.evalJs("JSON.stringify(document.querySelector('.bridge .waterfall canvas').getBoundingClientRect().toJSON())"),
+    );
+    const moverSort = () =>
+      browser.evalJs(
+        `(() => { const tab = document.querySelector('.tabs [aria-selected="true"]'); const sel = [...document.querySelectorAll('label')].find((l) => l.firstChild && l.firstChild.textContent.trim().startsWith('Sort by'))?.querySelector('select'); return JSON.stringify({ tab: tab ? tab.textContent.trim() : '', sort: sel ? sel.value : '' }); })()`,
+      ).then(JSON.parse);
+    let unitCost = null;
+    for (let i = 1; i < 12; i++) {
+      const x = canvasRect.left + (canvasRect.width * i) / 12;
+      const y = canvasRect.top + canvasRect.height / 2;
+      await browser.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+      await browser.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+      await browser.sleep(400);
+      const state = await moverSort();
+      if (state.tab === "Movers" && state.sort === "price") {
+        unitCost = state;
+        break;
+      }
+      await browser.evalJs(`T.tab("Bridge")`);
+      await browser.sleep(400);
+    }
+    if (!unitCost) fail("unit cost click: no waterfall bar opened Movers sorted by Price and unit cost");
+    console.log("ok  unit cost click: a waterfall bar opens Movers sorted by Price and unit cost");
+
+    // The trusted clicks above grant user activation, so this navigation opens
+    // the tool's leave-page question. Accept it once; the fresh page starts
+    // with no activation. Page.enable wires the dialog up first: without it
+    // the dismiss accepts nothing and the navigation still hangs.
+    {
+      await browser.send("Page.enable");
+      const leaving = browser.goto(`${origin}/app/`);
+      await browser.sleep(1000);
+      await browser.send("Page.handleJavaScriptDialog", { accept: true }).catch(() => {});
+      await leaving;
+      await browser.waitFor("document.body.innerText.includes('Load a sales file')");
+    }
+
+    // Zero prior units stay blank in every Movers export, never NaN.
+    const zeroUnitsPath = join(fixtureDir, "zero-units.csv");
+    writeFileSync(
+      zeroUnitsPath,
+      toCsvText(
+        ["period", "product", "units", "sales"],
+        [
+          ["2024", "A-100", 0, 0],
+          ["2025", "A-100", 10, 1100],
+          ["2024", "B-200", 0, 100],
+          ["2025", "B-200", 10, 1200],
+          ["2024", "C-300", 10, 1000],
+          ["2025", "C-300", 10, 1100],
+        ],
+      ),
+    );
+    await setDataFile(zeroUnitsPath);
+    await addAttribute("product");
+    await waitReady();
+    await calculate();
+    await browser.evalJs(`T.tab("Movers")`);
+    await browser.waitFor("document.querySelectorAll('.dense tbody tr').length > 0");
+    for (const [button, name] of [["CSV", "movers.csv"], ["All rows", "movers-all-rows.csv"]]) {
+      await browser.evalJs(`T.tab("Movers")`);
+      await browser.sleep(300);
+      const text = Buffer.from(await captureDownload(browser, button), "base64").toString("utf8");
+      if (!text) fail(`zero prior units: ${name} produced no file`);
+      if (/NaN|Infinity/.test(text)) fail(`zero prior units: ${name} holds ${JSON.stringify(text.match(/NaN|Infinity/)?.[0])}`);
+      if (!/,(?=,|$)/m.test(text)) fail(`zero prior units: ${name} has no blank field for the zero-unit row`);
+    }
+    await browser.evalJs("Object.defineProperty(navigator, 'clipboard', { value: { writeText: (text) => { window.__copiedTsv = text; return Promise.resolve(); } }, configurable: true }); T.btn('Copy').click()");
+    await browser.waitFor("typeof window.__copiedTsv === 'string'");
+    const copied = await browser.evalJs("window.__copiedTsv");
+    if (/NaN|Infinity/.test(copied)) fail("zero prior units: Copy TSV holds NaN or Infinity");
+    console.log("ok  zero prior units: Movers CSV, Copy TSV and All rows hold blanks, not NaN");
 
     await setDataFile(fixtures.csvPath);
     await addFixtureLevels();
@@ -1418,7 +1758,9 @@ async function drive(browser, origin, rows) {
     await browser.evalJs(`T.tab("Bridge")`);
     await browser.sleep(800);
     await browser.evalJs(`(${omitNamesBox}).click()`);
-    await browser.waitFor(`${omitNamesBox} && ${omitNamesBox}.checked && ${reactProp(omitNamesBox, "checked")} === true`);
+    // The freshness barrier above leaves a new result on screen; the box's
+    // own checked state then proves the tick the downloaded report asserts on.
+    await browser.waitFor(`${omitNamesBox} && ${omitNamesBox}.checked === true`);
     const tickedReport = await downloadReport();
     if (!tickedReport) fail("omit names: no ticked report was downloaded");
     for (const absent of [...moverValues, "C0", "C1", "C2", "C3", "C4", "smoke.csv", customLabel]) {
@@ -1569,6 +1911,29 @@ async function drive(browser, origin, rows) {
       if (excluded !== 0) fail(`exported workbook: Setup excludes ${excluded} with no filter on`);
     }
     console.log("ok  exported workbook: the Setup sheet ties the file's money to the bridge");
+    // The description the run was calculated with, pinned word for word. A
+    // recomputed description in its place would escape every check above.
+    {
+      const pinned = [
+        ["Source", "smoke.csv"],
+        ["Periods", "2024 to 2025 (sale_date, by year)"],
+        ["Units column", "net_sales"],
+        ["Sales column", "units"],
+        ["Attribute 1", "customer (customer)"],
+        ["Attribute 2", "model (model)"],
+        ["New and discontinued", "price difference only, units in volume"],
+      ];
+      const described = [];
+      setupSheet.eachRow((row) => {
+        described.push([String(row.getCell(1).value ?? ""), String(row.getCell(2).value ?? "")]);
+      });
+      const tieOutAt = described.findIndex(([label]) => label === "Money tie-out");
+      const block = (tieOutAt < 0 ? described : described.slice(0, tieOutAt)).filter(([label]) => label !== "");
+      if (block.length !== pinned.length || block.some(([label, value], i) => label !== pinned[i][0] || value !== pinned[i][1])) {
+        fail(`exported workbook: the Setup description is ${JSON.stringify(block)}, expected ${JSON.stringify(pinned)}`);
+      }
+      console.log("ok  exported workbook: the Setup sheet pins the run description");
+    }
     const bridgeSheet = workbook.getWorksheet("Bridge");
     let checkRowNumber = 0;
     bridgeSheet.eachRow((row, number) => {
@@ -1676,6 +2041,17 @@ async function drive(browser, origin, rows) {
       fail(`exported workbook: ${address} cached result is ${check.cached}, expected a value within 1e-6 of zero`);
     }
     console.log("ok  exported workbook: sheets present and the Bridge check row is a number or a formula result within 1e-6 of zero");
+    // The load-setup section leaves the swapped mapping and its two levels on
+    // screen, so the engine mirrors that run, not the fixture default.
+    await splitExports(browser, nodeQuery, fixtures.csvPath, {
+      ...fixtureSetup,
+      unitsColumn: "net_sales",
+      salesColumn: "units",
+      levels: [
+        { name: "customer", columns: ["customer"] },
+        { name: "model", columns: ["model"] },
+      ],
+    });
 
     // A stale bridge must not export: the notice and the button describe one
     // fact, the run's signature.
@@ -1972,6 +2348,77 @@ async function excelOfflineRecovery(browser, origin, fixtures) {
   console.log("ok  Excel offline load: the sentence offline, then smoke.xlsx with 240 rows after reconnecting, no reload");
 
   await browser.send("Network.emulateNetworkConditions", NET_ONLINE);
+}
+
+/**
+ * A forward proxy to `origin` that cuts the response body of armed paths
+ * mid-transfer: it answers the head with the full length, writes the first
+ * chunk, and destroys the socket. vite preview cannot end a body part-way,
+ * so the cut-body case loads the app through this proxy instead of the
+ * origin directly.
+ */
+async function startCutProxy(origin, shouldCut) {
+  const server = createHttpServer((clientReq, clientRes) => {
+    const target = new URL(clientReq.url, origin);
+    const cut = shouldCut(target);
+    const proxyReq = (target.protocol === "https:" ? httpsGet : httpGet)(target, { agent: false }, (proxyRes) => {
+      if (!cut) {
+        clientRes.writeHead(proxyRes.statusCode, proxyRes.headers);
+        proxyRes.pipe(clientRes);
+        return;
+      }
+      clientRes.writeHead(proxyRes.statusCode, proxyRes.headers);
+      let cutDone = false;
+      proxyRes.on("data", (chunk) => {
+        if (cutDone) return;
+        cutDone = true;
+        clientRes.write(chunk.subarray(0, Math.min(chunk.length, 1024)));
+        clientRes.socket.destroy();
+      });
+      proxyRes.on("end", () => clientRes.end());
+      proxyRes.on("error", () => clientRes.socket.destroy());
+    });
+    proxyReq.on("error", () => clientRes.destroy());
+    clientReq.pipe(proxyReq);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+  return {
+    origin: `http://127.0.0.1:${port}`,
+    stop: () => new Promise((resolve) => server.close(resolve)),
+  };
+}
+
+/**
+ * T69's harder variant, committed: the Excel chunk's body is cut off
+ * mid-transfer, and the same page recovers through a fresh address with no
+ * reload. The proxy cuts the bare import and the retry preflight; the next
+ * retry reads straight through.
+ */
+async function excelCutBody(browser, origin) {
+  await browser.size(1360, 1000);
+  let cuts = 2;
+  const proxy = await startCutProxy(origin, (url) => url.pathname.includes("exceljs.min-") && cuts-- > 0);
+  try {
+    await browser.goto(`${proxy.origin}/app/?sample=budget`);
+    await browser.waitFor("!!document.querySelector('.kpis')", 600);
+    await browser.sleep(500);
+    await browser.send("Network.setCacheDisabled", { cacheDisabled: true });
+    const sample = await browser.evalJs(EXCEL_SOURCE);
+    for (const step of ["cut bare import", "cut retry preflight"]) {
+      const cut = await clickExport(browser);
+      if (cut.error !== EXCEL_SENTENCE) fail(`Excel cut body: ${step}: ${JSON.stringify(cut.error)}`);
+      if (cut.bytes) fail(`Excel cut body: ${step}: a workbook was produced while the body was cut`);
+      if (cut.source !== sample) fail(`Excel cut body: ${step}: the loaded data changed to ${JSON.stringify(cut.source)}`);
+    }
+    const recovered = await clickExport(browser);
+    if (recovered.error) fail(`Excel cut body: the click after the cuts says ${JSON.stringify(recovered.error)}`);
+    if (recovered.bytes < 10_000) fail(`Excel cut body: the click after the cuts wrote ${recovered.bytes} bytes`);
+    if (recovered.source !== sample) fail(`Excel cut body: the loaded data changed to ${JSON.stringify(recovered.source)}`);
+    console.log(`ok  Excel cut body: the sentence on two truncated bodies, then ${recovered.bytes} bytes through a fresh address with no reload`);
+  } finally {
+    await proxy.stop();
+  }
 }
 
 /**
@@ -2444,6 +2891,9 @@ try {
   const policies = census.headers + census.metas;
   if (policies === 0) console.log(`note: ${origin} sends no content security policy (a dev server). Run npm run build && npm run smoke:preview for the full check.`);
   console.log(`starting ${CHROMIUM}${process.env.CHROMIUM ? "" : " from PATH (set CHROMIUM to start another browser)"}`);
+  DEBUG_PORT = await freePort();
+  SECOND_TAB_PORT = await freePort();
+  if (!DEBUG_PORT || !SECOND_TAB_PORT || DEBUG_PORT === SECOND_TAB_PORT) fail(`no two free debugging ports (got ${DEBUG_PORT} and ${SECOND_TAB_PORT})`);
   const control = await recorded((browser) => ask(browser, origin));
   const unproven = proves(control.record, origin, policies);
   if (unproven) fail(`canary: ${unproven}, so a request to another host could go unseen`);
@@ -2514,6 +2964,17 @@ try {
   if (!stamped.length) fail("Excel offline recovery: no stamped retry was recorded, so nothing proves a fresh address was read");
   console.log(`ok  Excel retry: ${stamped.length} of ${excelRequests.length} Excel chunk requests used a stamped address after a failure`);
   await crossPageRemembering(origin);
+  // The cut-body case loads the app through a forward proxy, so it runs on
+  // its own unrecorded browser after the record closes: the judge would flag
+  // the proxy origin as another host.
+  {
+    const cutBrowser = await open(SECOND_TAB_PORT, { chromium: CHROMIUM });
+    try {
+      await excelCutBody(cutBrowser, origin);
+    } finally {
+      await cutBrowser.close();
+    }
+  }
 } catch (error) {
   failures.push(error);
 } finally {
