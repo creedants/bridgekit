@@ -848,14 +848,7 @@ test("cell rows match the previous cells SQL", async () => {
       type: String(row.type),
     }));
     const oldColumns = (await query(`SELECT name FROM pragma_table_info('old_cells')`)).map((row) => String(row.name));
-    // The exact source sums are the only columns the previous cells SQL did not
-    // build; every other column and every row value must still match it.
-    const exactColumns = ["es0", "eq0", "es1", "eq1"];
-    const compared = columns.filter((column) => !exactColumns.includes(column.name));
-    assert.deepEqual(compared.map((column) => column.name), oldColumns, `${shape.label} columns`);
-    for (const name of exactColumns) {
-      assert.ok(columns.some((column) => column.name === name), `${shape.label} has ${name}`);
-    }
+    assert.deepEqual(columns.map((column) => column.name), oldColumns, `${shape.label} columns`);
 
     const keys = shape.config.levels.flatMap((level) => level.columns);
     const order = keys.map((key) => ident(key)).join(", ");
@@ -865,7 +858,7 @@ test("cell rows match the previous cells SQL", async () => {
     assert.ok(fresh.length > 0, `${shape.label} produced no cells`);
 
     for (let i = 0; i < fresh.length; i++) {
-      for (const column of compared) {
+      for (const column of columns) {
         const actual = fresh[i][column.name];
         const expected = previous[i][column.name];
         const actualNumber = asNumber(actual);
