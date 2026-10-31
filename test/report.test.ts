@@ -96,9 +96,9 @@ const distinctMovers = () => [
   { product: "ZX-14", s0: 20, s1: 50, z0: 0, z1: 0, volume: 0, mix_1: 0, price: 0, new_config: 0, discontinued: 0, no_units: 30 },
 ];
 
-/** Each `<h2>` heading's text and the span from its closing tag to the next heading, or to the end of the document. */
+/** Each `<h2` heading's text and the span from its closing tag to the next heading, or to the end of the document, whether or not the opening tag carries attributes. */
 const sectionsOf = (html: string): { text: string; start: number; end: number }[] =>
-  [...html.matchAll(/<h2>([\s\S]*?)<\/h2>/g)].map((match, index, all) => ({
+  [...html.matchAll(/<h2(?:\s[^>]*)?>([\s\S]*?)<\/h2>/g)].map((match, index, all) => ({
     text: match[1].trim(),
     start: (match.index ?? 0) + match[0].length,
     end: all[index + 1]?.index ?? html.length,
@@ -341,6 +341,37 @@ test("an unticked report keeps a fixed baseline whether the flag is absent or fa
     assert.deepEqual(tableRows(html, "Largest movers"), MOVERS_BASELINE, `${label}: movers cells changed`);
     assert.equal(html.includes(UNTICKED_SENTENCE), true, `${label}: unticked sentence changed`);
   }
+});
+
+test("a largest movers row rounds once, so its whole parts add up to its whole Change", () => {
+  const fractional = {
+    product: "ZX-51",
+    s0: 100.4,
+    s1: 102.4,
+    z0: 0,
+    z1: 0,
+    volume: 0.6,
+    mix_1: 0.6,
+    price: 0.8,
+    new_config: 0,
+    discontinued: 0,
+    no_units: 0,
+  };
+  const html = build({ movers: { label: "Product", rows: [fractional], columns: ["product"] } });
+  const [, row] = tableRows(html, "Largest movers");
+  const shown = row.slice(1).map((text) => Number(text.replace("+", "")));
+  const [change, ...parts] = shown;
+  assert.equal(change, 2, `the row's whole Change is ${row[1]}, not the rounded difference of 2`);
+  assert.equal(
+    parts.reduce((sum, part) => sum + part, 0),
+    change,
+    `the shown parts ${row.slice(2).join(" ")} add up to ${parts.reduce((sum, part) => sum + part, 0)}, not the shown Change ${row[1]}`,
+  );
+});
+
+test("a section heading with an attribute still bounds its own table", () => {
+  const html = build().replace("<h2>Bridge</h2>", '<h2 class="lead">Bridge</h2>');
+  assert.deepEqual(tableRows(html, "Bridge"), BRIDGE_BASELINE, "a Bridge heading with an attribute lost its table");
 });
 
 test("a section lookup rejects a heading that is missing, duplicated or renamed", () => {

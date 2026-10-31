@@ -1,0 +1,2 @@
+- Movers rows now round together so all displayed effect columns add up to Change, and Change equals rounded current minus rounded prior. CSV and Excel exports keep their unrounded figures.
+- The report test helper that bounds a section now accepts a heading with attributes, so a heading such as `<h2 class="lead">` still ends the section before it. `test/report.test.ts`.

@@ -763,6 +763,42 @@ test("Tab from a results tab moves into its panel, not past it", async () => {
   }
 });
 
+test("the Movers tab rounds each row once, so its whole parts add up to its whole Change", async () => {
+  const config: BridgeConfig = {
+    table: "t", periodColumn: "period", prior: "2025", current: "2026",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+  };
+  const rows = [
+    { product: "P1", q0: 10, q1: 10, s0: 100.4, s1: 102.4, z0: 0, z1: 0, volume: 0.6, mix_1: 0.6, price: 0.8, new_config: 0, discontinued: 0, no_units: 0 },
+  ];
+  const query: Query = async () => rows;
+  const React = await import("react");
+  const { Movers } = await import("../src/app/results/Movers.tsx");
+  const mounted = await mountPanel(
+    React.createElement(Movers, { run: { config } as unknown as Run, query: () => Promise.resolve(query), sortBy: "change", onSortBy: () => {} }),
+  );
+  try {
+    const text = (node: HarnessElement) => node.textContent ?? "";
+    const tableRows = () =>
+      harnessNodes(mounted.container, "TR")
+        .map((row) => harnessNodes(row, "TD").map(text))
+        .filter((cells) => cells.length > 0);
+    await mounted.until(() => tableRows().length === 1, "the Movers row");
+    const [row] = tableRows();
+    const number = (cell: string) => Number(cell.replace("+", ""));
+    const [prior, current, change, ...parts] = row.slice(1, 10).map(number);
+    assert.equal(current - prior, change, `shown current ${row[2]} minus shown prior ${row[1]} is not the shown Change ${row[3]}`);
+    assert.equal(
+      parts.reduce((sum, part) => sum + part, 0),
+      change,
+      `the shown parts ${row.slice(4, 10).join(" ")} add up to ${parts.reduce((sum, part) => sum + part, 0)}, not the shown Change ${row[3]}`,
+    );
+  } finally {
+    await mounted.unmount();
+  }
+});
+
 test("every results tab names the one panel, and the panel names the selected tab", async () => {
   const raw = await openDatabase();
   const mounted = await mountApp("?sample=1000", queued(raw));
