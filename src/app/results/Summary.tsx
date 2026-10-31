@@ -33,7 +33,7 @@ export async function summaryReport(
   const hasNames =
     !props.run.sample ||
     setup.filters.some((filter) => filter.values.length > 0) ||
-    (movers?.length ?? 0) > 0 ||
+    rows.length > 0 ||
     config.levels.some((level) => level.name !== level.columns.join(" + "));
   return buildReport({
     config,
@@ -73,11 +73,12 @@ export function Summary(
       stale = true;
     };
   }, [props.run]);
-  // Offered only when the report would carry a name that leaving out removes.
+  // Offered while the prefetch has not answered: an unknown is not "no names".
   const hasNames =
     !props.run.sample ||
     props.run.setup.filters.some((filter) => filter.values.length > 0) ||
-    (movers?.length ?? 0) > 0 ||
+    movers === null ||
+    movers.length > 0 ||
     config.levels.some((level) => level.name !== level.columns.join(" + "));
   const buildHtml = async () => summaryReport(props, movers);
   const saveReport = () => {

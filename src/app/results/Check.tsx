@@ -9,7 +9,13 @@ import { TABLE } from "../setup.ts";
 import { agree } from "../SetupPanel.tsx";
 import { QueryFailed, useLoad } from "./shared.tsx";
 
-export function Check(props: { run: Run; warnings: string[]; warningsKnown: boolean; query: () => Promise<Query> }) {
+export function Check(props: {
+  run: Run;
+  warnings: string[];
+  warningsKnown: boolean;
+  warningsFailed: boolean;
+  query: () => Promise<Query>;
+}) {
   const { check, config, ms, tieOut: money } = props.run;
   const tieOut = tieOutLines(config, money, props.run.result);
   const { loaded, failed } = useLoad(
@@ -42,7 +48,9 @@ export function Check(props: { run: Run; warnings: string[]; warningsKnown: bool
           ))}
         </tbody>
       </table>
-      {!props.warningsKnown ? null : props.warnings.length === 0 ? (
+      {!props.warningsKnown ? null : props.warningsFailed ? (
+        <p className="hint">{WHOLE_ROW_FAILED}</p>
+      ) : props.warnings.length === 0 ? (
         <p className="ok">No issues found in the rows used.</p>
       ) : (
         <ul className="warnings">{props.warnings.map((w) => <li key={w}>{w}</li>)}</ul>
@@ -87,16 +95,28 @@ export function checkWarnings(run: Run, fileWarnings: string[] = []): string[] {
   return [...warnings, ...fileWarnings];
 }
 
-/** One whole-row lookup per result: App builds a fresh query callback on every render. */
-const wholeRowWarnings = new WeakMap<Run, Promise<string[]>>();
+export const WHOLE_ROW_FAILED = "Could not finish checking the rows used. Choose Calculate bridge again.";
 
-export function wholeRowWarningsFor(run: Run, query: () => Promise<Query>): Promise<string[]> {
+export type WholeRowWarnings = { readonly warnings: string[]; readonly failed: boolean };
+
+/** One whole-row lookup per result: App builds a fresh query callback on every render. */
+const wholeRowWarnings = new WeakMap<Run, Promise<WholeRowWarnings>>();
+
+export function wholeRowWarningsFor(run: Run, query: () => Promise<Query>): Promise<WholeRowWarnings> {
   const cached = wholeRowWarnings.get(run);
   if (cached) return cached;
-  const warnings: Promise<string[]> = query()
-    .then((q) => wholeRowNote(q, TABLE))
-    .then((note) => (note ? [note] : []))
-    .catch(() => []);
+  // wholeRowNote answers null for its own failure too, so the rejection is read
+  // at the query handed to it rather than from the promise it returns.
+  let failed = false;
+  const watched = (q: Query): Query => (sql) =>
+    q(sql).catch((error: unknown) => {
+      failed = true;
+      throw error;
+    });
+  const warnings: Promise<WholeRowWarnings> = query()
+    .then((q) => wholeRowNote(watched(q), TABLE))
+    .then((note) => ({ warnings: note ? [note] : [], failed }))
+    .catch(() => ({ warnings: [], failed: true }));
   wholeRowWarnings.set(run, warnings);
   return warnings;
 }
@@ -105,19 +125,23 @@ export function wholeRowWarningsFor(run: Run, query: () => Promise<Query>): Prom
  * Loads the whole-row note for the Data check tab badge. The note lives in
  * the warnings, so the tab count includes it, while the notes list below
  * omits this warning. A slow reply from a replaced file changes nothing.
- * `resolved` turns true once the note's query has answered, so the tab does
- * not say it found no issues before it has looked.
+ * `resolved` turns true once the note's query has answered either way, so the
+ * tab does not say it found no issues before it has looked.
  */
 export function useWholeRowWarning(
   run: Run,
   query: () => Promise<Query>,
-): { warnings: string[]; resolved: boolean } {
-  const [state, setState] = useState<{ warnings: string[]; resolved: boolean }>({ warnings: [], resolved: false });
+): { warnings: string[]; failed: boolean; resolved: boolean } {
+  const [state, setState] = useState<{ warnings: string[]; failed: boolean; resolved: boolean }>({
+    warnings: [],
+    failed: false,
+    resolved: false,
+  });
   useEffect(() => {
     let stale = false;
-    setState({ warnings: [], resolved: false });
-    wholeRowWarningsFor(run, query).then((warnings) => {
-      if (!stale) setState({ warnings, resolved: true });
+    setState({ warnings: [], failed: false, resolved: false });
+    wholeRowWarningsFor(run, query).then(({ warnings, failed }) => {
+      if (!stale) setState({ warnings, failed, resolved: true });
     });
     return () => {
       stale = true;

@@ -548,9 +548,11 @@ function FilterEditor(props: {
   const { filter } = props;
   const [values, setValues] = useState<string[]>([]);
   const [search, setSearch] = useState("");
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let stale = false;
+    setFailed(false);
     props
       .query()
       .then((query) =>
@@ -560,7 +562,8 @@ function FilterEditor(props: {
            GROUP BY 1 ORDER BY count(*) DESC LIMIT ${MAX_FILTER_VALUES}`,
         ),
       )
-      .then((rows) => !stale && setValues(rows.map((row) => String(row.v))));
+      .then((rows) => !stale && setValues(rows.map((row) => String(row.v))))
+      .catch(() => !stale && setFailed(true));
     return () => {
       stale = true;
     };
@@ -593,6 +596,7 @@ function FilterEditor(props: {
         <input placeholder="Search values" aria-label="Search values" value={search} onChange={(e) => setSearch(e.target.value)} />
       )}
       <div className="values">
+        {failed && <p className="hint">Could not list this column's values.</p>}
         {shown.map((value) => (
           <label key={value}>
             <input type="checkbox" checked={selected.has(value)} onChange={() => toggle(value)} />
