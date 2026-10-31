@@ -999,6 +999,223 @@ test("a refused Parquet pick clears the ready announcement and says why", async 
 
 const PASTED = "period\tcustomer\tunits\n2025\tC0001\t10\n2026\tC0001\t12\n2026\tC0002\t7\n";
 
+const ROWS_FAILED = "Could not finish checking the rows used. Choose Calculate bridge again.";
+const VALUES_FAILED = "Could not list this column's values.";
+const NAMES_LABEL = "Leave the file name, filter values and mover names out of the report";
+
+test("the Data check says the row check failed instead of claiming it found no issues", async () => {
+  const config: BridgeConfig = {
+    table: "data", periodColumn: "period", prior: "2025", current: "2026",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Size", columns: ["size"] }],
+  };
+  const run = {
+    config,
+    check: {
+      rows: 2, priorRows: 1, currentRows: 1, otherPeriodRows: 0, blankPeriodRows: 0,
+      blankMeasureRows: 0, negativeUnitRows: 0, negativeSalesRows: 0, zeroUnitSalesRows: 0,
+    },
+    result: {
+      priorSales: 100,
+      currentSales: 120,
+      effects: [],
+      coverage: [{ level: 1, share: 1, label: "Exact", cells: 10, sales: 120 }],
+    },
+    tieOut: { prior: { period: "2025", inFile: 100, afterFilters: 100 }, current: { period: "2026", inFile: 120, afterFilters: 120 } },
+    ms: 1,
+    textColumns: ["size"],
+    periods: ["2025", "2026"],
+    description: [],
+    setup: { periodColumn: "period", grain: "value", unitsColumn: "units", salesColumn: "sales", levels: [{ name: "Size", columns: ["size"] }], filters: [] },
+    source: "sample",
+    sample: true,
+    formulaBlanks: 0,
+    amounts: null,
+  } as unknown as Run;
+  const query: Query = async (sql) => {
+    if (sql.includes("DESCRIBE")) {
+      return [
+        { column_name: "period", column_type: "VARCHAR" },
+        { column_name: "units", column_type: "DOUBLE" },
+        { column_name: "sales", column_type: "DOUBLE" },
+      ];
+    }
+    if (sql.includes("judged")) throw new Error("the whole-row note query failed");
+    return [];
+  };
+  const NO_ISSUES = "No issues found in the rows used.";
+  const React = await import("react");
+  const { Results } = await import("../src/app/Results.tsx");
+  const mounted = await mountPanel(React.createElement(Results, { run, query: () => Promise.resolve(query) }));
+  try {
+    await selectResultsTab(mounted, "Data check");
+    const success = () => harnessByClass(mounted.container, "ok").some((node) => node.textContent === NO_ISSUES);
+    await mounted.until(() => success() || panelHints(mounted.container).includes(ROWS_FAILED), "the Data check's row verdict");
+    assert.ok(
+      panelHints(mounted.container).includes(ROWS_FAILED),
+      `the Data check says the row check failed, but its hints say ${panelHints(mounted.container)}`,
+    );
+    assert.ok(!success(), "the Data check does not claim it found no issues when the row check failed");
+  } finally {
+    await mounted.unmount();
+  }
+});
+
+test("the names checkbox is offered while the movers query is unanswered, and the report leaves names out", async () => {
+  const config: BridgeConfig = {
+    table: "data", periodColumn: "period", prior: "2025", current: "2026",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Size", columns: ["size"] }],
+  };
+  const result = {
+    priorSales: 100,
+    currentSales: 120,
+    effects: [],
+    coverage: [{ level: 1, share: 1, label: "Exact", cells: 10, sales: 120 }],
+  } as unknown as Run["result"];
+  const levels = [{ name: "size", columns: ["size"] }];
+  const run = {
+    config: { ...config, levels },
+    check: {
+      rows: 2, priorRows: 1, currentRows: 1, otherPeriodRows: 0, blankPeriodRows: 0,
+      blankMeasureRows: 0, negativeUnitRows: 0, negativeSalesRows: 0, zeroUnitSalesRows: 0,
+    },
+    result,
+    tieOut: { prior: { period: "2025", inFile: 100, afterFilters: 100 }, current: { period: "2026", inFile: 120, afterFilters: 120 } },
+    ms: 1,
+    textColumns: ["size"],
+    periods: ["2025", "2026"],
+    description: [],
+    setup: { periodColumn: "period", grain: "value", unitsColumn: "units", salesColumn: "sales", levels, filters: [] },
+    source: "sample",
+    sample: true,
+    formulaBlanks: 0,
+    amounts: null,
+  } as unknown as Run;
+  let settle: { resolve: (q: Query) => void; reject: (error: unknown) => void } = { resolve: () => {}, reject: () => {} };
+  const answer = new Promise<Query>((resolve, reject) => {
+    settle = { resolve, reject };
+  });
+  const React = await import("react");
+  const { roundBridge } = await import("../src/summary.ts");
+  const { Summary, summaryReport } = await import("../src/app/results/Summary.tsx");
+  let omitted: boolean | null = null;
+  const mounted = await mountPanel(
+    React.createElement(Summary, {
+      run,
+      result,
+      shown: roundBridge(100, 120, []),
+      query: () => answer,
+      fresh: true,
+      onOmitNames: (next: boolean) => {
+        omitted = next;
+      },
+    }),
+  );
+  try {
+    const label = () => harnessNodes(mounted.container, "LABEL").find((node) => node.textContent === NAMES_LABEL);
+    assert.ok(label(), "the names checkbox is offered while the movers query is unanswered, but the summary hides it");
+    await mounted.React.act(async () => {
+      settle.reject(new Error("the movers query failed"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await mounted.flush();
+    assert.ok(label(), "the names checkbox stays offered after the movers query fails, but the summary hides it");
+
+    const box = harnessNodes(label() as HarnessNode, "INPUT")[0];
+    assert.ok(box, "the names checkbox has an input");
+    box.checked = true;
+    await mounted.React.act(async () => {
+      const event = (type: string) => ({ type, bubbles: true, target: box, preventDefault() {}, stopPropagation() {} });
+      box.dispatchEvent(event("change"));
+      box.dispatchEvent(event("click"));
+    });
+    await mounted.flush();
+    assert.equal(omitted, true, "ticking the names checkbox asks the app to leave the names out");
+
+    const mover = {
+      size: "PRODUCT-ALPHA", q0: 1, q1: 1, s0: 100, s1: 120, z0: 0, z1: 0,
+      price: 0, volume: 0, new_config: 0, discontinued: 0, no_units: 0,
+    };
+    const q: Query = async (sql) => {
+      if (sql.includes("ORDER BY abs(")) return [mover];
+      if (sql.includes("AS price_effect")) return [{ sales: 0, price_effect: 0 }];
+      return [];
+    };
+    const html = await summaryReport(
+      { run, result, query: () => Promise.resolve(q), omitNames: true },
+      null,
+    );
+    assert.ok(!html.includes("PRODUCT-ALPHA"), "the report leaves the mover name out when the choice is ticked");
+    assert.ok(html.includes("<td>1</td>"), "the report shows the mover's rank when the choice is ticked");
+  } finally {
+    await mounted.unmount();
+  }
+});
+
+test("a filter whose value list fails says it could not list the values", async () => {
+  // The base code leaves the failed list unhandled, which ends a test before its
+  // assertion runs; the runner's own handler is held so the view can be read.
+  const outer = process.listeners("unhandledRejection");
+  process.removeAllListeners("unhandledRejection");
+  const quiet = () => {};
+  process.on("unhandledRejection", quiet);
+  let mounted: Mounted | undefined;
+  try {
+    const columns = [
+      { name: "period", type: "VARCHAR", distinct: 2 },
+      { name: "customer", type: "VARCHAR", distinct: 3 },
+      { name: "units", type: "DOUBLE", distinct: 10 },
+      { name: "sales", type: "DOUBLE", distinct: 10 },
+    ];
+    const setup = {
+      periodColumn: "period",
+      grain: "value",
+      unitsColumn: "units",
+      salesColumn: "sales",
+      levels: [{ name: "customer", columns: ["customer"] }],
+      filters: [{ column: "customer", mode: "include", values: [] }],
+    };
+    let asked = false;
+    const q: Query = async (sql) => {
+      if (sql.includes("ORDER BY count(*) DESC")) {
+        asked = true;
+        throw new Error("the filter value list failed");
+      }
+      return [];
+    };
+    const React = await import("react");
+    const { SetupPanel } = await import("../src/app/SetupPanel.tsx");
+    mounted = await mountPanel(
+      React.createElement(SetupPanel, {
+        columns,
+        setup: setup as unknown as import("../src/app/setup.ts").Setup,
+        periods: ["2025", "2026"],
+        prior: "2025",
+        current: "2026",
+        query: () => Promise.resolve(q),
+        rollups: [],
+        totalRows: [],
+        onChange() {},
+        onRefine() {},
+        onPrior() {},
+        onCurrent() {},
+      }),
+    );
+    const hints = () => harnessByClass(mounted!.container, "hint").map((node) => node.textContent).join(" | ");
+    await mounted.until(() => asked, "the filter value list query");
+    await mounted.flush();
+    assert.ok(
+      hints().includes(VALUES_FAILED),
+      `the filter says it could not list the values, but its hints say ${hints()}`,
+    );
+  } finally {
+    process.removeListener("unhandledRejection", quiet);
+    for (const listener of outer) process.on("unhandledRejection", listener);
+    if (mounted) await mounted.unmount();
+  }
+});
+
 test("a paste made while a sample link waits to load is the data the visitor sees", async () => {
   holdFrames();
   const raw = await openDatabase();
