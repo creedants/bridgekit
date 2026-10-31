@@ -161,8 +161,11 @@ const isTrailingNote = (name: string) => noteWords.has(words(name).at(-1) ?? "")
 /** A count name, unless a currency word takes it out; "Sales (Currency Units)" reads as money. "stk" only counts as a whole word, so Selbstkosten stays out. */
 const countName = (name: string) =>
   (COUNT_PATTERN.test(fold(name)) || words(name).some((word) => unitWords.has(word))) && !CURRENCY_PATTERN.test(fold(name));
-/** Never Sales by name: a trailing note, a tax name or a unit price. */
-const neverSales = (name: string) => isTrailingNote(name) || TAX_DE.test(fold(name)) || isUnitPrice(name);
+/** A name that says price or preis as a whole word, as in net_price or Net Price, but not Nettoumsatz. */
+const priceWordName = (name: string) => words(name).some((word) => word === "price" || word === "preis");
+/** Never Sales by name: a trailing note, a tax name, a name that says price, or a unit price. */
+const neverSales = (name: string) =>
+  isTrailingNote(name) || TAX_DE.test(fold(name)) || priceWordName(name) || isUnitPrice(name);
 /** Never Sales by name, plus count names, for the by-name guess and the value fallback. */
 const notSalesByName = (name: string) => neverSales(name) || countName(name);
 
@@ -229,7 +232,8 @@ export function guessSetup(columns: Column[]): Setup {
   const periodColumn =
     date?.name ?? find(/year|annee|année|jahr|jaar|año|period|month|quarter|date|fiscal|exercice/i, columns);
   const unitsColumn = unitsName(withoutNotes.filter((column) => column.name !== periodColumn && !isUnitPrice(column.name)));
-  const net = find(/net/i, withoutNotes.filter((column) => column.name !== unitsColumn && !neverSales(column.name)));
+  // The net search refuses count and price names, the same rule the by-name guess uses.
+  const net = find(/net/i, withoutNotes.filter((column) => column.name !== unitsColumn && !notSalesByName(column.name)));
   const held = net ? "" : netSalesHeldAsText(columns);
   // The sales-stem fallback shares its rule with the measure hint below.
   const byName = salesByName(columns, unitsColumn);
