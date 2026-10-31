@@ -3,8 +3,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { registerHooks } from "node:module";
 import path from "node:path";
 import { test } from "node:test";
-import { excelHeaderNames, excelHoleIndexes, firstSheetAsCsv, holeRenames, MAX_SHEET_BYTES, unprefixPart } from "../src/app/sheet.ts";
-import { TOO_BIG_SENTENCE } from "../src/app/encoding.ts";
+import { excelHeaderNames, excelHoleIndexes, firstSheetAsCsv, holeRenames, unprefixPart } from "../src/app/sheet.ts";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -39,9 +38,14 @@ class ReportedSizeFile extends CountingFile {
   }
 }
 
+// Pinned as the product's workbook limit, so the test fails on its own assertion
+// when the cap is missing rather than on a missing import.
+const SHEET_CAP = 134_217_728;
+const TOO_BIG = "This file is too big to open in this browser. Try a smaller file, or save it with fewer rows or columns.";
+
 test("a workbook over the sheet limit is refused before it is read", async () => {
-  const file = new ReportedSizeFile([new Uint8Array(4)], "big.xlsx", MAX_SHEET_BYTES + 1);
-  await assert.rejects(firstSheetAsCsv(file), { message: TOO_BIG_SENTENCE });
+  const file = new ReportedSizeFile([new Uint8Array(4)], "big.xlsx", SHEET_CAP + 1);
+  await assert.rejects(firstSheetAsCsv(file), { message: TOO_BIG });
   assert.equal(file.arrayBufferReads, 0, "a workbook over the limit is never read");
 });
 
