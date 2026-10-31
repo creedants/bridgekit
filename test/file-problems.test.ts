@@ -15,6 +15,7 @@ import {
 import { guessSetup, refineGuess, type Column } from "../src/app/setup.ts";
 import { profileFile } from "../src/app/profile.ts";
 import { openDatabase } from "../src/duckdb.ts";
+import type { CsvReading } from "../src/app/encoding.ts";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -571,12 +572,13 @@ async function stagedCsv(
   name: string,
   content: string,
   file: File = new File([content], name),
+  reading: CsvReading = { kind: "bytes" },
 ): Promise<Column[]> {
   const directory = await mkdtemp("/tmp/bridgekit-rows-");
   const source = path.join(directory, name);
   await writeFile(source, content);
   const { stageCsvAndSwap } = await import("../src/app/db.ts");
-  await stageCsvAndSwap(query, file, "data", source);
+  await stageCsvAndSwap(query, file, "data", source, "month first", reading);
   return profileLoaded(query, "data");
 }
 
@@ -870,6 +872,7 @@ test("R7: a UTF-16 file with a byte-order mark proves the row", async () => {
     "utf16.csv",
     MULTILINE,
     new File([utf16leWithMark(MULTILINE)], "utf16.csv"),
+    { kind: "text", text: MULTILINE },
   );
   assert.deepEqual(fileProblem(multilineProblem(columns)), { kind: "reason", message: ROW_4 });
 });

@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { test } from "node:test";
-import { blobIsUtf8, decodeCsvBuffer, ENCODING_SENTENCE, isUtf8Prefix, isValidUtf8, type DecodedCsv } from "../src/app/encoding.ts";
+import {
+  blobIsUtf8,
+  CSV_PREFIX_BYTES,
+  decodeCsvBuffer,
+  ENCODING_SENTENCE,
+  isUtf8Prefix,
+  isValidUtf8,
+  readCsvFile,
+  type CsvReading,
+  type DecodedCsv,
+} from "../src/app/encoding.ts";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -40,6 +50,29 @@ function joined(...parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
     at += part.length;
   }
   return out;
+}
+
+/** A File that counts what a load reads from it, so a test can prove a read count. */
+class CountingFile extends File {
+  wholeReads = 0;
+  streamReads = 0;
+  sliceSizes: number[] = [];
+
+  override async arrayBuffer(): Promise<ArrayBuffer> {
+    this.wholeReads += 1;
+    return super.arrayBuffer();
+  }
+
+  override slice(start?: number, end?: number, contentType?: string): Blob {
+    const part = super.slice(start, end, contentType);
+    this.sliceSizes.push(part.size);
+    return part;
+  }
+
+  override stream(): ReadableStream<Uint8Array<ArrayBuffer>> {
+    this.streamReads += 1;
+    return super.stream();
+  }
 }
 
 // Windows-1252 code points above ASCII, used to build a real Excel export.
@@ -321,4 +354,219 @@ test("a direct stageCsvAndSwap call with no reading argument still runs the chec
     (error: unknown) => (error as Error).message === SENTENCE,
     SENTENCE,
   );
+});
+
+/**
+ * A database whose next statement starts a fresh instance when the Node
+ * binding has invalidated this one. The browser's database survives the
+ * internal error a refused CSV scan raises inside an aggregate, so the retry
+ * can run there; @duckdb/node-api marks the instance unusable instead.
+ */
+async function recoveringDatabase(): Promise<(sql: string) => Promise<Record<string, unknown>[]>> {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  let current = await openDatabase();
+  return async (sql) => {
+    let reopened = false;
+    for (;;) {
+      try {
+        return await current(sql);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (reopened || !message.includes("database has been invalidated")) throw error;
+        reopened = true;
+        current = await openDatabase();
+      }
+    }
+  };
+}
+
+test("a Windows-1252 file whose only high byte comes after 64 KiB loads", async () => {
+  const { loadCsv } = await import("../src/app/db.ts");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const lines = ["period,product,units,sales,note"];
+  for (let index = 0; index < 4000; index++) {
+    lines.push(`2025,A-100,${(index % 5) + 1},${100 + index},note ${index}`);
+  }
+  const text = `${lines.join("\n")}\n2025,P5X,1,900,late\n`;
+  const bytes = new Uint8Array(utf8(text));
+  const at = text.indexOf("P5X") + 2;
+  // The prefix holds ASCII alone, so it reads as UTF-8 and the byte below is
+  // the first one the database cannot read.
+  assert.ok(at >= CSV_PREFIX_BYTES, "the only high byte sits past the prefix");
+  bytes[at] = 0xe9;
+  const directory = await mkdtemp("/tmp/bridgekit-encoding-");
+  const filePath = path.join(directory, "late-product.csv");
+  await writeFile(filePath, bytes);
+  const file = new File([bytes], "late-product.csv");
+  assert.deepEqual(await readCsvFile(file), { kind: "bytes" });
+  const query = await recoveringDatabase();
+  let registrations = 0;
+  const register = async (reading: CsvReading) => {
+    registrations += 1;
+    if (reading.kind === "text") await writeFile(filePath, reading.text);
+  };
+  await loadCsv(query, file, "data", filePath, "month first", register);
+  const [counted] = await query("SELECT count(*)::DOUBLE AS n FROM data");
+  assert.equal(Number(counted.n), 4001);
+  const [last] = await query("SELECT product, note FROM data ORDER BY rowid DESC LIMIT 1");
+  assert.equal(String(last.product), "P5é");
+  assert.equal(String(last.note), "late");
+  // The number conversion and the row locator read the same file again, and
+  // must answer the reading the load settled on rather than the prefix's.
+  assert.equal((await readCsvFile(file)).kind, "text");
+  assert.equal(registrations, 2);
+});
+
+test("a UTF-8 file over 64 KiB loads from one prefix read and one registration", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { loadCsv } = await import("../src/app/db.ts");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const lines = ["period,product,units,sales,note"];
+  for (let index = 0; index < 4000; index++) {
+    lines.push(`2025,A-100,${(index % 5) + 1},${100 + index},note ${index}`);
+  }
+  const text = `${lines.join("\n")}\n`;
+  assert.ok(text.length > CSV_PREFIX_BYTES);
+  const bytes = utf8(text);
+  const file = new CountingFile([bytes], "plain.csv");
+  const directory = await mkdtemp("/tmp/bridgekit-encoding-");
+  const filePath = path.join(directory, "plain.csv");
+  await writeFile(filePath, bytes);
+  const query = await openDatabase();
+  let registrations = 0;
+  await loadCsv(query, file, "data", filePath, "month first", async () => {
+    registrations += 1;
+  });
+  const [counted] = await query("SELECT count(*)::DOUBLE AS n FROM data");
+  assert.equal(Number(counted.n), 4000);
+  assert.equal(file.wholeReads, 0, "a file that loads needs no whole-file read");
+  assert.equal(file.streamReads, 0);
+  assert.ok(file.sliceSizes.length > 0, "the encoding and header checks read the prefix");
+  assert.deepEqual(file.sliceSizes.filter((size) => size > CSV_PREFIX_BYTES), []);
+  assert.equal(registrations, 1);
+});
+
+test("a file invalid in both readings shows the plain sentence after one retry", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { loadCsv } = await import("../src/app/db.ts");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const lines = ["period,product,units,sales,note"];
+  for (let index = 0; index < 4000; index++) {
+    lines.push(`2025,A-100,${(index % 5) + 1},${100 + index},note ${index}`);
+  }
+  const text = `${lines.join("\n")}\n2025,P5X,1,900,late\n`;
+  const bytes = new Uint8Array(utf8(text));
+  const at = text.indexOf("P5X") + 2;
+  const control = text.indexOf("late") + 1;
+  assert.ok(at >= CSV_PREFIX_BYTES, "both damaged bytes sit past the prefix");
+  bytes[at] = 0xff;
+  // 0x81 is one of the five bytes Windows-1252 leaves undefined.
+  bytes[control] = 0x81;
+  const directory = await mkdtemp("/tmp/bridgekit-encoding-");
+  const filePath = path.join(directory, "both-readings.csv");
+  await writeFile(filePath, bytes);
+  const file = new CountingFile([bytes], "both-readings.csv");
+  assert.deepEqual(await readCsvFile(file), { kind: "bytes" });
+  const query = await openDatabase();
+  let registrations = 0;
+  await assert.rejects(
+    loadCsv(query, file, "data", filePath, "month first", async () => {
+      registrations += 1;
+    }),
+    (error: unknown) => (error as Error).message === SENTENCE,
+    SENTENCE,
+  );
+  // The sentence is only shown after the whole file was read and refused.
+  assert.equal(file.wholeReads, 1);
+  assert.equal(registrations, 1);
+});
+
+test("a CSV cut inside its final character loads at both sizes with the byte dropped", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { loadCsv } = await import("../src/app/db.ts");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  for (const padding of [0, 70000]) {
+    const label = padding === 0 ? "a file at most 64 KiB" : "a file over 64 KiB";
+    const lines = [
+      "period,product,units,sales,note",
+      `2025,P1,1,100,${"x".repeat(padding)}first`,
+      "2025,P2,2,110,second",
+      "2025,P3,3,120,third",
+      "2025,P4,4,130,last",
+    ];
+    const text = `${lines.join("\n")}\n`;
+    // The file ends between a lead byte and its continuations.
+    const bytes = joined(utf8(text), Uint8Array.from([0xe9]));
+    assert.equal(bytes.length > CSV_PREFIX_BYTES, padding > 0, label);
+    const directory = await mkdtemp("/tmp/bridgekit-encoding-");
+    const filePath = path.join(directory, "cut-character.csv");
+    await writeFile(filePath, bytes);
+    const file = new File([bytes], "cut-character.csv");
+    const query = await openDatabase();
+    const register = async (reading: CsvReading) => {
+      if (reading.kind === "text") await writeFile(filePath, reading.text);
+    };
+    await loadCsv(query, file, "data", filePath, "month first", register);
+    const [counted] = await query("SELECT count(*)::DOUBLE AS n FROM data");
+    assert.equal(Number(counted.n), 4, label);
+    const [last] = await query("SELECT product, note FROM data ORDER BY rowid DESC LIMIT 1");
+    assert.equal(String(last.product), "P4", label);
+    assert.equal(String(last.note), "last", label);
+  }
+});
+
+test("a final cut character is dropped and a mid-file damage still refuses", () => {
+  const whole = "period,product,units,sales\n2025,P1,1,100\n";
+  const cut = joined(utf8(whole), Uint8Array.from([0xe9]));
+  assert.equal(asText(decodeCsvBuffer(cut)), whole);
+  // A single byte that is not a lead byte is read as Windows-1252, not dropped.
+  assert.equal(asText(decodeCsvBuffer(joined(utf8(whole), Uint8Array.from([0xff])))), `${whole}ÿ`);
+  // A byte Windows-1252 cannot hold in the middle is damage, not a cut character.
+  const damaged = joined(
+    utf8("period,product,units,sales\n2025,P1,"),
+    Uint8Array.from([0x81]),
+    utf8("1,100\n"),
+    Uint8Array.from([0xe9]),
+  );
+  assert.throws(() => decodeCsvBuffer(damaged), { message: SENTENCE });
+});
+
+test("an out-of-memory failure on a file with a late invalid byte is too big with no retry", async () => {
+  const { loadCsv, loadFailure } = await import("../src/app/db.ts");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const lines = ["period,product,units,sales,note"];
+  for (let index = 0; index < 4000; index++) {
+    lines.push(`2025,A-100,${(index % 5) + 1},${100 + index},note ${index}`);
+  }
+  const text = `${lines.join("\n")}\n2025,P5X,1,900,late\n`;
+  const bytes = new Uint8Array(utf8(text));
+  const at = text.indexOf("P5X") + 2;
+  assert.ok(at >= CSV_PREFIX_BYTES, "the invalid byte sits past the prefix");
+  bytes[at] = 0xff;
+  const directory = await mkdtemp("/tmp/bridgekit-encoding-");
+  const filePath = path.join(directory, "late-byte.csv");
+  await writeFile(filePath, bytes);
+  const file = new CountingFile([bytes], "late-byte.csv");
+  const query = async (sql: string): Promise<Record<string, unknown>[]> => {
+    if (sql.includes("read_csv")) throw new Error("Out of Memory Error: Allocation failure");
+    return [];
+  };
+  let registrations = 0;
+  const failure = await loadCsv(query, file, "data", filePath, "month first", async () => {
+    registrations += 1;
+  }).then(
+    () => null,
+    (error: unknown) => loadFailure(error),
+  );
+  assert.ok(failure instanceof Error);
+  assert.equal(failure.message, TOO_BIG);
+  // Out of memory is decided first: the file the database could not hold is
+  // never read whole, and no second reading is registered.
+  assert.equal(file.wholeReads, 0);
+  assert.equal(registrations, 1);
 });
