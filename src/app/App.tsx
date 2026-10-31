@@ -807,9 +807,8 @@ export function App() {
   const Results = useResultsView(resultsChunk);
   const shown = mainView(phase, engineState);
   const status = phase.kind === "reading" ? phase.label : ([...tasks.values()].at(-1)?.label ?? "");
-  // Every load, a refused file included, and every task clears announced, and a setup change makes
-  // the run stale, so either way this line derives to "". A refused paste never reaches loadFile,
-  // so it does not clear announced.
+  // Every load, a refused file or paste included, and every task clears announced, and a setup
+  // change makes the run stale, so either way this line derives to "".
   const spoken = status || (fresh && fresh.id === announced ? "Bridge calculated." : "");
 
   return (

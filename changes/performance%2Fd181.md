@@ -1,0 +1,1 @@
+- Calculate bridge stays off, by click and by Ctrl or Cmd+Enter, while the period list for changed settings is still being read, and a refused paste no longer leaves "Bridge calculated." in the live region beside its alert.
