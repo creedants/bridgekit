@@ -341,8 +341,9 @@ test("every root page footer links to the PVM analysis and grouping level pages"
   }
 });
 
-test("the home page carries one structured-data block with WebSite and Organization", () => {
-  const html = readPage("index.html");
+type GraphNode = Record<string, unknown>;
+
+function graphOf(file: string, html: string, types: readonly string[]): Map<string, GraphNode> {
   const blocks = [
     ...html.matchAll(
       /<script\s+type="application\/ld\+json">([\s\S]*?)<\/script>/g,
@@ -351,31 +352,32 @@ test("the home page carries one structured-data block with WebSite and Organizat
   assert.equal(
     blocks.length,
     1,
-    `index.html has ${blocks.length} application/ld+json blocks: keep exactly one block after the twitter:card line`,
+    `${file} has ${blocks.length} application/ld+json blocks: keep exactly one block after the twitter:card line`,
   );
   let data: Record<string, unknown> = {};
   try {
     data = JSON.parse(blocks[0][1]) as Record<string, unknown>;
   } catch {
     assert.fail(
-      "index.html has an application/ld+json block that is not valid JSON: write it as one valid object",
+      `${file} has an application/ld+json block that is not valid JSON: write it as one valid object`,
     );
   }
   assert.equal(
     data["@context"],
     "https://schema.org",
-    `index.html structured data has @context ${String(data["@context"])}: use "https://schema.org"`,
+    `${file} structured data has @context ${String(data["@context"])}: use "https://schema.org"`,
   );
   const structured = data["@graph"];
   if (!Array.isArray(structured)) {
     assert.fail(
-      "index.html structured data has no @graph array: put the WebSite and Organization nodes in one @graph",
+      `${file} structured data has no @graph array: put the ${types.join(" and ")} nodes in one @graph`,
     );
   }
   const graph: unknown[] = structured;
-  function nodeOf(type: string): Record<string, unknown> {
+  const found = new Map<string, GraphNode>();
+  for (const type of types) {
     const nodes = graph.filter(
-      (node): node is Record<string, unknown> =>
+      (node): node is GraphNode =>
         typeof node === "object" &&
         node !== null &&
         "@type" in node &&
@@ -384,21 +386,26 @@ test("the home page carries one structured-data block with WebSite and Organizat
     assert.equal(
       nodes.length,
       1,
-      `index.html @graph has ${nodes.length} ${type} nodes: give it exactly one`,
+      `${file} @graph has ${nodes.length} ${type} nodes: give it exactly one`,
     );
-    return nodes[0];
+    found.set(type, nodes[0]);
   }
+  return found;
+}
+
+function checkHomeStructuredData(file: string, html: string): void {
+  const graph = graphOf(file, html, ["WebSite", "Organization"]);
   assert.deepEqual(
-    nodeOf("WebSite"),
+    graph.get("WebSite"),
     {
       "@type": "WebSite",
       name: "PVM Bridge",
       url: `${ORIGIN}/`,
       publisher: { "@id": `${ORIGIN}/#organization` },
     },
-    "index.html WebSite node does not match the site's name, url and publisher: use the plain fields only",
+    `${file} WebSite node does not match the site's name, url and publisher: use the plain fields only`,
   );
-  const organization = nodeOf("Organization");
+  const organization = graph.get("Organization");
   assert.deepEqual(
     organization,
     {
@@ -410,21 +417,25 @@ test("the home page carries one structured-data block with WebSite and Organizat
       email: "support@pvmbridge.com",
       sameAs: GITHUB,
     },
-    "index.html Organization node does not match the site's details: keep name, url, logo, email and sameAs only",
+    `${file} Organization node does not match the site's details: keep name, url, logo, email and sameAs only`,
   );
 
   const logo = new URL(String(organization.logo));
   assert.equal(
     logo.origin,
     ORIGIN,
-    `index.html Organization logo is ${logo.origin}: point it at this site`,
+    `${file} Organization logo is ${logo.origin}: point it at this site`,
   );
-  const size = pngSizeOf("index.html", logo.pathname);
+  const size = pngSizeOf(file, logo.pathname);
   assert.deepEqual(
     size,
     { width: 512, height: 512 },
-    `index.html Organization logo is ${size.width}x${size.height}: render public${logo.pathname} at 512x512`,
+    `${file} Organization logo is ${size.width}x${size.height}: render public${logo.pathname} at 512x512`,
   );
+}
+
+test("the home page carries one structured-data block with WebSite and Organization", () => {
+  checkHomeStructuredData("index.html", readPage("index.html"));
 });
 
 test("the home page carries fewer than 600 visible words", () => {
