@@ -1,0 +1,1 @@
+- Every address in `public/sitemap.xml` now carries a `lastmod` date that matches the date the page shows, so search engines can tell which pages to revisit. The sitemap generator refuses a page with no date, a date that is not a real calendar day such as `2026-02-30`, and a date for a page the sitemap leaves out.
