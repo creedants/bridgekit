@@ -947,8 +947,8 @@ function checkArticle(article: Article, html: string): void {
       url: canonical,
       datePublished: article.published,
       dateModified: datetime,
-      publisher: { "@id": `${ORIGIN}/#organization` },
-      author: { "@id": `${ORIGIN}/#organization` },
+      publisher: { "@id": `${ORIGIN}/#organization`, "@type": "Organization", name: "PVM Bridge", url: `${ORIGIN}/` },
+      author: { "@id": `${ORIGIN}/#organization`, "@type": "Organization", name: "PVM Bridge", url: `${ORIGIN}/` },
     },
     `${file} Article node does not match the page: keep headline, url, datePublished ${article.published}, dateModified, and the organization as publisher and author, and nothing else`,
   );
