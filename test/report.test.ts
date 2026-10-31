@@ -343,6 +343,37 @@ test("an unticked report keeps a fixed baseline whether the flag is absent or fa
   }
 });
 
+test("a largest movers row rounds once, so its whole parts add up to its whole Change", () => {
+  const fractional = {
+    product: "ZX-51",
+    s0: 100.4,
+    s1: 102.4,
+    z0: 0,
+    z1: 0,
+    volume: 0.6,
+    mix_1: 0.6,
+    price: 0.8,
+    new_config: 0,
+    discontinued: 0,
+    no_units: 0,
+  };
+  const html = build({ movers: { label: "Product", rows: [fractional], columns: ["product"] } });
+  const [, row] = tableRows(html, "Largest movers");
+  const shown = row.slice(1).map((text) => Number(text.replace("+", "")));
+  const [change, ...parts] = shown;
+  assert.equal(change, 2, `the row's whole Change is ${row[1]}, not the rounded difference of 2`);
+  assert.equal(
+    parts.reduce((sum, part) => sum + part, 0),
+    change,
+    `the shown parts ${row.slice(2).join(" ")} add up to ${parts.reduce((sum, part) => sum + part, 0)}, not the shown Change ${row[1]}`,
+  );
+});
+
+test("a section heading with an attribute still bounds its own table", () => {
+  const html = build().replace("<h2>Bridge</h2>", '<h2 class="lead">Bridge</h2>');
+  assert.deepEqual(tableRows(html, "Bridge"), BRIDGE_BASELINE, "a Bridge heading with an attribute lost its table");
+});
+
 test("a section lookup rejects a heading that is missing, duplicated or renamed", () => {
   const html = build();
   assert.equal(tableRows(html, "Bridge").length, BRIDGE_BASELINE.length, "the unedited report does not read the Bridge table");
