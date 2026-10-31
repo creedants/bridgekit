@@ -1,0 +1,1 @@
+- The connection queue and `statementStartsTurn` move from `src/app/small-bridges.ts` to `src/app/connectionQueue.ts` unchanged, so the chart helpers no longer hold the ordering of statements on the one DuckDB connection; `db.ts` imports them from there and every load still takes its own turn.

@@ -11,7 +11,6 @@ import {
   axisFloor,
   betweenLine,
   chartStack,
-  createConnectionQueue,
   createLatestOnly,
   createSplitRunner,
   drawGrid,
@@ -29,13 +28,13 @@ import {
   showSplit,
   shownSplit,
   SPLIT_FAILURE_SENTENCE,
-  statementStartsTurn,
   steps,
   viewsInstalled,
   wrapBetweenLine,
   type SplitPhase,
   type Step,
 } from "../src/app/small-bridges.ts";
+import { createConnectionQueue, statementStartsTurn } from "../src/app/connectionQueue.ts";
 import { compact } from "../src/app/format.ts";
 
 function bridge(priorSales: number, effects: [string, number][]): BridgeResult {
