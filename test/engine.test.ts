@@ -367,7 +367,7 @@ test("a change that is not exactly a bound keeps its own bucket", async () => {
 });
 
 /** The band one CSV file's configurations land in, loaded the way a person's file takes. */
-async function bucketOfCsv(text: string): Promise<string> {
+async function bucketOfCsv(text: string, column = "product"): Promise<string> {
   const directory = await mkdtemp("/tmp/bridgekit-edge-");
   const file = path.join(directory, "edge.csv");
   await writeFile(file, text);
@@ -376,7 +376,7 @@ async function bucketOfCsv(text: string): Promise<string> {
   const config: BridgeConfig = {
     table: "data", periodColumn: "year", prior: "2025", current: "2026",
     unitsColumn: "units", salesColumn: "sales",
-    levels: [{ name: "Product", columns: ["product"] }],
+    levels: [{ name: "Product", columns: [column] }],
   };
   await runBridge(query, config);
   const hit = (await priceDistribution(query, config)).buckets.filter((bucket) => bucket.cells > 0);
@@ -424,6 +424,41 @@ test("a CSV at an exact 10% edge is filed under the band its label names when th
     await bucketOfCsv(
       "year,product,units,sales\n2025,A-100,1,12.34\n2025,A-100,2,24.68\n2026,A-100,3,40.722\n2026,A-100,4,54.296\n",
     ),
+    "Up 5% to 10%",
+  );
+});
+
+test("a numeric product code at an exact 5% edge lands in Up 2% to 5%", async () => {
+  // The level value arrives as a bigint, so a JSON key would throw.
+  assert.equal(
+    await bucketOfCsv(
+      "year,product,units,sales\n2025,1001,1,0.01\n2025,1001,2,0.02\n2026,1001,3,0.0315\n2026,1001,4,0.042\n",
+    ),
+    "Up 2% to 5%",
+  );
+  assert.equal(
+    await bucketOfCsv(
+      "year,product,units,sales\n2025,A-100,1,0.01\n2025,A-100,2,0.02\n2026,A-100,3,0.0315\n2026,A-100,4,0.042\n",
+    ),
+    "Up 2% to 5%",
+  );
+});
+
+test("a level column named es0 keeps the band the same data has under a plain name", async () => {
+  assert.equal(
+    await bucketOfCsv("year,es0,units,sales\n2025,A-301,10,100.00\n2026,A-301,10,110.00\n", "es0"),
+    "Up 5% to 10%",
+  );
+  assert.equal(
+    await bucketOfCsv("year,product,units,sales\n2025,A-301,10,100.00\n2026,A-301,10,110.00\n"),
+    "Up 5% to 10%",
+  );
+});
+
+test("a boolean level column named es1 at an exact 10% edge lands in Up 5% to 10%", async () => {
+  // The column is a BOOLEAN level value whose name is a generated alias.
+  assert.equal(
+    await bucketOfCsv("year,es1,units,sales\n2025,true,10,100.00\n2026,true,10,110.00\n", "es1"),
     "Up 5% to 10%",
   );
 });
