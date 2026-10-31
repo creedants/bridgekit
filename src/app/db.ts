@@ -759,14 +759,14 @@ export async function stageCsvAndSwap(
   await swapWithSourceRows(query, table, source, () => swapLoadedTable(query, staging, table));
 }
 
+// The retry reads and decodes the whole file, so a larger file keeps its refusal rather than risking the tab's memory.
+const MAX_FALLBACK_BYTES = 32 * 1024 * 1024;
+
 /**
- * Loads a CSV through the one reading its bytes decide, and keeps a file the
- * prefix read as UTF-8 when its bytes are refused: the whole file is read once,
- * and when it reads as text the load runs again from that text, so a
- * Windows-1252 file whose non-ASCII bytes all sit past the prefix still loads.
- * An out-of-memory failure is never retried, because by then the file is too
- * big for a second attempt to say anything new. `register` hands a reading to
- * the database.
+ * Loads a CSV using the prefix decision, then retries an encoding refusal once
+ * if the whole-file classifier produces text. A later row-location check may
+ * read and decode the whole file again. Database out-of-memory failures are
+ * never retried. `register` hands each reading to the database.
  */
 export async function loadCsv(
   query: Query,
@@ -785,6 +785,7 @@ export async function loadCsv(
     // Out of memory first: the encoding retry is for a file the database read
     // wrongly, not for one it cannot hold.
     if (isOutOfMemory(error) || !(error instanceof CsvEncodingError)) throw error;
+    if (file.size > MAX_FALLBACK_BYTES) throw error;
     let whole: ArrayBuffer;
     try {
       whole = await file.arrayBuffer();

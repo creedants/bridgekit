@@ -162,10 +162,8 @@ export function decodeCsvBuffer(bytes: Uint8Array): DecodedCsv {
   if (startsWith(bytes, BOM_UTF16_LE)) return { kind: "text", text: decodeMarkedUtf16(bytes, true) };
   if (startsWith(bytes, BOM_UTF16_BE)) return { kind: "text", text: decodeMarkedUtf16(bytes, false) };
   if (isValidUtf8(bytes)) return { kind: "utf8", bytes };
-  // A file can end between one character's lead byte and its continuations,
-  // so its last character is only partly there: it is dropped, never replaced,
-  // and the rows the file does hold still load. A file damaged anywhere before
-  // the tail is not this case, and the check below refuses it.
+  // Only a tail-shaped suffix is removed, and only when the preceding bytes
+  // decode as UTF-8. Otherwise the single-byte check below decides.
   const cut = cutUtf8Tail(bytes);
   if (cut > 0) {
     try {
@@ -179,10 +177,9 @@ export function decodeCsvBuffer(bytes: Uint8Array): DecodedCsv {
 }
 
 /**
- * How many bytes at the end of `bytes` are one character the file cut short, or
- * 0 when the bytes are not valid UTF-8 apart from that character. Only a lead
- * byte with at least one continuation missing counts, so a damaged byte
- * anywhere else is not a cut character.
+ * Returns one to three trailing bytes shaped as an incomplete UTF-8 sequence,
+ * or 0 when no such tail exists. The caller validates the preceding bytes;
+ * this helper does not validate scalar-value restrictions on the tail.
  */
 function cutUtf8Tail(bytes: Uint8Array): number {
   for (let cut = 1; cut <= 3 && cut < bytes.length; cut++) {

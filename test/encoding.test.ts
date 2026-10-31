@@ -75,6 +75,23 @@ class CountingFile extends File {
   }
 }
 
+/**
+ * A file that reports more bytes than it holds, so a size limit is exercised
+ * without allocating the bytes. A slice still returns the real content.
+ */
+class ReportedSizeFile extends CountingFile {
+  readonly reportedSize: number;
+
+  constructor(parts: BlobPart[], name: string, reportedSize: number) {
+    super(parts, name);
+    this.reportedSize = reportedSize;
+  }
+
+  override get size(): number {
+    return this.reportedSize;
+  }
+}
+
 // Windows-1252 code points above ASCII, used to build a real Excel export.
 const CP1252: Record<string, number> = {
   "€": 0x80, "‚": 0x82, "ƒ": 0x83, "„": 0x84, "…": 0x85, "†": 0x86, "‡": 0x87,
@@ -418,7 +435,68 @@ test("a Windows-1252 file whose only high byte comes after 64 KiB loads", async 
   assert.equal(registrations, 2);
 });
 
-test("a UTF-8 file over 64 KiB loads from one prefix read and one registration", async () => {
+/** A late Windows-1252 CSV: ASCII through the prefix, its one high byte past it. */
+function lateWindows1252Csv(name: string): Uint8Array<ArrayBuffer> {
+  const lines = ["period,product,units,sales,note"];
+  for (let index = 0; index < 4000; index++) {
+    lines.push(`2025,A-100,${(index % 5) + 1},${100 + index},note ${index}`);
+  }
+  const text = `${lines.join("\n")}\n2025,P5X,1,900,late\n`;
+  const bytes = new Uint8Array(utf8(text));
+  const at = text.indexOf("P5X") + 2;
+  assert.ok(at >= CSV_PREFIX_BYTES, "the only high byte sits past the prefix");
+  bytes[at] = 0xe9;
+  assert.ok(bytes.length < 1024 * 1024, `${name} stays small on disk`);
+  return bytes;
+}
+
+test("a late Windows-1252 file over the limit shows the sentence without a whole-file read", async () => {
+  const { loadCsv } = await import("../src/app/db.ts");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const bytes = lateWindows1252Csv("over-limit.csv");
+  const directory = await mkdtemp("/tmp/bridgekit-encoding-");
+  const filePath = path.join(directory, "over-limit.csv");
+  await writeFile(filePath, bytes);
+  // The reported size decides the limit; the bytes on disk stay small.
+  const file = new ReportedSizeFile([bytes], "over-limit.csv", 40 * 1024 * 1024);
+  const query = await recoveringDatabase();
+  let registrations = 0;
+  const register = async (reading: CsvReading) => {
+    registrations += 1;
+    if (reading.kind === "text") await writeFile(filePath, reading.text);
+  };
+  await assert.rejects(
+    loadCsv(query, file, "data", filePath, "month first", register),
+    (error: unknown) => (error as Error).message === SENTENCE,
+    SENTENCE,
+  );
+  assert.equal(file.wholeReads, 0, "a file over the limit is never read whole");
+  assert.equal(registrations, 1);
+});
+
+test("a late Windows-1252 file at the limit still loads", async () => {
+  const { loadCsv } = await import("../src/app/db.ts");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const bytes = lateWindows1252Csv("at-limit.csv");
+  const directory = await mkdtemp("/tmp/bridgekit-encoding-");
+  const filePath = path.join(directory, "at-limit.csv");
+  await writeFile(filePath, bytes);
+  const file = new ReportedSizeFile([bytes], "at-limit.csv", 32 * 1024 * 1024);
+  const query = await recoveringDatabase();
+  const register = async (reading: CsvReading) => {
+    if (reading.kind === "text") await writeFile(filePath, reading.text);
+  };
+  await loadCsv(query, file, "data", filePath, "month first", register);
+  const [counted] = await query("SELECT count(*)::DOUBLE AS n FROM data");
+  assert.equal(Number(counted.n), 4001);
+  const [last] = await query("SELECT product FROM data ORDER BY rowid DESC LIMIT 1");
+  assert.equal(String(last.product), "P5é");
+  assert.equal(file.wholeReads, 1);
+});
+
+test("a UTF-8 file over 64 KiB loads without a whole-file read and with one registration", async () => {
   const { openDatabase } = await import("../src/duckdb.ts");
   const { loadCsv } = await import("../src/app/db.ts");
   const { mkdtemp, writeFile } = await import("node:fs/promises");
@@ -448,7 +526,7 @@ test("a UTF-8 file over 64 KiB loads from one prefix read and one registration",
   assert.equal(registrations, 1);
 });
 
-test("a file invalid in both readings shows the plain sentence after one retry", async () => {
+test("a file invalid in both readings shows the plain sentence after one whole-file check", async () => {
   const { openDatabase } = await import("../src/duckdb.ts");
   const { loadCsv } = await import("../src/app/db.ts");
   const { mkdtemp, writeFile } = await import("node:fs/promises");
