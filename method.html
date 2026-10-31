@@ -62,7 +62,7 @@
               <tr><td>Price (like-for-like)</td><td><code>s1 − Rk × q1</code></td><td>Only where the exact configuration sold in the prior period.</td></tr>
               <tr><td>Volume</td><td><code>(q1 − q0) × R0</code></td><td>Change in units at the overall prior average price.</td></tr>
               <tr><td>Mix, one per attribute</td><td><code>(q1 − q0) × (Rj − Rj−1)</code></td><td>Change in units valued at how much more expensive or cheaper the group is than the group above it.</td></tr>
-              <tr><td>New configurations</td><td><code>s1 − Rk × q1</code></td><td>The same difference where there was no exact match, so <code>Rk</code> is a fallback price.</td></tr>
+              <tr><td>New configurations</td><td><code>s1 − Rk × q1</code></td><td>The Price row’s difference where there was no exact match, so <code>Rk</code> is a fallback price.</td></tr>
               <tr><td>Discontinued configurations</td><td><code>(q1 − q0) × (Rk − Rm)</code></td><td>For a configuration that stopped selling, its price premium over the nearest group that still sells, level <code>m</code>. Its mix is counted only down to level <code>m</code>.</td></tr>
             </tbody>
           </table>
