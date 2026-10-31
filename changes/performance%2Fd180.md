@@ -1,0 +1,1 @@
+A CSV whose non-ASCII bytes all sit past the first 64 KiB now loads after one whole-file read, a file cut inside its final UTF-8 character loses that byte and loads at every size, and a file that runs out of memory is reported as too big without the encoding retry.

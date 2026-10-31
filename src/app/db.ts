@@ -3,7 +3,7 @@ import mvpWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url
 import ehWasm from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
 import mvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import type { Query } from "../engine.ts";
-import { CSV_PREFIX_BYTES, ENCODING_SENTENCE, blobIsUtf8, readCsvFile, type CsvReading } from "./encoding.ts";
+import { CSV_PREFIX_BYTES, ENCODING_SENTENCE, blobIsUtf8, decodeCsvBuffer, readCsvFile, rememberCsvReading, type CsvReading } from "./encoding.ts";
 import { ChunkUnavailable, lazyChunk, scheduleSpeculative, type ChunkSentences } from "./lazyChunk.ts";
 import {
   applyDotColumns,
@@ -760,6 +760,55 @@ export async function stageCsvAndSwap(
 }
 
 /**
+ * Loads a CSV through the one reading its bytes decide, and keeps a file the
+ * prefix read as UTF-8 when its bytes are refused: the whole file is read once,
+ * and when it reads as text the load runs again from that text, so a
+ * Windows-1252 file whose non-ASCII bytes all sit past the prefix still loads.
+ * An out-of-memory failure is never retried, because by then the file is too
+ * big for a second attempt to say anything new. `register` hands a reading to
+ * the database.
+ */
+export async function loadCsv(
+  query: Query,
+  file: File,
+  table: string,
+  readablePath: string,
+  order: DateOrder,
+  register: (reading: CsvReading) => Promise<void>,
+): Promise<void> {
+  const reading = await readCsvFile(file);
+  await register(reading);
+  try {
+    await refuseMixedSeparators(query, file, reading, readablePath);
+    await stageCsvAndSwap(query, file, table, readablePath, order, reading);
+  } catch (error) {
+    // Out of memory first: the encoding retry is for a file the database read
+    // wrongly, not for one it cannot hold.
+    if (isOutOfMemory(error) || !(error instanceof CsvEncodingError)) throw error;
+    let whole: ArrayBuffer;
+    try {
+      whole = await file.arrayBuffer();
+    } catch {
+      throw error;
+    }
+    let decision: ReturnType<typeof decodeCsvBuffer>;
+    try {
+      decision = decodeCsvBuffer(new Uint8Array(whole));
+    } catch {
+      throw error;
+    }
+    // The same bytes cannot take a second reading that the first one missed.
+    if (decision.kind === "utf8") throw error;
+    const text: CsvReading = { kind: "text", text: decision.text };
+    rememberCsvReading(file, text);
+    await register(text);
+    // One attempt has one reading: the separator check judges the same text.
+    await refuseMixedSeparators(query, file, text, readablePath);
+    await stageCsvAndSwap(query, file, table, readablePath, order, text);
+  }
+}
+
+/**
  * Stages an Excel workbook's flattened sheet and swaps it into place, as
  * `loadFile` does. `dataRows` is the spreadsheet row of each data row, which
  * the sheet reader already knows. `sheet` names the worksheet it loaded and
@@ -929,6 +978,18 @@ export async function dateOrderNote(query: Query, table: string): Promise<string
   return sentences.length === 0 ? null : sentences.join(" ");
 }
 
+/**
+ * The encoding backstop's refusal. The loader recognises it by type, not by
+ * comparing the sentence two of its own modules share, so it can retry the
+ * file's whole text before that sentence reaches the user.
+ */
+export class CsvEncodingError extends Error {
+  constructor() {
+    super(ENCODING_SENTENCE);
+    this.name = "CsvEncodingError";
+  }
+}
+
 // read_csv only reads UTF-8. When a file whose prefix passed is refused by the
 // database, its own bytes decide whether the encoding sentence replaces the
 // error: a file that is not UTF-8 anywhere shows the sentence, and any other
@@ -936,7 +997,7 @@ export async function dateOrderNote(query: Query, table: string): Promise<string
 // cannot read the file keeps the database's error.
 async function csvEncodingFailure(error: unknown, bytes?: Blob): Promise<unknown> {
   if (bytes === undefined || isOutOfMemory(error)) return error;
-  return (await blobIsUtf8(bytes)) === "invalid" ? new Error(ENCODING_SENTENCE) : error;
+  return (await blobIsUtf8(bytes)) === "invalid" ? new CsvEncodingError() : error;
 }
 
 export const TOO_BIG_SENTENCE =
@@ -1224,39 +1285,41 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
         }
         const order = orderForLanguage(navigator.language);
         const registered = "upload.csv";
-        if (uploadRegistered) {
+        /** Drops the last upload before the same name is registered again. */
+        const dropUpload = async () => {
+          if (!uploadRegistered) return;
           await db.dropFile(registered);
           uploadRegistered = false;
-        }
+        };
+        /** Hands a CSV reading to the database under the load's registered name. */
+        const register = async (reading: CsvReading) => {
+          await dropUpload();
+          if (reading.kind === "bytes") {
+            await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+          } else {
+            await db.registerFileText(registered, reading.text);
+          }
+          uploadRegistered = true;
+        };
         let sheet: { name: string; others: number } = { name: "", others: 0 };
         let excelHoles: readonly number[] = [];
         let excelRows: readonly number[] = [];
         let formulaBlanks = 0;
-        let reading: CsvReading | undefined;
+        // A refused file must leave the loaded data alone, so the new file
+        // converts on a staging table and only swaps into place once it has
+        // rows. The empty check, the swap and afterLoad all run after this.
         if (isExcel) {
+          await dropUpload();
           const first = await firstSheetAsCsv(file);
           excelHoles = first.holes;
           excelRows = first.dataRows;
           formulaBlanks = first.formulaBlanks;
           sheet = { name: first.sheetName, others: first.otherSheets };
           await db.registerFileText(registered, first.csv);
-        } else {
-          reading = await readCsvFile(file);
-          if (reading.kind === "bytes") {
-            await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
-          } else {
-            await db.registerFileText(registered, reading.text);
-          }
-        }
-        uploadRegistered = true;
-        // A refused file must leave the loaded data alone, so the new file
-        // converts on a staging table and only swaps into place once it has
-        // rows. The empty check, the swap and afterLoad all run after this.
-        if (isExcel) {
+          uploadRegistered = true;
           await stageExcelAndSwap(raw, table, registered, excelHoles, excelRows, sheet, order);
-        } else if (reading !== undefined) {
-          await refuseMixedSeparators(raw, file, reading, registered);
-          await stageCsvAndSwap(raw, file, table, registered, order, reading);
+        } else {
+          await loadCsv(raw, file, table, registered, order, register);
         }
         return formulaBlanks;
       } catch (error) {
