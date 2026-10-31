@@ -1,10 +1,27 @@
 import assert from "node:assert/strict";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { registerHooks } from "node:module";
+import path from "node:path";
 import { test } from "node:test";
 import { openDatabase } from "../src/duckdb.ts";
 import { runBridge, drill, unmatched, dataCheck, priceDistribution, sensitivity, trend, priceRealization, priceGaps, accountBridge, measureSql, periodMoney, tieOutLines, type BridgeConfig, type BridgeResult, type Level, type Query, type TieOutLine } from "../src/engine.ts";
 import { PERIOD, VIEW, quote, viewSql, type Setup } from "../src/app/setup.ts";
 import { whole } from "../src/app/format.ts";
 import { createSyntheticSales } from "../src/synth.ts";
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.includes("?url")) {
+      return { url: 'data:text/javascript,export default "stub"', shortCircuit: true };
+    }
+    return nextResolve(specifier, context);
+  },
+});
+
+// The CSV loader imports the browser wasm bundles by URL, which this runner
+// cannot fetch, so stubs replace those URLs the way test/date-order.test.ts
+// does it.
+const { readCsvTable } = await import("../src/app/db.ts");
 
 function effect(result: BridgeResult, key: string): number {
   const found = result.effects.find((e) => e.key === key);
@@ -267,6 +284,183 @@ test("a gross column splits price into list price and discounts", async () => {
   assert.equal(up?.cells, 1);
   near(up!.share, 935 / 1435);
   near(distribution.averageChange, 35 / 1400);
+});
+
+/** The bucket the engine files one price pair under, at the given unit counts. */
+async function bucketForPair(
+  query: Query,
+  prior: number,
+  current: number,
+  priorUnits = 1,
+  currentUnits = 1,
+): Promise<string> {
+  await query(`DROP TABLE IF EXISTS price_pair`);
+  await query(`CREATE TABLE price_pair AS SELECT * FROM (VALUES
+    ('p0', 'A-100', ${priorUnits}, ${priorUnits * prior}),
+    ('p1', 'A-100', ${currentUnits}, ${currentUnits * current})) v(period, product, units, sales)`);
+  const config: BridgeConfig = {
+    table: "price_pair", periodColumn: "period", prior: "p0", current: "p1",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+  };
+  await runBridge(query, config);
+  const hit = (await priceDistribution(query, config)).buckets.filter((bucket) => bucket.cells > 0);
+  assert.equal(hit.length, 1, `${prior} to ${current} landed in ${hit.map((b) => b.label).join(", ") || "no bucket"}`);
+  return hit[0].label;
+}
+
+test("a change of exactly a bucket bound is filed in the bucket its label names", async () => {
+  const query = await openDatabase();
+  // Each bound at exactly the bound, then one cent either side on the current
+  // price. At these base prices a cent is 0.1% or less, so the neighbours sit
+  // clearly inside their own buckets and must not move.
+  const cases: [number, number, string][] = [
+    [10.0, 11.0, "Up 5% to 10%"],
+    [10.0, 11.01, "Up more than 10%"],
+    [10.0, 10.99, "Up 5% to 10%"],
+    [10.0, 9.0, "Down 5% to 10%"],
+    [10.0, 8.99, "Down more than 10%"],
+    [10.0, 9.01, "Down 5% to 10%"],
+    [20.0, 21.0, "Up 2% to 5%"],
+    [20.0, 21.01, "Up 5% to 10%"],
+    [20.0, 20.99, "Up 2% to 5%"],
+    [20.0, 19.0, "Down 2% to 5%"],
+    [20.0, 18.99, "Down 5% to 10%"],
+    [20.0, 19.01, "Down 2% to 5%"],
+    [50.0, 51.0, "Up 0.5% to 2%"],
+    [50.0, 51.01, "Up 2% to 5%"],
+    [50.0, 50.99, "Up 0.5% to 2%"],
+    [50.0, 49.0, "Down 0.5% to 2%"],
+    [50.0, 48.99, "Down 2% to 5%"],
+    [50.0, 49.01, "Down 0.5% to 2%"],
+    [200.0, 201.0, "No change (within 0.5%)"],
+    [200.0, 201.01, "Up 0.5% to 2%"],
+    [200.0, 200.99, "No change (within 0.5%)"],
+    [200.0, 199.0, "No change (within 0.5%)"],
+    [200.0, 198.99, "Down 0.5% to 2%"],
+    [200.0, 199.01, "No change (within 0.5%)"],
+  ];
+  for (const [prior, current, expected] of cases) {
+    assert.equal(await bucketForPair(query, prior, current), expected, `${prior} to ${current}`);
+  }
+});
+
+test("a change that is not exactly a bound keeps its own bucket", async () => {
+  const query = await openDatabase();
+  // Prior unit prices 999.9999 and 9999.9999, 3 prior units and 7 current
+  // units. The first four changes are past their bounds by at least 5e-8 of a
+  // percentage point. The nine-figure pairs are past by about 1e-10 of a
+  // percentage point. None is an exact edge, so none may join the bucket
+  // nearer no change.
+  const cases: [number, number, string][] = [
+    [999.9999, 1004.9999, "Up 0.5% to 2%"],
+    [999.9999, 994.9999, "Down 0.5% to 2%"],
+    [999.9999, 1019.9999, "Up 2% to 5%"],
+    [9999.9999, 10999.9999, "Up more than 10%"],
+    [100000000, 102000000.0001, "Up 2% to 5%"],
+    [100000000, 100500000.0001, "Up 0.5% to 2%"],
+    [100000000, 89999999.9999, "Down more than 10%"],
+  ];
+  for (const [prior, current, expected] of cases) {
+    assert.equal(await bucketForPair(query, prior, current, 3, 7), expected, `${prior} to ${current}`);
+  }
+});
+
+/** The band one CSV file's configurations land in, loaded the way a person's file takes. */
+async function bucketOfCsv(text: string, column = "product"): Promise<string> {
+  const directory = await mkdtemp("/tmp/bridgekit-edge-");
+  const file = path.join(directory, "edge.csv");
+  await writeFile(file, text);
+  const query = await openDatabase();
+  await readCsvTable(query, "data", file);
+  const config: BridgeConfig = {
+    table: "data", periodColumn: "year", prior: "2025", current: "2026",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Product", columns: [column] }],
+  };
+  await runBridge(query, config);
+  const hit = (await priceDistribution(query, config)).buckets.filter((bucket) => bucket.cells > 0);
+  assert.equal(hit.length, 1, `landed in ${hit.map((b) => b.label).join(", ") || "no bucket"}`);
+  return hit[0].label;
+}
+
+test("a four-decimal CSV at an exact 5% edge is filed in Up 2% to 5%", async () => {
+  // The stored current cell sums to 0.07350000000000001, one unit in the last
+  // place above the typed 0.0735, so a test on the cell DOUBLE cannot see the
+  // edge.
+  assert.equal(
+    await bucketOfCsv(
+      "year,product,units,sales\n2025,A-100,1,0.01\n2025,A-100,2,0.02\n2026,A-100,3,0.0315\n2026,A-100,4,0.042\n",
+    ),
+    "Up 2% to 5%",
+  );
+});
+
+test("an ordinary two-decimal CSV at an exact -2% edge is filed in Down 0.5% to 2%", async () => {
+  // The stored current cell sums to 6.859999999999999, one unit in the last
+  // place below the typed 6.86.
+  assert.equal(
+    await bucketOfCsv(
+      "year,product,units,sales\n2025,A-100,1,1.00\n2025,A-100,2,2.00\n2026,A-100,3,2.94\n2026,A-100,4,3.92\n",
+    ),
+    "Down 0.5% to 2%",
+  );
+});
+
+test("a CSV at an exact -5% edge keeps the band nearer no change when the cell sum drifts", async () => {
+  // 8.40 and 16.80 typed; the stored prior cell sums to 25.200000000000003
+  // while the typed rows sum to 25.20.
+  assert.equal(
+    await bucketOfCsv(
+      "year,product,units,sales\n2025,A-100,1,8.40\n2025,A-100,2,16.80\n2026,A-100,3,23.94\n2026,A-100,4,31.92\n",
+    ),
+    "Down 2% to 5%",
+  );
+});
+
+test("a CSV at an exact 10% edge is filed under the band its label names when the prior sum drifts", async () => {
+  // 12.34 and 24.68 typed; the stored prior cell sums to 37.019999999999996.
+  assert.equal(
+    await bucketOfCsv(
+      "year,product,units,sales\n2025,A-100,1,12.34\n2025,A-100,2,24.68\n2026,A-100,3,40.722\n2026,A-100,4,54.296\n",
+    ),
+    "Up 5% to 10%",
+  );
+});
+
+test("a numeric product code at an exact 5% edge lands in Up 2% to 5%", async () => {
+  // The level value arrives as a bigint, so a JSON key would throw.
+  assert.equal(
+    await bucketOfCsv(
+      "year,product,units,sales\n2025,1001,1,0.01\n2025,1001,2,0.02\n2026,1001,3,0.0315\n2026,1001,4,0.042\n",
+    ),
+    "Up 2% to 5%",
+  );
+  assert.equal(
+    await bucketOfCsv(
+      "year,product,units,sales\n2025,A-100,1,0.01\n2025,A-100,2,0.02\n2026,A-100,3,0.0315\n2026,A-100,4,0.042\n",
+    ),
+    "Up 2% to 5%",
+  );
+});
+
+test("a level column named es0 keeps the band the same data has under a plain name", async () => {
+  assert.equal(
+    await bucketOfCsv("year,es0,units,sales\n2025,A-301,10,100.00\n2026,A-301,10,110.00\n", "es0"),
+    "Up 5% to 10%",
+  );
+  assert.equal(
+    await bucketOfCsv("year,product,units,sales\n2025,A-301,10,100.00\n2026,A-301,10,110.00\n"),
+    "Up 5% to 10%",
+  );
+});
+
+test("a boolean level column named es1 at an exact 10% edge lands in Up 5% to 10%", async () => {
+  // The column is a BOOLEAN level value whose name is a generated alias.
+  assert.equal(
+    await bucketOfCsv("year,es1,units,sales\n2025,true,10,100.00\n2026,true,10,110.00\n", "es1"),
+    "Up 5% to 10%",
+  );
 });
 
 test("trend bridges each pair of consecutive periods", async () => {
@@ -1121,6 +1315,52 @@ test("money tie-out rounds this four- and five-decimal fixture to the expected w
   await checkBoth(query, "four- and five-decimal money", "Sales", byProduct, byGroup, {
     lines: [3, 1, 2, 1, 0, 1],
     inFile: [3, 1],
+  });
+});
+
+test("money tie-out keeps its whole dollars when three-decimal inputs would not", async () => {
+  const query = await openDatabase();
+  const setup: Setup = {
+    periodColumn: "year",
+    grain: "value",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }],
+    filters: [],
+  };
+  // Three units each, at unit prices written with four and five decimals:
+  // 3.4166 and 3.41673 in 2025, 3.5833 and 3.58336 in 2026.
+  await loadFile(
+    query,
+    "year INTEGER, product VARCHAR, all_group VARCHAR, units INTEGER, sales DOUBLE",
+    `(2025, 'A-100', 'all', 3, 10.2498),
+     (2025, 'A-101', 'all', 3, 10.25019),
+     (2026, 'A-100', 'all', 3, 10.7499),
+     (2026, 'A-101', 'all', 3, 10.75008)`,
+    setup,
+  );
+  const base: Omit<BridgeConfig, "levels"> = {
+    table: VIEW, periodColumn: PERIOD, prior: 2025, current: 2026,
+    unitsColumn: "units", salesColumn: "sales",
+  };
+  const byProduct: BridgeConfig = { ...base, levels: [{ name: "Product", columns: ["product"] }] };
+  const byGroup: BridgeConfig = { ...base, levels: [{ name: "Group", columns: ["all_group"] }] };
+
+  const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
+  const atThreeDecimals = (values: number[]) =>
+    values.reduce((total, value) => total + Math.round(value * 1000) / 1000, 0);
+  const prior = [10.2498, 10.25019];
+  const current = [10.7499, 10.75008];
+  // The file holds 20.49999 and 21.49998, so the bridge shows 20 and 21. The
+  // same rows rounded to three decimals hold 20.500 and 21.500 and show 21 and
+  // 22, so the whole-dollar answer depends on the digits past three decimals.
+  assert.deepEqual([whole(sum(prior)), whole(sum(current))], ["20", "21"]);
+  assert.deepEqual([whole(atThreeDecimals(prior)), whole(atThreeDecimals(current))], ["21", "22"]);
+
+  await checkBoth(query, "three-decimal boundary money", "Sales", byProduct, byGroup, {
+    lines: [20, 0, 20, 21, 0, 21],
+    inFile: [20, 21],
+    noFilter: true,
   });
 });
 
