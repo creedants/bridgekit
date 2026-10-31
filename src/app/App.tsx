@@ -366,7 +366,7 @@ export function App() {
   const [formulaBlanks, setFormulaBlanks] = useState(0);
   const [setupError, setSetupError] = useState("");
   const [sheetNote, setSheetNote] = useState<string | null>(null);
-  // The run whose finish the live region announces; null once any task starts.
+  // The run whose finish the live region announces; null once any load or task starts.
   const [announced, setAnnounced] = useState<number | null>(null);
   // A demonstration sample must not overwrite a setup saved for a file with the same columns.
   const writesSetup = useRef(true);
@@ -432,6 +432,8 @@ export function App() {
     const meta: LoadMeta = { name, preset, blanks: 0 };
     loads.current.set(claim.n, meta);
     dispatch({ type: "read", load: claim.n, ...read });
+    // A refused load keeps the old run, so the region must not say it again once reading ends.
+    setAnnounced(null);
     clearBanner();
     try {
       const outcome = await claim.write(write);
@@ -803,7 +805,7 @@ export function App() {
   const Results = useResultsView(resultsChunk);
   const shown = mainView(phase, engineState);
   const status = phase.kind === "reading" ? phase.label : ([...tasks.values()].at(-1)?.label ?? "");
-  // A load empties the run and a setup change makes it stale, so either way this line derives to "".
+  // A load or task clears announced and a setup change makes the run stale, so either way this line derives to "".
   const spoken = status || (fresh && fresh.id === announced ? "Bridge calculated." : "");
 
   return (

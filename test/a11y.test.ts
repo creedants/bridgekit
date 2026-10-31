@@ -610,7 +610,7 @@ async function waitForSampleRun(mounted: Mounted): Promise<void> {
   await mounted.until(() => resultsHeading(mounted.container) !== undefined && tabButtons(mounted.container).length > 0, "the results tabs");
 }
 
-test("Calculate puts focus on the results heading and announces the bridge", async () => {
+test("A sample link's calculation puts focus on the results heading and announces the bridge", async () => {
   const raw = await openDatabase();
   const mounted = await mountApp("?sample=1000", queued(raw));
   try {

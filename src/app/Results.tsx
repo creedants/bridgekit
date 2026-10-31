@@ -102,7 +102,6 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
   const ids = useId();
   const panelId = `${ids}panel`;
   const tabId = (entry: Tab) => `${ids}tab-${entry}`;
-  // The roving tabindex follows the selection, so the strip needs no second focus state.
   const tabEls = useRef<(HTMLButtonElement | null)[]>([]);
   const mixCount = run.result.effects.filter((e) => e.key.startsWith("mix_")).length;
   // With many attributes the chart gets crowded, so mix starts combined.
@@ -152,6 +151,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
             id={tabId(entry.id)}
             aria-selected={tab === entry.id}
             aria-controls={panelId}
+            // The roving tabindex follows the selection, so the strip needs no second focus state.
             tabIndex={tab === entry.id ? 0 : -1}
             onClick={() => setTab(entry.id)}
             onKeyDown={(e) => {
