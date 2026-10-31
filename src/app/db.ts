@@ -4,7 +4,7 @@ import ehWasm from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
 import mvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import type { Query } from "../engine.ts";
 import { CSV_PREFIX_BYTES, ENCODING_SENTENCE, blobIsUtf8, readCsvFile, type CsvReading } from "./encoding.ts";
-import { ChunkUnavailable, lazyChunk, type ChunkSentences } from "./exportExcel.ts";
+import { ChunkUnavailable, lazyChunk, scheduleSpeculative, type ChunkSentences } from "./lazyChunk.ts";
 import {
   applyDotColumns,
   convertFormattedNumbers,
@@ -21,53 +21,9 @@ import { swapWithSourceRows, type CsvDialect, type SourceRows } from "./profile.
 import { firstSheetAsCsv, holeRenames, NO_DATA_ROWS } from "./sheet.ts";
 import { createConnectionQueue, statementStartsTurn } from "./small-bridges.ts";
 
-const IDLE_CAP_MS = 2000;
-
 // The page's one connection gets one queue, so no two statements from this page
 // run at the same time and a caller's consecutive statements stay together.
 const statements = createConnectionQueue();
-
-/**
- * Runs work nobody has asked for yet: after the load event, on an idle
- * callback, then `settleMs` later. Save-Data schedules nothing.
- * Returns a cancel.
- */
-export function scheduleSpeculative(work: () => void, settleMs = 0): () => void {
-  if (networkSaveData()) return () => {};
-  let cancelled = false;
-  let idleId: number | undefined;
-  let timerId: number | undefined;
-  const settle = () => {
-    if (cancelled) return;
-    if (settleMs === 0) work();
-    else timerId = window.setTimeout(work, settleMs);
-  };
-  const whenIdle = () => {
-    if (cancelled) return;
-    if (typeof window.requestIdleCallback === "function") {
-      idleId = window.requestIdleCallback(settle, { timeout: IDLE_CAP_MS });
-      return;
-    }
-    timerId = window.setTimeout(settle, IDLE_CAP_MS);
-  };
-  if (document.readyState === "complete") whenIdle();
-  else window.addEventListener("load", whenIdle, { once: true });
-  return () => {
-    cancelled = true;
-    window.removeEventListener("load", whenIdle);
-    if (idleId !== undefined) window.cancelIdleCallback(idleId);
-    if (timerId !== undefined) window.clearTimeout(timerId);
-  };
-}
-
-// The DOM lib in this toolchain does not declare Network Information.
-function networkSaveData(): boolean {
-  const host: unknown = navigator;
-  if (typeof host !== "object" || host === null || !("connection" in host)) return false;
-  const connection = host.connection;
-  if (typeof connection !== "object" || connection === null || !("saveData" in connection)) return false;
-  return connection.saveData === true;
-}
 
 export interface BrowserDatabase {
   query: Query;

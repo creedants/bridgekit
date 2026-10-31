@@ -5,13 +5,13 @@ import { resolveSample, type Sample } from "../synth.ts";
 import {
   openBrowserDatabase,
   PARQUET_REFUSAL,
-  scheduleSpeculative,
   type BrowserDatabase,
 } from "./db.ts";
-import { EXCEL_TYPE, excelFileName, lazyChunk, workbookBytes, type ChunkSentences, type LazyChunk } from "./exportExcel.ts";
+import { EXCEL_TYPE, excelFileName, workbookBytes } from "./exportExcel.ts";
 import { isPastedTable, saveOnce, shorten } from "./files.ts";
 import { fileProblem, periodView, periodsFor, type FileProblem, type Periods, type PeriodView } from "./fileProblems.ts";
 import { whole } from "./format.ts";
+import { lazyChunk, scheduleSpeculative, type ChunkSentences, type LazyChunk } from "./lazyChunk.ts";
 import { findTotalRows, profileFile, type TotalRow } from "./profile.ts";
 import { loadPeriodList } from "./periods.ts";
 import { describeSetup } from "./report.ts";

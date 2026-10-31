@@ -1,0 +1,1 @@
+- The chunk loader and the speculative scheduler moved out of `src/app/exportExcel.ts` and `src/app/db.ts` into `src/app/lazyChunk.ts`. Nothing a person sees changed.
