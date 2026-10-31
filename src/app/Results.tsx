@@ -250,7 +250,15 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
         {tab === "price" && <PriceChanges run={run} query={props.query} />}
         {tab === "movers" && <Movers run={run} query={props.query} sortBy={sortBy} onSortBy={setSortBy} />}
         {tab === "unmatched" && <Unmatched run={run} query={props.query} />}
-        {tab === "check" && <Check run={run} warnings={warnings} warningsKnown={fileWarnings.resolved} query={props.query} />}
+        {tab === "check" && (
+          <Check
+            run={run}
+            warnings={warnings}
+            warningsKnown={fileWarnings.resolved}
+            warningsFailed={fileWarnings.failed}
+            query={props.query}
+          />
+        )}
       </div>
     </>
   );
