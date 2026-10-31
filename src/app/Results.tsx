@@ -7,7 +7,7 @@ import {
   type Query,
   type TieOut,
 } from "../engine.ts";
-import { roundBridge, shownTotal } from "../summary.ts";
+import { roundEffects, shownTotal } from "../summary.ts";
 import { percent, shareOfPrior, signedPercent, signedWhole, whole } from "./format.ts";
 import { terms } from "./report.ts";
 import type { Setup } from "./setup.ts";
@@ -93,7 +93,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
     ...run.result,
     effects: run.result.effects.filter((e) => e.key !== "no_units" || e.value !== 0),
   };
-  const shown = roundBridge(result.priorSales, result.currentSales, result.effects.map((e) => e.value));
+  const shown = roundEffects(result.priorSales, result.currentSales, result.effects);
   // The tabs that re-query the mutable view read it only while the run and its
   // views are current; a temp table fixed at calculation time needs no such guard.
   const viewQuery = props.fresh === false || props.viewsCurrent === false ? null : props.query;

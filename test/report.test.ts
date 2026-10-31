@@ -170,7 +170,7 @@ const marginConfig: BridgeConfig = { ...config, costColumn: "cost" };
 
 test("sales mover headers keep today literals", () => {
   assert.deepEqual(moverHeader(config), [
-    "Prior sales", "Current sales", "Change", "Volume", "Mix", "Price",
+    "Prior sales", "Current sales", "Change", "Price", "Volume", "Mix",
     "New config.", "Discontinued", "No units", "Prior price", "Current price", "Price change",
   ]);
 });
@@ -205,7 +205,7 @@ test("a margin report is titled Margin bridge with the margin headers", () => {
 
 test("margin mover headers and terms name the unit-margin figures", () => {
   assert.deepEqual(moverHeader(marginConfig), [
-    "Prior margin", "Current margin", "Change", "Volume", "Mix", "Price and unit cost",
+    "Prior margin", "Current margin", "Change", "Price and unit cost", "Volume", "Mix",
     "New config.", "Discontinued", "No units", "Prior unit margin", "Current unit margin", "Unit margin change",
   ]);
   const t = terms(marginConfig);
@@ -319,8 +319,8 @@ const BRIDGE_BASELINE = [
 ];
 
 const MOVERS_BASELINE = [
-  ["Product", "Change", "Volume", "Mix", "Price", "New config.", "Discontinued", "No units"],
-  ["ZX-11", "+30", "+12", "+3", "+15", "0", "0", "0"],
+  ["Product", "Change", "Price", "Volume", "Mix", "New config.", "Discontinued", "No units"],
+  ["ZX-11", "+30", "+15", "+12", "+3", "0", "0", "0"],
   ["ZX-12", "+45", "0", "0", "0", "+45", "0", "0"],
   ["ZX-13", "-30", "0", "0", "0", "0", "-30", "0"],
   ["ZX-14", "+30", "0", "0", "0", "0", "0", "+30"],

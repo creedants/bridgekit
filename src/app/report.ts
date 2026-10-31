@@ -1,6 +1,6 @@
 import { commentary } from "../commentary.ts";
-import { coverageLabel, effectColumns, measureName, type AccountGroup, type BridgeConfig, type BridgeResult, type PriceBucket } from "../engine.ts";
-import { roundBridge } from "../summary.ts";
+import { coverageLabel, effectColumns, measureName, tieRank, type AccountGroup, type BridgeConfig, type BridgeResult, type PriceBucket } from "../engine.ts";
+import { roundBridge, roundEffects } from "../summary.ts";
 import type { Setup } from "./setup.ts";
 import { percent, shareOfPrior, signedPercent, signedWhole, whole } from "./format.ts";
 
@@ -98,12 +98,37 @@ export function terms(config: BridgeConfig): Terms {
   return config.costColumn ? TERMS.MARGIN : TERMS.SALES;
 }
 
+/** One Movers effect column: the key the table sorts by, its short head, and how a row's value is read. */
+export interface MoverEffect {
+  /** The effect key the table sorts by. */
+  key: string;
+  head: (t: Terms) => string;
+  value: (row: Record<string, unknown>, levelCount: number) => number;
+}
+
+/** The Movers effect columns, in display order. */
+export const MOVER_EFFECTS: readonly MoverEffect[] = [
+  { key: "price", head: (t) => t.priceEffect, value: (row) => Number(row.price) },
+  { key: "volume", head: () => "Volume", value: (row) => Number(row.volume) },
+  {
+    key: "mix",
+    head: () => "Mix",
+    value: (row, levelCount) => {
+      let mix = 0;
+      for (let i = 1; i <= levelCount; i += 1) mix += Number(row[`mix_${i}`] ?? 0);
+      return mix;
+    },
+  },
+  { key: "new_config", head: () => "New config.", value: (row) => Number(row.new_config) },
+  { key: "discontinued", head: () => "Discontinued", value: (row) => Number(row.discontinued) },
+  { key: "no_units", head: () => "No units", value: (row) => Number(row.no_units) },
+];
+
 /** The Movers columns after the grouping columns, in margin wording when the bridge is on margin. */
 export function moverHeader(config: BridgeConfig): string[] {
   const t = terms(config);
   return [
-    t.prior, t.current, "Change", "Volume", "Mix", t.priceEffect,
-    "New config.", "Discontinued", "No units", t.priorPrice, t.currentPrice, t.priceChange,
+    t.prior, t.current, "Change", ...MOVER_EFFECTS.map((effect) => effect.head(t)), t.priorPrice, t.currentPrice, t.priceChange,
   ];
 }
 
@@ -113,7 +138,7 @@ export interface WholeMoversRow {
   current: number;
   /** The shown current minus the shown prior. */
   change: number;
-  /** One whole value per effect, in Movers column order: volume, mix, price, new config, discontinued, no units. Mix is the sum of mix_1 to mix_<levelCount>. */
+  /** One whole value per effect, in Movers column order: price, volume, mix, new config, discontinued, no units. Mix is the sum of mix_1 to mix_<levelCount>. */
   parts: number[];
 }
 
@@ -124,16 +149,13 @@ export interface WholeMoversRow {
 export function wholeMoversRow(row: Record<string, unknown>, levelCount: number): WholeMoversRow {
   const prior = Number(row.s0) + Number(row.z0);
   const current = Number(row.s1) + Number(row.z1);
-  let mix = 0;
-  for (let i = 1; i <= levelCount; i += 1) mix += Number(row[`mix_${i}`] ?? 0);
-  const shown = roundBridge(prior, current, [
-    Number(row.volume),
-    mix,
-    Number(row.price),
-    Number(row.new_config),
-    Number(row.discontinued),
-    Number(row.no_units),
-  ]);
+  const shown = roundBridge(
+    prior,
+    current,
+    MOVER_EFFECTS.map((effect) => effect.value(row, levelCount)),
+    1,
+    MOVER_EFFECTS.map((effect) => tieRank(effect.key)),
+  );
   return { prior: shown.prior, current: shown.current, change: shown.current - shown.prior, parts: shown.values };
 }
 
@@ -143,12 +165,12 @@ export function trendHeader(config: BridgeConfig): { label: string; num: boolean
   return [
     { label: "Periods", num: false },
     { label: "Change", num: true },
-    { label: "Volume", num: true },
-    { label: "Mix", num: true },
     { label: "Price", num: true },
     ...(config.costColumn && unitCost ? [{ label: unitCost, num: true }] : []),
     { label: "Price, % of prior", num: true },
     { label: "Price effect", num: false },
+    { label: "Volume", num: true },
+    { label: "Mix", num: true },
     { label: "New and discontinued", num: true },
     { label: "No units", num: true },
   ];
@@ -213,7 +235,7 @@ export function buildReport(input: {
     return { ...e, label: `Mix: ${safe}` };
   });
   const viewEffects = omit ? safeEffects : result.effects;
-  const rounded = roundBridge(result.priorSales, result.currentSales, viewEffects.map((e) => e.value));
+  const rounded = roundEffects(result.priorSales, result.currentSales, viewEffects);
   const viewResult = { ...result, effects: viewEffects };
   const viewCoverage = omit
     ? result.coverage.map((c) => ({ ...c, label: coverageLabel(safeConfig, c.level) }))
@@ -230,8 +252,7 @@ export function buildReport(input: {
     ),
     row([cell(`${measureName(config)} ${config.current}`), whole(rounded.current), ""]),
   ];
-  const [, , change, volume, mix, priceEffect, newConfig, discontinued, noUnits] = moverHeader(config);
-  const moverLabels = [change, volume, mix, priceEffect, newConfig, discontinued, noUnits];
+  const moverLabels = moverHeader(config).slice(2, 3 + MOVER_EFFECTS.length);
   const movers = input.movers.rows.map((r, i) => {
     const shown = wholeMoversRow(r, config.levels.length);
     return row([

@@ -365,23 +365,23 @@ test("the Trend tab header list adds Unit cost only on a margin bridge", () => {
   assert.deepEqual(trendHeader(marginConfig).map((column) => column.label), [
     "Periods",
     "Change",
-    "Volume",
-    "Mix",
     "Price",
     "Unit cost",
     "Price, % of prior",
     "Price effect",
+    "Volume",
+    "Mix",
     "New and discontinued",
     "No units",
   ]);
   assert.deepEqual(trendHeader(salesConfig).map((column) => column.label), [
     "Periods",
     "Change",
-    "Volume",
-    "Mix",
     "Price",
     "Price, % of prior",
     "Price effect",
+    "Volume",
+    "Mix",
     "New and discontinued",
     "No units",
   ]);

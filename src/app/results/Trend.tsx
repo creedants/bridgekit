@@ -50,8 +50,6 @@ export function Trend(props: { run: Run; query: (() => Promise<Query>) | null })
             <tr key={s.current}>
               <TextCell value={`${s.prior} to ${s.current}`} />
               <td className="num strong">{signedWhole(s.currentSales - s.priorSales)}</td>
-              <td className="num">{signedWhole(s.volume)}</td>
-              <td className="num">{signedWhole(s.mix)}</td>
               <td className="num">{signedWhole(s.price)}</td>
               {s.unitCost === undefined ? null : <td className="num">{signedWhole(s.unitCost)}</td>}
               <td className="num">{signedPercent(shareOfPrior(s.price, s.priorSales))}</td>
@@ -64,6 +62,8 @@ export function Trend(props: { run: Run; query: (() => Promise<Query>) | null })
                   }}
                 />
               </td>
+              <td className="num">{signedWhole(s.volume)}</td>
+              <td className="num">{signedWhole(s.mix)}</td>
               <td className="num">{signedWhole(s.newAndDiscontinued)}</td>
               <td className="num">{signedWhole(s.noUnits)}</td>
             </tr>

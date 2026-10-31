@@ -3,12 +3,14 @@ import { cumulativeColumns, drill, measureName, type DrillFilter, type Query } f
 import { finiteOrBlank } from "../exportExcel.ts";
 import { saveOnce, toExportCsv } from "../files.ts";
 import { price, signedPercent, signedWhole, whole } from "../format.ts";
-import { moverHeader, terms, wholeMoversRow } from "../report.ts";
+import { MOVER_EFFECTS, moverHeader, terms, wholeMoversRow } from "../report.ts";
 import type { Run } from "../Results.tsx";
 import { QueryFailed, TableActions, TextCell, display, useLoad } from "./shared.tsx";
 
 /** The export keeps its short column names; the table has room to spell these out. */
 const FULL_HEAD: Record<string, string> = { "New config.": "New configurations", Discontinued: "Discontinued configurations" };
+/** The Sort by options keep the longer labels the table shortens, including the no-units line. */
+const SORT_HEAD: Record<string, string> = { ...FULL_HEAD, "No units": "Sales with no units" };
 
 export function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: string; onSortBy: (key: string) => void }) {
   const { config } = props.run;
@@ -57,8 +59,6 @@ export function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: s
   };
   const empty = emptyNote(rows, request, loaded?.key ?? null);
 
-  const mixOf = (row: Record<string, unknown>) =>
-    levels.reduce((sum, _, i) => sum + Number(row[`mix_${i + 1}`] ?? 0), 0);
   const header = [...group.columns, ...moverHeader(config)];
   const values = (row: Record<string, unknown>) => {
     const p0 = Number(row.s0) / Number(row.q0);
@@ -67,12 +67,6 @@ export function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: s
       s0: Number(row.s0) + Number(row.z0),
       s1: Number(row.s1) + Number(row.z1),
       change: Number(row.s1) + Number(row.z1) - Number(row.s0) - Number(row.z0),
-      discontinued: Number(row.discontinued),
-      noUnits: Number(row.no_units),
-      volume: Number(row.volume),
-      mix: mixOf(row),
-      price: Number(row.price),
-      newConfig: Number(row.new_config),
       p0,
       p1,
       priceChange: p1 / p0 - 1,
@@ -81,7 +75,7 @@ export function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: s
 
   const exportRow = (row: Record<string, unknown>) => {
     const v = values(row);
-    return [...group.columns.map((c) => display(row[c])), v.s0, v.s1, v.change, v.volume, v.mix, v.price, v.newConfig, v.discontinued, v.noUnits, v.p0, v.p1, v.priceChange];
+    return [...group.columns.map((c) => display(row[c])), v.s0, v.s1, v.change, ...MOVER_EFFECTS.map((e) => e.value(row, levels.length)), v.p0, v.p1, v.priceChange];
   };
 
   return (
@@ -98,12 +92,11 @@ export function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: s
           Sort by
           <select value={props.sortBy} onChange={(e) => props.onSortBy(e.target.value)}>
             <option value="change">Change</option>
-            <option value="volume">Volume</option>
-            <option value="mix">Mix</option>
-            <option value="price">{t.priceEffect}</option>
-            <option value="new_config">New configurations</option>
-            <option value="discontinued">Discontinued configurations</option>
-            <option value="no_units">Sales with no units</option>
+            {MOVER_EFFECTS.map((effect) => (
+              <option key={effect.key} value={effect.key}>
+                {SORT_HEAD[effect.head(t)] ?? effect.head(t)}
+              </option>
+            ))}
           </select>
         </label>
         {filters.map((filter) => (
