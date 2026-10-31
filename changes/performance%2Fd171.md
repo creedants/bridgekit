@@ -1,0 +1,2 @@
+- After Calculate, a screen reader hears that the bridge is ready and focus stays on the results heading, which now shows a keyboard ring. The results tabs move and select with the arrow, Home and End keys, and the filter's search box has a name of its own.
+- A paste made while a `?sample` link is still starting now stays on screen. The deferred sample load no longer replaces it, because the table owner's claim count decides whether any load has already started.
