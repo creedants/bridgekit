@@ -40,6 +40,17 @@ export type CsvReading = { readonly kind: "bytes" } | { readonly kind: "text"; r
 
 export type DecodedCsv = { kind: "utf8"; bytes: Uint8Array } | { kind: "text"; text: string };
 
+// How a file was decided, kept between reads of the same File. A load that
+// reads a refused file whole as text and the row locator that follows it must
+// read one text, so the later call answers the load's decision. The label
+// alone is kept: a large file's decoded string is not pinned for the tab's life.
+const decidedReadings = new WeakMap<Blob, "bytes" | "text">();
+
+/** Records how a load read a file, so a later read of it answers the same. */
+export function rememberCsvReading(file: Blob, reading: CsvReading): void {
+  decidedReadings.set(file, reading.kind);
+}
+
 const UTF8 = new TextDecoder("utf-8", { fatal: true });
 const UTF16_LE = new TextDecoder("utf-16le", { fatal: true });
 const UTF16_BE = new TextDecoder("utf-16be", { fatal: true });
@@ -151,8 +162,37 @@ export function decodeCsvBuffer(bytes: Uint8Array): DecodedCsv {
   if (startsWith(bytes, BOM_UTF16_LE)) return { kind: "text", text: decodeMarkedUtf16(bytes, true) };
   if (startsWith(bytes, BOM_UTF16_BE)) return { kind: "text", text: decodeMarkedUtf16(bytes, false) };
   if (isValidUtf8(bytes)) return { kind: "utf8", bytes };
+  // Only a tail-shaped suffix is removed, and only when the preceding bytes
+  // decode as UTF-8. Otherwise the single-byte check below decides.
+  const cut = cutUtf8Tail(bytes);
+  if (cut > 0) {
+    try {
+      return { kind: "text", text: UTF8.decode(bytes.subarray(0, bytes.length - cut)) };
+    } catch {
+      // A damaged byte before the tail: the single-byte check decides.
+    }
+  }
   if (readsAsSingleByteText(bytes)) return { kind: "text", text: WINDOWS_1252.decode(bytes) };
   throw new Error(ENCODING_SENTENCE);
+}
+
+/**
+ * Returns one to three trailing bytes shaped as an incomplete UTF-8 sequence,
+ * or 0 when no such tail exists. The caller validates the preceding bytes;
+ * this helper does not validate scalar-value restrictions on the tail.
+ */
+function cutUtf8Tail(bytes: Uint8Array): number {
+  for (let cut = 1; cut <= 3 && cut < bytes.length; cut++) {
+    const lead = bytes[bytes.length - cut];
+    const length = lead >= 0xc2 && lead <= 0xdf ? 2 : lead >= 0xe0 && lead <= 0xef ? 3 : lead >= 0xf0 && lead <= 0xf4 ? 4 : 0;
+    if (length <= cut) continue;
+    let continuations = true;
+    for (let at = bytes.length - cut + 1; at < bytes.length; at++) {
+      if ((bytes[at] & 0xc0) !== 0x80) continuations = false;
+    }
+    if (continuations) return cut;
+  }
+  return 0;
 }
 
 // Windows-1252 defines a character for every byte except five, so a buffer that
@@ -176,14 +216,26 @@ function readsAsSingleByteText(bytes: Uint8Array): boolean {
 
 /**
  * The loader's one decoding decision, so the database and the row locator read
- * the same text. Reads the whole file only when the prefix cannot decide.
- * Throws NOT_TEXT_FILE or ENCODING_SENTENCE.
+ * the same text. Reads the whole file only when the prefix cannot decide, or
+ * when an earlier load already read it as text. Throws NOT_TEXT_FILE or
+ * ENCODING_SENTENCE.
  */
 export async function readCsvFile(file: Blob): Promise<CsvReading> {
+  const decided = decidedReadings.get(file);
+  if (decided === "bytes") return { kind: "bytes" };
+  if (decided === "text") {
+    const whole = decodeCsvBuffer(new Uint8Array(await file.arrayBuffer()));
+    if (whole.kind === "text") return { kind: "text", text: whole.text };
+  }
   const prefix = new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer());
   if (looksBinary(prefix)) throw new Error(NOT_TEXT_FILE);
   const continues = prefix.byteLength < file.size;
-  if (continues && isUtf8Prefix(prefix)) return { kind: "bytes" };
+  if (continues && isUtf8Prefix(prefix)) {
+    rememberCsvReading(file, { kind: "bytes" });
+    return { kind: "bytes" };
+  }
   const decision = decodeCsvBuffer(continues ? new Uint8Array(await file.arrayBuffer()) : prefix);
-  return decision.kind === "utf8" ? { kind: "bytes" } : { kind: "text", text: decision.text };
+  const reading: CsvReading = decision.kind === "utf8" ? { kind: "bytes" } : { kind: "text", text: decision.text };
+  rememberCsvReading(file, reading);
+  return reading;
 }
