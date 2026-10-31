@@ -608,6 +608,113 @@ test("price realization by group and price gaps against peers", async () => {
   near(gaps.comparedSales, 200);
 });
 
+test("a price gap compares a row with the peer average that includes the row", async () => {
+  // C1 pays 10 and C2 pays 20 for P1, 10 units each, so the peer average is
+  // (100 + 200) / 20 = 15 with C1's own sale inside it. C1 is the only row
+  // below that average.
+  const directory = await mkdtemp("/tmp/bridgekit-gap-average-");
+  const file = path.join(directory, "gaps.csv");
+  await writeFile(
+    file,
+    [
+      "year,product,customer,units,sales",
+      "2025,P1,C1,10,100",
+      "2025,P1,C2,10,200",
+      "2026,P1,C1,10,100",
+      "2026,P1,C2,10,200",
+    ].join("\n") + "\n",
+  );
+  const query = await openDatabase();
+  await readCsvTable(query, "gaps", file);
+  const config: BridgeConfig = {
+    table: "gaps", periodColumn: "year", prior: "2025", current: "2026",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Product", columns: ["product"] }, { name: "Customer", columns: ["customer"] }],
+  };
+  await runBridge(query, config);
+
+  const gaps = await priceGaps(query, config);
+  assert.equal(gaps.rows.length, 1);
+  const [row] = gaps.rows;
+  assert.deepEqual(row.keys, { product: "P1", customer: "C1" });
+  assert.equal(row.price, 10);
+  assert.equal(row.peerPrice, 15);
+  near(row.opportunity, (15 - 10) * 10);
+  near(gaps.totalOpportunity, 50);
+  near(gaps.belowPeerSales, 100);
+  near(gaps.comparedSales, 300);
+});
+
+/** The same rows in every file, so only the attribute column's name differs. */
+const GAP_ROWS: [string, string, string, number, number][] = [
+  ["2025", "P1", "C1", 10, 100],
+  ["2025", "P1", "C2", 10, 200],
+  ["2025", "P1", "C3", 10, 180],
+  ["2025", "P2", "C1", 5, 60],
+  ["2025", "P2", "C2", 5, 50],
+  ["2026", "P1", "C1", 10, 100],
+  ["2026", "P1", "C2", 10, 200],
+  ["2026", "P1", "C3", 10, 180],
+  ["2026", "P2", "C1", 5, 60],
+  ["2026", "P2", "C2", 5, 50],
+];
+
+function gapCsv(first: string, second: string): string {
+  return [
+    ["year", first, second, "units", "sales"].join(","),
+    ...GAP_ROWS.map((row) => row.join(",")),
+  ].join("\n") + "\n";
+}
+
+/** The gaps with each level key mapped to its neutral column name, so two files that differ only in one header compare equal. */
+function canonicalGaps(gaps: Awaited<ReturnType<typeof priceGaps>>, columns: [string, string]) {
+  const neutral = ["product", "customer"];
+  return {
+    rows: gaps.rows.map((row) => ({
+      ...row,
+      keys: Object.fromEntries(
+        Object.entries(row.keys).map(([key, value]) => {
+          const position = columns.findIndex((column) => column.toLowerCase() === key.toLowerCase());
+          return [position < 0 ? key : neutral[position], value];
+        }),
+      ),
+    })),
+    totalOpportunity: gaps.totalOpportunity,
+    belowPeerSales: gaps.belowPeerSales,
+    comparedSales: gaps.comparedSales,
+  };
+}
+
+test("price gaps reads a level column named like one of its own figures", async (t) => {
+  // Fails at the base: the rows query aliased its figures own_price, peer_price
+  // and opportunity, so a level column of that name collided with them.
+  const directory = await mkdtemp("/tmp/bridgekit-gap-names-");
+  const query = await openDatabase();
+  const base = { periodColumn: "year", prior: "2025", current: "2026", unitsColumn: "units", salesColumn: "sales" };
+  let count = 0;
+  const read = async (first: string, second: string) => {
+    const table = `gaps${count++}`;
+    const file = path.join(directory, `${table}.csv`);
+    await writeFile(file, gapCsv(first, second));
+    await readCsvTable(query, table, file);
+    const config: BridgeConfig = {
+      ...base, table,
+      levels: [{ name: "Product", columns: [first] }, { name: "Customer", columns: [second] }],
+    };
+    await runBridge(query, config);
+    return priceGaps(query, config);
+  };
+  const ordinary = canonicalGaps(await read("product", "customer"), ["product", "customer"]);
+
+  for (const name of ["own_price", "peer_price", "opportunity"]) {
+    for (const [place, first, second] of [["first", name, "customer"], ["last", "product", name]] as const) {
+      await t.test(`a ${place} level column named ${name}`, async () => {
+        assert.deepEqual(canonicalGaps(await read(first, second), [first, second]), ordinary);
+      });
+    }
+  }
+});
+
 test("a cost column bridges margin and splits the rate effect into price and unit cost", async () => {
   const query = await openDatabase();
   await query(`CREATE TABLE t AS SELECT * FROM (VALUES
