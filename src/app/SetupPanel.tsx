@@ -327,7 +327,7 @@ export function SetupPanel(props: {
         <legend>Attributes</legend>
         <p className="hint">
           Put the attribute you care about most at the top; each mix step is measured after the ones above it. One
-          attribute gives a classic bridge: volume, one mix step and price.
+          attribute gives a classic bridge: price, volume and one mix step.
         </p>
         <button
           className="action"

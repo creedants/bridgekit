@@ -1,6 +1,6 @@
-import { measureName, type BridgeConfig, type BridgeResult } from "./engine.ts";
+import { measureName, tieRank, type BridgeConfig, type BridgeResult } from "./engine.ts";
 import { percent, signedShare, signedWhole, whole } from "./app/format.ts";
-import { roundBridge, shownTotal, type RoundedBridge } from "./summary.ts";
+import { roundEffects, shownTotal, type RoundedBridge } from "./summary.ts";
 
 /** A driver effect named for the reader: mix effects keep their attribute's case. */
 function driverLabel(effect: { key: string; label: string }, config: BridgeConfig): string {
@@ -23,7 +23,7 @@ function driverLabel(effect: { key: string; label: string }, config: BridgeConfi
 export function commentary(
   result: BridgeResult,
   config: BridgeConfig,
-  shown: RoundedBridge = roundBridge(result.priorSales, result.currentSales, result.effects.map((e) => e.value)),
+  shown: RoundedBridge = roundEffects(result.priorSales, result.currentSales, result.effects),
 ): string[] {
   const change = result.currentSales - result.priorSales;
   const shownChange = shown.current - shown.prior;
@@ -50,7 +50,7 @@ export function commentary(
   // lines and the leftover add up to the change the table shows.
   const drivers = result.effects
     .filter((e) => Math.abs(e.value) >= Math.abs(result.priorSales) * 0.0005)
-    .toSorted((a, b) => Math.abs(b.value) - Math.abs(a.value));
+    .toSorted((a, b) => Math.abs(b.value) - Math.abs(a.value) || tieRank(a.key) - tieRank(b.key));
   if (drivers.length > 0) {
     const named = drivers.slice(0, 4);
     const describe = (e: (typeof named)[number]) =>

@@ -470,10 +470,10 @@ test("the picked column can be an attribute, another column, or the period colum
     ],
   };
   const shapes: { label: string; config: BridgeConfig; keys: string[] }[] = [
-    { label: "sales", config: base, keys: ["volume", "mix_1", "mix_2", "price", "new_config", "discontinued", "no_units"] },
-    { label: "margin", config: { ...base, costColumn: "cost" }, keys: ["volume", "mix_1", "mix_2", "price_sales", "cost_rate", "new_config", "discontinued", "no_units"] },
-    { label: "gross", config: { ...base, grossColumn: "gross" }, keys: ["volume", "mix_1", "mix_2", "price_list", "price_discount", "new_config", "discontinued", "no_units"] },
-    { label: "full", config: { ...base, newAndDiscontinued: "full" }, keys: ["volume", "mix_1", "mix_2", "price", "new_config", "discontinued", "no_units"] },
+    { label: "sales", config: base, keys: ["price", "volume", "mix_1", "mix_2", "new_config", "discontinued", "no_units"] },
+    { label: "margin", config: { ...base, costColumn: "cost" }, keys: ["price_sales", "cost_rate", "volume", "mix_1", "mix_2", "new_config", "discontinued", "no_units"] },
+    { label: "gross", config: { ...base, grossColumn: "gross" }, keys: ["price_list", "price_discount", "volume", "mix_1", "mix_2", "new_config", "discontinued", "no_units"] },
+    { label: "full", config: { ...base, newAndDiscontinued: "full" }, keys: ["price", "volume", "mix_1", "mix_2", "new_config", "discontinued", "no_units"] },
   ];
   for (const shape of shapes) {
     for (const column of ["design", "region", "period"]) {

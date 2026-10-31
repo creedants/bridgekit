@@ -1,0 +1,1 @@
+- List the bridge effects as price, volume and mix everywhere the tool shows them, with every amount, total and check unchanged.

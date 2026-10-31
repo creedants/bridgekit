@@ -415,8 +415,6 @@ export function measureName(config: BridgeConfig): "Sales" | "Margin" {
 
 export function effectColumns(config: BridgeConfig): { key: string; label: string }[] {
   return [
-    { key: "volume", label: "Volume" },
-    ...config.levels.map((level, i) => ({ key: `mix_${i + 1}`, label: `Mix: ${level.name}` })),
     ...(config.costColumn
       ? [
           { key: "price_sales", label: "Price" },
@@ -428,10 +426,24 @@ export function effectColumns(config: BridgeConfig): { key: string; label: strin
           { key: "price_discount", label: "Discounts" },
         ]
       : [{ key: "price", label: "Price (like-for-like)" }]),
+    { key: "volume", label: "Volume" },
+    ...config.levels.map((level, i) => ({ key: `mix_${i + 1}`, label: `Mix: ${level.name}` })),
     { key: "new_config", label: "New configurations" },
     { key: "discontinued", label: "Discontinued configurations" },
     { key: "no_units", label: "Sales with no units" },
   ];
+}
+
+/** Frozen so rounding ties keep the volume, mix, price precedence they had before display moved to price first. */
+export function tieRank(key: string): number {
+  if (key === "volume") return 0;
+  if (key.startsWith("mix_")) return Number(key.slice(4)) || 0;
+  if (key === "price" || key === "price_sales" || key === "price_list") return 1000;
+  if (key === "cost_rate" || key === "price_discount") return 1001;
+  if (key === "new_config") return 2000;
+  if (key === "discontinued") return 2001;
+  if (key === "no_units") return 2002;
+  return 3000;
 }
 
 export function coverageLabel(config: BridgeConfig, level: number): string {
