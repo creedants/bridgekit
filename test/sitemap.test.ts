@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -79,12 +79,16 @@ function configWithInputBlock(): { lines: string[]; open: number } {
 
 // The generator finds its config and sitemap next to itself, so a run that must
 // refuse needs its own tree to show it wrote nothing.
-function runGeneratorOn(config: string): { status: number | null; stderr: string; sitemap: string } {
+function runGeneratorOn(
+  config: string,
+  editScript?: (source: string) => string,
+): { status: number | null; stderr: string; sitemap: string } {
   const dir = mkdtempSync(join(tmpdir(), "sitemap-"));
   try {
     mkdirSync(join(dir, "scripts"));
     mkdirSync(join(dir, "public"));
-    copyFileSync(fileURLToPath(new URL("../scripts/sitemap.mjs", import.meta.url)), join(dir, "scripts", "sitemap.mjs"));
+    const source = readFileSync(fileURLToPath(new URL("../scripts/sitemap.mjs", import.meta.url)), "utf8");
+    writeFileSync(join(dir, "scripts", "sitemap.mjs"), editScript === undefined ? source : editScript(source));
     writeFileSync(join(dir, "vite.config.ts"), config);
     writeFileSync(join(dir, "public", "sitemap.xml"), SENTINEL);
     const run = spawnSync(process.execPath, [join(dir, "scripts", "sitemap.mjs")], { encoding: "utf8" });
@@ -120,6 +124,66 @@ test("the generator refuses an input block that closes with anything but } or },
     `the generator exited ${run.status}: an input block closed as }, // pages is not read (stderr: ${run.stderr.trim()})`,
   );
   assert.match(run.stderr, /closes the input block as/);
+  assert.equal(run.sitemap, SENTINEL, "the generator replaced public/sitemap.xml on a run it refused");
+});
+
+test("the generator refuses a page the sitemap includes with no last-modified date", () => {
+  const { lines, open } = configWithInputBlock();
+  lines.splice(open + 1, 0, '  extra: resolve(import.meta.dirname, "extra.html"),');
+  const run = runGeneratorOn(lines.join("\n"));
+  assert.equal(
+    run.status,
+    1,
+    `the generator exited ${run.status}: a page with no last-modified date is not refused (stderr: ${run.stderr.trim()})`,
+  );
+  assert.equal(
+    run.stderr.trim(),
+    'sitemap: extra.html has no last-modified date: add ["extra.html", "YYYY-MM-DD"] to LASTMOD in scripts/sitemap.mjs, the day its content last changed',
+    "the refusal does not name extra.html and where to add its date",
+  );
+  assert.equal(run.sitemap, SENTINEL, "the generator replaced public/sitemap.xml on a run it refused");
+});
+
+test("the generator refuses a last-modified date that is not a real calendar date", () => {
+  const source = readFileSync(fileURLToPath(new URL("../scripts/sitemap.mjs", import.meta.url)), "utf8");
+  for (const bad of ["2026-02-30", "2026-13-01", "2026-1-1"]) {
+    const edit = (text: string): string => text.replace('["guide.html", "2026-10-31"]', `["guide.html", "${bad}"]`);
+    assert.notEqual(
+      edit(source),
+      source,
+      `scripts/sitemap.mjs has no ["guide.html", "2026-10-31"] entry to change to ${bad}: this test edits that entry`,
+    );
+    const run = runGeneratorOn(configWithInputBlock().lines.join("\n"), edit);
+    assert.equal(
+      run.status,
+      1,
+      `the generator exited ${run.status} on ${bad}: a date that is not a real calendar date is not refused (stderr: ${run.stderr.trim()})`,
+    );
+    assert.equal(
+      run.stderr.trim(),
+      `sitemap: guide.html has last-modified date ${bad}, which is not a real YYYY-MM-DD calendar date: fix its entry in LASTMOD in scripts/sitemap.mjs`,
+      `the refusal of ${bad} does not name guide.html and where to fix its date`,
+    );
+    assert.equal(run.sitemap, SENTINEL, "the generator replaced public/sitemap.xml on a run it refused");
+  }
+});
+
+test("the generator refuses a last-modified date for a page the sitemap leaves out", () => {
+  const { lines } = configWithInputBlock();
+  const guide = lines.findIndex((line) => line.includes('resolve(import.meta.dirname, "guide.html")'));
+  assert.notEqual(guide, -1, "vite.config.ts has no guide.html input line: this test removes it");
+  lines.splice(guide, 1);
+  const run = runGeneratorOn(lines.join("\n"));
+  assert.equal(
+    run.status,
+    1,
+    `the generator exited ${run.status}: a date for a page the sitemap leaves out is not refused (stderr: ${run.stderr.trim()})`,
+  );
+  assert.equal(
+    run.stderr.trim(),
+    "sitemap: guide.html has a last-modified date but the sitemap does not include it: remove its entry from LASTMOD in scripts/sitemap.mjs, or add the page to the vite.config.ts input",
+    "the refusal does not name guide.html and where to remove its date",
+  );
   assert.equal(run.sitemap, SENTINEL, "the generator replaced public/sitemap.xml on a run it refused");
 });
 
