@@ -380,6 +380,9 @@ export function App() {
   const published = useRef(0);
   // The load the visitor has actually been shown, which the paste question reads.
   const displayed = useRef(0);
+  // The sample load a ?sample link scheduled, until it runs. A file pick before it
+  // runs is the visitor's choice and cancels that load, refused or not.
+  const pendingSample = useRef(phase.kind === "reading" && phase.source === "sample" ? phase.load : null);
   const taskRef = useRef(0);
   const scrollAfterRun = useRef(false);
   const resultsRef = useRef<HTMLDivElement>(null);
@@ -509,9 +512,13 @@ export function App() {
   };
 
   const loadFile = (file: File) => {
+    const cancelled = pendingSample.current;
+    pendingSample.current = null;
     setAnnounced(null);
     if (/\.parquet$/i.test(file.name)) {
       showFailure(PARQUET_REFUSAL);
+      // The cancelled sample never loads, so its reading phase has to leave the loading shell.
+      if (cancelled !== null) dispatch({ type: "failed", load: cancelled });
       return;
     }
     prefetchResults();
@@ -679,7 +686,9 @@ export function App() {
     const frame = requestAnimationFrame(() => {
       timer = window.setTimeout(() => {
         // A paste, drop or file pick made before this ran is the visitor's choice; it wins.
-        if (tables.claimed()) return;
+        const pending = pendingSample.current;
+        pendingSample.current = null;
+        if (pending === null || tables.claimed()) return;
         loadSample();
       }, 0);
     });
@@ -995,7 +1004,10 @@ export function App() {
                     if (isValidSetup(saved, columns)) {
                       clearBanner();
                       setSetup(restoredSetup(saved));
-                    } else showFailure("That saved setup does not match the columns in this data.");
+                    } else {
+                      setAnnounced(null);
+                      showFailure("That saved setup does not match the columns in this data.");
+                    }
                   }}
                 />
               </Suspense>
