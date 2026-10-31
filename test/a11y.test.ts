@@ -524,8 +524,10 @@ async function mountApp(search: string, query: Query): Promise<Mounted> {
   const flush = async () => {
     for (let i = 0; i < 8; i += 1) await React.act(async () => {});
   };
+  // A clock, not a turn count: under the full suite DuckDB answers the filter's values far slower than alone.
   const until = async (check: () => boolean, what: string) => {
-    for (let i = 0; i < 1500; i += 1) {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
       if (check()) return;
       await React.act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
