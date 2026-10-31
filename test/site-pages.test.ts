@@ -45,6 +45,13 @@ function readPage(file: string): string {
   return readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
 }
 
+// The committed sitemap, parsed once, so each page's date can be checked against it.
+const SITEMAP_LASTMOD = new Map(
+  [...readFileSync(new URL("../public/sitemap.xml", import.meta.url), "utf8").matchAll(/<loc>([^<]*)<\/loc><lastmod>([^<]*)<\/lastmod>/g)].map(
+    (match) => [match[1], match[2]],
+  ),
+);
+
 type PlanCard = { attributes: Map<string, string>; inner: string };
 
 function classTokensOf(attributes: Map<string, string>): string[] {
@@ -952,6 +959,12 @@ function checkArticle(article: Article, html: string): void {
     },
     `${file} Article node does not match the page: keep headline, url, datePublished ${article.published}, dateModified, and the organization as publisher and author, and nothing else`,
   );
+  const lastmod = SITEMAP_LASTMOD.get(canonical);
+  assert.equal(
+    lastmod,
+    datetime,
+    `${file} says Updated ${datetime} but public/sitemap.xml gives ${canonical} lastmod ${String(lastmod)}: run node scripts/sitemap.mjs, or change the date in scripts/sitemap.mjs and the page`,
+  );
 }
 
 test("each article page says when it was updated, and its structured data agrees", () => {
@@ -966,6 +979,24 @@ test("each article page says when it was updated, and its structured data agrees
   );
   for (const article of ARTICLES) {
     checkArticle(article, readPage(article.file));
+  }
+});
+
+test("privacy and terms say the date the sitemap gives them", () => {
+  for (const file of ["privacy.html", "terms.html"]) {
+    const address = `${ORIGIN}/${file}`;
+    const lastmod = SITEMAP_LASTMOD.get(address);
+    const line = /<p class="date">Last changed (\d{1,2} [A-Z][a-z]+ \d{4})\.<\/p>/.exec(readPage(file));
+    assert.ok(
+      line,
+      `${file} has no Last changed line: put <p class="date">Last changed ${lastmod === undefined ? "D Month YYYY" : longDateOf(lastmod)}.</p> after its h1`,
+    );
+    const shown = line[1];
+    assert.equal(
+      shown,
+      lastmod === undefined ? undefined : longDateOf(lastmod),
+      `${file} says Last changed ${shown} but public/sitemap.xml gives ${address} lastmod ${String(lastmod)}, which is ${lastmod === undefined ? "no date" : longDateOf(lastmod)}: run node scripts/sitemap.mjs, or change the date in scripts/sitemap.mjs and the page`,
+    );
   }
 });
 
