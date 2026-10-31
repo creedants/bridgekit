@@ -48,13 +48,12 @@ export function Check(props: {
           ))}
         </tbody>
       </table>
-      {!props.warningsKnown ? null : props.warningsFailed ? (
-        <p className="hint">{WHOLE_ROW_FAILED}</p>
-      ) : props.warnings.length === 0 ? (
-        <p className="ok">No issues found in the rows used.</p>
-      ) : (
+      {props.warningsKnown && props.warningsFailed && <p className="hint">{WHOLE_ROW_FAILED}</p>}
+      {!props.warningsKnown ? null : props.warnings.length > 0 ? (
         <ul className="warnings">{props.warnings.map((w) => <li key={w}>{w}</li>)}</ul>
-      )}
+      ) : !props.warningsFailed ? (
+        <p className="ok">No issues found in the rows used.</p>
+      ) : null}
       {failed ? <QueryFailed /> : notes.map((sentence) => <p className="hint" key={sentence}>{sentence}</p>)}
       <table className="narrow">
         <tbody>

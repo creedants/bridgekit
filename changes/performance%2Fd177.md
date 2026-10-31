@@ -1,1 +1,1 @@
-The Data check, the names checkbox and the filter value list now say when their query failed instead of going quiet.
+The Data check and filter value list now say when their queries fail; the report names checkbox stays available while its mover lookup is pending or has failed.

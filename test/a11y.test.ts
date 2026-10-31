@@ -1043,12 +1043,13 @@ test("the Data check says the row check failed instead of claiming it found no i
     if (sql.includes("judged")) throw new Error("the whole-row note query failed");
     return [];
   };
+  run.check.negativeUnitRows = 1;
   const NO_ISSUES = "No issues found in the rows used.";
   const React = await import("react");
   const { Results } = await import("../src/app/Results.tsx");
   const mounted = await mountPanel(React.createElement(Results, { run, query: () => Promise.resolve(query) }));
   try {
-    await selectResultsTab(mounted, "Data check");
+    await selectResultsTab(mounted, "Data check (1)");
     const success = () => harnessByClass(mounted.container, "ok").some((node) => node.textContent === NO_ISSUES);
     await mounted.until(() => success() || panelHints(mounted.container).includes(ROWS_FAILED), "the Data check's row verdict");
     assert.ok(
@@ -1056,6 +1057,7 @@ test("the Data check says the row check failed instead of claiming it found no i
       `the Data check says the row check failed, but its hints say ${panelHints(mounted.container)}`,
     );
     assert.ok(!success(), "the Data check does not claim it found no issues when the row check failed");
+    assert.ok(harnessByClass(mounted.container, "warnings").some((node) => node.textContent.includes("1 row has negative units")), "known warnings stay visible after the row check fails");
   } finally {
     await mounted.unmount();
   }
