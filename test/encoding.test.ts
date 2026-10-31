@@ -475,6 +475,37 @@ test("a late Windows-1252 file over the limit shows the sentence without a whole
   assert.equal(registrations, 1);
 });
 
+test("a cut UTF-8 file over the limit keeps the sentence without a whole-file read", async () => {
+  const { loadCsv } = await import("../src/app/db.ts");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const lines = ["period,product,units,sales,note"];
+  for (let index = 0; index < 4000; index++) {
+    lines.push(`2025,A-100,${(index % 5) + 1},${100 + index},note ${index}`);
+  }
+  // The prefix is valid UTF-8, so the first reading is bytes; only the cut
+  // final byte makes the database refuse it.
+  const bytes = joined(utf8(`${lines.join("\n")}\n`), Uint8Array.from([0xc3]));
+  assert.ok(bytes.length > CSV_PREFIX_BYTES);
+  const directory = await mkdtemp("/tmp/bridgekit-encoding-");
+  const filePath = path.join(directory, "cut-over-limit.csv");
+  await writeFile(filePath, bytes);
+  const file = new ReportedSizeFile([bytes], "cut-over-limit.csv", 40 * 1024 * 1024);
+  const query = await recoveringDatabase();
+  let registrations = 0;
+  const register = async (reading: CsvReading) => {
+    registrations += 1;
+    if (reading.kind === "text") await writeFile(filePath, reading.text);
+  };
+  await assert.rejects(
+    loadCsv(query, file, "data", filePath, "month first", register),
+    (error: unknown) => (error as Error).message === SENTENCE,
+    SENTENCE,
+  );
+  assert.equal(file.wholeReads, 0, "a file over the limit is never read whole");
+  assert.equal(registrations, 1);
+});
+
 test("a late Windows-1252 file at the limit still loads", async () => {
   const { loadCsv } = await import("../src/app/db.ts");
   const { mkdtemp, writeFile } = await import("node:fs/promises");
