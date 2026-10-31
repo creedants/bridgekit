@@ -805,17 +805,25 @@ function exactBucket(s0: string, q0: string, s1: string, q1: string): number | n
 }
 
 /**
- * Exact decimal sums of the source measure and units for the cells the near-edge
- * net caught, keyed by the cell's level values. Only the rows that belong to
- * those cells are summed, so a bridge with nothing near an edge pays one query
- * over the cells table and no source scan. A cell that no source row matches is
- * absent from the map, and a cell with an unreadable value carries NULL, so both
- * keep the double comparison.
+ * The cells the near-edge net caught, each with its fallback band and the exact
+ * decimal sums of the source measure and units for the configurations the cell
+ * holds. The pairing happens inside SQL. The cell and the source rows build the
+ * same struct key from the level columns and compare it with IS NOT DISTINCT
+ * FROM, so no level value is serialized on the way out. The result has only
+ * generated column names, so no input column name can shadow one. Only the
+ * source rows that belong to those cells are summed, so a bridge with nothing
+ * near an edge scans the cells table and no source rows. A cell with no source
+ * row, or with an unreadable value, gets NULL sums and keeps the double band.
  */
-async function exactCellSums(query: Query, config: BridgeConfig, nearEdge: string): Promise<Map<string, string[]>> {
+async function nearEdgeCells(
+  query: Query,
+  config: BridgeConfig,
+  matched: string,
+  bucket: string,
+  nearEdge: string,
+): Promise<Record<string, unknown>[]> {
   const k = config.levels.length;
   const columns = cumulativeColumns(config.levels, k);
-  const keys = columns.map(ident).join(", ");
   const period = ident(config.periodColumn);
   const units = ident(config.unitsColumn);
   const hasUnits = `(${units} IS NOT NULL AND ${units} <> 0)`;
@@ -829,33 +837,27 @@ async function exactCellSums(query: Query, config: BridgeConfig, nearEdge: strin
   const exactCell = (value: string, unreadable: string, which: string) =>
     `CASE WHEN count(*) FILTER (WHERE ${period} = ${which} AND ${hasUnits} AND ${unreadable}) > 0 THEN NULL
     ELSE coalesce(sum(${value}) FILTER (WHERE ${period} = ${which} AND ${hasUnits}), ${ZERO_DECIMAL}) END`;
-  const on = columns
-    .map((column) => `c.${ident(column)} IS NOT DISTINCT FROM s.${ident(column)}`)
-    .join(" AND ");
-  const rows = await query(
+  const grouped = columns.map((column) => `s.${ident(column)}`).join(", ");
+  return query(
     `WITH chosen AS (
-       SELECT ${keys} FROM ${ident(config.cellsTable ?? DEFAULT_CELLS_TABLE)}
-       WHERE match_level = ${k} AND q0 > 0 AND q1 > 0 AND s0 > 0 AND (${nearEdge})
+       SELECT * ${matched} AND (${nearEdge})
      ), source_rows AS (
-       SELECT s.* FROM ${ident(config.table)} s SEMI JOIN chosen c ON ${on}
+       SELECT s.* FROM ${ident(config.table)} s SEMI JOIN chosen c
+         ON ${structKey("c", columns)} IS NOT DISTINCT FROM ${structKey("s", columns)}
        WHERE s.${period} IN (${prior}, ${current})
+     ), exact AS (
+       SELECT ${structKey("s", columns)} AS k,
+         CAST(${exactCell(measure, unreadableMeasure, prior)} AS VARCHAR) AS es0,
+         CAST(${exactCell(exactUnits, unreadableSql(config.unitsColumn), prior)} AS VARCHAR) AS eq0,
+         CAST(${exactCell(measure, unreadableMeasure, current)} AS VARCHAR) AS es1,
+         CAST(${exactCell(exactUnits, unreadableSql(config.unitsColumn), current)} AS VARCHAR) AS eq1
+       FROM source_rows s
+       GROUP BY ${grouped}
      )
-     SELECT ${keys},
-       CAST(${exactCell(measure, unreadableMeasure, prior)} AS VARCHAR) AS es0,
-       CAST(${exactCell(exactUnits, unreadableSql(config.unitsColumn), prior)} AS VARCHAR) AS eq0,
-       CAST(${exactCell(measure, unreadableMeasure, current)} AS VARCHAR) AS es1,
-       CAST(${exactCell(exactUnits, unreadableSql(config.unitsColumn), current)} AS VARCHAR) AS eq1
-     FROM source_rows
-     GROUP BY ${keys}`,
+     SELECT ${bucket} AS fallback, c.s1 AS sales, c.price AS price_effect,
+       e.es0, e.eq0, e.es1, e.eq1
+     FROM chosen c LEFT JOIN exact e ON e.k IS NOT DISTINCT FROM ${structKey("c", columns)}`,
   );
-  const sums = new Map<string, string[]>();
-  for (const row of rows) {
-    sums.set(
-      JSON.stringify(columns.map((column) => row[column] ?? null)),
-      [String(row.es0), String(row.eq0), String(row.es1), String(row.eq1)],
-    );
-  }
-  return sums;
 }
 
 
@@ -895,12 +897,7 @@ export async function priceDistribution(
     `SELECT ${bucket} AS bucket, count(*)::DOUBLE AS cells, sum(s1) AS sales, sum(price) AS price_effect
      ${matched} AND NOT (${nearEdge}) GROUP BY 1`,
   );
-  const keyColumns = cumulativeColumns(config.levels, k);
-  const near = await query(
-    `SELECT ${keyColumns.map(ident).join(", ")}, ${bucket} AS fallback, s1 AS sales, price AS price_effect
-     ${matched} AND (${nearEdge})`,
-  );
-  const exact = near.length === 0 ? new Map<string, string[]>() : await exactCellSums(query, config, nearEdge);
+  const near = await nearEdgeCells(query, config, matched, bucket, nearEdge);
   const cells = PRICE_BUCKETS.map(() => 0);
   const sales = PRICE_BUCKETS.map(() => 0);
   const priceEffect = PRICE_BUCKETS.map(() => 0);
@@ -911,9 +908,8 @@ export async function priceDistribution(
     priceEffect[i] += Number(row.price_effect);
   }
   for (const row of near) {
-    const sums = exact.get(JSON.stringify(keyColumns.map((column) => row[column] ?? null)));
     const i =
-      (sums === undefined ? null : exactBucket(sums[0], sums[1], sums[2], sums[3])) ?? Number(row.fallback);
+      exactBucket(String(row.es0), String(row.eq0), String(row.es1), String(row.eq1)) ?? Number(row.fallback);
     cells[i] += 1;
     sales[i] += Number(row.sales);
     priceEffect[i] += Number(row.price_effect);
