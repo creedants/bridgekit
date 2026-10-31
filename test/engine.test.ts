@@ -798,7 +798,7 @@ test("names the calculation uses only inside its own SQL load and bridge the sam
     "r0", "q0_l1", "s0_l1", "q1_l1", "s1_l1", "p0_l1", "p1_l1",
     "q0_l2", "s0_l2", "q1_l2", "s1_l2", "p0_l2", "p1_l2",
   ];
-  const directory = await mkdtemp("/tmp/opencode/bridgekit-freed-");
+  const directory = await mkdtemp("/tmp/bridgekit-freed-");
   const query = await openDatabase();
   const base = { periodColumn: "year", prior: "2025", current: "2026", unitsColumn: "units", salesColumn: "sales" };
   const read = async (table: string, column: string) => {
@@ -841,7 +841,7 @@ test("a file column named like a result a reader sees stays refused", async () =
     "price_sales", "cost_rate", "ref_0", "ref_1", "ref_2", "ref_6", "mix_1",
     "mix_2", "mix_6", "Price", "Q0", "Match_Level", "__bk_price", "__BK_s0",
   ];
-  const directory = await mkdtemp("/tmp/opencode/bridgekit-kept-");
+  const directory = await mkdtemp("/tmp/bridgekit-kept-");
   const query = await openDatabase();
   const base = { periodColumn: "year", prior: "2025", current: "2026", unitsColumn: "units", salesColumn: "sales" };
 
