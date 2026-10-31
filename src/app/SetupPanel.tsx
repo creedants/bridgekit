@@ -478,7 +478,7 @@ export function SetupPanel(props: {
         </label>
         <p className="hint">
           {setup.newAndDiscontinued === "full"
-            ? "New and discontinued configurations show their full sales. Volume, mix and price cover continuing configurations only."
+            ? "New and discontinued configurations show their full sales. Price, volume and mix cover continuing configurations only."
             : "Units of new and discontinued configurations count in volume. Their lines show only the difference from the nearest comparable group."}
         </p>
       </fieldset>

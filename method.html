@@ -4,10 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>The method: price-volume-mix with several attributes | PVM Bridge</title>
-    <meta name="description" content="How PVM Bridge calculates volume, mix, price and new-configuration effects, with formulas and a worked example." />
+    <meta name="description" content="How PVM Bridge calculates price, volume, mix and new-configuration effects, with formulas and a worked example." />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="The method: price-volume-mix with several attributes | PVM Bridge" />
-    <meta property="og:description" content="How PVM Bridge calculates volume, mix, price and new-configuration effects, with formulas and a worked example." />
+    <meta property="og:description" content="How PVM Bridge calculates price, volume, mix and new-configuration effects, with formulas and a worked example." />
     <link rel="canonical" href="https://pvmbridge.com/method.html" />
     <meta property="og:url" content="https://pvmbridge.com/method.html" />
     <meta property="og:image" content="https://pvmbridge.com/img/og-bridge.png" />
@@ -59,10 +59,10 @@
           <table>
             <thead><tr><th>Effect</th><th>Formula per configuration</th><th>Meaning</th></tr></thead>
             <tbody>
+              <tr><td>Price (like-for-like)</td><td><code>s1 − Rk × q1</code></td><td>Only where the exact configuration sold in the prior period.</td></tr>
               <tr><td>Volume</td><td><code>(q1 − q0) × R0</code></td><td>Change in units at the overall prior average price.</td></tr>
               <tr><td>Mix, one per attribute</td><td><code>(q1 − q0) × (Rj − Rj−1)</code></td><td>Change in units valued at how much more expensive or cheaper the group is than the group above it.</td></tr>
-              <tr><td>Price (like-for-like)</td><td><code>s1 − Rk × q1</code></td><td>Only where the exact configuration sold in the prior period.</td></tr>
-              <tr><td>New configurations</td><td><code>s1 − Rk × q1</code></td><td>The same difference where there was no exact match, so <code>Rk</code> is a fallback price.</td></tr>
+              <tr><td>New configurations</td><td><code>s1 − Rk × q1</code></td><td>The Price row’s difference where there was no exact match, so <code>Rk</code> is a fallback price.</td></tr>
               <tr><td>Discontinued configurations</td><td><code>(q1 − q0) × (Rk − Rm)</code></td><td>For a configuration that stopped selling, its price premium over the nearest group that still sells, level <code>m</code>. Its mix is counted only down to level <code>m</code>.</td></tr>
             </tbody>
           </table>
@@ -89,9 +89,9 @@
           <table>
             <thead><tr><th>Effect</th><th>Working</th><th class="num">Amount</th></tr></thead>
             <tbody>
+              <tr><td>Price</td><td>A: 110 − 10 × 10 = 10. B: 400 − 20 × 20 = 0</td><td class="num">+10</td></tr>
               <tr><td>Volume</td><td>(35 − 20) × 15</td><td class="num">+225</td></tr>
               <tr><td>Mix</td><td>A: (10 − 10) × (10 − 15) = 0. B: (20 − 10) × (20 − 15) = 50</td><td class="num">+50</td></tr>
-              <tr><td>Price</td><td>A: 110 − 10 × 10 = 10. B: 400 − 20 × 20 = 0</td><td class="num">+10</td></tr>
               <tr><td>New configurations</td><td>C: 150 − 5 × 15, valued at the overall average</td><td class="num">+75</td></tr>
               <tr class="total"><td>Total</td><td>660 − 300</td><td class="num">+360</td></tr>
             </tbody>
@@ -144,7 +144,7 @@
 
         <p>
           The tool has an option to show these two lines at <b>full sales</b> instead. New configurations then show
-          everything they sold, discontinued ones show everything they used to sell, and volume, mix and price are
+          everything they sold, discontinued ones show everything they used to sell, and price, volume and mix are
           calculated on continuing configurations only. This is simpler to explain, and it makes the two lines larger
           as you add attributes.
         </p>

@@ -4,8 +4,8 @@ import { test } from "node:test";
 import { applyFeatureBlocks } from "../scripts/feature-blocks.ts";
 import { signedWhole } from "../src/app/format.ts";
 import { openDatabase } from "../src/duckdb.ts";
-import { runBridge } from "../src/engine.ts";
-import { roundBridge } from "../src/summary.ts";
+import { effectColumns, runBridge } from "../src/engine.ts";
+import { roundEffects } from "../src/summary.ts";
 import { resolveSample } from "../src/synth.ts";
 
 const ORIGIN = "https://pvmbridge.com";
@@ -1140,11 +1140,7 @@ test("the home page sample figures match the engine sample bridge", async () => 
     levels: sample.setup.levels,
   };
   const result = await runBridge(query, config);
-  const shown = roundBridge(
-    result.priorSales,
-    result.currentSales,
-    result.effects.map((effect) => effect.value),
-  );
+  const shown = roundEffects(result.priorSales, result.currentSales, result.effects);
   const byKey = new Map(result.effects.map((effect, index) => [effect.key, shown.values[index]]));
   const html = readPage("index.html");
   const hero = /<b>Change<\/b><strong>([^<]+)<\/strong>/.exec(html);
@@ -1154,7 +1150,14 @@ test("the home page sample figures match the engine sample bridge", async () => 
     signedWhole(shown.current - shown.prior),
     `index.html hero Change reads ${hero[1]} but the engine sample bridge shows ${signedWhole(shown.current - shown.prior)}: use the engine figure`,
   );
-  const order = ["volume", "mix_1", "mix_2", "mix_3", "mix_4", "price", "new_config", "discontinued"];
+  assert.equal(
+    byKey.get("no_units"),
+    0,
+    "the engine sample bridge now has sales with no units: add that step to the home page ledger and charts",
+  );
+  const order = effectColumns(config)
+    .map((column) => column.key)
+    .filter((key) => key !== "no_units");
   const expected = order.map((key) => signedWhole(byKey.get(key) ?? NaN));
   const cells = [...html.matchAll(/<td class="amt">([\s\S]*?)<\/td>/g)].map((match) => match[1]);
   assert.equal(cells.length, 4, `index.html has ${cells.length} amount cells: keep the four rows`);
@@ -1166,7 +1169,49 @@ test("the home page sample figures match the engine sample bridge", async () => 
     expected.length,
     `index.html has ${actual.length} step amounts: keep the eight sample amounts`,
   );
-  assert.deepEqual(actual, expected, "index.html step amounts differ from the engine sample bridge: use the engine figures");
+  assert.deepEqual(
+    actual,
+    expected,
+    "index.html step amounts differ from the engine sample bridge, listed in the engine's step order: use the engine figures in that order",
+  );
+
+  const familyOf = (name: string) => {
+    const word = name.trim().toLowerCase();
+    if (word.startsWith("mix")) return "Mix";
+    if (word.startsWith("price")) return "Price";
+    if (word.startsWith("volume")) return "Volume";
+    if (word.startsWith("new")) return "New";
+    if (word.startsWith("discont")) return "Discont";
+    return name;
+  };
+  const families = (names: string[]) =>
+    names
+      .flatMap((name) => name.split(" and "))
+      .map(familyOf)
+      .filter((family, index, all) => family !== all[index - 1]);
+  const engineFamilies = families(order);
+  const svgOf = (kind: string) => {
+    const svg = new RegExp(`<svg class="wf ${kind}"[^>]*aria-label="([^"]*)"[^>]*>([\\s\\S]*?)</svg>`).exec(html);
+    assert.ok(svg, `index.html has no <svg class="wf ${kind}">: keep the hero bridge chart`);
+    return { aria: svg[1], body: svg[2] };
+  };
+  const wide = svgOf("wf-wide");
+  const narrow = svgOf("wf-narrow");
+  const lists = {
+    "wide chart step labels": [...wide.body.matchAll(/<text class="cat"[^>]*y="303\.0"[^>]*>([^<]+)<\/text>/g)].map((m) => m[1]),
+    "narrow chart step labels": [...narrow.body.matchAll(/<text class="cat"[^>]*>([^<]+)<\/text>/g)].map((m) => m[1]),
+    "ledger row headers": [...html.matchAll(/<th scope="row">([^<]+)<svg class="mini"/g)].map((m) => m[1]),
+    "wide chart aria-label": wide.aria.split(": ")[1].split(", "),
+    "narrow chart aria-label": narrow.aria.split(": ")[1].split(", "),
+  };
+  for (const [where, names] of Object.entries(lists)) {
+    const steps = names.filter((name) => !/^(sales |20\d\d)/.test(name));
+    assert.deepEqual(
+      families(steps),
+      engineFamilies,
+      `index.html ${where} list the steps as ${families(steps).join(", ")}, but the tool lists them as ${engineFamilies.join(", ")}: put the home page steps in the tool's order`,
+    );
+  }
 });
 
 test("the method page fallback example states the engine's figures", async () => {
