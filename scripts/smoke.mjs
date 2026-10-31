@@ -1665,7 +1665,7 @@ async function drive(browser, origin, rows) {
     await browser.evalJs(`T.tab("Movers")`);
     await browser.sleep(800);
     const salesHeads = await readHeads();
-    const salesTail = ["Prior sales", "Current sales", "Change", "Volume", "Mix", "Price", "New configurations", "Discontinued configurations", "No units", "Prior price", "Current price", "Price change"];
+    const salesTail = ["Prior sales", "Current sales", "Change", "Price", "Volume", "Mix", "New configurations", "Discontinued configurations", "No units", "Prior price", "Current price", "Price change"];
     if (salesHeads.slice(-salesTail.length).join("|") !== salesTail.join("|")) {
       fail(`sales labels: Movers headers are ${salesHeads.join(", ")}`);
     }
