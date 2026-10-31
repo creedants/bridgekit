@@ -142,7 +142,7 @@ export function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: s
             <tbody>
               {rows.map((row) => {
                 const v = values(row);
-                const shown = wholeMoversRow(row);
+                const shown = wholeMoversRow(row, levels.length);
                 return (
                   <tr
                     key={group.columns.map((c) => display(row[c])).join("|")}

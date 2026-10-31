@@ -113,7 +113,7 @@ export interface WholeMoversRow {
   current: number;
   /** The shown current minus the shown prior. */
   change: number;
-  /** One whole value per effect, in Movers column order: volume, mix, price, new config, discontinued, no units. */
+  /** One whole value per effect, in Movers column order: volume, mix, price, new config, discontinued, no units. Mix is the sum of mix_1 to mix_<levelCount>. */
   parts: number[];
 }
 
@@ -121,13 +121,11 @@ export interface WholeMoversRow {
  * Rounds a movers row with the bridge rule, so its shown parts add up exactly to
  * its shown Change and Change is the shown current minus the shown prior.
  */
-export function wholeMoversRow(row: Record<string, unknown>): WholeMoversRow {
+export function wholeMoversRow(row: Record<string, unknown>, levelCount: number): WholeMoversRow {
   const prior = Number(row.s0) + Number(row.z0);
   const current = Number(row.s1) + Number(row.z1);
-  const mix = Object.keys(row).reduce(
-    (sum, key) => (key.startsWith("mix_") ? sum + Number(row[key] ?? 0) : sum),
-    0,
-  );
+  let mix = 0;
+  for (let i = 1; i <= levelCount; i += 1) mix += Number(row[`mix_${i}`] ?? 0);
   const shown = roundBridge(prior, current, [
     Number(row.volume),
     mix,
@@ -235,7 +233,7 @@ export function buildReport(input: {
   const [, , change, volume, mix, priceEffect, newConfig, discontinued, noUnits] = moverHeader(config);
   const moverLabels = [change, volume, mix, priceEffect, newConfig, discontinued, noUnits];
   const movers = input.movers.rows.map((r, i) => {
-    const shown = wholeMoversRow(r);
+    const shown = wholeMoversRow(r, config.levels.length);
     return row([
       omit ? String(i + 1) : cell(input.movers.columns.map((c) => r[c] ?? "(blank)").join(" / ")),
       ...[shown.change, ...shown.parts].map(signedWhole),
