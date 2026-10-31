@@ -10,7 +10,7 @@ import { openDatabase } from "../src/duckdb.ts";
 // The page database needs a browser and wasm bundles, and the results view draws
 // its charts on a canvas. Both are replaced here so the real App can mount in Node.
 const FAKE_DATABASE_MODULE = `
-export const PARQUET_REFUSAL = "That file is a Parquet file. Save it as CSV or Excel, then choose it again.";
+export const PARQUET_REFUSAL = "Parquet files are not supported. Save the file as CSV or Excel and try again.";
 export function openBrowserDatabase() { return Promise.resolve(globalThis.__bridgekitDatabase); }
 export async function dateOrderNote() { return null; }
 `;
@@ -589,6 +589,23 @@ function tabIndexZero(container: HarnessElement): HarnessElement[] {
   return tabButtons(container).filter((node) => tabStop(node) === 0);
 }
 
+const NATIVELY_FOCUSABLE = new Set(["BUTTON", "INPUT", "SELECT", "TEXTAREA"]);
+
+/** Whether Tab would stop on this element: a non-negative tabindex, or a native control with no tabindex of its own. */
+function isTabStop(element: HarnessElement): boolean {
+  const index = element.getAttribute("tabindex");
+  if (index !== null) return Number(index) >= 0;
+  if (element.nodeName === "A") return element.hasAttribute("href");
+  if (!NATIVELY_FOCUSABLE.has(element.nodeName)) return false;
+  return !element.disabled && !element.hasAttribute("disabled");
+}
+
+/** The next element Tab lands on after `from`, in document order: the harness has no Tab navigation of its own. */
+function nextTabStop(from: HarnessElement): HarnessElement | undefined {
+  const order = walk(harnessDocument.documentElement);
+  return order.slice(order.indexOf(from) + 1).find(isTabStop);
+}
+
 async function pressKey(mounted: Mounted, element: HarnessElement, key: string): Promise<Record<string, unknown>> {
   const event: Record<string, unknown> = {
     type: "keydown",
@@ -673,6 +690,44 @@ test("the results tabs move and select with the arrow, Home and End keys", async
   }
 });
 
+test("Tab from a results tab moves into its panel, not past it", async () => {
+  const raw = await openDatabase();
+  const mounted = await mountApp("?sample=1000", queued(raw));
+  try {
+    await waitForSampleRun(mounted);
+    const bridge = tabButtons(mounted.container).find((node) => node.textContent === "Bridge");
+    assert.ok(bridge, "the Bridge tab is rendered");
+    bridge.focus();
+
+    const selectByArrows = async (key: string): Promise<HarnessElement> => {
+      const count = tabButtons(mounted.container).length;
+      for (let step = 0; step < count; step += 1) {
+        const selected = selectedTab(mounted.container);
+        assert.ok(selected, "one tab is selected");
+        if (selected.getAttribute("id")?.endsWith(`tab-${key}`)) return selected;
+        assert.equal(harnessDocument.activeElement, selected, "the arrow is pressed on the focused tab");
+        await pressKey(mounted, harnessDocument.activeElement, "ArrowRight");
+      }
+      assert.fail(`the ${key} tab never became selected`);
+    };
+
+    for (const [key, label] of [["trend", "Trend"], ["setup", "Setup check"], ["check", "Data check"]]) {
+      const tab = await selectByArrows(key);
+      assert.ok(tab.textContent?.startsWith(label), `the selected tab is ${label}, not ${tab.textContent}`);
+      const panel = walk(mounted.container).find((node) => node.getAttribute("role") === "tabpanel");
+      assert.ok(panel, "the results have a tab panel");
+      const next = nextTabStop(tab);
+      assert.ok(next, `Tab from the ${label} tab reaches a next stop`);
+      assert.ok(
+        walk(panel).includes(next),
+        `Tab from the ${label} tab lands inside the panel, not past it, but it landed on ${next.nodeName} "${next.textContent}"`,
+      );
+    }
+  } finally {
+    await mounted.unmount();
+  }
+});
+
 test("every results tab names the one panel, and the panel names the selected tab", async () => {
   const raw = await openDatabase();
   const mounted = await mountApp("?sample=1000", queued(raw));
@@ -694,12 +749,26 @@ test("every results tab names the one panel, and the panel names the selected ta
     };
 
     check();
-    await pressKey(mounted, harnessDocument.activeElement, "ArrowRight");
-    check();
-    await pressKey(mounted, harnessDocument.activeElement, "End");
-    check();
-    await pressKey(mounted, harnessDocument.activeElement, "Home");
-    check();
+    const bridge = selectedTab(mounted.container);
+    assert.ok(bridge, "one tab is selected");
+    assert.equal(bridge.textContent, "Bridge", "the run starts on the Bridge tab");
+    bridge.focus();
+
+    const moved = async (key: string, label: string) => {
+      const before = selectedTab(mounted.container);
+      assert.ok(before, "one tab is selected");
+      assert.equal(harnessDocument.activeElement, before, "the key is pressed on the focused tab");
+      await pressKey(mounted, harnessDocument.activeElement, key);
+      const after = selectedTab(mounted.container);
+      assert.ok(after, "one tab is selected");
+      assert.ok(after.textContent?.startsWith(label), `${key} selects ${label}, not ${after.textContent}`);
+      assert.notEqual(after, before, `${key} moves the selection`);
+      check();
+    };
+
+    await moved("ArrowRight", "Movers");
+    await moved("End", "Data check");
+    await moved("Home", "Bridge");
   } finally {
     await mounted.unmount();
   }
@@ -719,6 +788,30 @@ test("the filter search box has a name of its own", async () => {
     const box = () => harnessNodes(mounted.container, "INPUT").find((node) => node.getAttribute("placeholder") === "Search values");
     await mounted.until(() => box() !== undefined, "the customer filter's search box");
     assert.equal(box()?.getAttribute("aria-label"), "Search values");
+  } finally {
+    await mounted.unmount();
+  }
+});
+
+test("a refused Parquet pick clears the ready announcement and says why", async () => {
+  const raw = await openDatabase();
+  const mounted = await mountApp("?sample=1000", queued(raw));
+  try {
+    await mounted.until(() => politeRegion(mounted.container)?.textContent === "Bridge calculated.", "the announcement");
+    const picker = harnessNodes(mounted.container, "INPUT").find(
+      (node) =>
+        (node.getAttribute("type") ?? node.type) === "file" && (node.getAttribute("accept") ?? "").includes("csv"),
+    );
+    assert.ok(picker, "the data file picker is on screen");
+    (picker as unknown as { files: File[] }).files = [new File(["x"], "reject.parquet")];
+    await mounted.React.act(async () => {
+      picker.dispatchEvent({ type: "change", bubbles: true, target: picker, preventDefault() {}, stopPropagation() {} });
+    });
+    await mounted.flush();
+    assert.equal(politeRegion(mounted.container)?.textContent, "", "the live region no longer says the bridge is ready");
+    const alert = walk(mounted.container).find((node) => node.getAttribute("role") === "alert");
+    assert.ok(alert, "the refusal is on screen");
+    assert.equal(alert.textContent, "Parquet files are not supported. Save the file as CSV or Excel and try again.");
   } finally {
     await mounted.unmount();
   }
