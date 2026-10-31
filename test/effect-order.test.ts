@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { effectColumns, type BridgeConfig } from "../src/engine.ts";
-import { moverHeader, trendHeader } from "../src/app/report.ts";
+import { moverHeader, trendHeader, wholeMoversRow } from "../src/app/report.ts";
 import { roundBridge } from "../src/summary.ts";
 
 const base: BridgeConfig = {
@@ -66,4 +66,11 @@ test("a rank array gives the same values whichever order the lines are passed in
   assert.deepEqual(forward.values, [3, -3], `the ranked lines rounded to ${forward.values.join(", ")}`);
   assert.deepEqual(reversed.values.toReversed(), [3, -3], `the reversed lines rounded to ${reversed.values.join(", ")}`);
   assert.equal(forward.values.reduce((sum, value) => sum + value, 0), 0, "the ranked lines do not add up to the change");
+});
+
+test("a movers row hands its rounding unit to mix before new configurations, as it did before", () => {
+  const row = { product: "P1", s0: 10, s1: 15, z0: 0, z1: 0, price: 0, volume: 0, mix_1: 2.5, new_config: 2.5, discontinued: 0, no_units: 0 };
+  const shown = wholeMoversRow(row, 1);
+  assert.deepEqual(shown.parts, [0, 0, 3, 2, 0, 0], `the row's parts rounded to ${shown.parts.join(", ")}`);
+  assert.equal(shown.parts.reduce((sum, part) => sum + part, 0), shown.change, "the row's parts do not add up to its change");
 });

@@ -434,9 +434,10 @@ export function effectColumns(config: BridgeConfig): { key: string; label: strin
   ];
 }
 
-/** Frozen so rounding ties keep the volume, mix, price precedence they had before display moved to price first. */
+/** Frozen so rounding ties keep the volume, mix, price precedence they had before display moved to price first. A Movers row passes its grouped mix column as `mix`, which takes the first mix step's place. */
 export function tieRank(key: string): number {
   if (key === "volume") return 0;
+  if (key === "mix") return 1;
   if (key.startsWith("mix_")) return Number(key.slice(4)) || 0;
   if (key === "price" || key === "price_sales" || key === "price_list") return 1000;
   if (key === "cost_rate" || key === "price_discount") return 1001;
