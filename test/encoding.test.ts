@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
+import { registerHooks } from "node:module";
 import { test } from "node:test";
 import { blobIsUtf8, decodeCsvBuffer, ENCODING_SENTENCE, isUtf8Prefix, isValidUtf8, type DecodedCsv } from "../src/app/encoding.ts";
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.includes("?url")) {
+      return { url: "data:text/javascript,export default \"stub\"", shortCircuit: true };
+    }
+    return nextResolve(specifier, context);
+  },
+});
 
 const utf8 = (text: string) => new TextEncoder().encode(text);
 
@@ -232,4 +242,82 @@ test("looksBinary refuses NUL and C0 controls but keeps text and UTF-16", async 
   assert.equal(looksBinary(Uint8Array.from([0x61, 0x00, 0x62])), true);
   assert.equal(looksBinary(Uint8Array.from([0x61, 0x07, 0x62])), true);
   assert.equal(looksBinary(joined(Uint8Array.from(BOM_UTF16_LE), utf16("a,b\n", true))), false);
+});
+
+// Pinned as a literal, like the encoding sentence, so rewording fails here too.
+const TOO_BIG = "This file is too big to open in this browser. Try a smaller file, or save it with fewer rows or columns.";
+
+test("a CSV whose invalid byte comes after the checked prefix shows the plain sentence", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { readCsvFile } = await import("../src/app/encoding.ts");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const lines = ["period,product,units,sales,note"];
+  for (let index = 0; index < 4000; index++) {
+    lines.push(`2025,A-100,${(index % 5) + 1},${100 + index},note ${index}`);
+  }
+  const text = `${lines.join("\n")}\n`;
+  assert.ok(text.length > 65536);
+  // Every byte the prefix check reads is valid UTF-8, and only the last is not.
+  const bytes = joined(utf8(text), Uint8Array.from([0xff]));
+  const directory = await mkdtemp("/tmp/bridgekit-encoding-");
+  const filePath = path.join(directory, "late-byte.csv");
+  await writeFile(filePath, bytes);
+  const file = new File([bytes], "late-byte.csv");
+  const reading = await readCsvFile(file);
+  // The late-byte check needs the file's own bytes, so the reading must hand them over.
+  assert.deepEqual(reading, { kind: "bytes" });
+  const query = await openDatabase();
+  await assert.rejects(
+    stageCsvAndSwap(query, file, "data", filePath, "month first", reading),
+    (error: unknown) => (error as Error).message === SENTENCE,
+    SENTENCE,
+  );
+});
+
+test("a CSV of valid but unusual UTF-8 that fails for another reason keeps the database's own error", async () => {
+  const { openDatabase } = await import("../src/duckdb.ts");
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const { readCsvFile } = await import("../src/app/encoding.ts");
+  const { mkdtemp, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  // A byte-order mark, a composed é, a combining mark, a four-byte character,
+  // then one field past the database's line limit.
+  const text = `period,product,note\n2025,A-100,café\n2026,A-101,e\u0301\n2025,A-102,\u{1F600}\n2026,A-103,"${"x".repeat(2_097_152)}"\n`;
+  const bytes = joined(Uint8Array.from(BOM_UTF8), utf8(text));
+  const directory = await mkdtemp("/tmp/bridgekit-encoding-");
+  const filePath = path.join(directory, "unusual-utf8.csv");
+  await writeFile(filePath, bytes);
+  const file = new File([bytes], "unusual-utf8.csv");
+  const reading = await readCsvFile(file);
+  assert.equal(reading.kind, "bytes");
+  const query = await openDatabase();
+  const failure = await stageCsvAndSwap(query, file, "data", filePath, "month first", reading).then(
+    () => null,
+    (error: unknown) => error as Error,
+  );
+  assert.ok(failure instanceof Error);
+  assert.notEqual(failure.message, SENTENCE);
+  assert.notEqual(failure.message, TOO_BIG);
+  // Pinned as a literal so a changed database message fails here.
+  assert.ok(failure.message.startsWith("Invalid Input Error: CSV Error on Line:"), failure.message);
+});
+
+test("a direct stageCsvAndSwap call with no reading argument still runs the check", async () => {
+  const { stageCsvAndSwap } = await import("../src/app/db.ts");
+  const rows = ["period,product,units,sales"];
+  for (let index = 0; index < 12; index++) rows.push(`2025,A-10${index},${index + 1},${100 + index}`);
+  // The invalid byte sits well inside the prefix, so only the whole-file check finds it.
+  const bytes = joined(utf8(`${rows.join("\n")}\n`), Uint8Array.from([0xff]));
+  assert.ok(bytes.length < 65536);
+  const file = new File([bytes], "small.csv");
+  const query = async (): Promise<never> => {
+    throw new Error("The reader refused the file.");
+  };
+  await assert.rejects(
+    stageCsvAndSwap(query, file, "data", "small.csv"),
+    (error: unknown) => (error as Error).message === SENTENCE,
+    SENTENCE,
+  );
 });
