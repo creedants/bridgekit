@@ -504,7 +504,6 @@ interface Mounted {
   container: HarnessElement;
   flush: () => Promise<void>;
   until: (check: () => boolean, what: string) => Promise<void>;
-  dispatch: (type: string, event: Record<string, unknown>) => void;
   dispatchPaste: (text: string) => Promise<void>;
   unmount: () => Promise<void>;
 }
@@ -543,10 +542,9 @@ async function mountApp(search: string, query: Query): Promise<Mounted> {
     container,
     flush,
     until,
-    dispatch: (globalThis as unknown as { __harnessDispatch: Mounted["dispatch"] }).__harnessDispatch,
     dispatchPaste: async (text: string) => {
       await React.act(async () => {
-        const dispatch = (globalThis as unknown as { __harnessDispatch: Mounted["dispatch"] }).__harnessDispatch;
+        const dispatch = (globalThis as unknown as { __harnessDispatch: (type: string, event: Record<string, unknown>) => void }).__harnessDispatch;
         dispatch("paste", {
           clipboardData: { getData: () => text },
           preventDefault() {},
