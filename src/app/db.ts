@@ -19,7 +19,7 @@ import {
 } from "./numbers.ts";
 import { swapWithSourceRows, type CsvDialect, type SourceRows } from "./profile.ts";
 import { firstSheetAsCsv, holeRenames, NO_DATA_ROWS } from "./sheet.ts";
-import { createConnectionQueue, statementStartsTurn } from "./small-bridges.ts";
+import { createConnectionQueue, statementStartsTurn } from "./connectionQueue.ts";
 
 // The page's one connection gets one queue, so no two statements from this page
 // run at the same time and a caller's consecutive statements stay together.

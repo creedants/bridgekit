@@ -4,7 +4,7 @@ import { registerHooks } from "node:module";
 import { test } from "node:test";
 import { transformSync } from "esbuild";
 import type { Query } from "../src/engine.ts";
-import { createConnectionQueue, statementStartsTurn } from "../src/app/small-bridges.ts";
+import { createConnectionQueue, statementStartsTurn } from "../src/app/connectionQueue.ts";
 import { openDatabase } from "../src/duckdb.ts";
 
 // The page database needs a browser and wasm bundles, and the results view draws

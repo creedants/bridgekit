@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { transformSync } from "esbuild";
 import type { Query } from "../src/engine.ts";
 import { makeDownloader } from "../src/app/files.ts";
-import { createConnectionQueue, statementStartsTurn } from "../src/app/small-bridges.ts";
+import { createConnectionQueue, statementStartsTurn } from "../src/app/connectionQueue.ts";
 import {
   calculateGate,
   carryPeriods,
