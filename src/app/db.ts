@@ -716,9 +716,8 @@ export async function refuseMixedSeparators(query: Query, file: File, reading: C
  * byte length refuses an empty file, its header width refuses a file with too
  * many columns, and the staged table's row count refuses a header-only file,
  * so a refused file leaves the loaded table alone. The reading defaults to the
- * file's own bytes, because that is what the database read for every CSV that
- * passed the up-front prefix check, so a caller that omits it still gets the
- * late-byte encoding check.
+ * file's own bytes, which is what a caller that omits it hands the database, so
+ * a direct caller still gets the late-byte encoding check.
  */
 export async function stageCsvAndSwap(
   query: Query,
@@ -746,9 +745,9 @@ export async function stageCsvAndSwap(
   const staging = `${table}__staging`;
   const source: SourceRows = { kind: "csv", file, dialect: dialectForWidth };
   // A file that readCsvFile decoded as text was never handed to the database as
-  // bytes, so it keeps its own error. The file's own bytes are the safe default,
-  // because for every CSV that passed the up-front prefix check they are what
-  // the database read.
+  // bytes, so it keeps its own error. A caller that omits the reading handed the
+  // database the file itself, and the file's own bytes are then what the check
+  // must read.
   await readLoadedTable(query, staging, readablePath, false, order, leading, reading.kind === "bytes" ? file : undefined);
   await convertFormattedNumbers(query, staging, source);
   // No mixed-separator check: a record split by another separator can match a valid sparse record byte for byte.

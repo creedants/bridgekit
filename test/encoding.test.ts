@@ -308,7 +308,8 @@ test("a direct stageCsvAndSwap call with no reading argument still runs the chec
   const { stageCsvAndSwap } = await import("../src/app/db.ts");
   const rows = ["period,product,units,sales"];
   for (let index = 0; index < 12; index++) rows.push(`2025,A-10${index},${index + 1},${100 + index}`);
-  // The invalid byte sits well inside the prefix, so only the whole-file check finds it.
+  // The invalid byte sits inside the prefix, so this test pins the default and
+  // not how much of the file the check reads.
   const bytes = joined(utf8(`${rows.join("\n")}\n`), Uint8Array.from([0xff]));
   assert.ok(bytes.length < 65536);
   const file = new File([bytes], "small.csv");
