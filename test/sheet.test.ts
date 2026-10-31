@@ -3,7 +3,8 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { registerHooks } from "node:module";
 import path from "node:path";
 import { test } from "node:test";
-import { excelHeaderNames, excelHoleIndexes, firstSheetAsCsv, holeRenames, unprefixPart } from "../src/app/sheet.ts";
+import { excelHeaderNames, excelHoleIndexes, firstSheetAsCsv, holeRenames, MAX_SHEET_BYTES, unprefixPart } from "../src/app/sheet.ts";
+import { TOO_BIG_SENTENCE } from "../src/app/encoding.ts";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -12,6 +13,36 @@ registerHooks({
     }
     return nextResolve(specifier, context);
   },
+});
+
+/** A File that counts whole-file reads, so a size cap can be shown to refuse before one. */
+class CountingFile extends File {
+  arrayBufferReads = 0;
+
+  override async arrayBuffer(): Promise<ArrayBuffer> {
+    this.arrayBufferReads += 1;
+    return super.arrayBuffer();
+  }
+}
+
+/** A file that reports more bytes than it holds, so a size limit is exercised without allocating the bytes. */
+class ReportedSizeFile extends CountingFile {
+  readonly reportedSize: number;
+
+  constructor(parts: BlobPart[], name: string, reportedSize: number) {
+    super(parts, name);
+    this.reportedSize = reportedSize;
+  }
+
+  override get size(): number {
+    return this.reportedSize;
+  }
+}
+
+test("a workbook over the sheet limit is refused before it is read", async () => {
+  const file = new ReportedSizeFile([new Uint8Array(4)], "big.xlsx", MAX_SHEET_BYTES + 1);
+  await assert.rejects(firstSheetAsCsv(file), { message: TOO_BIG_SENTENCE });
+  assert.equal(file.arrayBufferReads, 0, "a workbook over the limit is never read");
 });
 
 async function formulaWorkbook(): Promise<ArrayBuffer> {

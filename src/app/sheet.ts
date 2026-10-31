@@ -1,4 +1,5 @@
 import type { Workbook, Worksheet } from "exceljs";
+import { TOO_BIG_SENTENCE } from "./encoding.ts";
 import { excelTools, type ExcelModule, type ExcelTools } from "./exportExcel.ts";
 import { toCsv } from "./files.ts";
 import { MAX_COLUMNS_READ, TOO_MANY_COLUMNS_SENTENCE } from "./numbers.ts";
@@ -77,6 +78,10 @@ export const INVALID_WORKBOOK =
 /** Shown when the workbook holds no data rows. The load refuses it, so the file problems list never sees it. */
 export const NO_DATA_ROWS = "This file has no data rows.";
 
+// The measured limit for a workbook read whole: the 45 MB sheet maximum needed
+// 4.5 GB of browser memory, and nothing capped a larger workbook.
+export const MAX_SHEET_BYTES = 134_217_728;
+
 /** The Excel library and the first worksheet of an .xlsx file, read before DuckDB sees any rows. */
 export async function firstSheetAsCsv(
   file: File,
@@ -91,6 +96,7 @@ export async function firstSheetAsCsv(
   /** Worksheets after the first whose last used row is at least row 2. */
   otherSheets: number;
 }> {
+  if (file.size > MAX_SHEET_BYTES) throw new Error(TOO_BIG_SENTENCE);
   const ExcelJS = await tools.load();
   const data = await file.arrayBuffer();
   if (!isZipArchive(data)) throw new Error(INVALID_WORKBOOK);
