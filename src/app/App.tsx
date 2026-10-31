@@ -509,6 +509,7 @@ export function App() {
   };
 
   const loadFile = (file: File) => {
+    setAnnounced(null);
     if (/\.parquet$/i.test(file.name)) {
       showFailure(PARQUET_REFUSAL);
       return;
@@ -805,7 +806,8 @@ export function App() {
   const Results = useResultsView(resultsChunk);
   const shown = mainView(phase, engineState);
   const status = phase.kind === "reading" ? phase.label : ([...tasks.values()].at(-1)?.label ?? "");
-  // A load or task clears announced and a setup change makes the run stale, so either way this line derives to "".
+  // Every load or file pick, a refused one included, and every task clears announced, and a setup
+  // change makes the run stale, so either way this line derives to "".
   const spoken = status || (fresh && fresh.id === announced ? "Bridge calculated." : "");
 
   return (

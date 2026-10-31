@@ -168,7 +168,8 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
         ))}
       </div>
 
-      <div role="tabpanel" id={panelId} aria-labelledby={tabId(tab)}>
+      {/* The Trend, Setup check and Data check panels hold no control of their own, so the panel is their Tab stop. */}
+      <div role="tabpanel" id={panelId} aria-labelledby={tabId(tab)} tabIndex={0}>
         {tab === "bridge" && (
           <>
             <div className="bridge">
