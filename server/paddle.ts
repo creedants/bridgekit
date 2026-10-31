@@ -15,11 +15,24 @@
  *   https://developer.paddle.com/build/transactions/default-payment-link
  */
 
+import type { Env } from "./env.ts";
+
 export const PADDLE_API = {
   sandbox: "https://sandbox-api.paddle.com",
   live: "https://api.paddle.com",
 } as const;
 export type PaddleEnvironment = keyof typeof PADDLE_API;
+
+/** The seat price ids a checkout may use, from the one configured price. */
+export function seatPrices(env: Env): readonly string[] | undefined {
+  return env.PADDLE_PRICE_ID ? [env.PADDLE_PRICE_ID] : undefined;
+}
+
+/** The deployment's Paddle account, or null when no API key is set. */
+export function paddleAccount(env: Env): PaddleAccount | null {
+  if (!env.PADDLE_API_KEY) return null;
+  return { apiKey: env.PADDLE_API_KEY, environment: env.PADDLE_ENVIRONMENT === "live" ? "live" : "sandbox", seatPriceIds: seatPrices(env) };
+}
 
 /**
  * How old a signed delivery may be. Paddle retries any non-200 answer with
@@ -375,6 +388,84 @@ export async function createPortalSession(options: PortalSessionOptions): Promis
   const portalUrl = direct ?? nested;
   if (!portalUrl) throw new Error("Paddle did not return a portal URL.");
   return { portalUrl };
+}
+
+/** Thrown when Paddle cannot cancel a subscription, so its billing must be kept. */
+export class PaddleCancelError extends Error {}
+
+export interface CancelSubscriptionOptions {
+  apiKey: string;
+  environment: PaddleEnvironment;
+  subscriptionId: string;
+  /** For tests. */
+  fetch?: typeof fetch;
+}
+
+/** What one Paddle answer about a subscription settles. */
+interface CancelState {
+  status: SubscriptionStatus;
+  /** Paddle already holds a cancel, so no further cancel request is needed. */
+  settled: boolean;
+}
+
+/**
+ * Reads a Paddle answer about one subscription. Only a JSON body whose `data`
+ * names this subscription with a status we know is readable. Anything else
+ * throws, so a malformed answer refuses the cancel instead of counting as one.
+ */
+async function readCancelState(response: Response, subscriptionId: string): Promise<CancelState> {
+  let json: unknown;
+  try {
+    json = await response.json();
+  } catch {
+    throw new PaddleCancelError("Paddle returned a subscription answer that was not JSON.");
+  }
+  const data = isRecord(json) ? json.data : undefined;
+  if (!isRecord(data) || data.id !== subscriptionId) throw new PaddleCancelError("Paddle returned another subscription.");
+  const status = data.status;
+  if (typeof status !== "string" || !STATUSES.includes(status)) throw new PaddleCancelError("Paddle returned an unknown subscription status.");
+  const scheduled = isRecord(data.scheduled_change) ? data.scheduled_change : undefined;
+  return { status: status as SubscriptionStatus, settled: status === "canceled" || scheduled?.action === "cancel" };
+}
+
+/**
+ * Cancels a subscription. A paused subscription is cancelled immediately,
+ * because Paddle refuses a scheduled cancellation for one; every other live
+ * status is cancelled at the end of the paid period, which is what the app
+ * grants Pro through (see hasPro). The subscription is read first, so one whose
+ * cancel Paddle already holds, from an earlier attempt or scheduled in the
+ * portal, is settled and gets no second request. Both answers must name the
+ * subscription and report a known status. The cancel answer must also report
+ * a canceled subscription or a scheduled cancel; otherwise deletion is refused.
+ */
+export async function cancelSubscription(options: CancelSubscriptionOptions): Promise<void> {
+  const doFetch = options.fetch ?? fetch;
+  const url = `${PADDLE_API[options.environment]}/subscriptions/${encodeURIComponent(options.subscriptionId)}`;
+  const headers = { authorization: `Bearer ${options.apiKey}`, "paddle-version": "1" };
+  let read: Response;
+  try {
+    read = await doFetch(url, { headers, redirect: "manual" });
+  } catch {
+    throw new PaddleCancelError("Paddle could not be reached.");
+  }
+  if (!read.ok) throw new PaddleCancelError(`Paddle returned ${read.status} when reading a subscription.`);
+  const current = await readCancelState(read, options.subscriptionId);
+  if (current.settled) return;
+  let response: Response;
+  try {
+    response = await doFetch(`${url}/cancel`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ effective_from: current.status === "paused" ? "immediately" : "next_billing_period" }),
+      redirect: "manual",
+    });
+  } catch {
+    throw new PaddleCancelError("Paddle could not be reached.");
+  }
+  if (!response.ok) throw new PaddleCancelError(`Paddle returned ${response.status} when cancelling a subscription.`);
+  if (!(await readCancelState(response, options.subscriptionId)).settled) {
+    throw new PaddleCancelError("Paddle did not report the subscription as cancelled.");
+  }
 }
 
 export async function createCheckout(options: CheckoutOptions): Promise<{ transactionId: string; checkoutUrl: string }> {

@@ -7,7 +7,16 @@ import { handleCommentary, type CommentarySpender } from "./commentary.ts";
 import { countPageView, pageView } from "./counts.ts";
 import { canSendEmail, EMAIL_NOT_SET_UP } from "./email.ts";
 import type { Env } from "./env.ts";
-import { createCheckout, createPortalSession, parseSubscriptionEvent, PaddleReadError, verifyPaddleSignature, type PaddleAccount, type PaddleEnvironment } from "./paddle.ts";
+import {
+  createCheckout,
+  createPortalSession,
+  paddleAccount,
+  parseSubscriptionEvent,
+  PaddleReadError,
+  seatPrices,
+  verifyPaddleSignature,
+  type PaddleEnvironment,
+} from "./paddle.ts";
 import { purgeSupportMail, receiveSupportMail } from "./support.ts";
 import {
   assertCheckoutOpen,
@@ -364,15 +373,6 @@ open.delete("/api/workspaces/:id/bridges/:item", async (c) => {
   await deleteSaved(c.env.DB, await userId(c), c.req.param("id"), "bridge", c.req.param("item"));
   return c.body(null, 204);
 });
-
-function seatPrices(env: Env): readonly string[] | undefined {
-  return env.PADDLE_PRICE_ID ? [env.PADDLE_PRICE_ID] : undefined;
-}
-
-function paddleAccount(env: Env): PaddleAccount | null {
-  if (!env.PADDLE_API_KEY) return null;
-  return { apiKey: env.PADDLE_API_KEY, environment: env.PADDLE_ENVIRONMENT === "live" ? "live" : "sandbox", seatPriceIds: seatPrices(env) };
-}
 
 open.post("/api/workspaces/:id/checkout", async (c) => {
   const id = c.req.param("id");
