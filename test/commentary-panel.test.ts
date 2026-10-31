@@ -492,7 +492,7 @@ test("a build without AI commentary renders no AI panel", async () => {
 });
 
 test("the whole-row note is looked up once per result", async () => {
-  const { wholeRowWarningsFor } = await import("../src/app/Results.tsx");
+  const { wholeRowWarningsFor } = await import("../src/app/results/Check.tsx");
   let started = 0;
   const sql: string[] = [];
   const start = () => {

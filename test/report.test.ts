@@ -726,7 +726,8 @@ const reproQuery = (): Promise<Query> =>
 test("D141: the price KPI, its table line and the summary print one amount, and the report keeps the exact share", async () => {
   const React = await import("react");
   const { renderToStaticMarkup } = await import("react-dom/server");
-  const { Results, summaryReport } = await import("../src/app/Results.tsx");
+  const { Results } = await import("../src/app/Results.tsx");
+  const { summaryReport } = await import("../src/app/results/Summary.tsx");
   const html = renderToStaticMarkup(React.createElement(Results, { run: reproRun() as never, query: reproQuery }));
 
   const kpi = (label: string) => kpiOf(html, label);
@@ -774,7 +775,8 @@ test("D141: the price KPI, its table line and the summary print one amount, and 
 test("D141: a split price sentence follows the shown price total on the page and in the report", async () => {
   const React = await import("react");
   const { renderToStaticMarkup } = await import("react-dom/server");
-  const { Results, summaryReport } = await import("../src/app/Results.tsx");
+  const { Results } = await import("../src/app/Results.tsx");
+  const { summaryReport } = await import("../src/app/results/Summary.tsx");
   const query = await openDatabase();
   await query(`DROP TABLE IF EXISTS data`);
   await query(`CREATE TABLE data (year VARCHAR, model VARCHAR, units INTEGER, sales DOUBLE, gross DOUBLE)`);

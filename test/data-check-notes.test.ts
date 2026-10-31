@@ -10,7 +10,7 @@ import { PERIOD, VIEW } from "../src/app/setup.ts";
 import { openDatabase } from "../src/duckdb.ts";
 import type { Query } from "../src/engine.ts";
 
-// The Data check helper lives in Results.tsx, and this runner cannot load a
+// The Data check helper lives in src/app/results/Check.tsx, and this runner cannot load a
 // .tsx file by itself, so a load hook transforms it with the esbuild copy the
 // build already installs. The database module is kept off the wasm bundles the
 // browser build imports by URL, the way test/date-order.test.ts does it. The
@@ -82,7 +82,7 @@ async function loaded(name: string, text: string): Promise<Query> {
 }
 
 async function notes(query: Query, table: string, formulaBlanks?: number): Promise<string[]> {
-  const { dataCheckNotes } = await import("../src/app/Results.tsx");
+  const { dataCheckNotes } = await import("../src/app/results/Check.tsx");
   return dataCheckNotes(query, table, formulaBlanks);
 }
 

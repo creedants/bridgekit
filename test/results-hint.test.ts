@@ -4,7 +4,7 @@ import { registerHooks } from "node:module";
 import { test } from "node:test";
 import { transformSync } from "esbuild";
 
-// The Setup check hint lives in Results.tsx, and this runner cannot load a
+// The Setup check hint lives in src/app/results/SetupCheck.tsx, and this runner cannot load a
 // .tsx file by itself, so a load hook transforms it with the esbuild copy the
 // build already installs. The page-only modules are replaced the way
 // test/data-check-notes.test.ts replaces them.
@@ -41,7 +41,7 @@ const LAST = "One that barely moves price and lowers the match rate can be dropp
 const OLD = "An attribute whose removal moves price a lot is one that carries real mix: keep it.";
 
 async function hint(prices: number[], rowCount: number): Promise<string> {
-  const { setupCheckHint } = await import("../src/app/Results.tsx");
+  const { setupCheckHint } = await import("../src/app/results/SetupCheck.tsx");
   return setupCheckHint(prices, rowCount);
 }
 
@@ -64,7 +64,7 @@ test("the Setup check hint keeps its first and last sentences and its figures", 
 });
 
 test("a partial match says which attributes it matched on", async () => {
-  const { matchLabel } = await import("../src/app/Results.tsx");
+  const { matchLabel } = await import("../src/app/results/shared.tsx");
   const levels = [
     { name: "Size", columns: ["size"] },
     { name: "Colour", columns: ["colour"] },
@@ -87,7 +87,7 @@ test("the Setup check hint says where an attribute about the customer belongs", 
 });
 
 test("Movers says no rows match once a search finds nothing", async () => {
-  const { emptyNote } = await import("../src/app/Results.tsx");
+  const { emptyNote } = await import("../src/app/results/Movers.tsx");
   assert.equal(emptyNote([], "Z-999", "Z-999"), "No rows match.");
   assert.equal(emptyNote([], "Z-999", "Z-99"), null, "the note shows before the search has finished");
   assert.equal(emptyNote([{ size: "A-100" }], "A-100", "A-100"), null);
