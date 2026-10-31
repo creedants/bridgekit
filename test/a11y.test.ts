@@ -875,44 +875,65 @@ test("the results tablist has the accessible name Result views", async () => {
 
 test("the Data check success line waits for the whole-row note query", async () => {
   const config: BridgeConfig = {
-    table: "t", periodColumn: "period", prior: "p0", current: "p1",
+    table: "data", periodColumn: "period", prior: "2025", current: "2026",
     unitsColumn: "units", salesColumn: "sales",
-    levels: [{ name: "Design", columns: ["design"] }],
+    levels: [{ name: "Size", columns: ["size"] }],
   };
   const run = {
     config,
     check: {
-      rows: 0, priorRows: 0, currentRows: 0, otherPeriodRows: 0, blankPeriodRows: 0,
+      rows: 2, priorRows: 1, currentRows: 1, otherPeriodRows: 0, blankPeriodRows: 0,
       blankMeasureRows: 0, negativeUnitRows: 0, negativeSalesRows: 0, zeroUnitSalesRows: 0,
     },
+    result: {
+      priorSales: 100,
+      currentSales: 120,
+      effects: [],
+      coverage: [{ level: 1, share: 1, label: "Exact", cells: 10, sales: 120 }],
+    },
+    tieOut: { prior: { period: "2025", inFile: 100, afterFilters: 100 }, current: { period: "2026", inFile: 120, afterFilters: 120 } },
     ms: 1,
-    tieOut: { prior: { period: "p0", inFile: 0, afterFilters: 0 }, current: { period: "p1", inFile: 0, afterFilters: 0 } },
-    result: { priorSales: 0, currentSales: 0, effects: [], coverage: [] },
+    textColumns: ["size"],
+    periods: ["2025", "2026"],
+    description: [],
+    setup: { periodColumn: "period", grain: "value", unitsColumn: "units", salesColumn: "sales", levels: [{ name: "Size", columns: ["size"] }], filters: [] },
+    source: "sample",
+    sample: true,
     formulaBlanks: 0,
+    amounts: null,
   } as unknown as Run;
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const query: Query = async (sql) => {
+    if (sql.includes("DESCRIBE")) {
+      await gate;
+      return [
+        { column_name: "period", column_type: "VARCHAR" },
+        { column_name: "units", column_type: "DOUBLE" },
+        { column_name: "sales", column_type: "DOUBLE" },
+      ];
+    }
+    if (sql.includes("judged")) return [{ n: 0, example: null }];
+    return [];
+  };
   const NO_ISSUES = "No issues found in the rows used.";
   const React = await import("react");
-  const { Check } = await import("../src/app/results/Check.tsx");
-  const query = (async () => []) as unknown as Query;
-  const mount = (warningsKnown: boolean) =>
-    mountPanel(React.createElement(Check, { run, warnings: [], warningsKnown, query: () => Promise.resolve(query) }));
-  const pending = await mount(false);
+  const { Results } = await import("../src/app/Results.tsx");
+  const mounted = await mountPanel(React.createElement(Results, { run, query: () => Promise.resolve(query) }));
   try {
-    assert.ok(
-      !harnessByClass(pending.container, "ok").some((node) => node.textContent === NO_ISSUES),
-      "the Data check does not say it found no issues before the whole-row note query resolves",
-    );
+    await selectResultsTab(mounted, "Data check");
+    const success = () => harnessByClass(mounted.container, "ok").some((node) => node.textContent === NO_ISSUES);
+    assert.ok(!success(), "the Data check does not say it found no issues before the whole-row note query answers");
+    await mounted.React.act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await mounted.until(success, "the Data check success line");
+    assert.ok(success(), "the Data check says it found no issues once the whole-row note query answers");
   } finally {
-    await pending.unmount();
-  }
-  const resolved = await mount(true);
-  try {
-    assert.ok(
-      harnessByClass(resolved.container, "ok").some((node) => node.textContent === NO_ISSUES),
-      "the Data check says it found no issues once the whole-row note query resolves",
-    );
-  } finally {
-    await resolved.unmount();
+    await mounted.unmount();
   }
 });
 
