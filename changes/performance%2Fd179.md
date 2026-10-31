@@ -1,0 +1,1 @@
+- Count names such as `NetSalesQty` are no longer guessed as Sales through the net search. Unit-price names such as `net_unit_price`, `net_price` and `avg_price` stay out of Sales; line-total names such as `total_price` and `Net Extended Price` retain their base guesses, as do money-only names such as `net_sales`, `Net Revenue` and `Nettoumsatz`.

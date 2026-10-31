@@ -161,8 +161,15 @@ const isTrailingNote = (name: string) => noteWords.has(words(name).at(-1) ?? "")
 /** A count name, unless a currency word takes it out; "Sales (Currency Units)" reads as money. "stk" only counts as a whole word, so Selbstkosten stays out. */
 const countName = (name: string) =>
   (COUNT_PATTERN.test(fold(name)) || words(name).some((word) => unitWords.has(word))) && !CURRENCY_PATTERN.test(fold(name));
-/** Never Sales by name: a trailing note, a tax name or a unit price. */
-const neverSales = (name: string) => isTrailingNote(name) || TAX_DE.test(fold(name)) || isUnitPrice(name);
+/** A price word without a line-total word; explicit unit-price pairs are refused separately. */
+const priceWordName = (name: string) => {
+  const parts = words(name);
+  return parts.some((word) => word === "price" || word === "preis") &&
+    !parts.some((word) => ["total", "extended", "ext", "line", "amount", "sales"].includes(word));
+};
+/** Never Sales by name: a trailing note, a tax name, a price name without a total word, or a unit price. */
+const neverSales = (name: string) =>
+  isTrailingNote(name) || TAX_DE.test(fold(name)) || priceWordName(name) || isUnitPrice(name);
 /** Never Sales by name, plus count names, for the by-name guess and the value fallback. */
 const notSalesByName = (name: string) => neverSales(name) || countName(name);
 
@@ -229,7 +236,8 @@ export function guessSetup(columns: Column[]): Setup {
   const periodColumn =
     date?.name ?? find(/year|annee|année|jahr|jaar|año|period|month|quarter|date|fiscal|exercice/i, columns);
   const unitsColumn = unitsName(withoutNotes.filter((column) => column.name !== periodColumn && !isUnitPrice(column.name)));
-  const net = find(/net/i, withoutNotes.filter((column) => column.name !== unitsColumn && !neverSales(column.name)));
+  // The net search shares the count and unit-price exclusions of the by-name guess.
+  const net = find(/net/i, withoutNotes.filter((column) => column.name !== unitsColumn && !notSalesByName(column.name)));
   const held = net ? "" : netSalesHeldAsText(columns);
   // The sales-stem fallback shares its rule with the measure hint below.
   const byName = salesByName(columns, unitsColumn);
