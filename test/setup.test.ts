@@ -90,8 +90,6 @@ const moneyWord = (name: string) =>
     name,
   );
 const countWord = (name: string) => /unit|qty|quant|count|job|piece|menge|anzahl|absatz|stueck|stuck|boite|bottl/i.test(name);
-const priceWord = (name: string) => headerWords(name).some((word) => word === "price" || word === "preis");
-const netWord = (name: string) => headerWords(name).includes("net");
 
 test("audit columns guess units and sales", () => {
   const setup = guessSetup([
@@ -219,10 +217,10 @@ test("kept Units Sold at Full Price", () => {
   assert.equal(setup.grossColumn, undefined);
 });
 
-test("excluded price column Net Extended Price", () => {
+test("kept Net Extended Price", () => {
   const setup = measures("Net Extended Price");
   assert.equal(setup.unitsColumn, "");
-  assert.equal(setup.salesColumn, "");
+  assert.equal(setup.salesColumn, "Net Extended Price");
   assert.equal(setup.grossColumn, undefined);
 });
 
@@ -1627,7 +1625,7 @@ const headers: { names: string[]; textMeasures: boolean }[] = [
   }
 ];
 
-// The five families the legacy oracle cannot judge, pinned here from the fixed
+// The four families the legacy oracle cannot judge, pinned here from the fixed
 // guess so no header row escapes this test. Keys are the header rows joined
 // with ", ", which repeats a row that appears twice in the matrix.
 const pinned = new Map<string, { period: string; units: string; sales: string }>([
@@ -1654,14 +1652,12 @@ const pinned = new Map<string, { period: string; units: string; sales: string }>
   ],
   ["year, product, units, Sales (units)", { period: "year", units: "units", sales: "" }],
   ["year, product, units, NetSalesQty", { period: "year", units: "units", sales: "" }],
-  // A name that says both net and price is not Sales, so amount takes it.
-  ["year, product, units, Net Extended Price, amount", { period: "year", units: "units", sales: "amount" }],
   // A count name beats one that also names a size, such as "Volume (units)".
   ["Volume (units), sales", { period: "", units: "Volume (units)", sales: "sales" }],
   ["Volume (units), unit, sales", { period: "", units: "unit", sales: "sales" }],
 ]);
 
-/** The five families the legacy oracle cannot judge, kept in one place. */
+/** The four families the legacy oracle cannot judge, kept in one place. */
 const outsideLegacy = (names: string[]) =>
   names.some((name) => /jahr|menge|umsatz|nettoumsatz|stueck|steuer|erl[öo]s/i.test(name)) ||
   names.some((name) =>
@@ -1670,10 +1666,7 @@ const outsideLegacy = (names: string[]) =>
     ),
   ) ||
   names.some((name) => moneyWord(name) && countWord(name)) ||
-  names.some((name) => countWord(name) && /volume|size|ml|litre|liter|kg|weight|gram|amount/i.test(name)) ||
-  // A name that says both net and price reads as money to the oracle and as a
-  // price to the guess, which refuses it.
-  names.some((name) => netWord(name) && priceWord(name));
+  names.some((name) => countWord(name) && /volume|size|ml|litre|liter|kg|weight|gram|amount/i.test(name));
 
 test("oracle headers match the legacy guess outside excluded words", () => {
   for (const row of headers) {
@@ -2953,7 +2946,7 @@ test("T136: a net count name stays out of Sales", () => {
   }
 });
 
-test("T320: a name that says price is never Sales", () => {
+test("T320: a unit-price name is never Sales", () => {
   const names = [
     "net_unit_price",
     "unit_price",
@@ -2962,8 +2955,6 @@ test("T320: a name that says price is never Sales", () => {
     "price",
     "net_price",
     "Net Price",
-    "total_price",
-    "sales_price",
   ];
   const alone = names.map((name) => {
     const file: Column[] = [
@@ -2990,4 +2981,19 @@ test("T320: a name that says price is never Sales", () => {
     return { row: name, sales: guess.salesColumn, note: measureNote(file, guess) };
   });
   assert.deepEqual(beside, names.map((row) => ({ row, sales: "sales", note: null })));
+});
+
+
+test("line-total price names keep their base Sales candidate", () => {
+  for (const name of ["total_price", "total price", "Net Extended Price", "sales_price", "amount_price", "net_line_price", "net_ext_price"]) {
+    const file: Column[] = [
+      { name: "year", type: "VARCHAR" }, { name: "product", type: "VARCHAR" },
+      { name: "units", type: "BIGINT", facts: fact(216) },
+      { name, type: "DOUBLE", facts: fact(6100) },
+    ];
+    assert.equal(guessSetup(file).salesColumn, name, name);
+  }
+  for (const name of ["total_unit_price", "line_price_per_unit", "amount_unit_price"]) {
+    assert.equal(guessSetup([{ name, type: "DOUBLE" }]).salesColumn, "", name);
+  }
 });
