@@ -12,9 +12,9 @@ export const NOT_TEXT_FILE = "This file is not a text file. Save it as CSV UTF-8
 export const TOO_BIG_SENTENCE =
   "This file is too big to open in this browser. Try a smaller file, or save it with fewer rows or columns.";
 
-// The measured limit for a CSV read whole: a 500 MB Windows-1252 file needed
-// 4.1 GB of browser memory, and above about 536.9 million characters
-// Chromium's Windows-1252 decode returns an empty string.
+// The limit for a CSV read whole: a 500 MB Windows-1252 file needed 4.1 GB of
+// browser memory, and the review measured a zero-length decode for a
+// 1,000,000,024-byte buffer, at Chromium's ~536.9-million-character string limit.
 export const MAX_WHOLE_FILE_BYTES = 268_435_456;
 
 /**

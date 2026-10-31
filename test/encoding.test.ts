@@ -546,6 +546,15 @@ test("a UTF-8 CSV over the whole-file limit still streams its bytes", async () =
   assert.equal(file.wholeReads, 0, "the streaming path is not capped");
 });
 
+test("a file already read as text over the limit is refused before it is read again", async () => {
+  const { rememberCsvReading } = await import("../src/app/encoding.ts");
+  const bytes = windows1252("period,product\n2025,Café\n");
+  const file = new ReportedSizeFile([bytes], "big-decided-text.csv", WHOLE_FILE_CAP + 1);
+  rememberCsvReading(file, { kind: "text" });
+  await assert.rejects(readCsvFile(file), { message: TOO_BIG });
+  assert.equal(file.wholeReads, 0, "the decided-text branch never reads a file over the limit");
+});
+
 test("a non-empty buffer decoded as empty text shows the too-big sentence", () => {
   assert.throws(() => checkedText(Uint8Array.from([0x41]), ""), { message: TOO_BIG });
   const text = "period,product\n2025,Café\n";
