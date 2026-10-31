@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { cumulativeColumns, drill, measureName, type DrillFilter, type Query } from "../../engine.ts";
 import { finiteOrBlank } from "../exportExcel.ts";
 import { saveOnce, toExportCsv } from "../files.ts";
 import { price, signedPercent, signedWhole, whole } from "../format.ts";
 import { moverHeader, terms } from "../report.ts";
 import type { Run } from "../Results.tsx";
-import { TableActions, TextCell, display } from "./shared.tsx";
+import { QueryFailed, TableActions, TextCell, display, useLoad } from "./shared.tsx";
 
 /** The export keeps its short column names; the table has room to spell these out. */
 const FULL_HEAD: Record<string, string> = { "New config.": "New configurations", Discontinued: "Discontinued configurations" };
@@ -26,26 +26,21 @@ export function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: s
   // `request` names the grouping, filters and search the rows were found for, so "No rows match." waits for the
   // request made last.
   const request = JSON.stringify([groupBy, filters, search]);
-  const [data, setData] = useState<{ groupBy: number; request: string | null; rows: Record<string, unknown>[] }>({
-    groupBy: 0,
-    request: null,
-    rows: [],
-  });
+  const { loaded, failed } = useLoad(
+    request,
+    () =>
+      props
+        .query()
+        .then((query) => drill(query, config, { columns: options[groupBy].columns, filters, sortBy: props.sortBy, search, limit: 200 }))
+        .then((rows) => ({ groupBy, rows })),
+    [props.run, groupBy, filters, props.sortBy, search],
+  );
   const [saveError, setSaveError] = useState("");
-  const rows = data.rows;
-  const group = options[data.groupBy] ?? options[0];
-  const canDrill = data.groupBy < levels.length - 1;
-
-  useEffect(() => {
-    let stale = false;
-    props
-      .query()
-      .then((query) => drill(query, config, { columns: options[groupBy].columns, filters, sortBy: props.sortBy, search, limit: 200 }))
-      .then((result) => !stale && setData({ groupBy, request, rows: result }));
-    return () => {
-      stale = true;
-    };
-  }, [props.run, groupBy, filters, props.sortBy, search]);
+  const shown = loaded?.value;
+  const rows = shown?.rows ?? [];
+  const shownGroupBy = shown?.groupBy ?? 0;
+  const group = options[shownGroupBy] ?? options[0];
+  const canDrill = shownGroupBy < levels.length - 1;
 
   const downloadAll = () => {
     setSaveError("");
@@ -60,7 +55,7 @@ export function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: s
       "text/csv",
     ).catch((e) => setSaveError(`Could not save every row: ${e instanceof Error ? e.message : String(e)}`));
   };
-  const empty = emptyNote(rows, request, data.request);
+  const empty = emptyNote(rows, request, loaded?.key ?? null);
 
   const mixOf = (row: Record<string, unknown>) =>
     levels.reduce((sum, _, i) => sum + Number(row[`mix_${i + 1}`] ?? 0), 0);
@@ -134,61 +129,63 @@ export function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: s
         <button onClick={downloadAll} title="Every row that matches, not only the 200 shown">All rows</button>
         {saveError && <p className="error" role="alert">{saveError}</p>}
       </div>
-      <div className="scroll">
-        <table className="dense">
-          <thead>
-            <tr>
-              {header.map((h, i) => (
-                <th key={h} className={i >= group.columns.length ? "num" : ""}>{FULL_HEAD[h] ?? h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => {
-              const v = values(row);
-              return (
-                <tr
-                  key={group.columns.map((c) => display(row[c])).join("|")}
-                  className={canDrill ? "clickable" : ""}
-                  title={canDrill ? `Show ${levels[data.groupBy + 1].name} within this row` : undefined}
-                  tabIndex={canDrill ? 0 : undefined}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") e.currentTarget.click();
-                  }}
-                  onClick={() => {
-                    if (!canDrill) return;
-                    const added = group.columns.map((column) => ({
-                      column,
-                      value: row[column] === null ? null : String(row[column]),
-                    }));
-                    setFilters([...filters.filter((f) => !group.columns.includes(f.column)), ...added]);
-                    setGroupBy(data.groupBy + 1);
-                  }}
-                >
-                  {group.columns.map((c) => <TextCell key={c} value={row[c]} />)}
-                  <td className="num">{whole(v.s0)}</td>
-                  <td className="num">{whole(v.s1)}</td>
-                  <td className="num strong">{signedWhole(v.change)}</td>
-                  <td className="num">{signedWhole(v.volume)}</td>
-                  <td className="num">{signedWhole(v.mix)}</td>
-                  <td className="num">{signedWhole(v.price)}</td>
-                  <td className="num">{signedWhole(v.newConfig)}</td>
-                  <td className="num">{signedWhole(v.discontinued)}</td>
-                  <td className="num">{signedWhole(v.noUnits)}</td>
-                  <td className="num">{price(v.p0)}</td>
-                  <td className="num">{price(v.p1)}</td>
-                  <td className="num">{signedPercent(v.priceChange)}</td>
-                </tr>
-              );
-            })}
-            {empty && (
+      {failed ? <QueryFailed /> : (
+        <div className="scroll">
+          <table className="dense">
+            <thead>
               <tr>
-                <td colSpan={header.length} className="hint">{empty}</td>
+                {header.map((h, i) => (
+                  <th key={h} className={i >= group.columns.length ? "num" : ""}>{FULL_HEAD[h] ?? h}</th>
+                ))}
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {rows.map((row) => {
+                const v = values(row);
+                return (
+                  <tr
+                    key={group.columns.map((c) => display(row[c])).join("|")}
+                    className={canDrill ? "clickable" : ""}
+                    title={canDrill ? `Show ${levels[shownGroupBy + 1].name} within this row` : undefined}
+                    tabIndex={canDrill ? 0 : undefined}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") e.currentTarget.click();
+                    }}
+                    onClick={() => {
+                      if (!canDrill) return;
+                      const added = group.columns.map((column) => ({
+                        column,
+                        value: row[column] === null ? null : String(row[column]),
+                      }));
+                      setFilters([...filters.filter((f) => !group.columns.includes(f.column)), ...added]);
+                      setGroupBy(shownGroupBy + 1);
+                    }}
+                  >
+                    {group.columns.map((c) => <TextCell key={c} value={row[c]} />)}
+                    <td className="num">{whole(v.s0)}</td>
+                    <td className="num">{whole(v.s1)}</td>
+                    <td className="num strong">{signedWhole(v.change)}</td>
+                    <td className="num">{signedWhole(v.volume)}</td>
+                    <td className="num">{signedWhole(v.mix)}</td>
+                    <td className="num">{signedWhole(v.price)}</td>
+                    <td className="num">{signedWhole(v.newConfig)}</td>
+                    <td className="num">{signedWhole(v.discontinued)}</td>
+                    <td className="num">{signedWhole(v.noUnits)}</td>
+                    <td className="num">{price(v.p0)}</td>
+                    <td className="num">{price(v.p1)}</td>
+                    <td className="num">{signedPercent(v.priceChange)}</td>
+                  </tr>
+                );
+              })}
+              {empty && (
+                <tr>
+                  <td colSpan={header.length} className="hint">{empty}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
       <p className="hint">
         Top 200 by size. Each row’s effects add up to its change. {t.hintUnits}
         {canDrill && " Select a row to break it down by the next attribute."} {t.hintChange}

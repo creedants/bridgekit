@@ -140,7 +140,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
         attribute values, such as A-100, Large, Red.
       </p>
 
-      <div className="tabs" role="tablist">
+      <div className="tabs" role="tablist" aria-label="Result views">
         {tabs.map((entry, i) => (
           <button
             key={entry.id}

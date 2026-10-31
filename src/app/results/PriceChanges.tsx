@@ -1,23 +1,19 @@
-import { useEffect, useState } from "react";
-import { priceDistribution, priceRealization, type PriceBucket, type Query, type Realization } from "../../engine.ts";
+import { useState } from "react";
+import { priceDistribution, priceRealization, type Query, type Realization } from "../../engine.ts";
 import { parsePlannedIncrease } from "../files.ts";
 import { percent, signedPercent, signedWhole, whole } from "../format.ts";
 import { terms } from "../report.ts";
 import type { Run } from "../Results.tsx";
-import { Kpi, TableActions, TextCell, display } from "./shared.tsx";
+import { Kpi, QueryFailed, TableActions, TextCell, display, useLoad } from "./shared.tsx";
 
 export function PriceChanges(props: { run: Run; query: () => Promise<Query> }) {
-  const [data, setData] = useState<{ buckets: PriceBucket[]; averageChange: number } | null>(null);
-  useEffect(() => {
-    let stale = false;
-    props
-      .query()
-      .then((query) => priceDistribution(query, props.run.config))
-      .then((result) => !stale && setData(result));
-    return () => {
-      stale = true;
-    };
-  }, [props.run]);
+  const { loaded, failed } = useLoad(
+    props.run,
+    () => props.query().then((query) => priceDistribution(query, props.run.config)),
+    [props.run],
+  );
+  const data = loaded?.value ?? null;
+  if (failed) return <QueryFailed />;
   if (!data) return null;
   const t = terms(props.run.config);
   const widest = Math.max(...data.buckets.map((b) => b.share), 0.0001);
@@ -75,18 +71,13 @@ function RealizationTable(props: { run: Run; query: () => Promise<Query>; overal
   const levels = props.run.config.levels;
   const [groupBy, setGroupBy] = useState(0);
   const [target, setTarget] = useState("");
-  const [data, setData] = useState<{ groupBy: number; rows: Realization[] }>({ groupBy: 0, rows: [] });
-  useEffect(() => {
-    let stale = false;
-    props
-      .query()
-      .then((query) => priceRealization(query, props.run.config, levels[groupBy].columns))
-      .then((rows) => !stale && setData({ groupBy, rows }));
-    return () => {
-      stale = true;
-    };
-  }, [props.run, groupBy]);
-  const columns = levels[data.groupBy].columns;
+  const { loaded, failed } = useLoad(
+    groupBy,
+    () => props.query().then((query) => priceRealization(query, props.run.config, levels[groupBy].columns)),
+    [props.run, groupBy],
+  );
+  const columns = levels[loaded?.key ?? 0].columns;
+  const rows = loaded?.value ?? [];
   const t = terms(props.run.config);
   const plan = parsePlannedIncrease(target);
   const planned = typeof plan === "object" ? plan.value / 100 : 0;
@@ -131,27 +122,29 @@ function RealizationTable(props: { run: Run; query: () => Promise<Query>; overal
             {percent(props.overall / planned)} of plan.
           </span>
         )}
-        <TableActions name="price-realization.csv" header={header} rows={() => data.rows.map(cells)} />
+        <TableActions name="price-realization.csv" header={header} rows={() => rows.map(cells)} />
       </div>
-      <div className="scroll">
-        <table className="dense">
-          <thead>
-            <tr>{header.map((h, i) => <th key={h} className={i >= columns.length ? "num" : ""}>{h}</th>)}</tr>
-          </thead>
-          <tbody>
-            {data.rows.map((row) => (
-              <tr key={columns.map((c) => display(row.keys[c])).join("|")}>
-                {columns.map((c) => <TextCell key={c} value={row.keys[c]} />)}
-                <td className="num">{whole(row.matchedSales)}</td>
-                <td className="num">{signedWhole(row.priceEffect)}</td>
-                <td className="num">{signedPercent(row.change)}</td>
-                {hasTarget && <td className="num">{percent(row.change / planned)}</td>}
-                {hasTarget && <td className="num">{signedWhole(againstPlan(row))}</td>}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {failed ? <QueryFailed /> : (
+        <div className="scroll">
+          <table className="dense">
+            <thead>
+              <tr>{header.map((h, i) => <th key={h} className={i >= columns.length ? "num" : ""}>{h}</th>)}</tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={columns.map((c) => display(row.keys[c])).join("|")}>
+                  {columns.map((c) => <TextCell key={c} value={row.keys[c]} />)}
+                  <td className="num">{whole(row.matchedSales)}</td>
+                  <td className="num">{signedWhole(row.priceEffect)}</td>
+                  <td className="num">{signedPercent(row.change)}</td>
+                  {hasTarget && <td className="num">{percent(row.change / planned)}</td>}
+                  {hasTarget && <td className="num">{signedWhole(againstPlan(row))}</td>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
       <p className="hint">
         Realized change is the like-for-like price effect over what this period’s volume would have cost at prior
         prices. {hasTarget && `${t.againstPlan} `}

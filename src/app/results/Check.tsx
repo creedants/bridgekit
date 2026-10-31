@@ -7,27 +7,17 @@ import { terms } from "../report.ts";
 import type { Run } from "../Results.tsx";
 import { TABLE } from "../setup.ts";
 import { agree } from "../SetupPanel.tsx";
+import { QueryFailed, useLoad } from "./shared.tsx";
 
 export function Check(props: { run: Run; warnings: string[]; query: () => Promise<Query> }) {
   const { check, config, ms, tieOut: money } = props.run;
   const tieOut = tieOutLines(config, money, props.run.result);
-  const [notes, setNotes] = useState<string[]>([]);
-  useEffect(() => {
-    let stale = false;
-    setNotes([]);
-    props
-      .query()
-      .then((query) => dataCheckNotes(query, TABLE, props.run.formulaBlanks))
-      .then((sentences) => {
-        if (!stale) setNotes(sentences);
-      })
-      .catch(() => {
-        if (!stale) setNotes([]);
-      });
-    return () => {
-      stale = true;
-    };
-  }, [props.run]);
+  const { loaded, failed } = useLoad(
+    props.run,
+    () => props.query().then((query) => dataCheckNotes(query, TABLE, props.run.formulaBlanks)),
+    [props.run],
+  );
+  const notes = loaded?.key === props.run ? loaded.value : [];
   const lines: [string, number][] = [
     ["Rows read (after filters)", check.rows],
     [`Rows in ${config.prior}`, check.priorRows],
@@ -57,7 +47,7 @@ export function Check(props: { run: Run; warnings: string[]; query: () => Promis
       ) : (
         <ul className="warnings">{props.warnings.map((w) => <li key={w}>{w}</li>)}</ul>
       )}
-      {notes.map((sentence) => <p className="hint" key={sentence}>{sentence}</p>)}
+      {failed ? <QueryFailed /> : notes.map((sentence) => <p className="hint" key={sentence}>{sentence}</p>)}
       <table className="narrow">
         <tbody>
           {lines.map(([label, value]) => (

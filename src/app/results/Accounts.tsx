@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { accountBridge, measureName, type AccountGroup, type Query } from "../../engine.ts";
 import { percent, signedWhole, whole } from "../format.ts";
 import type { Run } from "../Results.tsx";
 import { agree } from "../SetupPanel.tsx";
-import { Kpi, TextCell } from "./shared.tsx";
+import { Kpi, QueryFailed, TextCell, useLoad } from "./shared.tsx";
 
 const ACCOUNT_LABELS: Record<AccountGroup["status"], string> = {
   new: "New",
@@ -17,22 +17,15 @@ export function Accounts(props: { run: Run; query: (() => Promise<Query>) | null
   const guess =
     textColumns.find((c) => /customer|account|client|parent|sold.?to|buyer/i.test(c)) ?? textColumns[0] ?? "";
   const [column, setColumn] = useState(guess);
+  const live = props.query !== null;
+  const run = props.query;
   // The figures are kept with the column they were fetched for, so the four
   // groups can never appear under another column's name.
-  const [fetched, setFetched] = useState<{ column: string; groups: AccountGroup[] } | null>(null);
-  const live = props.query !== null;
-  useEffect(() => {
-    if (!column) return;
-    const run = props.query;
-    if (run === null) return;
-    let stale = false;
-    run()
-      .then((query) => accountBridge(query, config, column))
-      .then((result) => !stale && setFetched({ column, groups: result }));
-    return () => {
-      stale = true;
-    };
-  }, [props.run, column, live]);
+  const { loaded, failed } = useLoad(
+    column,
+    !column || run === null ? null : () => run().then((query) => accountBridge(query, config, column)),
+    [props.run, column, live],
+  );
   const toolbar = (
     <div className="toolbar">
       <label>
@@ -47,7 +40,15 @@ export function Accounts(props: { run: Run; query: (() => Promise<Query>) | null
     </div>
   );
   if (!column) return <p className="hint">This view needs a text column such as customer.</p>;
-  const groups = fetched !== null && fetched.column === column ? fetched.groups : null;
+  if (failed) {
+    return (
+      <div>
+        {toolbar}
+        <QueryFailed />
+      </div>
+    );
+  }
+  const groups = loaded?.key === column ? loaded.value : null;
   if (!groups) return <div>{toolbar}</div>;
   const by = Object.fromEntries(groups.map((g) => [g.status, g])) as Record<AccountGroup["status"], AccountGroup>;
   const existingPrior = by.lost.prior + by.growing.prior + by.shrinking.prior;

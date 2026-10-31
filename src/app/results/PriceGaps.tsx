@@ -1,28 +1,19 @@
-import { useEffect, useState } from "react";
 import { cumulativeColumns, priceGaps, type PriceGap, type Query } from "../../engine.ts";
 import { percent, price, signedPercent, signedWhole, whole } from "../format.ts";
 import { terms } from "../report.ts";
 import type { Run } from "../Results.tsx";
-import { Kpi, TableActions, TextCell, display } from "./shared.tsx";
+import { Kpi, QueryFailed, TableActions, TextCell, display, useLoad } from "./shared.tsx";
 
 export function PriceGaps(props: { run: Run; query: () => Promise<Query> }) {
   const { config } = props.run;
   const t = terms(config);
   const k = config.levels.length;
-  const [data, setData] = useState<Awaited<ReturnType<typeof priceGaps>> | null>(null);
-  useEffect(() => {
-    let stale = false;
-    props
-      .query()
-      .then((query) => priceGaps(query, config))
-      .then((result) => !stale && setData(result));
-    return () => {
-      stale = true;
-    };
-  }, [props.run]);
+  const { loaded, failed } = useLoad(props.run, () => props.query().then((query) => priceGaps(query, config)), [props.run]);
+  const data = loaded?.value ?? null;
   if (k < 2) {
     return <p className="hint">Price gaps need two or more attributes. Put the one to compare, usually customer, last.</p>;
   }
+  if (failed) return <QueryFailed />;
   if (!data) return null;
   const last = config.levels[k - 1].name;
   const peers = config.levels.slice(0, k - 1).map((l) => l.name).join(" + ");

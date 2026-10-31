@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
-import { sensitivity, type Alternative, type Query } from "../../engine.ts";
+import { sensitivity, type Query } from "../../engine.ts";
 import { shorten } from "../files.ts";
 import { percent, signedWhole, whole } from "../format.ts";
 import type { Run } from "../Results.tsx";
+import { QueryFailed, useLoad } from "./shared.tsx";
 
 /**
  * The Setup check hint. `prices` holds the price effect of the full setup and
@@ -14,19 +14,15 @@ export function setupCheckHint(prices: number[], rowCount: number): string {
 }
 
 export function SetupCheck(props: { run: Run; query: (() => Promise<Query>) | null }) {
-  const [rows, setRows] = useState<Alternative[] | null>(null);
   const live = props.query !== null;
-  useEffect(() => {
-    const run = props.query;
-    if (run === null) return;
-    let stale = false;
-    run()
-      .then((query) => sensitivity(query, props.run.config))
-      .then((result) => !stale && setRows(result));
-    return () => {
-      stale = true;
-    };
-  }, [props.run, live]);
+  const run = props.query;
+  const { loaded, failed } = useLoad(
+    props.run,
+    run === null ? null : () => run().then((query) => sensitivity(query, props.run.config)),
+    [props.run, live],
+  );
+  if (failed) return <QueryFailed />;
+  const rows = loaded?.value ?? null;
   if (!rows) {
     // A held read has no query to finish, so its sentence would never clear.
     if (!live) return null;
