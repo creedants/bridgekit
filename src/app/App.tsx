@@ -724,6 +724,7 @@ export function App() {
       e.preventDefault();
       const intent = pasteIntent(text, displayed.current);
       if (intent === "refuse") {
+        setAnnounced(null);
         showFailure(NOT_A_TABLE);
         return;
       }
