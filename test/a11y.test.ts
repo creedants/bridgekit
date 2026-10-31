@@ -1033,6 +1033,114 @@ test("a refused Parquet pick clears the ready announcement and says why", async 
   }
 });
 
+test("a refused paste clears the ready announcement beside its alert", async () => {
+  const raw = await openDatabase();
+  const mounted = await mountApp("?sample=1000", queued(raw));
+  try {
+    await mounted.until(() => politeRegion(mounted.container)?.textContent === "Bridge calculated.", "the announcement");
+    await mounted.dispatchPaste("just a sentence");
+    assert.equal(
+      politeRegion(mounted.container)?.textContent,
+      "",
+      "the live region no longer says the bridge is ready",
+    );
+    const alert = walk(mounted.container).find((node) => node.getAttribute("role") === "alert");
+    assert.ok(alert, "the refusal is on screen");
+    assert.equal(
+      alert.textContent,
+      "The pasted text is not a table. Copy cells from a spreadsheet, with a header row.",
+    );
+  } finally {
+    await mounted.unmount();
+  }
+});
+
+/** Holds the period list's own query, so a read for changed settings stays open until the test releases it. */
+function heldPeriodList(query: Query) {
+  let open: Promise<void> | null = null;
+  let release = () => {};
+  return {
+    query: (sql: string) => (open !== null && sql.includes("distinct_labels") ? open.then(() => query(sql)) : query(sql)),
+    hold() {
+      open = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    },
+    release() {
+      open = null;
+      release();
+    },
+  };
+}
+
+test("Calculate stays off while the period list for changed settings is being read", async () => {
+  const raw = await openDatabase();
+  const periods = heldPeriodList(queued(raw));
+  const mounted = await mountApp("?sample=1000", periods.query);
+  const calculateButton = () =>
+    harnessNodes(mounted.container, "BUTTON").find((node) => node.textContent.trim() === "Calculate bridge");
+  /** React writes the disabled prop as the attribute here, so both count, as in `isTabStop`. */
+  const offered = () => {
+    const button = calculateButton();
+    return button !== undefined && !button.disabled && !button.hasAttribute("disabled");
+  };
+  const status = () => harnessByClass(mounted.container, "status").map((node) => node.textContent).join("");
+  try {
+    await waitForSampleRun(mounted);
+    assert.equal(offered(), true, "Calculate is offered once the sample's own periods are read");
+
+    periods.hold();
+    const addFilter = harnessNodes(mounted.container, "SELECT").find(
+      (node) => node.getAttribute("aria-label") === "Add filter",
+    );
+    assert.ok(addFilter, "the Add filter control is on screen");
+
+    // A settings change commits before the effect that starts the read runs. That gap is
+    // the one the ticket is about, so the event runs outside act and only the render's
+    // own microtask is awaited.
+    const globals = globalThis as unknown as {
+      IS_REACT_ACT_ENVIRONMENT: boolean;
+      __harnessDispatch: (type: string, event: Record<string, unknown>) => void;
+    };
+    const wasAct = globals.IS_REACT_ACT_ENVIRONMENT;
+    globals.IS_REACT_ACT_ENVIRONMENT = false;
+    try {
+      addFilter.value = "customer";
+      addFilter.dispatchEvent({
+        type: "change",
+        bubbles: true,
+        target: addFilter,
+        preventDefault() {},
+        stopPropagation() {},
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      assert.equal(offered(), false, "Calculate is off before the period read for the new settings starts");
+      globals.__harnessDispatch("keydown", {
+        key: "Enter",
+        ctrlKey: true,
+        target: harnessDocument.body,
+        preventDefault() {},
+        stopPropagation() {},
+      });
+      await Promise.resolve();
+      assert.ok(!status().includes("Calculating"), `the shortcut started no run, but the status says ${status()}`);
+    } finally {
+      globals.IS_REACT_ACT_ENVIRONMENT = wasAct;
+    }
+
+    await mounted.until(() => status().includes("Reading periods"), "the period read for the new settings");
+    assert.equal(offered(), false, "Calculate stays off while the read is open");
+
+    periods.release();
+    await mounted.until(offered, "Calculate to be offered again");
+    assert.equal(status(), "", "the read finished");
+  } finally {
+    periods.release();
+    await mounted.unmount();
+  }
+});
+
 const PASTED = "period\tcustomer\tunits\n2025\tC0001\t10\n2026\tC0001\t12\n2026\tC0002\t7\n";
 
 const ROWS_FAILED = "Could not finish checking the rows used. Choose Calculate bridge again.";
