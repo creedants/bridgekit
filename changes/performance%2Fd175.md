@@ -1,0 +1,1 @@
+- A file whose attribute column is named `own_price`, `peer_price` or `opportunity` now shows the same Price gaps rows and totals as a file with a neutral name, where the price or the gap used to read NaN. The peer average is unchanged and still includes the row itself.
