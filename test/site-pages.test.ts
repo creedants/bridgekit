@@ -362,6 +362,12 @@ function graphOf(file: string, html: string, types: readonly string[]): Map<stri
       `${file} has an application/ld+json block that is not valid JSON: write it as one valid object`,
     );
   }
+  const extra = Object.keys(data).filter((key) => key !== "@context" && key !== "@graph");
+  assert.deepEqual(
+    extra,
+    [],
+    `${file} structured data has keys beside @context and @graph (${extra.join(", ")}): keep only those two at the top and put every fact in a @graph node`,
+  );
   assert.equal(
     data["@context"],
     "https://schema.org",
@@ -373,24 +379,22 @@ function graphOf(file: string, html: string, types: readonly string[]): Map<stri
       `${file} structured data has no @graph array: put the ${types.join(" and ")} nodes in one @graph`,
     );
   }
-  const graph: unknown[] = structured;
-  const found = new Map<string, GraphNode>();
-  for (const type of types) {
-    const nodes = graph.filter(
-      (node): node is GraphNode =>
-        typeof node === "object" &&
-        node !== null &&
-        "@type" in node &&
-        node["@type"] === type,
-    );
-    assert.equal(
-      nodes.length,
-      1,
-      `${file} @graph has ${nodes.length} ${type} nodes: give it exactly one`,
-    );
-    found.set(type, nodes[0]);
-  }
-  return found;
+  const nodes = structured.filter(
+    (node): node is GraphNode =>
+      typeof node === "object" && node !== null && !Array.isArray(node),
+  );
+  assert.equal(
+    nodes.length,
+    structured.length,
+    `${file} @graph holds ${structured.length - nodes.length} entries that are not objects: make every @graph entry a node`,
+  );
+  const found = nodes.map((node) => String(node["@type"])).sort();
+  assert.deepEqual(
+    found,
+    [...types].sort(),
+    `${file} @graph holds ${found.join(", ")}: keep exactly one ${types.join(" node and one ")} node`,
+  );
+  return new Map(nodes.map((node) => [String(node["@type"]), node]));
 }
 
 function checkHomeStructuredData(file: string, html: string): void {
@@ -436,6 +440,26 @@ function checkHomeStructuredData(file: string, html: string): void {
 
 test("the home page carries one structured-data block with WebSite and Organization", () => {
   checkHomeStructuredData("index.html", readPage("index.html"));
+});
+
+test("the structured-data checks reject a node the page does not describe", () => {
+  const home = readPage("index.html");
+  const withThing = home.replace('"@graph":[', '"@graph":[{"@type":"Thing"},');
+  assert.notEqual(withThing, home, 'index.html has no "@graph":[ to add a node to');
+  assert.throws(
+    () => checkHomeStructuredData("index.html", withThing),
+    /index\.html @graph holds Organization, Thing, WebSite: keep exactly/,
+  );
+});
+
+test("the structured-data checks reject an extra key beside @context and @graph", () => {
+  const home = readPage("index.html");
+  const withName = home.replace('{"@context"', '{"name":"PVM Bridge","@context"');
+  assert.notEqual(withName, home, 'index.html has no {"@context" to add a key to');
+  assert.throws(
+    () => checkHomeStructuredData("index.html", withName),
+    /index\.html structured data has keys beside @context and @graph \(name\)/,
+  );
 });
 
 test("the home page carries fewer than 600 visible words", () => {
