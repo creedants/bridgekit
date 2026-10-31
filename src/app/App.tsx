@@ -233,7 +233,7 @@ export type WriteOutcome<T> = { status: "wrote"; value: T } | { status: "superse
  * Owns the one loaded table. `claim()` is called in the pick handler, so claim
  * order is pick order, and each table number is the phase's load number.
  */
-export function createTableOwner(): { claim(): Claim; owner(): Claim | null } {
+export function createTableOwner(): { claim(): Claim; owner(): Claim | null; claimed(): boolean } {
   let count = 0;
   let newest: Claim | null = null;
   let held: Claim | null = null;
@@ -258,6 +258,7 @@ export function createTableOwner(): { claim(): Claim; owner(): Claim | null } {
       return claim;
     },
     owner: () => held,
+    claimed: () => count > 0,
   };
 }
 
@@ -365,6 +366,8 @@ export function App() {
   const [formulaBlanks, setFormulaBlanks] = useState(0);
   const [setupError, setSetupError] = useState("");
   const [sheetNote, setSheetNote] = useState<string | null>(null);
+  // The run whose finish the live region announces; null once any task starts.
+  const [announced, setAnnounced] = useState<number | null>(null);
   // A demonstration sample must not overwrite a setup saved for a file with the same columns.
   const writesSetup = useRef(true);
   // The loaded table's owner, so a load an earlier pick replaced never writes.
@@ -383,7 +386,6 @@ export function App() {
   const errorRef = useRef<HTMLParagraphElement>(null);
   // Clear data reloads on purpose, so it must not ask whether to leave.
   const leaving = useRef(false);
-  const sampleLinkRead = useRef(false);
 
   function db(): Promise<BrowserDatabase> {
     return startEngine();
@@ -398,6 +400,8 @@ export function App() {
   // Each kind of task keeps its own label, so one finishing cannot clear another's.
   async function task(kind: TaskKind, label: string, work: () => Promise<void>, keepError = false): Promise<boolean> {
     const id = ++taskRef.current;
+    // New work ends whatever the live region still says about the last run.
+    setAnnounced(null);
     setTasks((running) => new Map([...running].filter(([key]) => key !== kind)).set(kind, { label, id }));
     // A refused load's banner stays through the rebuilds its hold names, and no other task keeps it.
     if (!keepError) clearBanner();
@@ -619,6 +623,7 @@ export function App() {
             const amounts = await amountsNote(q);
             const check = await dataCheck(q, config);
             const tieOut = await periodMoney(q, config, { table: FILE_VIEW, periodColumn: PERIOD });
+            const id = Date.now();
             setRun({
               config,
               result,
@@ -633,9 +638,10 @@ export function App() {
               sample: fromSample,
               formulaBlanks,
               amounts,
-              id: Date.now(),
+              id,
               signature,
             });
+            setAnnounced(id);
             if (sampleLoad !== undefined) dispatch({ type: "ran", load: sampleLoad });
           } finally {
             scrollAfterRun.current = true;
@@ -664,11 +670,13 @@ export function App() {
   // A link to /app/?sample starts its load once the first frame is painted, so it
   // opens with the sample already calculated. That load opens the engine itself.
   useEffect(() => {
+    // The mount render's phase is initialPhase(location.search): reading only for a ?sample link.
+    if (phase.kind !== "reading") return;
     let timer = 0;
     const frame = requestAnimationFrame(() => {
       timer = window.setTimeout(() => {
-        if (sampleLinkRead.current || phase.kind !== "reading" || phase.load !== 0) return;
-        sampleLinkRead.current = true;
+        // A paste, drop or file pick made before this ran is the visitor's choice; it wins.
+        if (tables.claimed()) return;
         loadSample();
       }, 0);
     });
@@ -795,6 +803,8 @@ export function App() {
   const Results = useResultsView(resultsChunk);
   const shown = mainView(phase, engineState);
   const status = phase.kind === "reading" ? phase.label : ([...tasks.values()].at(-1)?.label ?? "");
+  // A load empties the run and a setup change makes it stale, so either way this line derives to "".
+  const spoken = status || (fresh && fresh.id === announced ? "Bridge calculated." : "");
 
   return (
     <div
@@ -819,7 +829,8 @@ export function App() {
               : "No data loaded"}
         </span>
         {sheetNote && phase.kind !== "reading" && <span className="hint">{sheetNote}</span>}
-        <span className="status" aria-live="polite">{status}</span>
+        <span className="status">{status}</span>
+        <span className="visually-hidden" aria-live="polite">{spoken}</span>
         <nav>
           {filePicker}
           <button disabled={!fresh || busy} onClick={exportWorkbook} aria-label="Export Excel">Export<span className="wide-only"> Excel</span></button>

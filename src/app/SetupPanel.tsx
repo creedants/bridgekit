@@ -590,7 +590,7 @@ function FilterEditor(props: {
         <button className="icon" aria-label="Remove filter" title="Remove" onClick={props.onRemove}>×</button>
       </div>
       {values.length > 8 && (
-        <input placeholder="Search values" value={search} onChange={(e) => setSearch(e.target.value)} />
+        <input placeholder="Search values" aria-label="Search values" value={search} onChange={(e) => setSearch(e.target.value)} />
       )}
       <div className="values">
         {shown.map((value) => (
