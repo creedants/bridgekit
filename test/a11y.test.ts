@@ -36,6 +36,40 @@ const FAKE_USE_CONFIG_MODULE = `
 export function useCommentaryOffer() { return "hidden"; }
 `;
 
+// The workspace panel's account calls reach the Worker; the test answers them so the
+// real panel renders its saved setups without a network.
+const FAKE_ACCOUNT_MODULE = `
+const api = () => globalThis.__bridgekitAccount;
+export function getConfig() { return Promise.resolve(api().config); }
+export function getUser() { return Promise.resolve(api().user); }
+export function listWorkspaces() { return Promise.resolve(api().workspaces); }
+export function preferredWorkspace(list, prefer, current) {
+  if (prefer && list.some((w) => w.id === prefer)) return prefer;
+  if (current && list.some((w) => w.id === current)) return current;
+  return list[0]?.id ?? "";
+}
+export function useCheckoutReturn() { return { returning: undefined, sentence: "" }; }
+export function getPlan() { return Promise.resolve(api().plan); }
+export function listBridges() { return Promise.resolve([]); }
+export function listSetups() { return Promise.resolve(api().setups); }
+export function billingView() { return { pro: "", paused: "", manage: false, subscribe: false, canManage: true }; }
+export function acceptInvitation() { return Promise.resolve(); }
+export function signOut() { return Promise.resolve(); }
+export function createWorkspace() { return Promise.resolve({ id: "w1" }); }
+export function openPortal() { return Promise.resolve({ portalUrl: "" }); }
+export function checkout() { return Promise.resolve({ checkoutUrl: "" }); }
+export function rememberCheckoutWorkspace() {}
+export function deleteSaved() { return Promise.resolve(); }
+export function saveSetup() { return Promise.resolve(); }
+export function saveBridge() { return Promise.resolve(); }
+export function getMembers() { return Promise.resolve({ members: [], invitations: [] }); }
+export function removeMember() { return Promise.resolve(); }
+export function invite() { return Promise.resolve(); }
+export function emailSignIn() { return Promise.resolve(); }
+export function providerSignIn() { return Promise.resolve(); }
+export function deleteAccount() { return Promise.resolve(); }
+`;
+
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier.includes("?url")) {
@@ -44,8 +78,11 @@ registerHooks({
     if (specifier === "./db.ts" && context.parentURL?.includes("/src/app/")) {
       return { url: `data:text/javascript,${encodeURIComponent(FAKE_DATABASE_MODULE)}`, shortCircuit: true };
     }
-    if (specifier === "./lazyChunk.ts" && context.parentURL?.endsWith("/src/app/App.tsx")) {
+    if (specifier === "./lazyChunk.ts" && context.parentURL?.includes("/src/app/App.tsx")) {
       return { url: `data:text/javascript,${encodeURIComponent(FAKE_LAZY_CHUNK_MODULE)}`, shortCircuit: true };
+    }
+    if (specifier === "./account.ts" && context.parentURL?.includes("/src/app/Workspace.tsx")) {
+      return { url: `data:text/javascript,${encodeURIComponent(FAKE_ACCOUNT_MODULE)}`, shortCircuit: true };
     }
     if (specifier === "./Waterfall.tsx") {
       return { url: `data:text/javascript,${encodeURIComponent(FAKE_WATERFALL_MODULE)}`, shortCircuit: true };
@@ -59,13 +96,18 @@ registerHooks({
     return nextResolve(specifier, context);
   },
   load(url, context, nextLoad) {
-    if (url.endsWith(".tsx")) {
-      const source = readFileSync(new URL(url), "utf8");
+    if (url.includes(".tsx")) {
+      const file = new URL(url);
+      const source = readFileSync(file.pathname, "utf8");
       const { code } = transformSync(source, {
         loader: "tsx",
         format: "esm",
         jsx: "automatic",
-        define: { "import.meta.env": "{}" },
+        // The plain page is the free build. One import adds the workspaces switch,
+        // so its panel can be mounted without changing what every other test sees.
+        define: {
+          "import.meta.env": file.searchParams.has("workspaces") ? '{"VITE_WORKSPACES":"1"}' : "{}",
+        },
       });
       return { format: "module", source: code, shortCircuit: true };
     }
@@ -528,7 +570,7 @@ function harnessRoot(React: typeof import("react"), container: HarnessElement) {
   return { flush, until };
 }
 
-async function mountApp(search: string, query: Query): Promise<Mounted> {
+async function mountApp(search: string, query: Query, options: { workspaces?: boolean } = {}): Promise<Mounted> {
   const doc = installHarnessDom();
   const React = await import("react");
   const { createRoot } = await import("react-dom/client");
@@ -537,7 +579,9 @@ async function mountApp(search: string, query: Query): Promise<Mounted> {
   location.href = `http://127.0.0.1:8790/app/${search}`;
   location.pathname = "/app/";
   (globalThis as unknown as { __bridgekitDatabase: HarnessDatabase }).__bridgekitDatabase = harnessDatabase(query);
-  const { App } = await import("../src/app/App.tsx");
+  // A non-literal specifier keeps the workspace build out of the type checker's module graph.
+  const appUrl = options.workspaces ? "../src/app/App.tsx?workspaces=1" : "../src/app/App.tsx";
+  const { App } = (await import(appUrl)) as typeof import("../src/app/App.tsx");
   const container = doc.createElement("div");
   doc.body.appendChild(container as unknown as HarnessNode);
   const root = createRoot(container as unknown as Element);
@@ -1055,6 +1099,56 @@ test("a refused paste clears the ready announcement beside its alert", async () 
   }
 });
 
+test("a refused saved setup clears the ready announcement beside its alert", async () => {
+  const raw = await openDatabase();
+  // The panel offers this setup for the loaded columns, but its units column is not in the file.
+  (globalThis as unknown as { __bridgekitAccount: unknown }).__bridgekitAccount = {
+    config: { email: true, providers: [], billing: false },
+    user: { id: "u1", email: "pricer@example.com", name: "Pricer" },
+    workspaces: [{ id: "w1", name: "Pricing team" }],
+    plan: { role: "owner", plan: { pro: true, seats: 1 } },
+    setups: [
+      {
+        id: "s1",
+        name: "Team setup",
+        createdAt: "2026-10-01T00:00:00Z",
+        createdBy: "pricer@example.com",
+        setup: {
+          periodColumn: "period",
+          grain: "value",
+          unitsColumn: "missing_units",
+          salesColumn: "sales",
+          levels: [{ name: "customer", columns: ["customer"] }],
+          filters: [],
+        },
+      },
+    ],
+  };
+  const mounted = await mountApp("?sample=1000", queued(raw), { workspaces: true });
+  const useButton = () =>
+    harnessNodes(mounted.container, "BUTTON").find((node) => node.textContent.trim() === "Use");
+  try {
+    await mounted.until(() => politeRegion(mounted.container)?.textContent === "Bridge calculated.", "the announcement");
+    await mounted.until(() => useButton() !== undefined, "the saved setup's Use button");
+    const button = useButton();
+    assert.ok(button, "the saved setup's Use button is on screen");
+    await mounted.React.act(async () => {
+      button.dispatchEvent({ type: "click", bubbles: true, target: button, preventDefault() {}, stopPropagation() {} });
+    });
+    await mounted.flush();
+    assert.equal(
+      politeRegion(mounted.container)?.textContent,
+      "",
+      "the live region no longer says the bridge is ready",
+    );
+    const alert = walk(mounted.container).find((node) => node.getAttribute("role") === "alert");
+    assert.ok(alert, "the refusal is on screen");
+    assert.equal(alert.textContent, "That saved setup does not match the columns in this data.");
+  } finally {
+    await mounted.unmount();
+  }
+});
+
 /** Holds the period list's own query, so a read for changed settings stays open until the test releases it. */
 function heldPeriodList(query: Query) {
   let open: Promise<void> | null = null;
@@ -1392,6 +1486,43 @@ test("a paste made while a sample link waits to load is the data the visitor see
       ["2025", "C0001", "10"],
       "the first preview row is the paste's first row",
     );
+  } finally {
+    releaseFrames();
+    await mounted.unmount();
+  }
+});
+
+test("a refused file pick made before a sample link's load cancels that load", async () => {
+  holdFrames();
+  const raw = await openDatabase();
+  const mounted = await mountApp("?sample=1000", queued(raw));
+  const picker = () =>
+    harnessNodes(mounted.container, "INPUT").find(
+      (node) =>
+        (node.getAttribute("type") ?? node.type) === "file" && (node.getAttribute("accept") ?? "").includes("csv"),
+    );
+  try {
+    const input = picker();
+    assert.ok(input, "the data file picker is on screen");
+    (input as unknown as { files: File[] }).files = [new File(["PAR1"], "reject.parquet")];
+    await mounted.React.act(async () => {
+      input.dispatchEvent({ type: "change", bubbles: true, target: input, preventDefault() {}, stopPropagation() {} });
+    });
+    await mounted.flush();
+    releaseFrames();
+    // Give the deferred sample load its chance; after this the refusal must still be what is shown.
+    for (let i = 0; i < 80; i += 1) {
+      await mounted.React.act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      });
+      if (politeRegion(mounted.container)?.textContent !== "") break;
+    }
+    const alert = walk(mounted.container).find((node) => node.getAttribute("role") === "alert");
+    assert.ok(alert, "the refusal is still on screen after the sample's turn");
+    assert.equal(alert.textContent, "Parquet files are not supported. Save the file as CSV or Excel and try again.");
+    assert.equal(politeRegion(mounted.container)?.textContent, "", "no bridge is announced");
+    const caption = harnessByClass(mounted.container, "source").map((node) => node.textContent).join("");
+    assert.equal(caption, "No data loaded", "the page is back on the start screen with no table");
   } finally {
     releaseFrames();
     await mounted.unmount();

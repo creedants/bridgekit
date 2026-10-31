@@ -1,0 +1,1 @@
+- A refused saved setup clears "Bridge calculated." from the live region beside its alert, and a file the page refuses before a sample link's load fires cancels that load and returns the page to its start screen, so the sample no longer loads and calculates over the refusal.
