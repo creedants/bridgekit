@@ -97,13 +97,19 @@ export function checkWarnings(run: Run, fileWarnings: string[] = []): string[] {
 
 export const WHOLE_ROW_FAILED = "Could not finish checking the rows used. Choose Calculate bridge again.";
 
-export type WholeRowWarnings = { readonly warnings: string[]; readonly failed: boolean };
+/** The whole-row note, and whether its query answered rather than only returning no note. */
+export type WholeRowCheck = { readonly warnings: string[]; readonly failed: boolean };
+
+interface WholeRowLookup {
+  readonly check: Promise<WholeRowCheck>;
+  readonly warnings: Promise<string[]>;
+}
 
 /** One whole-row lookup per result: App builds a fresh query callback on every render. */
-const wholeRowWarnings = new WeakMap<Run, Promise<WholeRowWarnings>>();
+const wholeRowLookups = new WeakMap<Run, WholeRowLookup>();
 
-export function wholeRowWarningsFor(run: Run, query: () => Promise<Query>): Promise<WholeRowWarnings> {
-  const cached = wholeRowWarnings.get(run);
+function wholeRowLookup(run: Run, query: () => Promise<Query>): WholeRowLookup {
+  const cached = wholeRowLookups.get(run);
   if (cached) return cached;
   // wholeRowNote answers null for its own failure too, so the rejection is read
   // at the query handed to it rather than from the promise it returns.
@@ -113,12 +119,23 @@ export function wholeRowWarningsFor(run: Run, query: () => Promise<Query>): Prom
       failed = true;
       throw error;
     });
-  const warnings: Promise<WholeRowWarnings> = query()
+  const check: Promise<WholeRowCheck> = query()
     .then((q) => wholeRowNote(watched(q), TABLE))
     .then((note) => ({ warnings: note ? [note] : [], failed }))
     .catch(() => ({ warnings: [], failed: true }));
-  wholeRowWarnings.set(run, warnings);
-  return warnings;
+  const lookup = { check, warnings: check.then((answered) => answered.warnings) };
+  wholeRowLookups.set(run, lookup);
+  return lookup;
+}
+
+/** The whole-row note and whether its query answered, for the Data check. */
+export function wholeRowCheckFor(run: Run, query: () => Promise<Query>): Promise<WholeRowCheck> {
+  return wholeRowLookup(run, query).check;
+}
+
+/** The whole-row note as a tab warning, which is all the tab badge counts. */
+export function wholeRowWarningsFor(run: Run, query: () => Promise<Query>): Promise<string[]> {
+  return wholeRowLookup(run, query).warnings;
 }
 
 /**
@@ -140,7 +157,7 @@ export function useWholeRowWarning(
   useEffect(() => {
     let stale = false;
     setState({ warnings: [], failed: false, resolved: false });
-    wholeRowWarningsFor(run, query).then(({ warnings, failed }) => {
+    wholeRowCheckFor(run, query).then(({ warnings, failed }) => {
       if (!stale) setState({ warnings, failed, resolved: true });
     });
     return () => {
