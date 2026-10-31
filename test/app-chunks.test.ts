@@ -7,19 +7,22 @@ import type { BridgeConfig, BridgeResult, DataCheck, Query, TieOut } from "../sr
 import {
   EXCEL_TYPE,
   excelFileName,
-  lazyChunk,
   workbookBytes,
-  type ChunkSentences,
   type ExcelTools,
-  type LazyChunk,
 } from "../src/app/exportExcel.ts";
 import { saveOnce } from "../src/app/files.ts";
+import { lazyChunk, type ChunkSentences, type LazyChunk } from "../src/app/lazyChunk.ts";
 import type { Results as ResultsComponent } from "../src/app/Results.tsx";
 
 const FAKE_DATABASE_MODULE = `
 export const PARQUET_REFUSAL = "That file is a Parquet file. Save it as CSV or Excel, then choose it again.";
-export function scheduleSpeculative() { return () => {}; }
 export function openBrowserDatabase() { return Promise.resolve(globalThis.__bridgekitDatabase); }
+`;
+
+const LAZY_CHUNK_URL = new URL("../src/app/lazyChunk.ts", import.meta.url).href;
+const FAKE_LAZY_CHUNK_MODULE = `
+export * from ${JSON.stringify(LAZY_CHUNK_URL)};
+export function scheduleSpeculative() { return () => {}; }
 `;
 
 // App.tsx is a .tsx file this runner cannot load by itself, so the esbuild copy
@@ -32,6 +35,9 @@ registerHooks({
     }
     if (specifier === "./db.ts" && context.parentURL?.endsWith("/src/app/App.tsx")) {
       return { url: `data:text/javascript,${encodeURIComponent(FAKE_DATABASE_MODULE)}`, shortCircuit: true };
+    }
+    if (specifier === "./lazyChunk.ts" && context.parentURL?.endsWith("/src/app/App.tsx")) {
+      return { url: `data:text/javascript,${encodeURIComponent(FAKE_LAZY_CHUNK_MODULE)}`, shortCircuit: true };
     }
     return nextResolve(specifier, context);
   },
