@@ -1,26 +1,14 @@
-import { useEffect, useState } from "react";
 import { cumulativeColumns, unmatched, type Query } from "../../engine.ts";
 import { price, signedWhole, whole } from "../format.ts";
 import { terms } from "../report.ts";
 import type { Run } from "../Results.tsx";
-import { TableActions, TextCell, display, matchLabel } from "./shared.tsx";
+import { QueryFailed, TableActions, TextCell, display, matchLabel, useLoad } from "./shared.tsx";
 
 export function Unmatched(props: { run: Run; query: () => Promise<Query> }) {
   const { config } = props.run;
   const t = terms(config);
   const keys = cumulativeColumns(config.levels, config.levels.length);
-  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
-
-  useEffect(() => {
-    let stale = false;
-    props
-      .query()
-      .then((query) => unmatched(query, config, 200))
-      .then((result) => !stale && setRows(result));
-    return () => {
-      stale = true;
-    };
-  }, [props.run]);
+  const { loaded, failed } = useLoad(props.run, () => props.query().then((q) => unmatched(q, config, 200)), [props.run]);
 
   const header = [...keys, "Units", t.measure, "Price", "Compared against", "Reference price", "Effect"];
   const cells = (row: Record<string, unknown>) => [
@@ -33,6 +21,9 @@ export function Unmatched(props: { run: Run; query: () => Promise<Query> }) {
     Number(row.new_config),
   ];
 
+  if (failed) return <QueryFailed />;
+  const rows = loaded?.key === props.run ? loaded.value : null;
+  if (rows === null) return <p className="hint">Checking for configurations with no prior match…</p>;
   if (rows.length === 0) {
     return <p className="hint">Every current-period configuration had an exact match in the prior period.</p>;
   }

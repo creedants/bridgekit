@@ -3,9 +3,10 @@ import { readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { test } from "node:test";
 import { transformSync } from "esbuild";
-import type { Query } from "../src/engine.ts";
+import type { BridgeConfig, Query } from "../src/engine.ts";
 import { createConnectionQueue, statementStartsTurn } from "../src/app/connectionQueue.ts";
 import { openDatabase } from "../src/duckdb.ts";
+import type { Run } from "../src/app/Results.tsx";
 
 // The page database needs a browser and wasm bundles, and the results view draws
 // its charts on a canvas. Both are replaced here so the real App can mount in Node.
@@ -508,19 +509,8 @@ interface Mounted {
   unmount: () => Promise<void>;
 }
 
-async function mountApp(search: string, query: Query): Promise<Mounted> {
-  const doc = installHarnessDom();
-  const React = await import("react");
-  const { createRoot } = await import("react-dom/client");
-  const location = (globalThis as unknown as { location: { href: string; pathname: string; search: string } }).location;
-  location.search = search;
-  location.href = `http://127.0.0.1:8790/app/${search}`;
-  location.pathname = "/app/";
-  (globalThis as unknown as { __bridgekitDatabase: HarnessDatabase }).__bridgekitDatabase = harnessDatabase(query);
-  const { App } = await import("../src/app/App.tsx");
-  const container = doc.createElement("div");
-  doc.body.appendChild(container as unknown as HarnessNode);
-  const root = createRoot(container as unknown as Element);
+/** The flush and wait helpers a mounted tree needs, shared by the app and the single-panel mounts. */
+function harnessRoot(React: typeof import("react"), container: HarnessElement) {
   const flush = async () => {
     for (let i = 0; i < 8; i += 1) await React.act(async () => {});
   };
@@ -535,6 +525,23 @@ async function mountApp(search: string, query: Query): Promise<Mounted> {
     }
     throw new Error(`timed out waiting for ${what}: ${walk(container).map((node) => node.textContent).join(" ").slice(0, 400)}`);
   };
+  return { flush, until };
+}
+
+async function mountApp(search: string, query: Query): Promise<Mounted> {
+  const doc = installHarnessDom();
+  const React = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const location = (globalThis as unknown as { location: { href: string; pathname: string; search: string } }).location;
+  location.search = search;
+  location.href = `http://127.0.0.1:8790/app/${search}`;
+  location.pathname = "/app/";
+  (globalThis as unknown as { __bridgekitDatabase: HarnessDatabase }).__bridgekitDatabase = harnessDatabase(query);
+  const { App } = await import("../src/app/App.tsx");
+  const container = doc.createElement("div");
+  doc.body.appendChild(container as unknown as HarnessNode);
+  const root = createRoot(container as unknown as Element);
+  const { flush, until } = harnessRoot(React, container);
   await React.act(async () => {
     root.render(React.createElement(App));
   });
@@ -555,6 +562,34 @@ async function mountApp(search: string, query: Query): Promise<Mounted> {
       });
       await flush();
     },
+    unmount: async () => {
+      await React.act(async () => {
+        root.unmount();
+      });
+      doc.body.removeChild(container as unknown as HarnessNode);
+    },
+  };
+}
+
+/** Mounts one component in its own container, for a panel whose query the test controls. */
+async function mountPanel(element: import("react").ReactElement): Promise<Mounted> {
+  const doc = installHarnessDom();
+  const React = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const container = doc.createElement("div");
+  doc.body.appendChild(container as unknown as HarnessNode);
+  const root = createRoot(container as unknown as Element);
+  const { flush, until } = harnessRoot(React, container);
+  await React.act(async () => {
+    root.render(element);
+  });
+  await flush();
+  return {
+    React,
+    container,
+    flush,
+    until,
+    dispatchPaste: async () => {},
     unmount: async () => {
       await React.act(async () => {
         root.unmount();
@@ -769,6 +804,151 @@ test("every results tab names the one panel, and the panel names the selected ta
     await moved("ArrowRight", "Movers");
     await moved("End", "Data check");
     await moved("Home", "Bridge");
+  } finally {
+    await mounted.unmount();
+  }
+});
+
+const PANEL_FAILURE = "Could not calculate this view. Choose Calculate bridge again.";
+const CHECKING_UNMATCHED = "Checking for configurations with no prior match…";
+const NO_UNMATCHED = "Every current-period configuration had an exact match in the prior period.";
+
+/** Clicks a results tab by its visible label. */
+async function selectResultsTab(mounted: Mounted, label: string): Promise<void> {
+  const tab = tabButtons(mounted.container).find((node) => node.textContent === label);
+  assert.ok(tab, `the ${label} tab is rendered`);
+  await mounted.React.act(async () => {
+    tab.dispatchEvent({ type: "click", bubbles: true, target: tab, preventDefault() {}, stopPropagation() {} });
+  });
+  await mounted.flush();
+}
+
+/** The hint paragraphs inside the one results panel, joined, so a test can read what the panel says. */
+function panelHints(container: HarnessElement): string {
+  const panel = walk(container).find((node) => node.getAttribute("role") === "tabpanel");
+  assert.ok(panel, "the results have a tab panel");
+  return harnessByClass(panel, "hint").map((node) => node.textContent).join(" | ");
+}
+
+test("Unmatched says it is checking before its query resolves, and claims a match only after", async () => {
+  const config: BridgeConfig = {
+    table: "t", periodColumn: "period", prior: "p0", current: "p1",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Design", columns: ["design"] }, { name: "Finish", columns: ["finish"] }],
+  };
+  const run = { config } as unknown as Run;
+  let release: (rows: Record<string, unknown>[]) => void = () => {};
+  const answer = new Promise<Query>((resolve) => {
+    release = (rows) => resolve((async () => rows) as unknown as Query);
+  });
+  const React = await import("react");
+  const { Unmatched } = await import("../src/app/results/Unmatched.tsx");
+  const mounted = await mountPanel(React.createElement(Unmatched, { run, query: () => answer }));
+  try {
+    const hints = () => harnessByClass(mounted.container, "hint").map((node) => node.textContent).join(" | ");
+    assert.ok(hints().includes(CHECKING_UNMATCHED), `the panel says it is checking while the query runs, but says ${hints()}`);
+    assert.ok(!hints().includes(NO_UNMATCHED), `the panel does not claim a match before the query resolves, but says ${hints()}`);
+    await mounted.React.act(async () => {
+      release([]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await mounted.flush();
+    assert.ok(hints().includes(NO_UNMATCHED), `the panel claims a match once the query resolves empty, but says ${hints()}`);
+    assert.ok(!hints().includes(CHECKING_UNMATCHED), `the checking sentence clears once the query resolves, but says ${hints()}`);
+  } finally {
+    await mounted.unmount();
+  }
+});
+
+test("the results tablist has the accessible name Result views", async () => {
+  const raw = await openDatabase();
+  const mounted = await mountApp("?sample=1000", queued(raw));
+  try {
+    await waitForSampleRun(mounted);
+    const strip = walk(mounted.container).find((node) => node.getAttribute("role") === "tablist");
+    assert.ok(strip, "the results have a tablist");
+    assert.equal(strip.getAttribute("aria-label"), "Result views");
+  } finally {
+    await mounted.unmount();
+  }
+});
+
+test("the Data check success line waits for the whole-row note query", async () => {
+  const config: BridgeConfig = {
+    table: "data", periodColumn: "period", prior: "2025", current: "2026",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Size", columns: ["size"] }],
+  };
+  const run = {
+    config,
+    check: {
+      rows: 2, priorRows: 1, currentRows: 1, otherPeriodRows: 0, blankPeriodRows: 0,
+      blankMeasureRows: 0, negativeUnitRows: 0, negativeSalesRows: 0, zeroUnitSalesRows: 0,
+    },
+    result: {
+      priorSales: 100,
+      currentSales: 120,
+      effects: [],
+      coverage: [{ level: 1, share: 1, label: "Exact", cells: 10, sales: 120 }],
+    },
+    tieOut: { prior: { period: "2025", inFile: 100, afterFilters: 100 }, current: { period: "2026", inFile: 120, afterFilters: 120 } },
+    ms: 1,
+    textColumns: ["size"],
+    periods: ["2025", "2026"],
+    description: [],
+    setup: { periodColumn: "period", grain: "value", unitsColumn: "units", salesColumn: "sales", levels: [{ name: "Size", columns: ["size"] }], filters: [] },
+    source: "sample",
+    sample: true,
+    formulaBlanks: 0,
+    amounts: null,
+  } as unknown as Run;
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const query: Query = async (sql) => {
+    if (sql.includes("DESCRIBE")) {
+      await gate;
+      return [
+        { column_name: "period", column_type: "VARCHAR" },
+        { column_name: "units", column_type: "DOUBLE" },
+        { column_name: "sales", column_type: "DOUBLE" },
+      ];
+    }
+    if (sql.includes("judged")) return [{ n: 0, example: null }];
+    return [];
+  };
+  const NO_ISSUES = "No issues found in the rows used.";
+  const React = await import("react");
+  const { Results } = await import("../src/app/Results.tsx");
+  const mounted = await mountPanel(React.createElement(Results, { run, query: () => Promise.resolve(query) }));
+  try {
+    await selectResultsTab(mounted, "Data check");
+    const success = () => harnessByClass(mounted.container, "ok").some((node) => node.textContent === NO_ISSUES);
+    assert.ok(!success(), "the Data check does not say it found no issues before the whole-row note query answers");
+    await mounted.React.act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await mounted.until(success, "the Data check success line");
+    assert.ok(success(), "the Data check says it found no issues once the whole-row note query answers");
+  } finally {
+    await mounted.unmount();
+  }
+});
+
+test("a rejected panel query says the view could not be calculated", async () => {
+  const raw = await openDatabase();
+  const mounted = await mountApp("?sample=1000", queued(raw));
+  try {
+    await waitForSampleRun(mounted);
+    // The panels under test read the calculated cells table, so dropping it makes their query reject.
+    await raw("DROP TABLE bridge_cells");
+    for (const label of ["Unmatched", "Price changes", "Movers"]) {
+      await selectResultsTab(mounted, label);
+      await mounted.until(() => panelHints(mounted.container).includes(PANEL_FAILURE), `the ${label} failure sentence`);
+      assert.ok(panelHints(mounted.container).includes(PANEL_FAILURE), `the ${label} panel says the view could not be calculated`);
+    }
   } finally {
     await mounted.unmount();
   }

@@ -1,29 +1,22 @@
-import { useEffect, useState } from "react";
-import { trend, type Query, type TrendStep } from "../../engine.ts";
+import { trend, type Query } from "../../engine.ts";
 import { shareOfPrior, signedPercent, signedWhole } from "../format.ts";
 import { trendPeriods } from "../periods.ts";
 import { trendHeader } from "../report.ts";
 import type { Run } from "../Results.tsx";
-import { TextCell } from "./shared.tsx";
+import { QueryFailed, TextCell, useLoad } from "./shared.tsx";
 
 const MAX_TREND_PERIODS = 13;
 
 export function Trend(props: { run: Run; query: (() => Promise<Query>) | null }) {
   const periods = trendPeriods(props.run.periods, MAX_TREND_PERIODS);
-  const [steps, setSteps] = useState<TrendStep[] | null>(null);
   const live = props.query !== null;
-  useEffect(() => {
-    if (periods.length < 3) return;
-    const run = props.query;
-    if (run === null) return;
-    let stale = false;
-    run()
-      .then((query) => trend(query, props.run.config, periods))
-      .then((result) => !stale && setSteps(result));
-    return () => {
-      stale = true;
-    };
-  }, [props.run, live]);
+  const run = props.query;
+  const { loaded, failed } = useLoad(
+    props.run,
+    periods.length < 3 || run === null ? null : () => run().then((query) => trend(query, props.run.config, periods)),
+    [props.run, live],
+  );
+  const steps = loaded?.value ?? null;
   if (periods.length < 3) {
     return (
       <p className="hint">
@@ -32,6 +25,7 @@ export function Trend(props: { run: Run; query: (() => Promise<Query>) | null })
       </p>
     );
   }
+  if (failed) return <QueryFailed />;
   if (!steps) {
     // A held read has no query to finish, so its sentence would never clear.
     if (!live) return null;
