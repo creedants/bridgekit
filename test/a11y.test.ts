@@ -591,7 +591,7 @@ function tabIndexZero(container: HarnessElement): HarnessElement[] {
 
 const NATIVELY_FOCUSABLE = new Set(["BUTTON", "INPUT", "SELECT", "TEXTAREA"]);
 
-/** Whether Tab would stop on this element: a non-negative tabindex, or a native control with no tabindex of its own. */
+/** An approximation of Chromium's Tab stops for a harness with no layout, so hidden elements still count. */
 function isTabStop(element: HarnessElement): boolean {
   const index = element.getAttribute("tabindex");
   if (index !== null) return Number(index) >= 0;
