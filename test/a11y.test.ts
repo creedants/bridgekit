@@ -607,11 +607,7 @@ async function pressKey(mounted: Mounted, element: HarnessElement, key: string):
 }
 
 async function waitForSampleRun(mounted: Mounted): Promise<void> {
-  await mounted.until(() => resultsHeading(mounted.container) !== undefined, "the results heading");
-  await mounted.until(
-    () => politeRegion(mounted.container)?.textContent === "Bridge calculated.",
-    'the "Bridge calculated." announcement',
-  );
+  await mounted.until(() => resultsHeading(mounted.container) !== undefined && tabButtons(mounted.container).length > 0, "the results tabs");
 }
 
 test("Calculate puts focus on the results heading and announces the bridge", async () => {

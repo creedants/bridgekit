@@ -28,7 +28,7 @@
   --radius: 0;
 }
 
-/* Lives here because styles.css is not part of this change. */
+/* Hidden on screen and still read by screen readers, such as the live region that says a bridge is ready. */
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -42,5 +42,5 @@
   border: 0;
 }
 
-/* The results heading takes focus after Calculate; styles.css hides its ring, so this overrides at (0,2,1). */
+/* The results heading takes focus after Calculate. styles.css removes its outline on :focus; this rule is more specific, so the keyboard ring shows. */
 h1.results-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
