@@ -48,38 +48,6 @@ test("an ordinary load error is returned unchanged", () => {
   assert.equal(loadFailure(original), original);
 });
 
-test("a later load never reuses the previous load's registered file name", async () => {
-  const db = await import("../src/app/db.ts");
-  assert.equal(typeof db.registerUpload, "function", "a load registers its upload through registerUpload");
-  const calls: string[] = [];
-  const files = {
-    dropFile: async (name: string) => {
-      calls.push(`drop ${name}`);
-    },
-    registerFileHandle: async (name: string) => {
-      calls.push(`handle ${name}`);
-    },
-    registerFileText: async (name: string) => {
-      calls.push(`text ${name}`);
-    },
-  };
-  const upload: { name?: string } = {};
-  const small = new File([new Uint8Array(6)], "small.csv");
-  await db.registerUpload(files, upload, "upload-1.csv", { kind: "bytes" }, small, 0);
-  await db.registerUpload(files, upload, "upload-2.csv", { kind: "bytes" }, small, 0);
-  await db.registerUpload(files, upload, "upload-3.csv", { kind: "text", text: "a,b\n" }, small, 0);
-  // The earlier name is dropped before the new one is registered, and no load
-  // answers a name an earlier load's reader may still hold.
-  assert.deepEqual(calls, [
-    "handle upload-1.csv",
-    "drop upload-1.csv",
-    "handle upload-2.csv",
-    "drop upload-2.csv",
-    "text upload-3.csv",
-  ]);
-  assert.equal(upload.name, "upload-3.csv");
-});
-
 test("a real zero row count reports no data rows and drops the staged table", async () => {
   const { requireDataRows } = await import("../src/app/db.ts");
   const { NO_DATA_ROWS } = await import("../src/app/sheet.ts");

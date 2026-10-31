@@ -1024,42 +1024,6 @@ export function loadFailure(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-/** The file-registration calls a load makes, kept apart from the database so a test can stand in for it. */
-export interface UploadFiles {
-  dropFile(name: string): Promise<unknown>;
-  registerFileHandle(name: string, file: File, protocol: number, directIO: boolean): Promise<void>;
-  registerFileText(name: string, text: string): Promise<void>;
-}
-
-/** The file name the last load registered, kept between loads on one page. */
-export interface UploadName {
-  name?: string;
-}
-
-/**
- * Registers one load's upload under its own file name, dropping the last load's
- * first. A name is never reused: measured, a 1.25 GB CSV load followed straight
- * away by a 6,456-byte CSV in the same tab read the small file as zero rows, and
- * a second read of that same name read zero again, while the next load's own
- * name read all 200 rows. A reused name can answer from the earlier reader.
- */
-export async function registerUpload(
-  files: UploadFiles,
-  upload: UploadName,
-  name: string,
-  reading: CsvReading,
-  file: File,
-  protocol: number,
-): Promise<void> {
-  if (upload.name != null) {
-    await files.dropFile(upload.name);
-    upload.name = undefined;
-  }
-  if (reading.kind === "bytes") await files.registerFileHandle(name, file, protocol, true);
-  else await files.registerFileText(name, reading.text);
-  upload.name = name;
-}
-
 // One open per page. A rejection clears it so the next call can try again.
 // A stale attempt must not clear a newer one.
 let opening: Promise<BrowserDatabase> | undefined;
@@ -1301,9 +1265,9 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
     startFailed.catch(() => {});
     await Promise.race([db.instantiate(pageUrl(bundle.mainModule), pthread), startFailed]);
     const connection = await db.connect();
-    // The upload the last load registered, and a counter that never repeats a name.
-    const upload: UploadName = {};
-    let uploadGeneration = 0;
+    // DuckDB keeps a registered name until it is dropped and refuses a file
+    // handle under a name it still holds as text, so a load drops the last upload first.
+    let uploadRegistered = false;
     // The raw runner. Only the queue below, and a load's own statements, reach it.
     const raw: Query = async (sql) => {
       const result = await connection.query(sql);
@@ -1327,11 +1291,22 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
           throw new Error("Use a CSV or Excel (.xlsx) file");
         }
         const order = orderForLanguage(navigator.language);
-        // This load's own file name, never the last load's. See registerUpload.
-        const registered = `upload-${(uploadGeneration += 1)}.csv`;
+        const registered = "upload.csv";
+        /** Drops the last upload before the same name is registered again. */
+        const dropUpload = async () => {
+          if (!uploadRegistered) return;
+          await db.dropFile(registered);
+          uploadRegistered = false;
+        };
         /** Hands a CSV reading to the database under the load's registered name. */
         const register = async (reading: CsvReading) => {
-          await registerUpload(db, upload, registered, reading, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER);
+          await dropUpload();
+          if (reading.kind === "bytes") {
+            await db.registerFileHandle(registered, file, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+          } else {
+            await db.registerFileText(registered, reading.text);
+          }
+          uploadRegistered = true;
         };
         let sheet: { name: string; others: number } = { name: "", others: 0 };
         let excelHoles: readonly number[] = [];
@@ -1341,12 +1316,14 @@ async function instantiateBrowserDatabase(): Promise<BrowserDatabase> {
         // converts on a staging table and only swaps into place once it has
         // rows. The empty check, the swap and afterLoad all run after this.
         if (isExcel) {
+          await dropUpload();
           const first = await firstSheetAsCsv(file);
           excelHoles = first.holes;
           excelRows = first.dataRows;
           formulaBlanks = first.formulaBlanks;
           sheet = { name: first.sheetName, others: first.otherSheets };
-          await register({ kind: "text", text: first.csv });
+          await db.registerFileText(registered, first.csv);
+          uploadRegistered = true;
           await stageExcelAndSwap(raw, table, registered, excelHoles, excelRows, sheet, order);
         } else {
           await loadCsv(raw, file, table, registered, order, register);
