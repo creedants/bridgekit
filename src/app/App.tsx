@@ -8,8 +8,8 @@ import {
   scheduleSpeculative,
   type BrowserDatabase,
 } from "./db.ts";
-import { exportExcel, lazyChunk, type ChunkSentences } from "./exportExcel.ts";
-import { isPastedTable, makeGuard, saveOnce, shorten } from "./files.ts";
+import { EXCEL_TYPE, excelFileName, lazyChunk, workbookBytes, type ChunkSentences, type LazyChunk } from "./exportExcel.ts";
+import { isPastedTable, saveOnce, shorten } from "./files.ts";
 import { fileProblem, periodView, periodsFor, type FileProblem, type Periods, type PeriodView } from "./fileProblems.ts";
 import { whole } from "./format.ts";
 import { findTotalRows, profileFile, type TotalRow } from "./profile.ts";
@@ -76,6 +76,26 @@ function prefetchResults(): void {
 }
 
 const RESULTS_PREFETCH_SETTLE_MS = 150;
+
+/**
+ * The Results component once its chunk loads, else null. The mount reads the
+ * already-resolved value so a chunk loaded before mount shows Results on the
+ * first render; every later resolution, from whichever caller started it,
+ * arrives through state, so the render tracks it. This starts no load of its
+ * own: the page's prefetch, a load, and Calculate still decide when the chunk
+ * downloads. A failed load leaves it null, as before.
+ */
+export function useResultsView(chunk: LazyChunk<ResultsView>): ResultsView | null {
+  const [view, setView] = useState<ResultsView | null>(() => chunk.loaded ?? null);
+  useEffect(() => {
+    const install = (loaded: ResultsView) => setView(() => loaded);
+    const stop = chunk.subscribe(install);
+    // A load can resolve between the mount read and this subscription.
+    if (chunk.loaded !== undefined) install(chunk.loaded);
+    return stop;
+  }, [chunk]);
+  return view;
+}
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -345,8 +365,6 @@ export function App() {
   const [formulaBlanks, setFormulaBlanks] = useState(0);
   const [setupError, setSetupError] = useState("");
   const [sheetNote, setSheetNote] = useState<string | null>(null);
-  // exportExcel saves its file itself, so the Excel export keeps a guard of its own.
-  const [exportGuard] = useState(() => makeGuard());
   // A demonstration sample must not overwrite a setup saved for a file with the same columns.
   const writesSetup = useRef(true);
   // The loaded table's owner, so a load an earlier pick replaced never writes.
@@ -725,13 +743,22 @@ export function App() {
     return () => window.removeEventListener("beforeunload", onLeave);
   }, [phase]);
 
-  const exportWorkbook = () =>
-    exportGuard.run(() =>
-      task("export", "Building Excel file…", async () => {
-        if (!fresh) return;
-        await exportExcel(await query(), fresh.config, fresh.result, fresh.check, fresh.tieOut, fresh.description);
-      }),
+  // Building happens under the export label, and the shared guard drops a second click before it starts.
+  const exportWorkbook = () => {
+    if (!fresh) return;
+    const job = fresh;
+    return saveOnce(
+      excelFileName(job.config),
+      async () => {
+        let bytes: BlobPart | null = null;
+        const built = await task("export", "Building Excel file…", async () => {
+          bytes = await workbookBytes(await query(), job.config, job.result, job.check, job.tieOut, job.description);
+        });
+        return built ? bytes : null;
+      },
+      EXCEL_TYPE,
     );
+  };
 
   const importSetup = (file: File) =>
     task("import", "Reading setup…", async () => {
@@ -765,7 +792,7 @@ export function App() {
     </label>
   );
 
-  const Results = resultsChunk.loaded;
+  const Results = useResultsView(resultsChunk);
   const shown = mainView(phase, engineState);
   const status = phase.kind === "reading" ? phase.label : ([...tasks.values()].at(-1)?.label ?? "");
 

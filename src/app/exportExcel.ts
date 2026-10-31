@@ -38,6 +38,8 @@ export interface LazyChunk<T> {
   /** One shared load per chunk. Rejects only with an Error whose message is one of the two sentences. */
   load(): Promise<T>;
   readonly loaded: T | undefined;
+  /** Calls `listener` with the value of every load that resolves. Returns an unsubscribe. */
+  subscribe(listener: (value: T) => void): () => void;
 }
 
 type ChunkState<T> =
@@ -53,6 +55,7 @@ export class ChunkUnavailable extends Error {}
 /** A dynamic chunk that recovers from a failed load. */
 export function lazyChunk<T>(options: ChunkSource<T> & { sentences: ChunkSentences }): LazyChunk<T> {
   let state: ChunkState<T> = { phase: "untried" };
+  const listeners = new Set<(value: T) => void>();
   return {
     load() {
       if (state.phase === "loading" || state.phase === "loaded") return state.attempt;
@@ -63,6 +66,7 @@ export function lazyChunk<T>(options: ChunkSource<T> & { sentences: ChunkSentenc
           throw new ChunkUnavailable(options.sentences[result.failure]);
         }
         state = { phase: "loaded", attempt, value: result.value };
+        for (const listener of listeners) listener(result.value);
         return result.value;
       });
       state = { phase: "loading", attempt };
@@ -70,6 +74,12 @@ export function lazyChunk<T>(options: ChunkSource<T> & { sentences: ChunkSentenc
     },
     get loaded() {
       return state.phase === "loaded" ? state.value : undefined;
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
     },
   };
 }
@@ -218,7 +228,7 @@ function sheetName(base: string, usedNames: Set<string>): string {
   return name;
 }
 
-export async function exportExcel(
+export async function workbookBytes(
   query: Query,
   config: BridgeConfig,
   result: BridgeResult,
@@ -227,7 +237,7 @@ export async function exportExcel(
   description: string[],
   tools: ExcelTools = excelTools,
   split: BridgeBy | null = shownSplit(result),
-): Promise<void> {
+): Promise<BlobPart> {
   const ExcelJS = await tools.load();
   const workbook = new ExcelJS.Workbook();
   workbook.calcProperties.fullCalcOnLoad = true;
@@ -473,9 +483,25 @@ export async function exportExcel(
   }
 
   const buffer = await workbook.xlsx.writeBuffer();
-  download(
-    `bridge-${config.prior}-to-${config.current}.xlsx`,
-    buffer,
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  );
+  return buffer;
+}
+
+/** The workbook's file name for a bridge. */
+export function excelFileName(config: Pick<BridgeConfig, "prior" | "current">): string {
+  return `bridge-${config.prior}-to-${config.current}.xlsx`;
+}
+
+export const EXCEL_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+export async function exportExcel(
+  query: Query,
+  config: BridgeConfig,
+  result: BridgeResult,
+  check: DataCheck,
+  tieOut: TieOut,
+  description: string[],
+  tools: ExcelTools = excelTools,
+  split: BridgeBy | null = shownSplit(result),
+): Promise<void> {
+  download(excelFileName(config), await workbookBytes(query, config, result, check, tieOut, description, tools, split), EXCEL_TYPE);
 }
