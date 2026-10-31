@@ -1163,10 +1163,12 @@ export interface PriceGap {
 }
 
 /**
- * Compares the current price of each configuration with the average for its
- * peers: the other configurations that share every attribute but the last.
- * With customer as the last attribute this shows who pays less than others
- * for the same product.
+ * Compares the current price of each configuration with the peer average: the
+ * units-weighted average price over configurations that share every attribute
+ * but the last and have positive current units and sales, this row included.
+ * A row is compared only when that filtered group has at least two rows and
+ * positive total units. With customer as the last attribute this shows who
+ * pays less than the group average for the same product.
  */
 export async function priceGaps(
   query: Query,
@@ -1180,7 +1182,8 @@ export async function priceGaps(
   const stored = (name: string) => cellsRef(config, name);
   // The derived table's own names carry WORKING, so a level column can take any
   // plain name without changing what the outer query reads.
-  const w = (name: string) => ident(`${WORKING}${name}`);
+  const field = (name: string) => `${WORKING}${name}`;
+  const w = (name: string) => ident(field(name));
   const compared = `
     SELECT *, ${w("peer_sales")} / ${w("peer_units")} AS ${w("peer_price")}, ${w("s1")} / ${w("q1")} AS ${w("own_price")}
     FROM (
@@ -1200,20 +1203,19 @@ export async function priceGaps(
      FROM (${compared})`,
   );
   const rows = await query(
-    `SELECT ${all.map(ident).join(", ")}, ${w("q1")} AS q1, ${w("s1")} AS s1, ${w("own_price")} AS own_price, ${w(
-      "peer_price",
-    )} AS peer_price, (${w("peer_price")} - ${w("own_price")}) * ${w("q1")} AS opportunity
+    `SELECT ${all.map(ident).join(", ")}, ${w("q1")}, ${w("s1")}, ${w("own_price")}, ${w("peer_price")},
+       (${w("peer_price")} - ${w("own_price")}) * ${w("q1")} AS ${w("opportunity")}
      FROM (${compared}) WHERE ${below}
-     ORDER BY opportunity DESC LIMIT ${Math.floor(limit)}`,
+     ORDER BY ${w("opportunity")} DESC LIMIT ${Math.floor(limit)}`,
   );
   return {
     rows: rows.map((row) => ({
       keys: Object.fromEntries(all.map((c) => [c, row[c]])),
-      units: Number(row.q1),
-      sales: Number(row.s1),
-      price: Number(row.own_price),
-      peerPrice: Number(row.peer_price),
-      opportunity: Number(row.opportunity),
+      units: Number(row[field("q1")]),
+      sales: Number(row[field("s1")]),
+      price: Number(row[field("own_price")]),
+      peerPrice: Number(row[field("peer_price")]),
+      opportunity: Number(row[field("opportunity")]),
     })),
     totalOpportunity: Number(totals.opportunity),
     belowPeerSales: Number(totals.below_sales),
