@@ -550,7 +550,7 @@ test("a file already read as text over the limit is refused before it is read ag
   const { rememberCsvReading } = await import("../src/app/encoding.ts");
   const bytes = windows1252("period,product\n2025,Café\n");
   const file = new ReportedSizeFile([bytes], "big-decided-text.csv", WHOLE_FILE_CAP + 1);
-  rememberCsvReading(file, { kind: "text" });
+  rememberCsvReading(file, { kind: "text", text: "period,product" });
   await assert.rejects(readCsvFile(file), { message: TOO_BIG });
   assert.equal(file.wholeReads, 0, "the decided-text branch never reads a file over the limit");
 });
