@@ -44,9 +44,9 @@
           <table>
             <thead><tr><th>Effect</th><th>Formula</th><th>In words</th></tr></thead>
             <tbody>
+              <tr><td>Price</td><td>sum of <code>q1 × (p1 − p0)</code></td><td>The price change on each product, on this period’s units.</td></tr>
               <tr><td>Volume</td><td><code>(Q1 − Q0) × P0</code></td><td>The change in total units, valued at last period’s average price.</td></tr>
               <tr><td>Mix</td><td>sum of <code>(q1 − q0) × (p0 − P0)</code></td><td>Units moving toward products that are more expensive or cheaper than average.</td></tr>
-              <tr><td>Price</td><td>sum of <code>q1 × (p1 − p0)</code></td><td>The price change on each product, on this period’s units.</td></tr>
             </tbody>
           </table>
         </div>
@@ -64,10 +64,10 @@
         </div>
         <p>Prior sales are 300 on 20 units, so <code>P0</code> is 15. Current sales are 510 on 30 units.</p>
         <ul>
+          <li><b>Price:</b> A is 10 × (11 − 10) = +10. B is 0.</li>
           <li><b>Volume:</b> (30 − 20) × 15 = +150.</li>
           <li><b>Mix:</b> A is (10 − 10) × (10 − 15) = 0. B is (20 − 10) × (20 − 15) = +50.</li>
-          <li><b>Price:</b> A is 10 × (11 − 10) = +10. B is 0.</li>
-          <li><b>Total:</b> 150 + 50 + 10 = 210, which is 510 − 300.</li>
+          <li><b>Total:</b> 10 + 150 + 50 = 210, which is 510 − 300.</li>
         </ul>
         <p>Without the split, the average price rose from 15 to 17, which looks like a 13% price increase. The real price increase was 10 on sales of 300, about 3%. The rest was customers buying more of product B.</p>
 

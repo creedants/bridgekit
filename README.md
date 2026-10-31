@@ -24,9 +24,9 @@ prior average price.
 
 | Effect | Formula |
 |---|---|
+| Price (like-for-like) | `s1 - R_k * q1`, exact matches only |
 | Volume | `(q1 - q0) * R_0` |
 | Mix, one per attribute | `(q1 - q0) * (R_j - R_(j-1))`, down to level `m` for discontinued configurations |
-| Price (like-for-like) | `s1 - R_k * q1`, exact matches only |
 | New configurations | `s1 - R_k * q1`, configurations with no exact match |
 | Discontinued configurations | `(q1 - q0) * (R_k - R_m)`, where `m` is the finest level that still sells |
 | Sales with no units | change in sales on rows with zero units (rebates, credits, fees) |
