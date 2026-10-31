@@ -21,9 +21,10 @@ export interface Load<K, T> {
 
 /**
  * Runs `load` whenever `deps` change and keeps the latest result with the tag it was loaded for.
- * `key` is the part of the request the result is shown for, compared with Object.is. A null `load`
- * keeps the current state untouched (a held read with nothing to load). A result or rejection that
- * arrives after cleanup changes nothing.
+ * A rejection is recorded against `key`, and `failed` turns on only while `key` is still the
+ * current one, compared with Object.is. Panels that show a value under a request tag compare
+ * `loaded.key` themselves. A null `load` keeps the current state untouched (a held read with
+ * nothing to load). A result or rejection that arrives after cleanup changes nothing.
  */
 export function useLoad<K, T>(key: K, load: (() => Promise<T>) | null, deps: DependencyList): Load<K, T> {
   const [loaded, setLoaded] = useState<Loaded<K, T> | null>(null);

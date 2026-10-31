@@ -873,12 +873,55 @@ test("the results tablist has the accessible name Result views", async () => {
   }
 });
 
+test("the Data check success line waits for the whole-row note query", async () => {
+  const config: BridgeConfig = {
+    table: "t", periodColumn: "period", prior: "p0", current: "p1",
+    unitsColumn: "units", salesColumn: "sales",
+    levels: [{ name: "Design", columns: ["design"] }],
+  };
+  const run = {
+    config,
+    check: {
+      rows: 0, priorRows: 0, currentRows: 0, otherPeriodRows: 0, blankPeriodRows: 0,
+      blankMeasureRows: 0, negativeUnitRows: 0, negativeSalesRows: 0, zeroUnitSalesRows: 0,
+    },
+    ms: 1,
+    tieOut: { prior: { period: "p0", inFile: 0, afterFilters: 0 }, current: { period: "p1", inFile: 0, afterFilters: 0 } },
+    result: { priorSales: 0, currentSales: 0, effects: [], coverage: [] },
+    formulaBlanks: 0,
+  } as unknown as Run;
+  const NO_ISSUES = "No issues found in the rows used.";
+  const React = await import("react");
+  const { Check } = await import("../src/app/results/Check.tsx");
+  const query = (async () => []) as unknown as Query;
+  const mount = (warningsKnown: boolean) =>
+    mountPanel(React.createElement(Check, { run, warnings: [], warningsKnown, query: () => Promise.resolve(query) }));
+  const pending = await mount(false);
+  try {
+    assert.ok(
+      !harnessByClass(pending.container, "ok").some((node) => node.textContent === NO_ISSUES),
+      "the Data check does not say it found no issues before the whole-row note query resolves",
+    );
+  } finally {
+    await pending.unmount();
+  }
+  const resolved = await mount(true);
+  try {
+    assert.ok(
+      harnessByClass(resolved.container, "ok").some((node) => node.textContent === NO_ISSUES),
+      "the Data check says it found no issues once the whole-row note query resolves",
+    );
+  } finally {
+    await resolved.unmount();
+  }
+});
+
 test("a rejected panel query says the view could not be calculated", async () => {
   const raw = await openDatabase();
   const mounted = await mountApp("?sample=1000", queued(raw));
   try {
     await waitForSampleRun(mounted);
-    // The panels read the calculated cells table, so dropping it makes each panel's query reject.
+    // The panels under test read the calculated cells table, so dropping it makes their query reject.
     await raw("DROP TABLE bridge_cells");
     for (const label of ["Unmatched", "Price changes", "Movers"]) {
       await selectResultsTab(mounted, label);

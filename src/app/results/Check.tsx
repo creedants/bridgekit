@@ -9,7 +9,7 @@ import { TABLE } from "../setup.ts";
 import { agree } from "../SetupPanel.tsx";
 import { QueryFailed, useLoad } from "./shared.tsx";
 
-export function Check(props: { run: Run; warnings: string[]; query: () => Promise<Query> }) {
+export function Check(props: { run: Run; warnings: string[]; warningsKnown: boolean; query: () => Promise<Query> }) {
   const { check, config, ms, tieOut: money } = props.run;
   const tieOut = tieOutLines(config, money, props.run.result);
   const { loaded, failed } = useLoad(
@@ -42,7 +42,7 @@ export function Check(props: { run: Run; warnings: string[]; query: () => Promis
           ))}
         </tbody>
       </table>
-      {props.warnings.length === 0 ? (
+      {!props.warningsKnown ? null : props.warnings.length === 0 ? (
         <p className="ok">No issues found in the rows used.</p>
       ) : (
         <ul className="warnings">{props.warnings.map((w) => <li key={w}>{w}</li>)}</ul>
@@ -105,20 +105,25 @@ export function wholeRowWarningsFor(run: Run, query: () => Promise<Query>): Prom
  * Loads the whole-row note for the Data check tab badge. The note lives in
  * the warnings, so the tab count includes it, while the notes list below
  * omits this warning. A slow reply from a replaced file changes nothing.
+ * `resolved` turns true once the note's query has answered, so the tab does
+ * not say it found no issues before it has looked.
  */
-export function useWholeRowWarning(run: Run, query: () => Promise<Query>): string[] {
-  const [fileWarnings, setFileWarnings] = useState<string[]>([]);
+export function useWholeRowWarning(
+  run: Run,
+  query: () => Promise<Query>,
+): { warnings: string[]; resolved: boolean } {
+  const [state, setState] = useState<{ warnings: string[]; resolved: boolean }>({ warnings: [], resolved: false });
   useEffect(() => {
     let stale = false;
-    setFileWarnings([]);
+    setState({ warnings: [], resolved: false });
     wholeRowWarningsFor(run, query).then((warnings) => {
-      if (!stale) setFileWarnings(warnings);
+      if (!stale) setState({ warnings, resolved: true });
     });
     return () => {
       stale = true;
     };
   }, [run]);
-  return fileWarnings;
+  return state;
 }
 
 /** The Data check's sentences about how the file was read, in the order the tab shows them. */

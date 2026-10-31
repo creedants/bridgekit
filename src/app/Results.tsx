@@ -111,7 +111,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
   const priceEffect = result.effects.filter((e) => e.key.startsWith("price")).reduce((sum, e) => sum + e.value, 0);
   const exact = result.coverage.find((c) => c.level === config.levels.length)?.share ?? 0;
   const fileWarnings = useWholeRowWarning(run, props.query);
-  const warnings = checkWarnings(run, fileWarnings);
+  const warnings = checkWarnings(run, fileWarnings.warnings);
 
   const tabs: { id: Tab; label: string }[] = [
     { id: "bridge", label: "Bridge" },
@@ -250,7 +250,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
         {tab === "price" && <PriceChanges run={run} query={props.query} />}
         {tab === "movers" && <Movers run={run} query={props.query} sortBy={sortBy} onSortBy={setSortBy} />}
         {tab === "unmatched" && <Unmatched run={run} query={props.query} />}
-        {tab === "check" && <Check run={run} warnings={warnings} query={props.query} />}
+        {tab === "check" && <Check run={run} warnings={warnings} warningsKnown={fileWarnings.resolved} query={props.query} />}
       </div>
     </>
   );
