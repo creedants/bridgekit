@@ -1,0 +1,1 @@
+- A results panel whose query fails now says so instead of waiting forever, the Unmatched tab says it is still checking before it claims every configuration matched, and the results tab strip is named "Result views" for screen readers.
