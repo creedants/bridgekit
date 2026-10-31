@@ -715,7 +715,10 @@ export async function refuseMixedSeparators(query: Query, file: File, reading: C
  * Stages a CSV file's readable path and swaps it into place. The file's own
  * byte length refuses an empty file, its header width refuses a file with too
  * many columns, and the staged table's row count refuses a header-only file,
- * so a refused file leaves the loaded table alone.
+ * so a refused file leaves the loaded table alone. The reading defaults to the
+ * file's own bytes, on the assumption that a caller that omits it handed the
+ * database the file itself, so a direct caller still gets the late-byte
+ * encoding check.
  */
 export async function stageCsvAndSwap(
   query: Query,
@@ -723,7 +726,7 @@ export async function stageCsvAndSwap(
   table: string,
   readablePath: string,
   order: DateOrder = "month first",
-  reading?: CsvReading,
+  reading: CsvReading = { kind: "bytes" },
 ): Promise<void> {
   if (file.size === 0) throw new Error(NO_DATA_ROWS);
   const prefix = new TextDecoder().decode(new Uint8Array(await file.slice(0, CSV_PREFIX_BYTES).arrayBuffer()));
@@ -743,8 +746,10 @@ export async function stageCsvAndSwap(
   const staging = `${table}__staging`;
   const source: SourceRows = { kind: "csv", file, dialect: dialectForWidth };
   // A file that readCsvFile decoded as text was never handed to the database as
-  // bytes, so it keeps its own error.
-  await readLoadedTable(query, staging, readablePath, false, order, leading, reading?.kind === "bytes" ? file : undefined);
+  // bytes, so it keeps its own error. An omitted reading assumes the caller
+  // handed the database the file itself, and the file's own bytes are then what
+  // the check must read.
+  await readLoadedTable(query, staging, readablePath, false, order, leading, reading.kind === "bytes" ? file : undefined);
   await convertFormattedNumbers(query, staging, source);
   // No mixed-separator check: a record split by another separator can match a valid sparse record byte for byte.
   await requireDataRows(query, staging);
