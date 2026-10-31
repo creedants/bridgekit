@@ -107,6 +107,38 @@ export function moverHeader(config: BridgeConfig): string[] {
   ];
 }
 
+/** One movers row's whole figures, rounded once so its parts add up to its Change. */
+export interface WholeMoversRow {
+  prior: number;
+  current: number;
+  /** The shown current minus the shown prior. */
+  change: number;
+  /** One whole value per effect, in Movers column order: volume, mix, price, new config, discontinued, no units. */
+  parts: number[];
+}
+
+/**
+ * Rounds a movers row with the bridge rule, so its shown parts add up exactly to
+ * its shown Change and Change is the shown current minus the shown prior.
+ */
+export function wholeMoversRow(row: Record<string, unknown>): WholeMoversRow {
+  const prior = Number(row.s0) + Number(row.z0);
+  const current = Number(row.s1) + Number(row.z1);
+  const mix = Object.keys(row).reduce(
+    (sum, key) => (key.startsWith("mix_") ? sum + Number(row[key] ?? 0) : sum),
+    0,
+  );
+  const shown = roundBridge(prior, current, [
+    Number(row.volume),
+    mix,
+    Number(row.price),
+    Number(row.new_config),
+    Number(row.discontinued),
+    Number(row.no_units),
+  ]);
+  return { prior: shown.prior, current: shown.current, change: shown.current - shown.prior, parts: shown.values };
+}
+
 /** The Trend tab columns, in order, so whether a margin bridge's Unit cost column appears is decided here rather than in the JSX. */
 export function trendHeader(config: BridgeConfig): { label: string; num: boolean }[] {
   const unitCost = effectColumns(config).find((column) => column.key === "cost_rate")?.label;
@@ -200,24 +232,15 @@ export function buildReport(input: {
     ),
     row([cell(`${measureName(config)} ${config.current}`), whole(rounded.current), ""]),
   ];
-  const mixOf = (r: Record<string, unknown>) =>
-    config.levels.reduce((sum, _, i) => sum + Number(r[`mix_${i + 1}`] ?? 0), 0);
   const [, , change, volume, mix, priceEffect, newConfig, discontinued, noUnits] = moverHeader(config);
-  const moverColumns = [
-    { label: change, value: (r: Record<string, unknown>) => Number(r.s1) + Number(r.z1) - Number(r.s0) - Number(r.z0) },
-    { label: volume, value: (r: Record<string, unknown>) => Number(r.volume) },
-    { label: mix, value: mixOf },
-    { label: priceEffect, value: (r: Record<string, unknown>) => Number(r.price) },
-    { label: newConfig, value: (r: Record<string, unknown>) => Number(r.new_config) },
-    { label: discontinued, value: (r: Record<string, unknown>) => Number(r.discontinued) },
-    { label: noUnits, value: (r: Record<string, unknown>) => Number(r.no_units) },
-  ];
-  const movers = input.movers.rows.map((r, i) =>
-    row([
+  const moverLabels = [change, volume, mix, priceEffect, newConfig, discontinued, noUnits];
+  const movers = input.movers.rows.map((r, i) => {
+    const shown = wholeMoversRow(r);
+    return row([
       omit ? String(i + 1) : cell(input.movers.columns.map((c) => r[c] ?? "(blank)").join(" / ")),
-      ...moverColumns.map((c) => signedWhole(c.value(r))),
-    ]),
-  );
+      ...[shown.change, ...shown.parts].map(signedWhole),
+    ]);
+  });
   const summarySentence = omit
     ? "It holds totals, a written summary and the setup, leaves out the file name, filter values, mover names and chart, and holds no rows."
     : "It holds totals and a written summary, names the file, the setup, its filter values and the largest movers, and holds no rows.";
@@ -280,7 +303,7 @@ ${omit ? "" : input.chartUrl ? `<img alt="Waterfall chart of the bridge" src="${
     .map((c) => row([cell(c.label), percent(c.share), whole(c.cells)]))
     .join("")}</table>
 <h2>Largest movers by ${markup(viewMoversLabel)}</h2>
-<table class="plain">${row([cell(viewMoversLabel), ...moverColumns.map((c) => c.label)], "th")}${movers.join("")}</table>
+<table class="plain">${row([cell(viewMoversLabel), ...moverLabels], "th")}${movers.join("")}</table>
 <h2>How widely price moved</h2>
 <table class="plain">${row(["Change in average price", t.matchedShare, "Price effect"], "th")}${input.priceBands
     .map((b) => row([cell(b.label), percent(b.share), signedWhole(b.priceEffect)]))

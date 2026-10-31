@@ -96,9 +96,9 @@ const distinctMovers = () => [
   { product: "ZX-14", s0: 20, s1: 50, z0: 0, z1: 0, volume: 0, mix_1: 0, price: 0, new_config: 0, discontinued: 0, no_units: 30 },
 ];
 
-/** Each `<h2>` heading's text and the span from its closing tag to the next heading, or to the end of the document. */
+/** Each `<h2` heading's text and the span from its closing tag to the next heading, or to the end of the document, whether or not the opening tag carries attributes. */
 const sectionsOf = (html: string): { text: string; start: number; end: number }[] =>
-  [...html.matchAll(/<h2>([\s\S]*?)<\/h2>/g)].map((match, index, all) => ({
+  [...html.matchAll(/<h2(?:\s[^>]*)?>([\s\S]*?)<\/h2>/g)].map((match, index, all) => ({
     text: match[1].trim(),
     start: (match.index ?? 0) + match[0].length,
     end: all[index + 1]?.index ?? html.length,

@@ -3,7 +3,7 @@ import { cumulativeColumns, drill, measureName, type DrillFilter, type Query } f
 import { finiteOrBlank } from "../exportExcel.ts";
 import { saveOnce, toExportCsv } from "../files.ts";
 import { price, signedPercent, signedWhole, whole } from "../format.ts";
-import { moverHeader, terms } from "../report.ts";
+import { moverHeader, terms, wholeMoversRow } from "../report.ts";
 import type { Run } from "../Results.tsx";
 import { QueryFailed, TableActions, TextCell, display, useLoad } from "./shared.tsx";
 
@@ -142,6 +142,7 @@ export function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: s
             <tbody>
               {rows.map((row) => {
                 const v = values(row);
+                const shown = wholeMoversRow(row);
                 return (
                   <tr
                     key={group.columns.map((c) => display(row[c])).join("|")}
@@ -162,15 +163,12 @@ export function Movers(props: { run: Run; query: () => Promise<Query>; sortBy: s
                     }}
                   >
                     {group.columns.map((c) => <TextCell key={c} value={row[c]} />)}
-                    <td className="num">{whole(v.s0)}</td>
-                    <td className="num">{whole(v.s1)}</td>
-                    <td className="num strong">{signedWhole(v.change)}</td>
-                    <td className="num">{signedWhole(v.volume)}</td>
-                    <td className="num">{signedWhole(v.mix)}</td>
-                    <td className="num">{signedWhole(v.price)}</td>
-                    <td className="num">{signedWhole(v.newConfig)}</td>
-                    <td className="num">{signedWhole(v.discontinued)}</td>
-                    <td className="num">{signedWhole(v.noUnits)}</td>
+                    <td className="num">{whole(shown.prior)}</td>
+                    <td className="num">{whole(shown.current)}</td>
+                    <td className="num strong">{signedWhole(shown.change)}</td>
+                    {shown.parts.map((part, i) => (
+                      <td key={i} className="num">{signedWhole(part)}</td>
+                    ))}
                     <td className="num">{price(v.p0)}</td>
                     <td className="num">{price(v.p1)}</td>
                     <td className="num">{signedPercent(v.priceChange)}</td>
