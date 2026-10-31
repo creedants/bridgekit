@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
 import {
   measureName,
   type BridgeConfig,
@@ -50,6 +50,16 @@ export interface Run {
 
 type Tab = "bridge" | "movers" | "accounts" | "price" | "gaps" | "trend" | "unmatched" | "setup" | "check";
 
+/** WAI-ARIA tabs with automatic activation: the index a key moves to, or null for a key the strip ignores. */
+export function tabAfterKey(key: string, at: number, count: number): number | null {
+  if (count === 0) return null;
+  if (key === "ArrowRight") return (at + 1) % count;
+  if (key === "ArrowLeft") return (at - 1 + count) % count;
+  if (key === "Home") return 0;
+  if (key === "End") return count - 1;
+  return null;
+}
+
 /**
  * The report's names choice. App owns it so it survives the keyed Results remount.
  * Optional so a direct render of Results without the choice still compiles; a missing
@@ -89,6 +99,10 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
   const viewQuery = props.fresh === false || props.viewsCurrent === false ? null : props.query;
   const [tab, setTab] = useState<Tab>("bridge");
   const [sortBy, setSortBy] = useState("change");
+  const ids = useId();
+  const panelId = `${ids}panel`;
+  const tabId = (entry: Tab) => `${ids}tab-${entry}`;
+  const tabEls = useRef<(HTMLButtonElement | null)[]>([]);
   const mixCount = run.result.effects.filter((e) => e.key.startsWith("mix_")).length;
   // With many attributes the chart gets crowded, so mix starts combined.
   const [combineMix, setCombineMix] = useState(mixCount > 4);
@@ -127,94 +141,117 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
       </p>
 
       <div className="tabs" role="tablist">
-        {tabs.map((entry) => (
-          <button key={entry.id} role="tab" aria-selected={tab === entry.id} onClick={() => setTab(entry.id)}>
+        {tabs.map((entry, i) => (
+          <button
+            key={entry.id}
+            ref={(el) => {
+              tabEls.current[i] = el;
+            }}
+            role="tab"
+            id={tabId(entry.id)}
+            aria-selected={tab === entry.id}
+            aria-controls={panelId}
+            // The roving tabindex follows the selection, so the strip needs no second focus state.
+            tabIndex={tab === entry.id ? 0 : -1}
+            onClick={() => setTab(entry.id)}
+            onKeyDown={(e) => {
+              const next = tabAfterKey(e.key, i, tabs.length);
+              if (next === null) return;
+              // Home, End and the arrows would move the page or the strip without this.
+              e.preventDefault();
+              setTab(tabs[next].id);
+              tabEls.current[next]?.focus();
+            }}
+          >
             {entry.label}
           </button>
         ))}
       </div>
 
-      {tab === "bridge" && (
-        <>
-          <div className="bridge">
-            <Waterfall
-              result={combineMix ? withCombinedMix(result) : result}
-              controls={
-                mixCount > 1 && (
-                  <>
-                    <label className="check">
-                      <input type="checkbox" checked={combineMix} onChange={(e) => setCombineMix(e.target.checked)} />
-                      Combine mix
-                    </label>{" "}
-                    <span className="hint">Shows the mix steps of all attributes as one Mix bar.</span>
-                  </>
-                )
-              }
-              priorLabel={String(config.prior)}
-              currentLabel={String(config.current)}
-              below={() => splitPicture(run)}
-              footer={<Summary run={run} result={result} shown={shown} query={props.query} fresh={props.fresh !== false && props.viewsCurrent !== false} omitNames={props.omitNames} onOmitNames={props.onOmitNames} />}
-              onSelect={(key) => {
-                setSortBy(key.startsWith("mix_") ? "mix" : key.startsWith("price") || key === "cost_rate" ? "price" : key);
-                setTab("movers");
-              }}
-            />
-            <div>
-              <table>
-                <thead>
-                  <tr><th>Bridge</th><th className="num">Amount</th><th className="num">% of prior</th></tr>
-                </thead>
-                <tbody>
-                  <tr className="total"><td>{measureName(config)} {config.prior}</td><td className="num">{whole(shown.prior)}</td><td /></tr>
-                  {result.effects.map((e, i) => (
-                    <tr key={e.key}>
-                      <td>{e.label}</td>
-                      <td className="num">{signedWhole(shown.values[i])}</td>
-                      <td className="num">{signedPercent(shareOfPrior(e.value, result.priorSales))}</td>
-                    </tr>
-                  ))}
-                  <tr className="total"><td>{measureName(config)} {config.current}</td><td className="num">{whole(shown.current)}</td><td /></tr>
-                </tbody>
-              </table>
-              {run.amounts && <p className="notice">{run.amounts}</p>}
-              {signNote(result.effects, config.newAndDiscontinued) && (
-                <p className="hint">{signNote(result.effects, config.newAndDiscontinued)}</p>
-              )}
-              <h3>{t.matchedHeading}</h3>
-              <table>
-                <thead>
-                  <tr><th>Compared against</th><th className="num">Share</th><th className="num">Configurations</th></tr>
-                </thead>
-                <tbody>
-                  {result.coverage.map((c) => (
-                    <tr key={c.level}>
-                      <td>{matchLabel(config, c.level)}</td>
-                      <td className="num">{percent(c.share)}</td>
-                      <td className="num">{whole(c.cells)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <p className="hint">
-                Only exact matches count as price. The rest is in “New configurations”; see the Unmatched tab. {t.sharesNote}
-              </p>
-              <p className="hint">
-                New configurations sold in the current period but not the prior one. Discontinued configurations sold in
-                the prior period but not the current one.
-              </p>
+      {/* The Trend, Setup check and Data check panels hold no control of their own, so the panel is their Tab stop. */}
+      <div role="tabpanel" id={panelId} aria-labelledby={tabId(tab)} tabIndex={0}>
+        {tab === "bridge" && (
+          <>
+            <div className="bridge">
+              <Waterfall
+                result={combineMix ? withCombinedMix(result) : result}
+                controls={
+                  mixCount > 1 && (
+                    <>
+                      <label className="check">
+                        <input type="checkbox" checked={combineMix} onChange={(e) => setCombineMix(e.target.checked)} />
+                        Combine mix
+                      </label>{" "}
+                      <span className="hint">Shows the mix steps of all attributes as one Mix bar.</span>
+                    </>
+                  )
+                }
+                priorLabel={String(config.prior)}
+                currentLabel={String(config.current)}
+                below={() => splitPicture(run)}
+                footer={<Summary run={run} result={result} shown={shown} query={props.query} fresh={props.fresh !== false && props.viewsCurrent !== false} omitNames={props.omitNames} onOmitNames={props.onOmitNames} />}
+                onSelect={(key) => {
+                  setSortBy(key.startsWith("mix_") ? "mix" : key.startsWith("price") || key === "cost_rate" ? "price" : key);
+                  setTab("movers");
+                }}
+              />
+              <div>
+                <table>
+                  <thead>
+                    <tr><th>Bridge</th><th className="num">Amount</th><th className="num">% of prior</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr className="total"><td>{measureName(config)} {config.prior}</td><td className="num">{whole(shown.prior)}</td><td /></tr>
+                    {result.effects.map((e, i) => (
+                      <tr key={e.key}>
+                        <td>{e.label}</td>
+                        <td className="num">{signedWhole(shown.values[i])}</td>
+                        <td className="num">{signedPercent(shareOfPrior(e.value, result.priorSales))}</td>
+                      </tr>
+                    ))}
+                    <tr className="total"><td>{measureName(config)} {config.current}</td><td className="num">{whole(shown.current)}</td><td /></tr>
+                  </tbody>
+                </table>
+                {run.amounts && <p className="notice">{run.amounts}</p>}
+                {signNote(result.effects, config.newAndDiscontinued) && (
+                  <p className="hint">{signNote(result.effects, config.newAndDiscontinued)}</p>
+                )}
+                <h3>{t.matchedHeading}</h3>
+                <table>
+                  <thead>
+                    <tr><th>Compared against</th><th className="num">Share</th><th className="num">Configurations</th></tr>
+                  </thead>
+                  <tbody>
+                    {result.coverage.map((c) => (
+                      <tr key={c.level}>
+                        <td>{matchLabel(config, c.level)}</td>
+                        <td className="num">{percent(c.share)}</td>
+                        <td className="num">{whole(c.cells)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="hint">
+                  Only exact matches count as price. The rest is in “New configurations”; see the Unmatched tab. {t.sharesNote}
+                </p>
+                <p className="hint">
+                  New configurations sold in the current period but not the prior one. Discontinued configurations sold in
+                  the prior period but not the current one.
+                </p>
+              </div>
             </div>
-          </div>
-          <SmallBridges run={run} query={props.query} fresh={props.fresh !== false && props.viewsCurrent !== false} />
-        </>
-      )}
-      {tab === "accounts" && <Accounts run={run} query={viewQuery} />}
-      {tab === "gaps" && <PriceGaps run={run} query={props.query} />}
-      {tab === "trend" && <Trend run={run} query={viewQuery} />}
-      {tab === "setup" && <SetupCheck run={run} query={viewQuery} />}
-      {tab === "price" && <PriceChanges run={run} query={props.query} />}
-      {tab === "movers" && <Movers run={run} query={props.query} sortBy={sortBy} onSortBy={setSortBy} />}
-      {tab === "unmatched" && <Unmatched run={run} query={props.query} />}
-      {tab === "check" && <Check run={run} warnings={warnings} query={props.query} />}
+            <SmallBridges run={run} query={props.query} fresh={props.fresh !== false && props.viewsCurrent !== false} />
+          </>
+        )}
+        {tab === "accounts" && <Accounts run={run} query={viewQuery} />}
+        {tab === "gaps" && <PriceGaps run={run} query={props.query} />}
+        {tab === "trend" && <Trend run={run} query={viewQuery} />}
+        {tab === "setup" && <SetupCheck run={run} query={viewQuery} />}
+        {tab === "price" && <PriceChanges run={run} query={props.query} />}
+        {tab === "movers" && <Movers run={run} query={props.query} sortBy={sortBy} onSortBy={setSortBy} />}
+        {tab === "unmatched" && <Unmatched run={run} query={props.query} />}
+        {tab === "check" && <Check run={run} warnings={warnings} query={props.query} />}
+      </div>
     </>
   );
 }

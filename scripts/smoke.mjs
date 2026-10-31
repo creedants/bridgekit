@@ -1008,6 +1008,61 @@ async function pendingPaste(browser, origin) {
   }
 }
 
+/**
+ * T471: a paste made while a ?sample link still waits to start its own load is
+ * the visitor's choice. Frames are held from document start so the paste lands
+ * before the deferred timer, then released so the sample load may run.
+ */
+async function sampleLinkPaste(browser, origin) {
+  const tsv = toTsvText(
+    ["period", "customer", "units"],
+    [
+      ["2025", "C0001", 10],
+      ["2026", "C0001", 12],
+      ["2026", "C0002", 7],
+    ],
+  );
+  await browser.send("Page.enable");
+  const { identifier } = await browser.send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `(() => {
+      const held = []; const raf = window.requestAnimationFrame.bind(window);
+      window.__releaseFrames = () => { window.requestAnimationFrame = raf; for (const f of held.splice(0)) raf(f); };
+      window.requestAnimationFrame = (f) => { held.push(f); return 1e6 + held.length; };
+      window.__pasteListening = false; const add = window.addEventListener.bind(window);
+      window.addEventListener = (type, ...rest) => { if (type === "paste") window.__pasteListening = true; return add(type, ...rest); };
+    })()`,
+  });
+  try {
+    await browser.goto(`${origin}/app/?sample=1000`);
+    await browser.waitFor("window.__pasteListening === true", 200);
+    await browser.evalJs(`(() => {
+      const text = ${JSON.stringify(tsv)};
+      const data = { getData: (t) => (t === "text/plain" ? text : "") };
+      const event = new Event("paste", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "clipboardData", { value: data });
+      document.body.dispatchEvent(event);
+      window.__releaseFrames();
+      return true;
+    })()`);
+    await browser.waitFor("document.querySelector('.source')?.textContent.includes('Pasted cells.tsv')", 300);
+    await sleep(4000);
+    const shown = JSON.parse(
+      await browser.evalJs(`JSON.stringify({
+        caption: document.querySelector(".source")?.textContent ?? "",
+        firstRow: [...(document.querySelector("main .dense tbody tr")?.cells ?? [])].map((cell) => cell.textContent),
+      })`),
+    );
+    if (!shown.caption.includes("Pasted cells.tsv")) fail(`sample link paste: the caption reads ${JSON.stringify(shown.caption)}, not the pasted cells`);
+    if (!shown.caption.includes("3 rows")) fail(`sample link paste: the caption reads ${JSON.stringify(shown.caption)}, not the paste's 3 rows`);
+    if (shown.firstRow.join("|") !== "2025|C0001|10") {
+      fail(`sample link paste: the first preview row is ${JSON.stringify(shown.firstRow)}, not the paste's first row`);
+    }
+    console.log("ok  sample link paste: a paste made before the sample's own load stays on screen");
+  } finally {
+    await browser.send("Page.removeScriptToEvaluateOnNewDocument", { identifier });
+  }
+}
+
 async function drive(browser, origin, rows) {
   console.log(`browser: ${(await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/version`)).json()).Browser}`);
   await browser.size(1360, 1000);
@@ -1531,6 +1586,7 @@ async function drive(browser, origin, rows) {
     sameTotals(await readBridge("pasted cells"), totalsByFormat.csv, "pasted cells: totals differ from the csv load");
     console.log("ok  pasted cells: tab-separated text through the paste path gives the same totals");
     await pendingPaste(browser, origin);
+    await sampleLinkPaste(browser, origin);
 
     await setDataFile(fixtures.formattedPath);
     await addAttribute("product");

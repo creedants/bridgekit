@@ -27,3 +27,20 @@
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --radius: 0;
 }
+
+/* Hidden on screen and still read by screen readers, such as the live region that says a bridge is ready. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The results heading takes focus after Calculate. styles.css removes its outline on :focus; this rule is more specific, so the keyboard ring shows. */
+h1.results-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
