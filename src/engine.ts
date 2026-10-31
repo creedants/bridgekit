@@ -114,8 +114,39 @@ export interface BridgeResult {
   cellsTable: string;
 }
 
+/**
+ * Prefix for every column and alias the calculation adds. A file column can
+ * take any plain name; a level column that takes one keeps it in the cells
+ * table and pushes the calculation's column to its prefixed name.
+ */
+const WORKING = "__bk_";
+
 export function ident(name: string): string {
   return `"${name.replaceAll('"', '""')}"`;
+}
+
+/**
+ * The cells-table name of one of the calculation's columns. It is the plain
+ * name unless a level column takes that name.
+ */
+function cellsName(config: BridgeConfig, name: string): string {
+  const plain = name.toLowerCase();
+  const taken = config.levels.some((level) =>
+    level.columns.some((column) => column.toLowerCase() === plain),
+  );
+  return taken ? WORKING + name : name;
+}
+
+/** One of the calculation's columns read from the cells table under its plain result name. */
+function cellsRead(config: BridgeConfig, name: string): string {
+  const stored = cellsName(config, name);
+  return stored === name ? name : `${ident(stored)} AS ${name}`;
+}
+
+/** A calculation column as a cells-table query refers to it: the plain name when it is free, the prefixed one when a level column takes it. */
+function cellsRef(config: BridgeConfig, name: string): string {
+  const stored = cellsName(config, name);
+  return stored === name ? name : ident(stored);
 }
 
 function literal(value: string | number): string {
@@ -136,7 +167,9 @@ function structKey(alias: string | null, columns: string[]): string {
 
 function validate(config: BridgeConfig): void {
   if (config.levels.length === 0) throw new Error("At least one level is required");
-  const reserved = /^(q0|s0|q1|s1|z0|z1|g0|g1|rs0|rs1|r0|match_level|surviving_level|status|ref_price|volume|price|new_config|discontinued|no_units|price_list|price_discount|price_sales|cost_rate|(ref|mix)_\d+|[qsp][01]_l\d+)$/i;
+  // A calculation column keeps its prefixed name when a level column takes the
+  // plain one, so only the prefix itself stays out of a file's columns.
+  const reserved = /^__bk_/i;
   const seen = new Set<string>();
   for (const level of config.levels) {
     if (level.columns.length === 0) throw new Error(`Level "${level.name}" has no columns`);
@@ -177,66 +210,71 @@ export function cellsSql(config: BridgeConfig): string {
   const gross = !cost && config.grossColumn ? ident(config.grossColumn) : null;
   const measure = measureSql(config);
   const full = config.newAndDiscontinued === "full";
+  // Every column and alias the calculation adds carries WORKING, so the CTEs
+  // never bind a level column by accident.
+  const w = (name: string) => `${WORKING}${name}`;
   // In "full" mode reference prices come from continuing configurations only.
-  const continuing = "(q0 > 0 AND q1 <> 0)";
+  const continuing = `(${w("q0")} > 0 AND ${w("q1")} <> 0)`;
   const scope = full ? ` FILTER (WHERE ${continuing})` : "";
 
   const groupPrices: string[] = [];
   for (let j = 1; j <= k; j++) {
-    groupPrices.push(`CASE WHEN q0_l${j} > 0 THEN s0_l${j} / q0_l${j} END AS p0_l${j}`);
+    groupPrices.push(
+      `CASE WHEN ${w(`q0_l${j}`)} > 0 THEN ${w(`s0_l${j}`)} / ${w(`q0_l${j}`)} END AS ${w(`p0_l${j}`)}`,
+    );
   }
 
   // Joining every level in one FROM makes DuckDB cross-join those aggregates first
   // (184 million rows at 3 million sales rows).
   const levelCtes: string[] = [
-    `totals AS (
-  SELECT sum(s0)${scope} AS tot_s0, sum(q0)${scope} AS tot_q0
-  FROM cells
+    `${w("totals")} AS (
+  SELECT sum(${w("s0")})${scope} AS ${w("tot_s0")}, sum(${w("q0")})${scope} AS ${w("tot_q0")}
+  FROM ${w("cells")}
 )`,
   ];
   for (let j = 1; j < k; j++) {
     const columns = cumulativeColumns(config.levels, j);
     const group = columns.map(ident).join(", ");
-    levelCtes.push(`lvl${j} AS (
-  SELECT ${structKey(null, columns)} AS k, sum(q0)${scope} AS q0_l${j}, sum(s0)${scope} AS s0_l${j}, sum(q1) AS q1_l${j}
-  FROM cells
+    levelCtes.push(`${w(`lvl${j}`)} AS (
+  SELECT ${structKey(null, columns)} AS ${w("k")}, sum(${w("q0")})${scope} AS ${w(`q0_l${j}`)}, sum(${w("s0")})${scope} AS ${w(`s0_l${j}`)}, sum(${w("q1")}) AS ${w(`q1_l${j}`)}
+  FROM ${w("cells")}
   GROUP BY ${group}
 )`);
   }
   const finest = (alias: string) => {
-    const onCell = `(${alias}.q0 > 0 AND ${alias}.q1 <> 0)`;
-    return `${full ? `CASE WHEN ${onCell} THEN ${alias}.q0 END` : `${alias}.q0`} AS q0_l${k},
-    ${full ? `CASE WHEN ${onCell} THEN ${alias}.s0 END` : `${alias}.s0`} AS s0_l${k},
-    ${alias}.q1 AS q1_l${k}`;
+    const onCell = `(${alias}.${w("q0")} > 0 AND ${alias}.${w("q1")} <> 0)`;
+    return `${full ? `CASE WHEN ${onCell} THEN ${alias}.${w("q0")} END` : `${alias}.${w("q0")}`} AS ${w(`q0_l${k}`)},
+    ${full ? `CASE WHEN ${onCell} THEN ${alias}.${w("s0")} END` : `${alias}.${w("s0")}`} AS ${w(`s0_l${k}`)},
+    ${alias}.${w("q1")} AS ${w(`q1_l${k}`)}`;
   };
   const joinCtes: string[] = [];
   if (k === 1) {
-    joinCtes.push(`windowed AS (
+    joinCtes.push(`${w("windowed")} AS (
   SELECT c.*,
-    t.tot_s0 / t.tot_q0 AS r0,
+    t.${w("tot_s0")} / t.${w("tot_q0")} AS ${w("r0")},
     ${finest("c")}
-  FROM cells c
-  CROSS JOIN totals t
+  FROM ${w("cells")} c
+  CROSS JOIN ${w("totals")} t
 )`);
   } else {
-    let source = "cells c\n  CROSS JOIN totals t";
+    let source = `${w("cells")} c\n  CROSS JOIN ${w("totals")} t`;
     let alias = "c";
     for (let j = 1; j < k; j++) {
       const columns = cumulativeColumns(config.levels, j);
       const last = j === k - 1;
-      const name = last ? "windowed" : `joined_${j}`;
+      const name = last ? w("windowed") : w(`joined_${j}`);
       const extras = [
-        ...(j === 1 ? ["t.tot_s0 / t.tot_q0 AS r0"] : []),
-        `a${j}.q0_l${j}`,
-        `a${j}.s0_l${j}`,
-        `a${j}.q1_l${j}`,
+        ...(j === 1 ? [`t.${w("tot_s0")} / t.${w("tot_q0")} AS ${w("r0")}`] : []),
+        `a${j}.${w(`q0_l${j}`)}`,
+        `a${j}.${w(`s0_l${j}`)}`,
+        `a${j}.${w(`q1_l${j}`)}`,
       ];
       if (last) extras.push(finest(alias));
       joinCtes.push(`${name} AS${last ? "" : " MATERIALIZED"} (
   SELECT ${j === 1 ? "c" : alias}.*,
     ${extras.join(",\n    ")}
   FROM ${source}
-  JOIN lvl${j} a${j} ON a${j}.k IS NOT DISTINCT FROM ${structKey(alias, columns)}
+  JOIN ${w(`lvl${j}`)} a${j} ON a${j}.${w("k")} IS NOT DISTINCT FROM ${structKey(alias, columns)}
 )`);
       source = name;
       alias = name;
@@ -244,67 +282,98 @@ export function cellsSql(config: BridgeConfig): string {
   }
 
   // R_j = coalesce(p0_lj, ..., p0_l1, r0)
-  const refs: string[] = ["r0 AS ref_0"];
+  const refs: string[] = [`${w("r0")} AS ${w("ref_0")}`];
   for (let j = 1; j <= k; j++) {
-    const chain = Array.from({ length: j }, (_, i) => `p0_l${j - i}`).join(", ");
-    refs.push(`coalesce(${chain}, r0) AS ref_${j}`);
+    const chain = Array.from({ length: j }, (_, i) => w(`p0_l${j - i}`)).join(", ");
+    refs.push(`coalesce(${chain}, ${w("r0")}) AS ${w(`ref_${j}`)}`);
   }
   const matchLevel = full
-    ? `CASE WHEN q0 > 0 THEN ${k} ELSE 0 END`
+    ? `CASE WHEN ${w("q0")} > 0 THEN ${k} ELSE 0 END`
     : "CASE " +
-      Array.from({ length: k }, (_, i) => `WHEN p0_l${k - i} IS NOT NULL THEN ${k - i}`).join(" ") +
+      Array.from({ length: k }, (_, i) => `WHEN ${w(`p0_l${k - i}`)} IS NOT NULL THEN ${k - i}`).join(" ") +
       " ELSE 0 END";
 
   // Finest level at which the cell's group still sells in the current period.
   const survivingLevel = full
     ? String(k)
     : "CASE " +
-      Array.from({ length: k }, (_, i) => `WHEN q1_l${k - i} > 0 THEN ${k - i}`).join(" ") +
+      Array.from({ length: k }, (_, i) => `WHEN ${w(`q1_l${k - i}`)} > 0 THEN ${k - i}`).join(" ") +
       " ELSE 0 END";
   const survivingRef =
-    "CASE surviving_level " +
-    Array.from({ length: k + 1 }, (_, j) => `WHEN ${j} THEN ref_${j}`).join(" ") +
+    `CASE ${w("surviving_level")} ` +
+    Array.from({ length: k + 1 }, (_, j) => `WHEN ${j} THEN ${w(`ref_${j}`)}`).join(" ") +
     " END";
 
   const mixes = Array.from(
     { length: k },
     (_, i) =>
-      `CASE WHEN ${full ? continuing : `surviving_level >= ${i + 1}`} THEN (q1 - q0) * (ref_${i + 1} - ref_${i}) ELSE 0 END AS mix_${i + 1}`,
+      `CASE WHEN ${full ? continuing : `${w("surviving_level")} >= ${i + 1}`} THEN (${w("q1")} - ${w("q0")}) * (${w(`ref_${i + 1}`)} - ${w(`ref_${i}`)}) ELSE 0 END AS ${w(`mix_${i + 1}`)}`,
   );
-  const rest = `s1 - s0 - (q1 - q0) * ref_${k}`;
+  const rest = `${w("s1")} - ${w("s0")} - (${w("q1")} - ${w("q0")}) * ${w(`ref_${k}`)}`;
   // Cells whose rate effect is like-for-like, so it can be split further.
-  const rated = full ? continuing : `match_level = ${k}`;
+  const rated = full ? continuing : `${w("match_level")} = ${k}`;
   const effects = full
-    ? `CASE WHEN ${continuing} THEN ref_${k} END AS ref_price,
-  CASE WHEN ${continuing} THEN (q1 - q0) * ref_0 ELSE 0 END AS volume,
+    ? `CASE WHEN ${continuing} THEN ${w(`ref_${k}`)} END AS ${w("ref_price")},
+  CASE WHEN ${continuing} THEN (${w("q1")} - ${w("q0")}) * ${w("ref_0")} ELSE 0 END AS ${w("volume")},
   ${mixes.join(",\n  ")},
-  CASE WHEN ${continuing} THEN ${rest} ELSE 0 END AS price,
-  CASE WHEN q0 <= 0 AND NOT (q1 = 0 AND q0 <> 0) THEN s1 - s0 ELSE 0 END AS new_config,
-  CASE WHEN q1 = 0 AND q0 <> 0 THEN s1 - s0 ELSE 0 END AS discontinued`
-    : `ref_${k} AS ref_price,
-  (q1 - q0) * ref_0 AS volume,
+  CASE WHEN ${continuing} THEN ${rest} ELSE 0 END AS ${w("price")},
+  CASE WHEN ${w("q0")} <= 0 AND NOT (${w("q1")} = 0 AND ${w("q0")} <> 0) THEN ${w("s1")} - ${w("s0")} ELSE 0 END AS ${w("new_config")},
+  CASE WHEN ${w("q1")} = 0 AND ${w("q0")} <> 0 THEN ${w("s1")} - ${w("s0")} ELSE 0 END AS ${w("discontinued")}`
+    : `${w(`ref_${k}`)} AS ${w("ref_price")},
+  (${w("q1")} - ${w("q0")}) * ${w("ref_0")} AS ${w("volume")},
   ${mixes.join(",\n  ")},
-  CASE WHEN match_level = ${k} THEN ${rest} ELSE 0 END AS price,
-  CASE WHEN match_level < ${k} THEN ${rest} ELSE 0 END AS new_config,
-  (q1 - q0) * (ref_${k} - ${survivingRef}) AS discontinued`;
+  CASE WHEN ${w("match_level")} = ${k} THEN ${rest} ELSE 0 END AS ${w("price")},
+  CASE WHEN ${w("match_level")} < ${k} THEN ${rest} ELSE 0 END AS ${w("new_config")},
+  (${w("q1")} - ${w("q0")}) * (${w(`ref_${k}`)} - ${survivingRef}) AS ${w("discontinued")}`;
+
+  const listPrice = `CASE WHEN ${rated} AND ${w("g0")} <> 0 AND ${w("q0")} > 0 AND ${w("q1")} <> 0 THEN (${w("g1")} - ${w("q1")} * ${w("g0")} / ${w("q0")}) * (${w("s0")} / ${w("g0")}) ELSE 0 END`;
+  const sellingPrice = `CASE WHEN ${rated} AND ${w("q0")} > 0 THEN ${w("rs1")} - ${w("q1")} * ${w("rs0")} / ${w("q0")} ELSE 0 END`;
+  const split = gross
+    ? [
+        `${listPrice} AS ${ident(cellsName(config, "price_list"))}`,
+        `${w("price")} - ${listPrice} AS ${ident(cellsName(config, "price_discount"))}`,
+      ]
+    : cost
+      ? [
+          `${sellingPrice} AS ${ident(cellsName(config, "price_sales"))}`,
+          `${w("price")} - ${sellingPrice} AS ${ident(cellsName(config, "cost_rate"))}`,
+        ]
+      : [];
+
+  const working = [
+    "q0", "s0", "q1", "s1", "z0", "z1",
+    ...(gross ? ["g0", "g1"] : cost ? ["rs0", "rs1"] : []),
+    "match_level", "surviving_level",
+    ...Array.from({ length: k + 1 }, (_, j) => `ref_${j}`),
+    "status", "ref_price", "volume",
+    ...Array.from({ length: k }, (_, i) => `mix_${i + 1}`),
+    "price", "new_config", "discontinued", "no_units",
+  ];
+  const projection = [
+    ...allColumns,
+    ...working.map((name) =>
+      cellsName(config, name) === name ? `${ident(w(name))} AS ${ident(name)}` : ident(w(name)),
+    ),
+    ...split,
+  ].join(",\n  ");
 
   return `
-WITH cells AS MATERIALIZED (
+WITH ${w("cells")} AS MATERIALIZED (
   SELECT ${allColumns.join(", ")},
-    round(coalesce(sum(${units}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE, 6) AS q0,
-    coalesce(sum(${measure}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE AS s0,
-    round(coalesce(sum(${units}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE, 6) AS q1,
-    coalesce(sum(${measure}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE AS s1,
-    coalesce(sum(${measure}) FILTER (WHERE ${period} = ${prior} AND NOT ${hasUnits}), 0)::DOUBLE AS z0,
-    coalesce(sum(${measure}) FILTER (WHERE ${period} = ${current} AND NOT ${hasUnits}), 0)::DOUBLE AS z1${
+    round(coalesce(sum(${units}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE, 6) AS ${w("q0")},
+    coalesce(sum(${measure}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE AS ${w("s0")},
+    round(coalesce(sum(${units}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE, 6) AS ${w("q1")},
+    coalesce(sum(${measure}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE AS ${w("s1")},
+    coalesce(sum(${measure}) FILTER (WHERE ${period} = ${prior} AND NOT ${hasUnits}), 0)::DOUBLE AS ${w("z0")},
+    coalesce(sum(${measure}) FILTER (WHERE ${period} = ${current} AND NOT ${hasUnits}), 0)::DOUBLE AS ${w("z1")}${
       gross
         ? `,
-    coalesce(sum(${gross}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE AS g0,
-    coalesce(sum(${gross}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE AS g1`
+    coalesce(sum(${gross}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE AS ${w("g0")},
+    coalesce(sum(${gross}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE AS ${w("g1")}`
         : cost
           ? `,
-    coalesce(sum(${sales}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE AS rs0,
-    coalesce(sum(${sales}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE AS rs1`
+    coalesce(sum(${sales}) FILTER (WHERE ${period} = ${prior} AND ${hasUnits}), 0)::DOUBLE AS ${w("rs0")},
+    coalesce(sum(${sales}) FILTER (WHERE ${period} = ${current} AND ${hasUnits}), 0)::DOUBLE AS ${w("rs1")}`
           : ""
     }
   FROM ${ident(config.table)}
@@ -313,38 +382,28 @@ WITH cells AS MATERIALIZED (
 ),
 ${levelCtes.join(",\n")},
 ${joinCtes.join(",\n")},
-priced AS (
+${w("priced")} AS (
   SELECT *,
     ${groupPrices.join(",\n    ")}
-  FROM windowed
+  FROM ${w("windowed")}
 ),
-referenced AS (
+${w("referenced")} AS (
   SELECT *,
-    ${matchLevel} AS match_level,
-    ${survivingLevel} AS surviving_level,
+    ${matchLevel} AS ${w("match_level")},
+    ${survivingLevel} AS ${w("surviving_level")},
     ${refs.join(",\n    ")}
-  FROM priced
+  FROM ${w("priced")}
 ),
-priced_effects AS (
-SELECT ${allColumns.join(", ")}, q0, s0, q1, s1, z0, z1,${gross ? " g0, g1," : ""}${cost ? " rs0, rs1," : ""} match_level, surviving_level,
-  ${Array.from({ length: k + 1 }, (_, j) => `ref_${j}`).join(", ")},
-  CASE WHEN q1 = 0 AND q0 <> 0 THEN 'discontinued' WHEN q0 <= 0 THEN 'new' ELSE 'continuing' END AS status,
+${w("priced_effects")} AS (
+SELECT ${allColumns.join(", ")}, ${w("q0")}, ${w("s0")}, ${w("q1")}, ${w("s1")}, ${w("z0")}, ${w("z1")},${gross ? ` ${w("g0")}, ${w("g1")},` : ""}${cost ? ` ${w("rs0")}, ${w("rs1")},` : ""} ${w("match_level")}, ${w("surviving_level")},
+  ${Array.from({ length: k + 1 }, (_, j) => w(`ref_${j}`)).join(", ")},
+  CASE WHEN ${w("q1")} = 0 AND ${w("q0")} <> 0 THEN 'discontinued' WHEN ${w("q0")} <= 0 THEN 'new' ELSE 'continuing' END AS ${w("status")},
   ${effects},
-  z1 - z0 AS no_units
-FROM referenced
+  ${w("z1")} - ${w("z0")} AS ${w("no_units")}
+FROM ${w("referenced")}
 )
-SELECT *${
-    gross
-      ? `,
-  CASE WHEN ${rated} AND g0 <> 0 AND q0 > 0 AND q1 <> 0 THEN (g1 - q1 * g0 / q0) * (s0 / g0) ELSE 0 END AS price_list,
-  price - CASE WHEN ${rated} AND g0 <> 0 AND q0 > 0 AND q1 <> 0 THEN (g1 - q1 * g0 / q0) * (s0 / g0) ELSE 0 END AS price_discount`
-      : cost
-        ? `,
-  CASE WHEN ${rated} AND q0 > 0 THEN rs1 - q1 * rs0 / q0 ELSE 0 END AS price_sales,
-  price - CASE WHEN ${rated} AND q0 > 0 THEN rs1 - q1 * rs0 / q0 ELSE 0 END AS cost_rate`
-        : ""
-  }
-FROM priced_effects`;
+SELECT ${projection}
+FROM ${w("priced_effects")}`;
 }
 
 /** What the bridge measures, for labels. */
@@ -433,8 +492,11 @@ export async function runBridge(query: Query, config: BridgeConfig): Promise<Bri
 
   const columns = effectColumns(config);
   const [totals] = await query(
-    `SELECT sum(s0 + z0) AS s0, sum(s1 + z1) AS s1, sum(s1) AS unit_s1, ${columns
-      .map((c) => `sum(${c.key}) AS ${c.key}`)
+    `SELECT sum(${cellsRef(config, "s0")} + ${cellsRef(config, "z0")}) AS s0, sum(${cellsRef(
+      config,
+      "s1",
+    )} + ${cellsRef(config, "z1")}) AS s1, sum(${cellsRef(config, "s1")}) AS unit_s1, ${columns
+      .map((c) => `sum(${cellsRef(config, c.key)}) AS ${c.key}`)
       .join(", ")}
      FROM ${ident(cellsTable)}`,
   );
@@ -449,9 +511,12 @@ export async function runBridge(query: Query, config: BridgeConfig): Promise<Bri
   }
 
   const coverageRows = await query(
-    `SELECT match_level, count(*)::DOUBLE AS cells, sum(s1) AS sales
-     FROM ${ident(cellsTable)} WHERE q1 <> 0 OR s1 <> 0
-     GROUP BY match_level ORDER BY match_level DESC`,
+    `SELECT ${cellsRef(config, "match_level")} AS match_level, count(*)::DOUBLE AS cells, sum(${cellsRef(
+      config,
+      "s1",
+    )}) AS sales
+     FROM ${ident(cellsTable)} WHERE ${cellsRef(config, "q1")} <> 0 OR ${cellsRef(config, "s1")} <> 0
+     GROUP BY 1 ORDER BY 1 DESC`,
   );
 
   return {
@@ -506,11 +571,12 @@ export async function drill(
   }
   const effects = effectColumns(config).map((c) => c.key);
   const mixes = effects.filter((e) => e.startsWith("mix_"));
+  const stored = (name: string) => cellsRef(config, name);
   const sortBy = options.sortBy ?? "change";
   const sortExpression =
-    sortBy === "change" ? "sum(s1 + z1) - sum(s0 + z0)"
-    : sortBy === "mix" ? `sum(${mixes.join(" + ")})`
-    : effects.includes(sortBy) || sortBy === "price" ? `sum(${sortBy})`
+    sortBy === "change" ? `sum(${stored("s1")} + ${stored("z1")}) - sum(${stored("s0")} + ${stored("z0")})`
+    : sortBy === "mix" ? `sum(${mixes.map(stored).join(" + ")})`
+    : effects.includes(sortBy) || sortBy === "price" ? `sum(${stored(sortBy)})`
     : null;
   if (!sortExpression) throw new Error(`Cannot sort by "${sortBy}"`);
 
@@ -526,8 +592,12 @@ export async function drill(
   }
   const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
   return query(
-    `SELECT ${keys}, sum(q0) AS q0, sum(q1) AS q1, sum(s0) AS s0, sum(s1) AS s1, sum(z0) AS z0, sum(z1) AS z1,${effects.includes("price") ? "" : " sum(price) AS price,"} ${effects
-      .map((e) => `sum(${e}) AS ${e}`)
+    `SELECT ${keys}, sum(${stored("q0")}) AS q0, sum(${stored("q1")}) AS q1, sum(${stored("s0")}) AS s0, sum(${stored(
+      "s1",
+    )}) AS s1, sum(${stored("z0")}) AS z0, sum(${stored("z1")}) AS z1,${
+      effects.includes("price") ? "" : ` sum(${stored("price")}) AS price,`
+    } ${effects
+      .map((e) => `sum(${stored(e)}) AS ${e}`)
       .join(", ")}
      FROM ${ident(config.cellsTable ?? DEFAULT_CELLS_TABLE)}
      ${where}
@@ -545,11 +615,17 @@ export async function unmatched(
 ): Promise<Record<string, unknown>[]> {
   const k = config.levels.length;
   const keys = cumulativeColumns(config.levels, k).map(ident).join(", ");
+  const matchLevel = cellsRef(config, "match_level");
+  const q1 = cellsRef(config, "q1");
+  const s1 = cellsRef(config, "s1");
   return query(
-    `SELECT ${keys}, q1, s1, match_level, ref_price, new_config
+    `SELECT ${keys}, ${cellsRead(config, "q1")}, ${cellsRead(config, "s1")}, ${cellsRead(
+      config,
+      "match_level",
+    )}, ${cellsRead(config, "ref_price")}, ${cellsRead(config, "new_config")}
      FROM ${ident(config.cellsTable ?? DEFAULT_CELLS_TABLE)}
-     WHERE match_level < ${k} AND (q1 <> 0 OR s1 <> 0)
-     ORDER BY abs(s1) DESC
+     WHERE ${matchLevel} < ${k} AND (${q1} <> 0 OR ${s1} <> 0)
+     ORDER BY abs(${s1}) DESC
      LIMIT ${Math.floor(limit)}`,
   );
 }
@@ -854,7 +930,10 @@ async function nearEdgeCells(
        FROM source_rows s
        GROUP BY ${grouped}
      )
-     SELECT ${bucket} AS fallback, c.s1 AS sales, c.price AS price_effect,
+     SELECT ${bucket} AS fallback, c.${cellsRef(config, "s1")} AS sales, c.${cellsRef(
+       config,
+       "price",
+     )} AS price_effect,
        e.es0, e.eq0, e.es1, e.eq1
      FROM chosen c LEFT JOIN exact e ON e.k IS NOT DISTINCT FROM ${structKey("c", columns)}`,
   );
@@ -870,7 +949,8 @@ export async function priceDistribution(
   config: BridgeConfig,
 ): Promise<{ buckets: PriceBucket[]; averageChange: number }> {
   const k = config.levels.length;
-  const change = "(s1 / q1) / (s0 / q0) - 1";
+  const stored = (name: string) => cellsRef(config, name);
+  const change = `(${stored("s1")} / ${stored("q1")}) / (${stored("s0")} / ${stored("q0")}) - 1`;
   // The band edges are whole tenths of a percent, so a change within 5e-7 of a
   // percent of one rounds to it at six decimals. The division's error is a few
   // units in the last place of the percentage: about 9e-15 of a percent at a
@@ -892,9 +972,11 @@ export async function priceDistribution(
       .join(" ") +
     ` ELSE ${PRICE_BUCKETS.length - 1} END`;
   const matched = `FROM ${ident(config.cellsTable ?? DEFAULT_CELLS_TABLE)}
-     WHERE match_level = ${k} AND q0 > 0 AND q1 > 0 AND s0 > 0`;
+     WHERE ${stored("match_level")} = ${k} AND ${stored("q0")} > 0 AND ${stored("q1")} > 0 AND ${stored("s0")} > 0`;
   const rows = await query(
-    `SELECT ${bucket} AS bucket, count(*)::DOUBLE AS cells, sum(s1) AS sales, sum(price) AS price_effect
+    `SELECT ${bucket} AS bucket, count(*)::DOUBLE AS cells, sum(${stored("s1")}) AS sales, sum(${stored(
+      "price",
+    )}) AS price_effect
      ${matched} AND NOT (${nearEdge}) GROUP BY 1`,
   );
   const near = await nearEdgeCells(query, config, matched, bucket, nearEdge);
@@ -914,7 +996,7 @@ export async function priceDistribution(
     sales[i] += Number(row.sales);
     priceEffect[i] += Number(row.price_effect);
   }
-  const [totals] = await query(`SELECT sum(s1) AS sales, sum(price) AS price_effect ${matched}`);
+  const [totals] = await query(`SELECT sum(${stored("s1")}) AS sales, sum(${stored("price")}) AS price_effect ${matched}`);
   const totalSales = Number(totals.sales ?? 0);
   return {
     buckets: PRICE_BUCKETS.map(([, label], i) => ({
@@ -1044,12 +1126,15 @@ export async function priceRealization(
     if (!known.has(column)) throw new Error(`"${column}" is not a level column`);
   }
   const keys = columns.map(ident).join(", ");
+  const stored = (name: string) => cellsRef(config, name);
   const rows = await query(
-    `SELECT ${keys}, sum(s1) AS matched_sales, sum(price) AS price_effect
+    `SELECT ${keys}, sum(${stored("s1")}) AS matched_sales, sum(${stored("price")}) AS price_effect
      FROM ${ident(config.cellsTable ?? DEFAULT_CELLS_TABLE)}
-     WHERE match_level = ${config.levels.length} AND q0 > 0 AND q1 > 0 AND s0 > 0
+     WHERE ${stored("match_level")} = ${config.levels.length} AND ${stored("q0")} > 0 AND ${stored(
+       "q1",
+     )} > 0 AND ${stored("s0")} > 0
      GROUP BY ${keys}
-     ORDER BY sum(s1) DESC
+     ORDER BY sum(${stored("s1")}) DESC
      LIMIT ${Math.floor(limit)}`,
   );
   return rows.map((row) => {
@@ -1090,26 +1175,32 @@ export async function priceGaps(
   if (k < 2) return { rows: [], totalOpportunity: 0, belowPeerSales: 0, comparedSales: 0 };
   const all = cumulativeColumns(config.levels, k);
   const peers = cumulativeColumns(config.levels, k - 1).map(ident).join(", ");
+  const stored = (name: string) => cellsRef(config, name);
+  // The derived table's own names carry WORKING, so a level column can take any
+  // plain name without changing what the outer query reads.
+  const w = (name: string) => ident(`${WORKING}${name}`);
   const compared = `
-    SELECT *, peer_sales / peer_units AS peer_price, s1 / q1 AS own_price
+    SELECT *, ${w("peer_sales")} / ${w("peer_units")} AS ${w("peer_price")}, ${w("s1")} / ${w("q1")} AS ${w("own_price")}
     FROM (
-      SELECT ${all.map(ident).join(", ")}, q1, s1,
-        sum(s1) OVER (PARTITION BY ${peers}) AS peer_sales,
-        sum(q1) OVER (PARTITION BY ${peers}) AS peer_units,
-        count(*) OVER (PARTITION BY ${peers}) AS peer_count
+      SELECT ${all.map(ident).join(", ")}, ${stored("q1")} AS ${w("q1")}, ${stored("s1")} AS ${w("s1")},
+        sum(${stored("s1")}) OVER (PARTITION BY ${peers}) AS ${w("peer_sales")},
+        sum(${stored("q1")}) OVER (PARTITION BY ${peers}) AS ${w("peer_units")},
+        count(*) OVER (PARTITION BY ${peers}) AS ${w("peer_count")}
       FROM ${ident(config.cellsTable ?? DEFAULT_CELLS_TABLE)}
-      WHERE q1 > 0 AND s1 > 0
+      WHERE ${stored("q1")} > 0 AND ${stored("s1")} > 0
     )
-    WHERE peer_count > 1 AND peer_units > 0`;
-  const below = "own_price < peer_price";
+    WHERE ${w("peer_count")} > 1 AND ${w("peer_units")} > 0`;
+  const below = `${w("own_price")} < ${w("peer_price")}`;
   const [totals] = await query(
-    `SELECT coalesce(sum((peer_price - own_price) * q1) FILTER (WHERE ${below}), 0) AS opportunity,
-       coalesce(sum(s1) FILTER (WHERE ${below}), 0) AS below_sales,
-       coalesce(sum(s1), 0) AS compared_sales
+    `SELECT coalesce(sum((${w("peer_price")} - ${w("own_price")}) * ${w("q1")}) FILTER (WHERE ${below}), 0) AS opportunity,
+       coalesce(sum(${w("s1")}) FILTER (WHERE ${below}), 0) AS below_sales,
+       coalesce(sum(${w("s1")}), 0) AS compared_sales
      FROM (${compared})`,
   );
   const rows = await query(
-    `SELECT ${all.map(ident).join(", ")}, q1, s1, own_price, peer_price, (peer_price - own_price) * q1 AS opportunity
+    `SELECT ${all.map(ident).join(", ")}, ${w("q1")} AS q1, ${w("s1")} AS s1, ${w("own_price")} AS own_price, ${w(
+      "peer_price",
+    )} AS peer_price, (${w("peer_price")} - ${w("own_price")}) * ${w("q1")} AS opportunity
      FROM (${compared}) WHERE ${below}
      ORDER BY opportunity DESC LIMIT ${Math.floor(limit)}`,
   );

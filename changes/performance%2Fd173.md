@@ -1,0 +1,1 @@
+- A file whose attribute column is named `price`, `status`, `volume`, `discontinued` or any other name the bridge used for its own figures now loads and calculates without renaming anything: the calculation keeps its own column names under a `__bk_` prefix, so only a column that itself starts with `__bk_` is still refused (`src/engine.ts`).
