@@ -417,9 +417,15 @@ export function useCheckoutReturn(options: {
     setState({ ...state, phase: "paid" });
   }, [state?.workspace, state?.phase, checkoutPro]);
 
+  // The deadline closes the return to replies in the same turn its timer runs,
+  // before React commits the expired state and runs the poll's cleanup. A
+  // reply released later in that turn must not reach the plans map.
+  const deadlinePassed = useRef(false);
+
   // Poll the checkout workspace until its plan is Pro or the deadline passes.
-  // Ignore replies after a newer poll reply has been applied, after this
-  // effect has accepted Pro, or after its cleanup has run.
+  // Ignore replies after the deadline has fired, after a newer poll reply has
+  // been applied, after this effect has accepted Pro, or after its cleanup has
+  // run.
   useEffect(() => {
     if (!state || state.phase !== "pending" || !options.enabled || !state.workspace) return;
     const target = state.workspace;
@@ -432,7 +438,7 @@ export function useCheckoutReturn(options: {
       const mine = sent;
       void read(target).then(
         (found) => {
-          if (!live || settled || mine < latest) return;
+          if (!live || deadlinePassed.current || settled || mine < latest) return;
           latest = mine;
           options.onPlan(target, found);
           if (found.plan.pro) {
@@ -459,11 +465,13 @@ export function useCheckoutReturn(options: {
     if (!state || state.phase !== "pending") return;
     const remaining = state.deadline - now();
     if (remaining <= 0) {
+      deadlinePassed.current = true;
       if (state.token) forgetCheckoutWorkspace(state.token);
       setState({ ...state, phase: "expired" });
       return;
     }
     const timer = setTimeout(() => {
+      deadlinePassed.current = true;
       if (state.token) forgetCheckoutWorkspace(state.token);
       setState((current) => (current && current.phase === "pending" ? { ...current, phase: "expired" } : current));
     }, remaining);

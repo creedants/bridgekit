@@ -1,0 +1,1 @@
+- A checkout return stops accepting plan replies the moment its deadline fires, so a reply that lands after it can no longer show Pro while the page still says the payment is being confirmed.
