@@ -704,62 +704,21 @@ test("every results tab names the one panel, and the panel names the selected ta
 });
 
 test("the filter search box has a name of its own", async () => {
-  const doc = installHarnessDom();
-  const React = await import("react");
-  const { createRoot } = await import("react-dom/client");
-  const { SetupPanel } = await import("../src/app/SetupPanel.tsx");
-  const values = Array.from({ length: 10 }, (_, i) => ({ v: `P${i}` }));
-  const query = async () => async (sql: string) =>
-    sql.includes("GROUP BY 1") && sql.includes(" AS v ") ? values : [];
-  const setup = {
-    periodColumn: "year",
-    grain: "value",
-    unitsColumn: "units",
-    salesColumn: "sales",
-    levels: [],
-    filters: [{ column: "product", mode: "include", values: [] }],
-  } as const;
-  const container = doc.createElement("div");
-  doc.body.appendChild(container as unknown as HarnessNode);
-  const root = createRoot(container as unknown as Element);
+  const raw = await openDatabase();
+  const mounted = await mountApp("?sample=1000", queued(raw));
   try {
-    await React.act(async () => {
-      root.render(
-        React.createElement(SetupPanel, {
-          columns: [
-            { name: "year", type: "INTEGER" },
-            { name: "product", type: "VARCHAR" },
-            { name: "units", type: "DOUBLE" },
-            { name: "sales", type: "DOUBLE" },
-          ],
-          setup,
-          periods: ["2025", "2026"],
-          prior: "2025",
-          current: "2026",
-          query,
-          rollups: [],
-          totalRows: [],
-          onChange: () => {},
-          onRefine: () => {},
-          onPrior: () => {},
-          onCurrent: () => {},
-        } as unknown as Parameters<typeof SetupPanel>[0]),
-      );
+    await waitForSampleRun(mounted);
+    const add = harnessNodes(mounted.container, "SELECT").find((node) => node.getAttribute("aria-label") === "Add filter");
+    assert.ok(add, "the Add filter control is on screen");
+    (add as unknown as { value: string }).value = "customer";
+    await mounted.React.act(async () => {
+      add.dispatchEvent({ type: "change", bubbles: true, target: add, preventDefault() {}, stopPropagation() {} });
     });
-    const box = () => harnessNodes(container, "INPUT").find((node) => node.getAttribute("placeholder") === "Search values");
-    for (let i = 0; i < 100 && box() === undefined; i += 1) {
-      await React.act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      });
-    }
-    const input = box();
-    assert.ok(input, "the filter search box is on screen");
-    assert.equal(input.getAttribute("aria-label"), "Search values");
+    const box = () => harnessNodes(mounted.container, "INPUT").find((node) => node.getAttribute("placeholder") === "Search values");
+    await mounted.until(() => box() !== undefined, "the customer filter's search box");
+    assert.equal(box()?.getAttribute("aria-label"), "Search values");
   } finally {
-    await React.act(async () => {
-      root.unmount();
-    });
-    doc.body.removeChild(container as unknown as HarnessNode);
+    await mounted.unmount();
   }
 });
 
