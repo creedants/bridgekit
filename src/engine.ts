@@ -116,8 +116,9 @@ export interface BridgeResult {
 
 /**
  * Prefix for every column and alias the calculation adds. A file column can
- * take any plain name; a level column that takes one keeps it in the cells
- * table and pushes the calculation's column to its prefixed name.
+ * take any plain name the results do not read; a level column that takes one
+ * keeps it in the cells table and pushes the calculation's column to its
+ * prefixed name.
  */
 const WORKING = "__bk_";
 
@@ -167,15 +168,16 @@ function structKey(alias: string | null, columns: string[]): string {
 
 function validate(config: BridgeConfig): void {
   if (config.levels.length === 0) throw new Error("At least one level is required");
-  // A calculation column keeps its prefixed name when a level column takes the
-  // plain one, so only the prefix itself stays out of a file's columns.
-  const reserved = /^__bk_/i;
+  /** Names a reader outside the calculation sees in a result row or a cells-table field. A file column that takes one hides the label or the figure, so it stays refused. */
+  const RESERVED = /^(q0|s0|q1|s1|z0|z1|g0|g1|rs0|rs1|match_level|surviving_level|status|ref_price|volume|price|new_config|discontinued|no_units|price_list|price_discount|price_sales|cost_rate|(ref|mix)_\d+)$/i;
+  /** Names the calculation keeps for itself, which a file column must never take. */
+  const WORKING_PREFIX = /^__bk_/i;
   const seen = new Set<string>();
   for (const level of config.levels) {
     if (level.columns.length === 0) throw new Error(`Level "${level.name}" has no columns`);
     for (const column of level.columns) {
       if (seen.has(column)) throw new Error(`Column "${column}" is used in more than one level`);
-      if (reserved.test(column)) {
+      if (RESERVED.test(column) || WORKING_PREFIX.test(column)) {
         throw new Error(`Column "${column}" has a name the calculation uses internally. Rename it in your file and load it again.`);
       }
       seen.add(column);
