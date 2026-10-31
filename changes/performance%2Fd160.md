@@ -1,0 +1,2 @@
+- The method page's fallback example now states the figures the bridge gives: its 4 new units add 4 × 15 = 60 to volume, 4 × (20 − 15) = 20 as model mix and 0 as finish mix, and the remaining 120 is still new configurations.
+- The PVM analysis page's grouping item now links the grouping level page before the method page.
