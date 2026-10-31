@@ -1164,10 +1164,11 @@ export interface PriceGap {
 
 /**
  * Compares the current price of each configuration with the peer average: the
- * units-weighted average price over every configuration that shares every
- * attribute but the last, this row included. A row is compared only when it
- * has at least one other peer. With customer as the last attribute this shows
- * who pays less than others for the same product.
+ * units-weighted average price over configurations that share every attribute
+ * but the last and have positive current units and sales, this row included.
+ * A row is compared only when that filtered group has at least two rows and
+ * positive total units. With customer as the last attribute this shows who
+ * pays less than the group average for the same product.
  */
 export async function priceGaps(
   query: Query,
