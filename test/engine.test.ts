@@ -755,62 +755,108 @@ test("review findings: float units that net to zero, offsetting splits, null sal
   );
 });
 
-test("a file column named like one of the calculation's own columns loads and bridges the same", async () => {
+// The same rows in every file, so only the attribute column's name differs.
+const RESERVED_ROWS: [string, string, string, number, number][] = [
+  ["2025", "D1", "basic", 10, 100],
+  ["2025", "D1", "premium", 10, 300],
+  ["2025", "D2", "basic", 20, 400],
+  ["2026", "D1", "basic", 10, 110],
+  ["2026", "D1", "premium", 12, 360],
+  ["2026", "D2", "premium", 4, 200],
+];
+
+function reservedCsv(attribute: string): string {
+  return [
+    ["year", attribute, "finish", "units", "sales"].join(","),
+    ...RESERVED_ROWS.map(([year, design, finish, units, sales]) => [year, design, finish, units, sales].join(",")),
+  ].join("\n") + "\n";
+}
+
+function reservedLevels(column: string): Level[] {
+  return [{ name: "Attribute", columns: [column] }, { name: "Finish", columns: ["finish"] }];
+}
+
+/** Rewrites the level column's key to "attribute" and rounds every number, so two files that differ only in the attribute header compare equal. */
+function canonical(value: unknown, column: string): unknown {
+  if (typeof value === "number") return Number(value.toFixed(9));
+  if (Array.isArray(value)) return value.map((item) => canonical(item, column));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key.toLowerCase() === column.toLowerCase() ? "attribute" : key,
+        canonical(item, column),
+      ]),
+    );
+  }
+  return value;
+}
+
+test("names the calculation uses only inside its own SQL load and bridge the same as a neutral name", async () => {
+  // Fails if a freed name is added back to RESERVED, or if the __bk_ prefixing
+  // of the cells table regresses.
   const names = [
-    "q0", "s0", "q1", "s1", "z0", "z1", "g0", "g1", "rs0", "rs1", "r0",
-    "match_level", "surviving_level", "status", "ref_price", "volume", "price",
-    "new_config", "discontinued", "no_units", "price_list", "price_discount",
-    "price_sales", "cost_rate", "ref_0", "ref_2", "mix_1", "mix_2",
-    "q0_l1", "s1_l2", "p0_l1", "p1_l2",
+    "r0", "q0_l1", "s0_l1", "q1_l1", "s1_l1", "p0_l1", "p1_l1",
+    "q0_l2", "s0_l2", "q1_l2", "s1_l2", "p0_l2", "p1_l2",
   ];
-  // A gross or cost column makes the working columns those two modes add.
-  const grossNames = new Set(["g0", "g1", "price_list", "price_discount"]);
-  const costNames = new Set(["rs0", "rs1", "price_sales", "cost_rate"]);
-  // The same rows in every file, so only the attribute column's name differs.
-  const rows: [string, string, string, number, number][] = [
-    ["2025", "D1", "basic", 10, 100],
-    ["2025", "D1", "premium", 10, 300],
-    ["2025", "D2", "basic", 20, 400],
-    ["2026", "D1", "basic", 10, 110],
-    ["2026", "D1", "premium", 12, 360],
-    ["2026", "D2", "premium", 4, 200],
-  ];
-  const csv = (attribute: string, amount: "cost" | "gross" | null) =>
-    [
-      ["year", attribute, "finish", "units", "sales", ...(amount ? [amount] : [])].join(","),
-      ...rows.map(([year, design, finish, units, sales]) =>
-        [year, design, finish, units, sales, ...(amount ? [Number((sales * (amount === "gross" ? 1.2 : 0.4)).toFixed(2))] : [])].join(","),
-      ),
-    ].join("\n") + "\n";
-  const directory = await mkdtemp("/tmp/bridgekit-reserved-");
+  const directory = await mkdtemp("/tmp/opencode/bridgekit-freed-");
   const query = await openDatabase();
-  const shape = (result: BridgeResult) => ({
-    priorSales: result.priorSales,
-    currentSales: result.currentSales,
-    effects: result.effects,
-    coverage: result.coverage.map(({ level, cells, sales }) => ({ level, cells, sales })),
-  });
-  const levels = (column: string): Level[] => [
-    { name: "Attribute", columns: [column] },
-    { name: "Finish", columns: ["finish"] },
-  ];
+  const base = { periodColumn: "year", prior: "2025", current: "2026", unitsColumn: "units", salesColumn: "sales" };
+  const read = async (table: string, column: string) => {
+    const config: BridgeConfig = { ...base, table, levels: reservedLevels(column) };
+    const result = await runBridge(query, config);
+    return {
+      bridge: {
+        priorSales: result.priorSales,
+        currentSales: result.currentSales,
+        effects: result.effects,
+        coverage: result.coverage.map(({ level, cells, sales }) => ({ level, cells, sales })),
+      },
+      drill: await drill(query, config, { columns: [column] }),
+      unmatched: await unmatched(query, config),
+      gaps: await priceGaps(query, config),
+      distribution: await priceDistribution(query, config),
+      realization: await priceRealization(query, config, [column]),
+    };
+  };
 
   for (const name of names) {
-    const amount = costNames.has(name) ? "cost" : grossNames.has(name) ? "gross" : null;
     const file = path.join(directory, `${name}.csv`);
-    const plainFile = path.join(directory, `attribute${amount ? `-${amount}` : ""}.csv`);
-    await writeFile(file, csv(name, amount));
-    await writeFile(plainFile, csv("attribute", amount));
-    await readCsvTable(query, "reserved", file);
-    await readCsvTable(query, "plain", plainFile);
-    const base = {
-      periodColumn: "year", prior: "2025", current: "2026",
-      unitsColumn: "units", salesColumn: "sales",
-      ...(amount === "cost" ? { costColumn: "cost" } : amount === "gross" ? { grossColumn: "gross" } : {}),
-    };
-    const colliding = await runBridge(query, { ...base, table: "reserved", levels: levels(name) });
-    const ordinary = await runBridge(query, { ...base, table: "plain", levels: levels("attribute") });
-    assert.deepEqual(shape(colliding), shape(ordinary), `a column named ${name}`);
+    const plainFile = path.join(directory, "attribute.csv");
+    await writeFile(file, reservedCsv(name));
+    await writeFile(plainFile, reservedCsv("attribute"));
+    await readCsvTable(query, "freed", file);
+    await readCsvTable(query, "neutral", plainFile);
+    const freed = await read("freed", name);
+    const ordinary = await read("neutral", "attribute");
+    assert.deepEqual(canonical(freed, name), canonical(ordinary, name), `a column named ${name}`);
+  }
+});
+
+test("a file column named like a result a reader sees stays refused", async () => {
+  // Fails if any kept name is removed from RESERVED.
+  const names = [
+    "q0", "q1", "s0", "s1", "z0", "z1", "g0", "g1", "rs0", "rs1",
+    "match_level", "surviving_level", "status", "ref_price", "volume", "price",
+    "new_config", "discontinued", "no_units", "price_list", "price_discount",
+    "price_sales", "cost_rate", "ref_0", "ref_1", "ref_2", "ref_6", "mix_1",
+    "mix_2", "mix_6", "Price", "Q0", "Match_Level", "__bk_price", "__BK_s0",
+  ];
+  const directory = await mkdtemp("/tmp/opencode/bridgekit-kept-");
+  const query = await openDatabase();
+  const base = { periodColumn: "year", prior: "2025", current: "2026", unitsColumn: "units", salesColumn: "sales" };
+
+  for (const name of names) {
+    const file = path.join(directory, `${name}.csv`);
+    await writeFile(file, reservedCsv(name));
+    await readCsvTable(query, "kept", file);
+    const expected = `Column "${name}" has a name the calculation uses internally. Rename it in your file and load it again.`;
+    await assert.rejects(
+      runBridge(query, { ...base, table: "kept", levels: reservedLevels(name) }),
+      (error: Error) => {
+        assert.equal(error.message, expected);
+        return true;
+      },
+    );
   }
 });
 
