@@ -442,26 +442,6 @@ test("the home page carries one structured-data block with WebSite and Organizat
   checkHomeStructuredData("index.html", readPage("index.html"));
 });
 
-test("the structured-data checks reject a node the page does not describe", () => {
-  const home = readPage("index.html");
-  const withThing = home.replace('"@graph":[', '"@graph":[{"@type":"Thing"},');
-  assert.notEqual(withThing, home, 'index.html has no "@graph":[ to add a node to');
-  assert.throws(
-    () => checkHomeStructuredData("index.html", withThing),
-    /index\.html @graph holds Organization, Thing, WebSite: keep exactly/,
-  );
-});
-
-test("the structured-data checks reject an extra key beside @context and @graph", () => {
-  const home = readPage("index.html");
-  const withName = home.replace('{"@context"', '{"name":"PVM Bridge","@context"');
-  assert.notEqual(withName, home, 'index.html has no {"@context" to add a key to');
-  assert.throws(
-    () => checkHomeStructuredData("index.html", withName),
-    /index\.html structured data has keys beside @context and @graph \(name\)/,
-  );
-});
-
 test("the home page carries fewer than 600 visible words", () => {
   const words = visibleWordsOf(readPage("index.html"));
   assert.ok(
@@ -894,6 +874,136 @@ const SITE_PAGES = [
   "grouping-level.html",
   "price-volume-mix-analysis.html",
 ];
+
+type Article = { file: string; published: string };
+
+// datePublished has no visible copy on the page to check it against, so this table pins it.
+const ARTICLES: readonly Article[] = [
+  { file: "method.html", published: "2026-10-03" },
+  { file: "guide.html", published: "2026-10-03" },
+  { file: "price-volume-mix-analysis.html", published: "2026-10-03" },
+  { file: "grouping-level.html", published: "2026-10-11" },
+];
+
+const MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+function longDateOf(datetime: string): string {
+  const [year, month, day] = datetime.split("-").map(Number);
+  return `${day} ${MONTHS[month - 1]} ${year}`;
+}
+
+function checkArticle(article: Article, html: string): void {
+  const { file } = article;
+  const line =
+    /<h1>([^<]*)<\/h1>\s*<p class="date">Updated <time datetime="(\d{4}-\d{2}-\d{2})">([^<]+)<\/time>\.<\/p>/.exec(
+      html,
+    );
+  assert.ok(
+    line,
+    `${file} has no Updated line straight under the h1: put <p class="date">Updated <time datetime="YYYY-MM-DD">D Month YYYY</time>.</p> right after the <h1>`,
+  );
+  const [, heading, datetime, shown] = line;
+  assert.equal(
+    shown,
+    longDateOf(datetime),
+    `${file} says Updated ${shown} but its datetime is ${datetime}: write ${longDateOf(datetime)} or fix the datetime`,
+  );
+  const node = graphOf(file, html, ["Article"]).get("Article");
+  const headline = collapseSpaces(heading);
+  const canonical = canonicalsOf(headOf(file, html))[0];
+  assert.equal(
+    node?.headline,
+    headline,
+    `${file} Article headline is ${String(node?.headline)}: set it to the h1, "${headline}"`,
+  );
+  assert.equal(
+    node?.url,
+    canonical,
+    `${file} Article url is ${String(node?.url)}: set it to the canonical address, ${canonical}`,
+  );
+  assert.equal(
+    node?.dateModified,
+    datetime,
+    `${file} Article dateModified is ${String(node?.dateModified)}: set it to the Updated datetime, ${datetime}`,
+  );
+  assert.deepEqual(
+    node,
+    {
+      "@type": "Article",
+      headline,
+      url: canonical,
+      datePublished: article.published,
+      dateModified: datetime,
+      publisher: { "@id": `${ORIGIN}/#organization` },
+      author: { "@id": `${ORIGIN}/#organization` },
+    },
+    `${file} Article node does not match the page: keep headline, url, datePublished ${article.published}, dateModified, and the organization as publisher and author, and nothing else`,
+  );
+}
+
+test("each article page says when it was updated, and its structured data agrees", () => {
+  const listed = ARTICLES.map((article) => article.file).sort();
+  const articles = SITE_PAGES.filter(
+    (file) => file !== "privacy.html" && file !== "terms.html",
+  ).sort();
+  assert.deepEqual(
+    listed,
+    articles,
+    `ARTICLES lists ${listed.join(", ")} but the article pages are ${articles.join(", ")}: list every site page except privacy and terms in ARTICLES with its first-published date`,
+  );
+  for (const article of ARTICLES) {
+    checkArticle(article, readPage(article.file));
+  }
+});
+
+test("the structured-data checks reject a node the page does not describe", () => {
+  const home = readPage("index.html");
+  const homeWithThing = home.replace('"@graph":[', '"@graph":[{"@type":"Thing"},');
+  assert.notEqual(homeWithThing, home, 'index.html has no "@graph":[ to add a node to');
+  assert.throws(
+    () => checkHomeStructuredData("index.html", homeWithThing),
+    /index\.html @graph holds Organization, Thing, WebSite: keep exactly/,
+  );
+  const method = ARTICLES[0];
+  const page = readPage(method.file);
+  const pageWithThing = page.replace('"@graph":[', '"@graph":[{"@type":"Thing"},');
+  assert.notEqual(pageWithThing, page, `${method.file} has no "@graph":[ to add a node to`);
+  assert.throws(
+    () => checkArticle(method, pageWithThing),
+    /method\.html @graph holds Article, Thing: keep exactly/,
+  );
+});
+
+test("the structured-data checks reject an extra key beside @context and @graph", () => {
+  const home = readPage("index.html");
+  const homeWithName = home.replace('{"@context"', '{"name":"PVM Bridge","@context"');
+  assert.notEqual(homeWithName, home, 'index.html has no {"@context" to add a key to');
+  assert.throws(
+    () => checkHomeStructuredData("index.html", homeWithName),
+    /index\.html structured data has keys beside @context and @graph \(name\)/,
+  );
+  const method = ARTICLES[0];
+  const page = readPage(method.file);
+  const pageWithName = page.replace('{"@context"', '{"name":"PVM Bridge","@context"');
+  assert.notEqual(pageWithName, page, `${method.file} has no {"@context" to add a key to`);
+  assert.throws(
+    () => checkArticle(method, pageWithName),
+    /method\.html structured data has keys beside @context and @graph \(name\)/,
+  );
+});
 
 function blockOf(file: string, html: string, pattern: RegExp, name: string): string {
   const block = pattern.exec(html);
