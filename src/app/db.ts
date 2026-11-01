@@ -3,7 +3,7 @@ import mvpWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url
 import ehWasm from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
 import mvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import type { Query } from "../engine.ts";
-import { CSV_PREFIX_BYTES, ENCODING_SENTENCE, blobIsUtf8, decodeCsvBuffer, readCsvFile, rememberCsvReading, type CsvReading } from "./encoding.ts";
+import { CSV_PREFIX_BYTES, ENCODING_SENTENCE, TOO_BIG_SENTENCE, blobIsUtf8, decodeCsvBuffer, readCsvFile, rememberCsvReading, type CsvReading } from "./encoding.ts";
 import { ChunkUnavailable, lazyChunk, scheduleSpeculative, type ChunkSentences } from "./lazyChunk.ts";
 import {
   applyDotColumns,
@@ -627,13 +627,20 @@ export async function readLoadedTable(
   }
 }
 
-/** Refuses an empty or header-only table: the file problems list never sees one. */
+/**
+ * Refuses an empty or header-only table: the file problems list never sees one.
+ * A count that cannot be read is a database fault, not an empty file, so it
+ * keeps its table and uses the existing reload sentence.
+ */
 export async function requireDataRows(query: Query, table: string): Promise<void> {
   const [row] = await query(`SELECT count(*)::DOUBLE AS n FROM ${quote(table)}`);
-  if (!(Number(row?.n) > 0)) {
+  const value = row?.n;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (value > 0) return;
     await query(`DROP TABLE IF EXISTS ${quote(table)}`);
     throw new Error(NO_DATA_ROWS);
   }
+  throw new Error(LIBRARY_FAILURE.gone);
 }
 
 /**
@@ -1001,8 +1008,7 @@ async function csvEncodingFailure(error: unknown, bytes?: Blob): Promise<unknown
   return (await blobIsUtf8(bytes)) === "invalid" ? new CsvEncodingError() : error;
 }
 
-export const TOO_BIG_SENTENCE =
-  "This file is too big to open in this browser. Try a smaller file, or save it with fewer rows or columns.";
+export { TOO_BIG_SENTENCE } from "./encoding.ts";
 
 // DuckDB-WASM begins the recorded allocation failure with this text.
 // CSV parse and encoding failures do not begin with this prefix.

@@ -1,0 +1,1 @@
+- A CSV that has to be read whole is refused above 256 MiB, and an Excel workbook above 128 MiB is refused before it is read, both with the existing sentence "This file is too big to open in this browser. Try a smaller file, or save it with fewer rows or columns."

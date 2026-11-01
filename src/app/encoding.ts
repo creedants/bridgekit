@@ -9,6 +9,14 @@ export const ENCODING_SENTENCE = "This file's text encoding could not be read. S
 /** The one sentence shown when the file is not text at all. */
 export const NOT_TEXT_FILE = "This file is not a text file. Save it as CSV UTF-8 or Excel (.xlsx).";
 
+export const TOO_BIG_SENTENCE =
+  "This file is too big to open in this browser. Try a smaller file, or save it with fewer rows or columns.";
+
+// The limit for a CSV read whole: a 500 MB Windows-1252 file needed 4.1 GB of
+// browser memory, and the review measured a zero-length decode for a
+// 1,000,000,024-byte buffer, at Chromium's ~536.9-million-character string limit.
+export const MAX_WHOLE_FILE_BYTES = 268_435_456;
+
 /**
  * True when the prefix holds a byte no text CSV uses: NUL or a C0 control
  * other than the whitespace a CSV needs. A UTF-16 byte-order mark exempts the
@@ -144,6 +152,12 @@ function decodeMarkedUtf16(bytes: Uint8Array, littleEndian: boolean): string {
   }
 }
 
+/** A whole-buffer decode that came back empty is a lost string, not an empty file. */
+export function checkedText(bytes: Uint8Array, text: string): string {
+  if (bytes.length > 0 && text.length === 0) throw new Error(TOO_BIG_SENTENCE);
+  return text;
+}
+
 /**
  * Classifies a whole CSV buffer. Bytes that are already valid UTF-8 are handed
  * back untouched. A UTF-16 buffer is decoded by its byte-order mark, and a
@@ -159,20 +173,24 @@ export function decodeCsvBuffer(bytes: Uint8Array): DecodedCsv {
     if (isValidUtf8(bytes)) return { kind: "utf8", bytes };
     throw new Error(ENCODING_SENTENCE);
   }
-  if (startsWith(bytes, BOM_UTF16_LE)) return { kind: "text", text: decodeMarkedUtf16(bytes, true) };
-  if (startsWith(bytes, BOM_UTF16_BE)) return { kind: "text", text: decodeMarkedUtf16(bytes, false) };
+  if (startsWith(bytes, BOM_UTF16_LE)) return { kind: "text", text: checkedText(bytes, decodeMarkedUtf16(bytes, true)) };
+  if (startsWith(bytes, BOM_UTF16_BE)) return { kind: "text", text: checkedText(bytes, decodeMarkedUtf16(bytes, false)) };
   if (isValidUtf8(bytes)) return { kind: "utf8", bytes };
   // Only a tail-shaped suffix is removed, and only when the preceding bytes
   // decode as UTF-8. Otherwise the single-byte check below decides.
   const cut = cutUtf8Tail(bytes);
   if (cut > 0) {
+    let text: string | undefined;
     try {
-      return { kind: "text", text: UTF8.decode(bytes.subarray(0, bytes.length - cut)) };
+      text = UTF8.decode(bytes.subarray(0, bytes.length - cut));
     } catch {
       // A damaged byte before the tail: the single-byte check decides.
     }
+    if (text !== undefined) return { kind: "text", text: checkedText(bytes, text) };
   }
-  if (readsAsSingleByteText(bytes)) return { kind: "text", text: WINDOWS_1252.decode(bytes) };
+  if (readsAsSingleByteText(bytes)) {
+    return { kind: "text", text: checkedText(bytes, WINDOWS_1252.decode(bytes)) };
+  }
   throw new Error(ENCODING_SENTENCE);
 }
 
@@ -217,13 +235,15 @@ function readsAsSingleByteText(bytes: Uint8Array): boolean {
 /**
  * The loader's one decoding decision, so the database and the row locator read
  * the same text. Reads the whole file only when the prefix cannot decide, or
- * when an earlier load already read it as text. Throws NOT_TEXT_FILE or
- * ENCODING_SENTENCE.
+ * when an earlier load already read it as text, and never when that whole read
+ * would be over MAX_WHOLE_FILE_BYTES. Throws NOT_TEXT_FILE, ENCODING_SENTENCE or
+ * TOO_BIG_SENTENCE.
  */
 export async function readCsvFile(file: Blob): Promise<CsvReading> {
   const decided = decidedReadings.get(file);
   if (decided === "bytes") return { kind: "bytes" };
   if (decided === "text") {
+    if (file.size > MAX_WHOLE_FILE_BYTES) throw new Error(TOO_BIG_SENTENCE);
     const whole = decodeCsvBuffer(new Uint8Array(await file.arrayBuffer()));
     if (whole.kind === "text") return { kind: "text", text: whole.text };
   }
@@ -234,6 +254,7 @@ export async function readCsvFile(file: Blob): Promise<CsvReading> {
     rememberCsvReading(file, { kind: "bytes" });
     return { kind: "bytes" };
   }
+  if (continues && file.size > MAX_WHOLE_FILE_BYTES) throw new Error(TOO_BIG_SENTENCE);
   const decision = decodeCsvBuffer(continues ? new Uint8Array(await file.arrayBuffer()) : prefix);
   const reading: CsvReading = decision.kind === "utf8" ? { kind: "bytes" } : { kind: "text", text: decision.text };
   rememberCsvReading(file, reading);

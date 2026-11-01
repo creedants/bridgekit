@@ -14,6 +14,41 @@ registerHooks({
   },
 });
 
+/** A File that counts whole-file reads, so a size cap can be shown to refuse before one. */
+class CountingFile extends File {
+  arrayBufferReads = 0;
+
+  override async arrayBuffer(): Promise<ArrayBuffer> {
+    this.arrayBufferReads += 1;
+    return super.arrayBuffer();
+  }
+}
+
+/** A file that reports more bytes than it holds, so a size limit is exercised without allocating the bytes. */
+class ReportedSizeFile extends CountingFile {
+  readonly reportedSize: number;
+
+  constructor(parts: BlobPart[], name: string, reportedSize: number) {
+    super(parts, name);
+    this.reportedSize = reportedSize;
+  }
+
+  override get size(): number {
+    return this.reportedSize;
+  }
+}
+
+// Pinned as the product's workbook limit, so the test fails on its own assertion
+// when the cap is missing rather than on a missing import.
+const SHEET_CAP = 134_217_728;
+const TOO_BIG = "This file is too big to open in this browser. Try a smaller file, or save it with fewer rows or columns.";
+
+test("a workbook over the sheet limit is refused before it is read", async () => {
+  const file = new ReportedSizeFile([new Uint8Array(4)], "big.xlsx", SHEET_CAP + 1);
+  await assert.rejects(firstSheetAsCsv(file), { message: TOO_BIG });
+  assert.equal(file.arrayBufferReads, 0, "a workbook over the limit is never read");
+});
+
 async function formulaWorkbook(): Promise<ArrayBuffer> {
   const { default: ExcelJS } = await import("exceljs");
   const workbook = new ExcelJS.Workbook();

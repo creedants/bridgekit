@@ -3,6 +3,7 @@ import { registerHooks } from "node:module";
 import { test } from "node:test";
 import {
   blobIsUtf8,
+  checkedText,
   CSV_PREFIX_BYTES,
   decodeCsvBuffer,
   ENCODING_SENTENCE,
@@ -112,7 +113,7 @@ const CP1252: Record<string, number> = {
   "ÿ": 0xff,
 };
 
-function windows1252(text: string): Uint8Array {
+function windows1252(text: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from([...text].map((character) => {
     const byte = CP1252[character] ?? character.codePointAt(0)!;
     assert.ok(byte < 0x100, `no Windows-1252 byte for ${character}`);
@@ -525,6 +526,39 @@ test("a late Windows-1252 file at the limit still loads", async () => {
   const [last] = await query("SELECT product FROM data ORDER BY rowid DESC LIMIT 1");
   assert.equal(String(last.product), "P5é");
   assert.equal(file.wholeReads, 1);
+});
+
+// Pinned as the product's whole-file limit, so the test fails on its own
+// assertion when the cap is missing rather than on a missing import.
+const WHOLE_FILE_CAP = 268_435_456;
+
+test("a Windows-1252 CSV over the whole-file limit is refused without a whole-file read", async () => {
+  const bytes = windows1252("period,product\n2025,Café\n");
+  const file = new ReportedSizeFile([bytes], "big-windows-1252.csv", WHOLE_FILE_CAP + 1);
+  await assert.rejects(readCsvFile(file), { message: TOO_BIG });
+  assert.equal(file.wholeReads, 0, "a file over the limit is never read whole");
+});
+
+test("a UTF-8 CSV over the whole-file limit still streams its bytes", async () => {
+  const bytes = utf8("period,product\n2025,Café\n");
+  const file = new ReportedSizeFile([bytes], "big-utf8.csv", WHOLE_FILE_CAP + 1);
+  assert.deepEqual(await readCsvFile(file), { kind: "bytes" });
+  assert.equal(file.wholeReads, 0, "the streaming path is not capped");
+});
+
+test("a file already read as text over the limit is refused before it is read again", async () => {
+  const { rememberCsvReading } = await import("../src/app/encoding.ts");
+  const bytes = windows1252("period,product\n2025,Café\n");
+  const file = new ReportedSizeFile([bytes], "big-decided-text.csv", WHOLE_FILE_CAP + 1);
+  rememberCsvReading(file, { kind: "text", text: "period,product" });
+  await assert.rejects(readCsvFile(file), { message: TOO_BIG });
+  assert.equal(file.wholeReads, 0, "the decided-text branch never reads a file over the limit");
+});
+
+test("a non-empty buffer decoded as empty text shows the too-big sentence", () => {
+  assert.throws(() => checkedText(Uint8Array.from([0x41]), ""), { message: TOO_BIG });
+  const text = "period,product\n2025,Café\n";
+  assert.equal(checkedText(utf8(text), text), text);
 });
 
 test("a UTF-8 file over 64 KiB loads without a whole-file read and with one registration", async () => {

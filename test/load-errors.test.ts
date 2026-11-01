@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { test } from "node:test";
+import type { Query } from "../src/engine.ts";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -45,6 +46,49 @@ test("an out-of-memory load shows only the too-big sentence", () => {
 test("an ordinary load error is returned unchanged", () => {
   const original = new Error("Invalid Input Error: CSV Error on Line: 2");
   assert.equal(loadFailure(original), original);
+});
+
+test("a real zero row count reports no data rows and drops the staged table", async () => {
+  const { requireDataRows } = await import("../src/app/db.ts");
+  const { NO_DATA_ROWS } = await import("../src/app/sheet.ts");
+  const statements: string[] = [];
+  const query: Query = async (sql) => {
+    statements.push(sql);
+    return [{ n: 0 }];
+  };
+  await assert.rejects(requireDataRows(query, "data__staging"), { message: NO_DATA_ROWS });
+  assert.equal(statements.some((sql) => sql.startsWith("DROP TABLE")), true);
+});
+
+test("a count row that cannot be read is a database fault, not an empty file", async () => {
+  const { requireDataRows, TOO_BIG_SENTENCE } = await import("../src/app/db.ts");
+  const { NO_DATA_ROWS } = await import("../src/app/sheet.ts");
+  const cases: Record<string, unknown>[][] = [[], [{ n: "not a number" }]];
+  for (const rows of cases) {
+    const statements: string[] = [];
+    const query: Query = async (sql) => {
+      statements.push(sql);
+      return rows;
+    };
+    await assert.rejects(requireDataRows(query, "data__staging"), (error: unknown) => {
+      const message = (error as Error).message;
+      assert.notEqual(message, NO_DATA_ROWS);
+      assert.notEqual(message, TOO_BIG_SENTENCE);
+      return message === "Reload the page to start again.";
+    });
+    assert.equal(statements.some((sql) => sql.startsWith("DROP TABLE")), false);
+  }
+});
+
+test("a usable count resolves and a rejecting count keeps its own error", async () => {
+  const { requireDataRows } = await import("../src/app/db.ts");
+  const counted: Query = async () => [{ n: 5 }];
+  await requireDataRows(counted, "data__staging");
+  const failure = new Error("The database worker did not start");
+  const rejecting: Query = async () => {
+    throw failure;
+  };
+  await assert.rejects(requireDataRows(rejecting, "data__staging"), (error: unknown) => error === failure);
 });
 
 test("R16: a first load into an empty database raises no error and keeps the staged table", async () => {
