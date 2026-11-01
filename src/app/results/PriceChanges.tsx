@@ -37,7 +37,7 @@ export function PriceChanges(props: { run: Run; query: () => Promise<Query> }) {
   return (
     <div>
       <div className="kpis" style={{ marginBottom: 12 }}>
-        <Kpi label="Average price change" value={signedPercent(data.averageChange)} note="exactly matched configurations" />
+        <Kpi label={t.averageChange} value={signedPercent(data.averageChange)} note="exactly matched configurations" />
         <Kpi label={t.priceUp} value={percent(moved(5, 9))} note="up more than 0.5%" />
         <Kpi label={t.priceFlat} value={percent(moved(4, 5))} note="within 0.5%" />
         <Kpi label={t.priceDown} value={percent(moved(0, 4))} note="down more than 0.5%" />
@@ -45,11 +45,11 @@ export function PriceChanges(props: { run: Run; query: () => Promise<Query> }) {
       <table className="dense distribution">
         <thead>
           <tr>
-            <th>Change in average price</th>
+            <th>{t.bandsChange}</th>
             <th>{t.matchedShare}</th>
             <th className="num">Share</th>
             <th className="num">{t.current}</th>
-            <th className="num">Price effect</th>
+            <th className="num">{t.priceEffectHead}</th>
             <th className="num">Configurations</th>
           </tr>
         </thead>
@@ -76,7 +76,7 @@ export function PriceChanges(props: { run: Run; query: () => Promise<Query> }) {
       </table>
       <p className="hint">
         {placementNote(t.measure.toLowerCase())}{" "}
-        This shows how widely a price change landed, which the single price number in the bridge cannot.{" "}
+        {t.bandsNote}{" "}
         {priceNote(t.measure.toLowerCase())}
       </p>
       <RealizationTable run={props.run} query={props.query} overall={data.averageChange} />
@@ -100,7 +100,7 @@ function RealizationTable(props: { run: Run; query: () => Promise<Query>; overal
   const planned = typeof plan === "object" ? plan.value / 100 : 0;
   const hasTarget = planned !== 0;
   const againstPlan = (row: Realization) => (row.change - planned) * (row.matchedSales - row.priceEffect);
-  const header = [...columns, t.matched, "Price effect", "Realized change", ...(hasTarget ? ["Realization", "Against plan"] : [])];
+  const header = [...columns, t.matched, t.priceEffectHead, "Realized change", ...(hasTarget ? ["Realization", "Against plan"] : [])];
   const cells = (row: Realization) => [
     ...columns.map((c) => display(row.keys[c])),
     row.matchedSales,
@@ -163,8 +163,7 @@ function RealizationTable(props: { run: Run; query: () => Promise<Query>; overal
         </div>
       )}
       <p className="hint">
-        Realized change is the like-for-like price effect over what this period’s volume would have cost at prior
-        prices. {hasTarget && `${t.againstPlan} `}
+        {t.realizedNote} {hasTarget && `${t.againstPlan} `}
         {t.largestGroups}
       </p>
     </div>

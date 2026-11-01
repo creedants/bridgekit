@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import type { Worksheet } from "exceljs";
 import { exportExcel } from "../src/app/exportExcel.ts";
-import { buildReport, moverHeader, terms, trendHeader } from "../src/app/report.ts";
+import { buildReport, moverHeader, terms, trendHeader, type Terms } from "../src/app/report.ts";
 import type { BridgeConfig, BridgeResult, DataCheck, Query, TieOut } from "../src/engine.ts";
 
 const salesConfig: BridgeConfig = {
@@ -135,10 +135,10 @@ test("a margin workbook names margin on every sheet that shows the measure", asy
 
   const bands = workbook.getWorksheet("Price bands")!;
   assert.deepEqual(headerRow(bands), [
-    "Change in average price",
+    "Change in average unit margin",
     "Share",
     "Current margin",
-    "Price effect",
+    "Price and unit cost",
     "Configurations",
   ]);
 
@@ -275,7 +275,7 @@ test("a margin bridge's coverage hint names margin", () => {
 
 test("a margin bridge's price increase KPI names margin", () => {
   assert.deepEqual(resultsLabel("priceUp"), {
-    margin: "Margin with a price increase",
+    margin: "Margin with a unit margin increase",
     sales: "Sales with a price increase",
     used: true,
   });
@@ -291,7 +291,7 @@ test("a margin bridge's no-change KPI names margin", () => {
 
 test("a margin bridge's price decrease KPI names margin", () => {
   assert.deepEqual(resultsLabel("priceDown"), {
-    margin: "Margin with a price decrease",
+    margin: "Margin with a unit margin decrease",
     sales: "Sales with a price decrease",
     used: true,
   });
@@ -386,3 +386,82 @@ test("the Trend tab header list adds Unit cost only on a margin bridge", () => {
     "No units",
   ]);
 });
+
+/** The Price changes tab alone, read as text, because its table only arrives in an effect. */
+const priceChangesSource = readFileSync(new URL("../src/app/results/PriceChanges.tsx", import.meta.url), "utf8");
+
+test("a margin bridge says unit margin in the Price changes tab and the report", () => {
+  const wording: { field: keyof Terms; margin: string; sales: string }[] = [
+    { field: "averageChange", margin: "Average unit margin change", sales: "Average price change" },
+    { field: "bandsChange", margin: "Change in average unit margin", sales: "Change in average price" },
+    { field: "priceEffectHead", margin: "Price and unit cost", sales: "Price effect" },
+    {
+      field: "bandsNote",
+      margin:
+        "This shows how widely a unit margin change landed, which the combined Price and Unit cost steps in the bridge cannot.",
+      sales: "This shows how widely a price change landed, which the single price number in the bridge cannot.",
+    },
+    {
+      field: "realizedNote",
+      margin:
+        "Realized change is the like-for-like unit margin effect over what this period's volume would have earned at prior unit margins.",
+      sales:
+        "Realized change is the like-for-like price effect over what this period’s volume would have cost at prior prices.",
+    },
+  ];
+  for (const { field, margin, sales } of wording) {
+    assert.match(priceChangesSource, new RegExp(`t\\.${field}(?![A-Za-z])`), `the tab does not read t.${field}`);
+    assert.equal(terms(marginConfig)[field], margin, `the margin bridge reads ${field} wrong`);
+    assert.equal(terms(salesConfig)[field], sales, `the sales bridge reads ${field} wrong`);
+  }
+
+  const margin = terms(marginConfig);
+  const sales = terms(salesConfig);
+  assert.equal(margin.priceEffectHead, margin.priceEffect, "the band effect column must match the bridge's Price and unit cost step");
+  const marginLabels = [
+    margin.averageChange,
+    margin.bandsChange,
+    margin.bandsHeading,
+    margin.bandsNote,
+    margin.realizedNote,
+    margin.priceUp,
+    margin.priceDown,
+  ];
+  const stale = [
+    "Average price change",
+    "Change in average price",
+    "How widely price moved",
+    "This shows how widely a price change landed",
+    "like-for-like price effect over what this period’s volume would have cost at prior prices",
+    "Margin with a price increase",
+    "Margin with a price decrease",
+  ];
+  for (const text of marginLabels) {
+    for (const old of stale) assert.equal(text.includes(old), false, `the margin bridge still says "${old}": ${text}`);
+  }
+  const salesLabels = [
+    sales.averageChange,
+    sales.bandsChange,
+    sales.bandsHeading,
+    sales.bandsNote,
+    sales.realizedNote,
+    sales.priceUp,
+    sales.priceDown,
+  ];
+  for (const text of salesLabels) {
+    for (const old of ["unit margin", "Margin with a unit"]) {
+      assert.equal(text.includes(old), false, `the sales bridge says "${old}": ${text}`);
+    }
+  }
+
+  const marginHtml = report(marginConfig, marginResult);
+  assert.equal(marginHtml.includes("<h2>How widely unit margin moved</h2>"), true, "the margin report's band heading");
+  assert.equal(marginHtml.includes(">Change in average unit margin<"), true, "the margin report's band column");
+  assert.equal(marginHtml.includes(">Price and unit cost<"), true, "the margin report's band effect column");
+  assert.equal(marginHtml.includes(">Share of matched margin<"), true, "the margin report's band share column");
+  const salesHtml = report(salesConfig, salesResult);
+  assert.equal(salesHtml.includes("<h2>How widely price moved</h2>"), true, "the sales report's band heading moved");
+  assert.equal(salesHtml.includes(">Change in average price<"), true, "the sales report's band column moved");
+  assert.equal(salesHtml.includes(">Price effect<"), true, "the sales report's band effect column moved");
+});
+
