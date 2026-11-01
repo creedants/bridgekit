@@ -1239,17 +1239,37 @@ async function drive(browser, origin, rows) {
       let blob = null; const original = URL.createObjectURL;
       URL.createObjectURL = (b) => { blob = b; return original(b); };
       const button = T.btn('Export Excel');
+      // Latch the first busy label from the mutation that carries it, so no timed read can miss it.
+      let busy = '';
+      const textOf = (node) => (node.nodeType === Node.TEXT_NODE ? node.data : node.textContent ?? '').trim();
+      const isBusy = (text) => text.length > 0 && text.endsWith('…') && text !== 'Export' && text !== 'Export Excel';
+      const latch = (records) => {
+        for (const record of records) {
+          if (record.type === 'characterData') {
+            const text = textOf(record.target);
+            if (!busy && isBusy(text)) busy = text;
+            continue;
+          }
+          for (const node of record.addedNodes) {
+            const text = textOf(node);
+            if (!busy && isBusy(text)) busy = text;
+          }
+        }
+      };
+      const observer = new MutationObserver(latch);
+      observer.observe(button, { childList: true, subtree: true, characterData: true });
       const t = performance.now(); button.click();
-      // React commits the click's state update in a microtask, so read the label after a task turn.
-      await new Promise(r => setTimeout(r, 0));
-      const busy = button.textContent.trim();
+      // A label rendered and replaced before the observer callback still lands in its queue.
+      latch(observer.takeRecords());
       for (let i = 0; i < 400 && !blob; i++) await new Promise(r => setTimeout(r, 200));
+      latch(observer.takeRecords());
+      observer.disconnect();
       URL.createObjectURL = original;
       return JSON.stringify({ bytes: blob?.size ?? 0, ms: Math.round(performance.now() - t), error: T.err(), busy });
     })()`),
   );
   if (exported.error || exported.bytes < 10_000) fail(`Excel export: ${exported.error ?? "no file"}`);
-  if (exported.busy !== "Preparing…") fail(`Excel export: the button reads ${JSON.stringify(exported.busy)} while the file is prepared, expected "Preparing…"`);
+  if (exported.busy !== "Saving…") fail(`Excel export: the button read ${JSON.stringify(exported.busy)} while the file was made, expected "Saving…"`);
   console.log(`ok  Excel export (${exported.bytes} bytes in ${exported.ms} ms, button said ${JSON.stringify(exported.busy)})`);
 
   // The visitor's own file replaces the sample in the address too, so a reload does not bring the sample back.

@@ -20,7 +20,10 @@ const result: BridgeResult = {
     { key: "discontinued", label: "Discontinued configurations", value: 0 },
     { key: "no_units", label: "Sales with no units", value: 0 },
   ],
-  coverage: [{ level: 1, label: "Exact configuration", cells: 10, sales: 1_000_000, share: 0.95 }],
+  coverage: [
+    { level: 1, label: "Exact configuration", cells: 10, sales: 1_000_000, share: 0.95 },
+    { level: 0, label: "No comparable group (overall average)", cells: 1, sales: 50_000, share: 0.05 },
+  ],
   cellsTable: "bridge_cells",
 };
 

@@ -4,8 +4,8 @@ import { readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { transformSync } from "esbuild";
 import { openDatabase } from "../src/duckdb.ts";
-import type { BridgeConfig, Query } from "../src/engine.ts";
-import { accountBridge, drill, priceDistribution, runBridge } from "../src/engine.ts";
+import type { BridgeConfig, BridgeResult, Query } from "../src/engine.ts";
+import { accountBridge, dataCheck, drill, periodMoney, priceDistribution, runBridge } from "../src/engine.ts";
 import { buildReport, moverHeader, terms } from "../src/app/report.ts";
 import { signedWhole, whole } from "../src/app/format.ts";
 import { roundBridge, shownTotal } from "../src/summary.ts";
@@ -109,6 +109,7 @@ const HEADINGS: Record<string, RegExp> = {
   Bridge: /^Bridge$/,
   Setup: /^Setup$/,
   "Largest movers": /^Largest movers by .+$/,
+  Matched: /^How current sales were matched$/,
 };
 
 /** A table's rows as ordered cell text, from the one section whose whole heading matches, with tag attributes and the spacing between tags ignored. */
@@ -145,6 +146,18 @@ const screenRowOf = (html: string, label: string) => {
   );
   assert.ok(match, `the page bridge table has no ${label} row`);
   return [match[1], match[2]];
+};
+
+/** The coverage table's rows as [compared against, share, configurations], read from the rendered page. */
+const pageCoverage = (html: string): string[][] => {
+  const heading = html.indexOf("<h3>How current sales were matched</h3>");
+  assert.ok(heading !== -1, "the page has no coverage heading");
+  const start = html.indexOf("<table", heading);
+  const end = html.indexOf("</table>", start);
+  assert.ok(start !== -1 && end > start, "the coverage heading holds no table");
+  return [...html.slice(start, end).matchAll(/<tr><td>([^<]*)<\/td><td class="num">([^<]*)<\/td><td class="num">([^<]*)<\/td><\/tr>/g)].map(
+    ([, label, share, cells]) => [label, share, cells],
+  );
 };
 
 test("a mover name that begins with a formula character takes a leading apostrophe", () => {
@@ -897,5 +910,123 @@ test("D141: a split price sentence follows the shown price total on the page and
     tableRows(report, "Bridge").find(([label]) => label === "Discounts"),
     ["Discounts", "0", "-0.5%"],
     "the downloaded report's discount line changed",
+  );
+});
+
+/** A run around one engine result, with the file's own counts and totals read from the database. */
+async function runOf(query: Query, config: BridgeConfig) {
+  const result = await runBridge(query, config);
+  return {
+    textColumns: ["product"],
+    periods: [String(config.prior), String(config.current)],
+    description: ["Source: A-100.csv", `Periods: ${config.prior} to ${config.current} (period)`],
+    setup: {
+      periodColumn: config.periodColumn,
+      grain: "value" as const,
+      unitsColumn: config.unitsColumn,
+      salesColumn: config.salesColumn,
+      levels: config.levels,
+      filters: [],
+    },
+    source: "A-100.csv",
+    sample: false,
+    formulaBlanks: 0,
+    amounts: null,
+    config,
+    result,
+    check: await dataCheck(query, config),
+    tieOut: await periodMoney(query, config, { table: config.table, periodColumn: config.periodColumn }),
+    ms: 1,
+  };
+}
+
+const shareConfig: BridgeConfig = {
+  table: "shares",
+  periodColumn: "period",
+  prior: "2025",
+  current: "2026",
+  unitsColumn: "units",
+  salesColumn: "sales",
+  levels: [{ name: "Product", columns: ["product"] }],
+};
+
+/** Every coverage row at the full configuration, which is what the engine reports for a complete match. */
+const completeOf = (coverage: BridgeResult["coverage"], levelCount: number) =>
+  coverage.length > 0 && coverage.every((c) => c.level === levelCount);
+
+test("D191-2: a share short of all sales never reads 100.0%, and a complete match does", async () => {
+  const React = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { Results } = await import("../src/app/Results.tsx");
+  const { matchedPercent } = await import("../src/app/format.ts");
+  const { commentary } = await import("../src/commentary.ts");
+
+  const query = await openDatabase();
+  await query(`DROP TABLE IF EXISTS shares`);
+  await query(`CREATE TABLE shares (period VARCHAR, product VARCHAR, units INTEGER, sales DOUBLE)`);
+
+  // The review's reproduction: one huge matched configuration and one sale of 1 with no prior match.
+  await query(
+    `INSERT INTO shares VALUES ('2025', 'A', 1, 10000000000), ('2026', 'A', 1, 10000000000), ('2026', 'B', 1, 1)`,
+  );
+  const repro = await runOf(query, shareConfig);
+  const exact = repro.result.coverage.find((c) => c.level === shareConfig.levels.length)?.share ?? 0;
+  assert.ok(exact < 1, `the exact share is ${exact}, expected below 1`);
+  assert.notEqual(exact, 1, "the exact share is exactly 1");
+  const complete = completeOf(repro.result.coverage, shareConfig.levels.length);
+  assert.equal(complete, false, "the review reproduction reads complete");
+
+  const html = renderToStaticMarkup(React.createElement(Results, { run: repro as never, query: () => Promise.resolve(query) }));
+  assert.deepEqual(kpiOf(html, "Matched exactly"), { value: "99.9%", note: "of current sales with units" });
+  assert.deepEqual(
+    pageCoverage(html).map((cells) => cells[1]),
+    ["99.9%", "0.0%"],
+    "the page's coverage rows changed",
+  );
+  const sentence = "It is measured on the 99.9% of current sales with units that matched an exact prior configuration.";
+  assert.ok(html.includes(sentence), "the page's summary does not print the share");
+  assert.ok(
+    commentary(repro.result, shareConfig).some((paragraph) => paragraph.includes(sentence)),
+    "the commentary does not print the share",
+  );
+
+  const report = buildReport({
+    config: shareConfig,
+    result: repro.result,
+    description: ["Source: A-100.csv", "Periods: 2025 to 2026 (period)"],
+    movers: { label: "Product", rows: [], columns: ["product"] },
+    priceBands: [],
+  });
+  assert.deepEqual(
+    tableRows(report, "Matched").slice(1).map((cells) => cells[1]),
+    ["99.9%", "0.0%"],
+    "the report's coverage rows changed",
+  );
+  // Fully matched: identical fractional sales all the way down, so every row is at the full configuration.
+  await query(`DROP TABLE shares`);
+  await query(`CREATE TABLE shares (period VARCHAR, product VARCHAR, units INTEGER, sales DOUBLE)`);
+  const rows: string[] = [];
+  for (let i = 0; i < 500; i += 1) {
+    const sale = i / 3 + i / 7 + 0.1;
+    rows.push(`('2025', 'P-${i}', 1, ${sale})`, `('2026', 'P-${i}', 1, ${sale})`);
+  }
+  await query(`INSERT INTO shares VALUES ${rows.join(", ")}`);
+  const full = await runOf(query, shareConfig);
+  assert.ok(full.result.coverage.length > 0, "the complete data has no coverage rows");
+  for (const row of full.result.coverage) {
+    assert.equal(row.level, shareConfig.levels.length, `a coverage row sits at level ${row.level}, not the exact level`);
+  }
+  const fullComplete = completeOf(full.result.coverage, shareConfig.levels.length);
+  assert.equal(fullComplete, true, "the complete data does not read complete");
+  const fullExact = full.result.coverage.find((c) => c.level === shareConfig.levels.length)?.share ?? 0;
+  assert.equal(matchedPercent(fullExact, fullComplete), "100.0%");
+  const fullHtml = renderToStaticMarkup(
+    React.createElement(Results, { run: full as never, query: () => Promise.resolve(query) }),
+  );
+  assert.deepEqual(kpiOf(fullHtml, "Matched exactly"), { value: "100.0%", note: "of current sales with units" });
+  assert.deepEqual(
+    pageCoverage(fullHtml).map((cells) => cells[1]),
+    ["100.0%"],
+    "the complete page's coverage row changed",
   );
 });

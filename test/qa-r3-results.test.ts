@@ -48,7 +48,8 @@ test("a matched share never reads 100.0% while it is short of all sales", () => 
   assert.equal(matchedPercent(0.99996), "99.9%");
   assert.equal(matchedPercent(1), "100.0%");
   assert.equal(matchedPercent(0.95), "95.0%");
-  assert.equal(matchedPercent(1 - 1e-12), "100.0%");
+  assert.equal(matchedPercent(1 - 1e-12), "99.9%");
+  assert.equal(matchedPercent(0.9999999999, true), "100.0%");
 });
 
 test("a bar label keeps whole units below a thousand and a short unit above", () => {
@@ -70,7 +71,7 @@ test("the results page explains its terms, its chart labels and the price counts
     salesColumn: "sales",
     levels: [],
   };
-  const sales = resultTerms(terms(config));
+  const sales = resultTerms(terms(config), config);
   assert.ok(sales.includes("Volume: The change in units at the overall prior average price."), sales);
   assert.ok(
     sales.includes(
@@ -78,14 +79,43 @@ test("the results page explains its terms, its chart labels and the price counts
     ),
     sales,
   );
-  const margin = resultTerms(terms({ ...config, costColumn: "cost" }));
+  const margin = resultTerms(terms({ ...config, costColumn: "cost" }), { ...config, costColumn: "cost" });
   assert.ok(margin.includes("Volume: The change in units at the overall prior average unit margin."), margin);
   assert.ok(margin.includes("how much higher or lower the group's unit margin is"), margin);
   assert.ok(CHART_TERMS.includes("K, M and B"), CHART_TERMS);
   assert.ok(CHART_TERMS.includes("Discont. configs"), CHART_TERMS);
-  const note = priceNote("sales");
-  assert.ok(note.includes("positive units in both periods"), note);
-  assert.ok(note.includes("Bridge price step"), note);
+  const SALES_NOTE =
+    "Counts only exactly matched configurations with positive units in both periods and positive prior sales, after each configuration's rows are added together. The Bridge price step can include other configurations.";
+  const MARGIN_SENTENCE = "On a margin bridge, compare the combined Price and Unit cost steps.";
+  assert.equal(priceNote("sales"), SALES_NOTE, "the sales note changed");
+  assert.equal(priceNote("margin"), `${SALES_NOTE.replace("prior sales", "prior margin")} ${MARGIN_SENTENCE}`);
+  assert.equal(priceNote("sales").includes(MARGIN_SENTENCE), false, "the sales note names the margin steps");
+});
+
+test("Full sales says Volume and Mix cover continuing configurations only", async () => {
+  const { resultTerms } = await import("../src/app/Results.tsx");
+  const { terms } = await import("../src/app/report.ts");
+  const sentence =
+    "With Full sales selected, Volume and Mix cover continuing configurations only, using prior averages from those configurations.";
+  const config = {
+    table: "t",
+    periodColumn: "period",
+    prior: "2025",
+    current: "2026",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: [],
+  };
+  for (const withCost of [false, true]) {
+    const base = withCost ? { ...config, costColumn: "cost" } : config;
+    assert.ok(resultTerms(terms(base), { ...base, newAndDiscontinued: "full" }).includes(sentence), "full sales has no sentence");
+    assert.equal(
+      resultTerms(terms(base), { ...base, newAndDiscontinued: "difference" }).includes(sentence),
+      false,
+      "difference mode carries the full sales sentence",
+    );
+    assert.equal(resultTerms(terms(base), base).includes(sentence), false, "an unset setting carries the full sales sentence");
+  }
 });
 
 test("the top bar keeps the export label and a reading label wins", async () => {
