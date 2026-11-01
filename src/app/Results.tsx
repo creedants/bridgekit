@@ -125,8 +125,8 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
   const change = result.currentSales - result.priorSales;
   const priceEffect = result.effects.filter((e) => e.key.startsWith("price")).reduce((sum, e) => sum + e.value, 0);
   const exact = result.coverage.find((c) => c.level === config.levels.length)?.share ?? 0;
-  // The engine reported every current row matched at the full configuration, and no configuration
-  // is left at another level, so the matched share is complete whatever the last bits say.
+  // The engine reported every current row with units matched at the full configuration, and no
+  // configuration is left at another level, so the matched share is complete whatever the last bits say.
   const complete = result.coverage.length > 0 && result.coverage.every((c) => c.level === config.levels.length);
   const fileWarnings = useWholeRowWarning(run, props.query);
   const warnings = checkWarnings(run, fileWarnings.warnings);
