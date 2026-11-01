@@ -1242,7 +1242,7 @@ async function drive(browser, origin, rows) {
       // Latch the first busy label from the mutation that carries it, so no timed read can miss it.
       let busy = '';
       const textOf = (node) => (node.nodeType === Node.TEXT_NODE ? node.data : node.textContent ?? '').trim();
-      const isBusy = (text) => text.length > 0 && text.endsWith('…') && text !== 'Export' && text !== 'Export Excel';
+      const isBusy = (text) => text === 'Saving' || (text.length > 0 && text.endsWith('…') && text !== 'Export' && text !== 'Export Excel');
       const latch = (records) => {
         for (const record of records) {
           if (record.type === 'characterData') {
@@ -1269,7 +1269,7 @@ async function drive(browser, origin, rows) {
     })()`),
   );
   if (exported.error || exported.bytes < 10_000) fail(`Excel export: ${exported.error ?? "no file"}`);
-  if (exported.busy !== "Saving…") fail(`Excel export: the button read ${JSON.stringify(exported.busy)} while the file was made, expected "Saving…"`);
+  if (exported.busy !== "Saving") fail(`Excel export: the button read ${JSON.stringify(exported.busy)} while the file was made, expected "Saving"`);
   console.log(`ok  Excel export (${exported.bytes} bytes in ${exported.ms} ms, button said ${JSON.stringify(exported.busy)})`);
 
   // The visitor's own file replaces the sample in the address too, so a reload does not bring the sample back.

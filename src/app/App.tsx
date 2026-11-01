@@ -105,7 +105,7 @@ function describeError(error: unknown): string {
 export const EXPORTING = "Preparing Excel file…";
 
 /** The export button's own label while the file is made. */
-export const SAVING = "Saving…";
+export const SAVING = "Saving";
 
 /** The top bar's status: a reading load's label, else the last task's, else nothing. */
 export function statusLine(reading: string | null, labels: readonly string[]): string {

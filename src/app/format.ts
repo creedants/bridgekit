@@ -31,10 +31,10 @@ export const signedPercent = (n: number) => {
 };
 
 /**
- * A matched share. A complete result with a positive share prints 100.0%, because the engine
- * reported every current row with units matched at the full configuration, whatever the last bits
- * of the computed share say. Otherwise a share below one that would round up to 100.0% prints
- * 99.9%, because it did not cover everything, and any other share prints as computed.
+ * A matched share. A complete result with a positive share prints 100.0%, because every reported
+ * coverage row sits at the full configuration, whatever the last bits of the computed share say.
+ * Otherwise a share below one that would round up to 100.0% prints 99.9%, because it did not
+ * cover everything, and any other share prints as computed.
  */
 export const matchedPercent = (n: number, complete = false) => {
   if (complete && Number.isFinite(n) && n > 0) return "100.0%";

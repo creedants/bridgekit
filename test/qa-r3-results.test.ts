@@ -85,11 +85,23 @@ test("the results page explains its terms, its chart labels and the price counts
   assert.ok(CHART_TERMS.includes("K, M and B"), CHART_TERMS);
   assert.ok(CHART_TERMS.includes("Discont. configs"), CHART_TERMS);
   const SALES_NOTE =
-    "Counts only exactly matched configurations with positive units in both periods and positive prior sales, after each configuration's rows are added together. The Bridge price step can include other configurations.";
+    "Counts only exactly matched configurations with positive units in both periods and positive prior sales, after each configuration's rows with units are added together. The Bridge price step can include other configurations.";
   const MARGIN_SENTENCE = "On a margin bridge, compare the combined Price and Unit cost steps.";
   assert.equal(priceNote("sales"), SALES_NOTE, "the sales note changed");
   assert.equal(priceNote("margin"), `${SALES_NOTE.replace("prior sales", "prior margin")} ${MARGIN_SENTENCE}`);
   assert.equal(priceNote("sales").includes(MARGIN_SENTENCE), false, "the sales note names the margin steps");
+});
+
+test("a margin bridge places configurations by unit margin and a sales bridge by price", async () => {
+  const { placementNote } = await import("../src/app/results/PriceChanges.tsx");
+  const price =
+    "Each configuration counted here is placed by how much its average price moved between the two periods.";
+  const margin =
+    "Each configuration counted here is placed by how much its average unit margin moved between the two periods.";
+  assert.equal(placementNote("sales"), price, "the sales bridge does not place configurations by average price");
+  assert.equal(placementNote("margin"), margin, "the margin bridge does not place configurations by average unit margin");
+  assert.equal(placementNote("sales").includes("unit margin"), false, "the sales bridge names unit margin");
+  assert.equal(placementNote("margin").includes("average price"), false, "the margin bridge names average price");
 });
 
 test("Full sales says Volume and Mix cover continuing configurations only", async () => {
