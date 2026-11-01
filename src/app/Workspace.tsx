@@ -61,11 +61,13 @@ export default function WorkspacePanel(props: {
 
   // The startup reads. Try again runs them once more over the same mount, so
   // the analysis on screen is untouched. The guard keeps a second press from
-  // starting a second run, and the message stays until a run succeeds.
+  // starting a second run, and the message stays until a run succeeds. Busy
+  // covers the whole run, so a create cannot race the first workspace list.
   const starting = useRef(false);
   const start = async () => {
     if (starting.current) return;
     starting.current = true;
+    setBusy(true);
     try {
       const found = await api.getConfig();
       setConfig(found);
@@ -92,6 +94,7 @@ export default function WorkspacePanel(props: {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       starting.current = false;
+      setBusy(false);
     }
   };
 
