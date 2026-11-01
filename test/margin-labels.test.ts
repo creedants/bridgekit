@@ -417,6 +417,7 @@ test("a margin bridge says unit margin in the Price changes tab and the report",
 
   const margin = terms(marginConfig);
   const sales = terms(salesConfig);
+  assert.equal(margin.priceEffectHead, margin.priceEffect, "the band effect column must match the bridge's Price and unit cost step");
   const marginLabels = [
     margin.averageChange,
     margin.bandsChange,
