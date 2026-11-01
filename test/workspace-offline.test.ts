@@ -20,6 +20,10 @@ interface FakeServer {
   down: boolean;
   /** While set, the config read waits for it, so a run can be held open. */
   held: Promise<void> | null;
+  /** While set, the workspace-list read waits for it, so startup can be held. */
+  heldList: Promise<void> | null;
+  /** While true, the workspace-list read fails the way an offline request does. */
+  listFails: boolean;
   requests: string[];
   fetch(path: string): Promise<Response>;
 }
@@ -29,12 +33,18 @@ function server(): FakeServer {
   const fake: FakeServer = {
     down: true,
     held: null,
+    heldList: null,
+    listFails: false,
     requests,
     async fetch(path: string) {
       const url = String(path);
       requests.push(url);
       if (fake.down) throw new TypeError("Failed to fetch");
       if (url === "/api/config" && fake.held) await fake.held;
+      if (url === "/api/auth/organization/list") {
+        if (fake.heldList) await fake.heldList;
+        if (fake.listFails) throw new TypeError("Failed to fetch");
+      }
       const body = url === "/api/config" ? OPEN_CONFIG : url === "/api/auth/get-session" ? { user: USER } : [];
       return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
     },
@@ -146,6 +156,18 @@ class ShimElement extends ShimNode {
     this.localName = String(tagName).toLowerCase();
   }
 
+  // A browser reports "text" for an input with no type attribute, and React's
+  // change detection checks it before accepting a typed value.
+  ownType = "";
+
+  get type(): string {
+    return this.attributes.get("type") ?? (this.ownType || (this.nodeName === "INPUT" ? "text" : ""));
+  }
+
+  set type(next: string) {
+    this.ownType = String(next);
+  }
+
   get namespaceURI(): string {
     return "http://www.w3.org/1999/xhtml";
   }
@@ -217,6 +239,9 @@ function installDom(): ShimDocument {
   doc.head = new ShimElement("head");
   doc.body = new ShimElement("body");
   doc.HTMLIFrameElement = class extends ShimElement {};
+  // React takes its native input-event path only when the document advertises
+  // the event, as a real one does, so a typed value reaches onChange.
+  (doc as unknown as { oninput: null }).oninput = null;
   doc.documentElement.appendChild(doc.head);
   doc.documentElement.appendChild(doc.body);
   (doc as unknown as ShimNode).appendChild(doc.documentElement);
@@ -326,6 +351,23 @@ async function mount(fake: FakeServer, strict = false) {
     shows: (sentence: string) => text().includes(sentence),
     buttons: () => elements().filter((element) => element.nodeName === "BUTTON").map((element) => element.textContent),
     reloads: () => reloads,
+    /** True when the button with this label is on screen and not disabled. */
+    enabled(label: string) {
+      const button = elements().find((element) => element.nodeName === "BUTTON" && element.textContent === label);
+      assert.ok(button, `the panel offers a button named ${label}`);
+      return !button.hasAttribute("disabled");
+    },
+    /** Types into the one field on screen, the way a person would. */
+    async type(value: string) {
+      const input = elements().find((element) => element.nodeName === "INPUT");
+      assert.ok(input, `the panel offers a field to type in: ${JSON.stringify(text())}`);
+      (input as unknown as { value: string }).value = value;
+      await act(async () => {
+        input.dispatchEvent({ type: "input", bubbles: true, target: input });
+        input.dispatchEvent({ type: "change", bubbles: true, target: input });
+      });
+      await flush();
+    },
     /** Presses the button with this label, then lets the reply land. */
     async press(label: string, settle = true) {
       const button = elements().find((element) => element.nodeName === "BUTTON" && element.textContent === label);
@@ -388,4 +430,46 @@ test("a second press while the first retry runs starts no second run", async () 
   await panel.settle();
   assert.equal(fake.requests.filter((path) => path === "/api/config").length, 2, `the reads ran ${fake.requests.join(", ")}`);
   assert.ok(panel.shows("Signed in as u@example.invalid."), `the panel showed ${JSON.stringify(panel.text())}`);
+});
+
+test("a typed Create workspace form waits for the startup list to answer", async () => {
+  const fake = server();
+  fake.down = false;
+  let release: () => void = () => {};
+  fake.heldList = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const panel = await mount(fake);
+  await panel.type("New team");
+  assert.equal(
+    panel.enabled("Create workspace"),
+    false,
+    `Create workspace was enabled while the first list was on its way: ${JSON.stringify(panel.text())}`,
+  );
+  assert.equal(
+    panel.enabled("Delete my account"),
+    false,
+    `account deletion was enabled while the first list was on its way: ${JSON.stringify(panel.text())}`,
+  );
+  release();
+  await panel.settle();
+  assert.equal(panel.enabled("Create workspace"), true, `Create workspace stayed disabled after the list answered: ${JSON.stringify(panel.text())}`);
+  assert.equal(panel.enabled("Delete my account"), true, `account deletion stayed disabled after the list answered: ${JSON.stringify(panel.text())}`);
+  assert.deepEqual(fake.requests, ["/api/config", "/api/auth/get-session", "/api/auth/organization/list"]);
+});
+
+test("a startup list that fails after the session read frees the controls and shows its sentence", async () => {
+  const fake = server();
+  fake.down = false;
+  fake.listFails = true;
+  const panel = await mount(fake);
+  await panel.type("New team");
+  assert.equal(
+    panel.enabled("Create workspace"),
+    true,
+    `Create workspace stayed disabled after the startup list failed: ${JSON.stringify(panel.text())}`,
+  );
+  assert.equal(panel.enabled("Delete my account"), true, `account deletion stayed disabled after the startup list failed: ${JSON.stringify(panel.text())}`);
+  assert.ok(panel.shows(SENTENCE), `the failed startup list showed ${JSON.stringify(panel.text())}`);
+  assert.deepEqual(fake.requests, ["/api/config", "/api/auth/get-session", "/api/auth/organization/list"]);
 });
