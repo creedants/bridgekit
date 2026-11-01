@@ -630,7 +630,7 @@ export async function readLoadedTable(
 /**
  * Refuses an empty or header-only table: the file problems list never sees one.
  * A count that cannot be read is a database fault, not an empty file, so it
- * keeps its table and shows its own sentence.
+ * keeps its table and uses the existing reload sentence.
  */
 export async function requireDataRows(query: Query, table: string): Promise<void> {
   const [row] = await query(`SELECT count(*)::DOUBLE AS n FROM ${quote(table)}`);
@@ -640,7 +640,7 @@ export async function requireDataRows(query: Query, table: string): Promise<void
     await query(`DROP TABLE IF EXISTS ${quote(table)}`);
     throw new Error(NO_DATA_ROWS);
   }
-  throw new Error("The row count could not be read from the database.");
+  throw new Error(LIBRARY_FAILURE.gone);
 }
 
 /**

@@ -74,7 +74,7 @@ test("a count row that cannot be read is a database fault, not an empty file", a
       const message = (error as Error).message;
       assert.notEqual(message, NO_DATA_ROWS);
       assert.notEqual(message, TOO_BIG_SENTENCE);
-      return message === "The row count could not be read from the database.";
+      return message === "Reload the page to start again.";
     });
     assert.equal(statements.some((sql) => sql.startsWith("DROP TABLE")), false);
   }
