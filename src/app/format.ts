@@ -13,6 +13,9 @@ export const compact = (n: number) =>
 export const signedCompact = (n: number) => (n > 0 ? "+" : "") + compact(n);
 export const whole = (n: number) => wholeFormat.format(n);
 export const signedWhole = (n: number) => (n > 0 ? "+" : "") + wholeFormat.format(n);
+/** A short figure that prints whole units below a thousand, as the table does. */
+export const roundedCompact = (n: number) => (Math.abs(n) < 1000 ? whole(n) : compact(n));
+export const signedRoundedCompact = (n: number) => (n > 0 ? "+" : "") + roundedCompact(n);
 export const price = (n: number) => (Number.isFinite(n) ? priceFormat.format(n) : "");
 export const percent = (n: number) => {
   if (!Number.isFinite(n)) return "";
@@ -25,6 +28,20 @@ export const signedPercent = (n: number) => {
   const value = n * 100;
   if (Math.abs(value) > PERCENT_CAP) return value < 0 ? "<-1,000,000%" : ">1,000,000%";
   return (n > 0 ? "+" : "") + value.toFixed(1) + "%";
+};
+
+/**
+ * A matched share. A complete result with a positive share prints 100.0%, because every reported
+ * coverage row sits at the full configuration, whatever the last bits of the computed share say.
+ * Otherwise a share below one that would round up to 100.0% prints 99.9%, because it did not
+ * cover everything, and any other share prints as computed.
+ */
+export const matchedPercent = (n: number, complete = false) => {
+  if (complete && Number.isFinite(n) && n > 0) return "100.0%";
+  if (!Number.isFinite(n) || n <= 0) return percent(n);
+  if (n >= 1) return percent(n);
+  const text = percent(n);
+  return text === "100.0%" ? "99.9%" : text;
 };
 
 /** A value as a share of the prior total. Dividing by the absolute prior keeps the value's sign when the prior total is negative, and a zero prior gives a number the formatters print as blank. */

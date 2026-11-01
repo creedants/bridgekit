@@ -1,6 +1,15 @@
 import { measureName, tieRank, type BridgeConfig, type BridgeResult } from "./engine.ts";
-import { percent, signedShare, signedWhole, whole } from "./app/format.ts";
+import { matchedPercent, percent, signedShare, signedWhole, whole } from "./app/format.ts";
 import { roundEffects, shownTotal, type RoundedBridge } from "./summary.ts";
+
+/** The most leftovers a sentence names; past this count it gives the number alone. */
+const NAMED_LEFTOVERS = 3;
+
+/** Names joined as "a", "a and b", or "a, b and c". */
+function joinNames(names: readonly string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
 
 /** A driver effect named for the reader: mix effects keep their attribute's case. */
 function driverLabel(effect: { key: string; label: string }, config: BridgeConfig): string {
@@ -59,10 +68,16 @@ export function commentary(
     const leftovers = result.effects.filter((e) => e.value !== 0 && !named.includes(e));
     const others = leftovers.reduce((sum, e) => sum + amount(e), 0);
     const only = leftovers[0];
+    const leftoverSentence =
+      leftovers.length > 1
+        ? leftovers.length <= NAMED_LEFTOVERS
+          ? ` The other ${leftovers.length} lines (${joinNames(leftovers.map((e) => driverLabel(e, config)))}) add up to ${signedWhole(others)}.`
+          : ` The other ${leftovers.length} lines add up to ${signedWhole(others)}.`
+        : "";
     paragraphs.push(
       `The largest driver was ${describe(first)}` +
         (next.length ? `, followed by ${next.map(describe).join(", ")}.` : ".") +
-        (leftovers.length > 1 ? ` The other ${leftovers.length} lines add up to ${signedWhole(others)}.` : "") +
+        leftoverSentence +
         (leftovers.length === 1 ? ` ${only.label} adds ${signedWhole(amount(only))}.` : ""),
     );
   }
@@ -74,6 +89,7 @@ export function commentary(
   // keeps the exact sign.
   const priceSign = shownPrice !== 0 ? Math.sign(shownPrice) : Math.sign(priceEffect);
   const exact = result.coverage.find((c) => c.level === config.levels.length)?.share ?? 0;
+  const complete = result.coverage.length > 0 && result.coverage.every((c) => c.level === config.levels.length);
   const list = result.effects.find((e) => e.key === "price_list");
   const discount = result.effects.find((e) => e.key === "price_discount");
   paragraphs.push(
@@ -81,7 +97,7 @@ export function commentary(
       (list && discount
         ? `Of that, list price changes were ${signedWhole(amount(list))} and discount changes were ${signedWhole(amount(discount))}. `
         : "") +
-      `It is measured on the ${percent(exact)} of current unit sales that matched an exact prior configuration.`,
+      `It is measured on the ${matchedPercent(exact, complete)} of current ${measure} with units that matched an exact prior configuration.`,
   );
 
   const mixes = result.effects.filter((e) => e.key.startsWith("mix_"));

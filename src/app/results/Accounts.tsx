@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { accountBridge, measureName, type AccountGroup, type Query } from "../../engine.ts";
 import { percent, signedWhole, whole } from "../format.ts";
 import type { Run } from "../Results.tsx";
@@ -12,11 +11,19 @@ const ACCOUNT_LABELS: Record<AccountGroup["status"], string> = {
   shrinking: "Shrinking",
 };
 
-export function Accounts(props: { run: Run; query: (() => Promise<Query>) | null }) {
+/** The first text column that names an account, or "" when none does. */
+export function accountGuess(textColumns: readonly string[]): string {
+  return textColumns.find((c) => /customer|account|client|parent|sold.?to|buyer/i.test(c)) ?? "";
+}
+
+export function Accounts(props: {
+  run: Run;
+  query: (() => Promise<Query>) | null;
+  column: string;
+  onColumn: (column: string) => void;
+}) {
   const { config, textColumns } = props.run;
-  const guess =
-    textColumns.find((c) => /customer|account|client|parent|sold.?to|buyer/i.test(c)) ?? textColumns[0] ?? "";
-  const [column, setColumn] = useState(guess);
+  const column = props.column;
   const live = props.query !== null;
   const run = props.query;
   // The figures are kept with the column they were fetched for, so the four
@@ -30,7 +37,8 @@ export function Accounts(props: { run: Run; query: (() => Promise<Query>) | null
     <div className="toolbar">
       <label>
         Account column
-        <select value={column} onChange={(e) => setColumn(e.target.value)}>
+        <select value={column} onChange={(e) => props.onColumn(e.target.value)}>
+          <option value="">Choose a column</option>
           {textColumns.map((c) => <option key={c}>{c}</option>)}
         </select>
       </label>
@@ -39,7 +47,15 @@ export function Accounts(props: { run: Run; query: (() => Promise<Query>) | null
       </span>
     </div>
   );
-  if (!column) return <p className="hint">This view needs a text column such as customer.</p>;
+  if (textColumns.length === 0) return <p className="hint">This view needs a text column such as customer.</p>;
+  if (column === "") {
+    return (
+      <div>
+        {toolbar}
+        <p className="hint">Choose the account column to see these groups.</p>
+      </div>
+    );
+  }
   if (failed) {
     return (
       <div>

@@ -6,6 +6,22 @@ import { terms } from "../report.ts";
 import type { Run } from "../Results.tsx";
 import { Kpi, QueryFailed, TableActions, TextCell, display, useLoad } from "./shared.tsx";
 
+/**
+ * What the price counts include. The margin bridge splits price into two steps, so its note says
+ * which pair to read together.
+ */
+export const priceNote = (measure: string) => {
+  const note = `Counts only exactly matched configurations with positive units in both periods and positive prior ${measure}, after each configuration's rows with units are added together. The Bridge price step can include other configurations.`;
+  return measure === "margin" ? `${note} On a margin bridge, compare the combined Price and Unit cost steps.` : note;
+};
+
+/**
+ * What the bands measure. A margin bridge's bands hold average unit margin, and a sales bridge's
+ * hold average price.
+ */
+export const placementNote = (measure: string) =>
+  `Each configuration counted here is placed by how much its average ${measure === "margin" ? "unit margin" : "price"} moved between the two periods.`;
+
 export function PriceChanges(props: { run: Run; query: () => Promise<Query> }) {
   const { loaded, failed } = useLoad(
     props.run,
@@ -59,8 +75,9 @@ export function PriceChanges(props: { run: Run; query: () => Promise<Query> }) {
         </tbody>
       </table>
       <p className="hint">
-        Each exactly matched configuration is placed by how much its average price moved between the two periods.
-        This shows how widely a price change landed, which the single price number in the bridge cannot.
+        {placementNote(t.measure.toLowerCase())}{" "}
+        This shows how widely a price change landed, which the single price number in the bridge cannot.{" "}
+        {priceNote(t.measure.toLowerCase())}
       </p>
       <RealizationTable run={props.run} query={props.query} overall={data.averageChange} />
     </div>

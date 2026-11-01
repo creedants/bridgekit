@@ -16,7 +16,7 @@ export interface BridgeSummary {
   effects: { label: string; value: number }[];
   /** Attribute names, most important first. */
   attributes: string[];
-  /** Share of current unit sales matched to the same configuration in the prior period, 0 to 1. */
+  /** Share of the current period's net measure on rows with units that matched the same configuration in the prior period. Zero when the net total is zero; signed measures can produce shares outside 0 to 1. */
   exactMatchShare: number;
   newAndDiscontinued: "difference" | "full";
 }

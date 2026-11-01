@@ -20,7 +20,10 @@ const result: BridgeResult = {
     { key: "discontinued", label: "Discontinued configurations", value: 0 },
     { key: "no_units", label: "Sales with no units", value: 0 },
   ],
-  coverage: [{ level: 1, label: "Exact configuration", cells: 10, sales: 1_000_000, share: 0.95 }],
+  coverage: [
+    { level: 1, label: "Exact configuration", cells: 10, sales: 1_000_000, share: 0.95 },
+    { level: 0, label: "No comparable group (overall average)", cells: 1, sales: 50_000, share: 0.05 },
+  ],
   cellsTable: "bridge_cells",
 };
 
@@ -33,7 +36,7 @@ test("the summary states the change, ranks the drivers and qualifies price", () 
   );
   assert.equal(
     text[2],
-    "Like-for-like price added 30,000, +3.0% of prior sales. It is measured on the 95.0% of current unit sales that matched an exact prior configuration.",
+    "Like-for-like price added 30,000, +3.0% of prior sales. It is measured on the 95.0% of current sales with units that matched an exact prior configuration.",
   );
   // Zero lines and the no-units line are left out when they are nil.
   assert.equal(text.some((p) => p.includes("no units")), false);
@@ -137,7 +140,10 @@ test("F9: every unnamed line joins the leftover sum, including one below the thr
   };
   const drivers = commentary(f9, { ...config, levels: five.map((name) => ({ name, columns: [name.toLowerCase()] })) })[1];
   assert.match(drivers, /^The largest driver was volume \(\+100,000, \+10\.0% of prior sales\), followed by /);
-  assert.ok(drivers.endsWith(" The other 3 lines add up to -222."), drivers);
+  assert.ok(
+    drivers.endsWith(" The other 3 lines (mix: Colour, mix: Finish and mix: Material) add up to -222."),
+    drivers,
+  );
   // The two zero lines are not counted as leftover lines.
   assert.equal(drivers.includes("Discontinued"), false);
 });
@@ -196,6 +202,28 @@ test("one leftover line adds up in the singular and two in the plural", () => {
   };
   assert.match(
     commentary(more, { ...config, levels: [...config.levels, { name: "Size", columns: ["size"] }] })[1],
-    /The other 2 lines add up to \+30,000\.$/,
+    /The other 2 lines \(discontinued configurations and mix: Size\) add up to \+30,000\.$/,
   );
+});
+
+test("more than three leftovers keep the count and name none", () => {
+  const names = ["Product", "Size", "Colour", "Finish", "Material", "Season", "Tier", "Group", "Channel"];
+  const leftovers = [-10, -20, -30, -40, -50];
+  const effects = [
+    { key: "volume", label: "Volume", value: 100_000 },
+    { key: "price", label: "Price (like-for-like)", value: 50_000 },
+    { key: "mix_1", label: "Mix: Product", value: 30_000 },
+    { key: "mix_2", label: "Mix: Size", value: 20_000 },
+    ...leftovers.map((value, i) => ({ key: `mix_${i + 3}`, label: `Mix: ${names[i + 2]}`, value })),
+  ];
+  const total = effects.reduce((sum, e) => sum + e.value, 0);
+  const many: BridgeResult = {
+    ...result,
+    priorSales: 1_000_000,
+    currentSales: 1_000_000 + total,
+    effects,
+  };
+  const text = commentary(many, { ...config, levels: names.map((name) => ({ name, columns: [name.toLowerCase()] })) })[1];
+  assert.ok(text.endsWith(" The other 5 lines add up to -150."), text);
+  assert.equal(text.includes("mix: Colour"), false, text);
 });

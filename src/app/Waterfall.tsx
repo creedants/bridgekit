@@ -8,8 +8,9 @@ import { useEffect, useRef, useState } from "react";
 import type React from "react";
 import type { BridgeResult } from "../engine.ts";
 import { saveOnce } from "./files.ts";
-import { compact, signedCompact } from "./format.ts";
+import { compact, roundedCompact, signedRoundedCompact } from "./format.ts";
 import { axisCaption, axisFloor, chartStack, steps, type Step, type ValueScale } from "./small-bridges.ts";
+import type { RoundedBridge } from "../summary.ts";
 
 echarts.use([BarChart, GridComponent, TooltipComponent, LegacyGridContainLabel, CanvasRenderer]);
 
@@ -164,7 +165,7 @@ export function chartPng(chart: echarts.ECharts | null): Uint8Array<ArrayBuffer>
   return url ? Uint8Array.from(atob(url.slice(url.indexOf(",") + 1)), (c) => c.charCodeAt(0)) : null;
 }
 
-const valueText = (bar: Step) => (bar.kind === "total" ? compact(bar.value) : signedCompact(bar.value));
+export const valueText = (bar: Step) => (bar.kind === "total" ? roundedCompact(bar.shown) : signedRoundedCompact(bar.shown));
 
 /**
  * The whole chart for one label plan. `touch` and `selectable` are asked again each time a tooltip opens,
@@ -416,6 +417,8 @@ export function Waterfall(props: {
   result: BridgeResult;
   priorLabel: string;
   currentLabel: string;
+  /** The amounts the table beside the chart prints, so a label quotes the same figures. Absent keeps the exact values. */
+  shown?: RoundedBridge;
   /** Called with an effect key when its bar is clicked. A chart without it is not clickable. */
   onSelect?: (effectKey: string) => void;
   footer?: React.ReactNode;
@@ -427,7 +430,7 @@ export function Waterfall(props: {
   below?: () => Promise<HTMLCanvasElement | null>;
 }) {
   const chartRef = useRef<echarts.ECharts>(null);
-  const bars = steps(props.result, props.priorLabel, props.currentLabel);
+  const bars = steps(props.result, props.priorLabel, props.currentLabel, props.shown);
   const caption = axisCaption(bars);
 
   return (

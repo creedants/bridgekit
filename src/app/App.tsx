@@ -101,6 +101,17 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** The export task's label while the workbook is built. */
+export const EXPORTING = "Preparing Excel file…";
+
+/** The export button's own label while the file is made. */
+export const SAVING = "Saving";
+
+/** The top bar's status: a reading load's label, else the last task's, else nothing. */
+export function statusLine(reading: string | null, labels: readonly string[]): string {
+  return reading ?? labels.at(-1) ?? "";
+}
+
 /**
  * The banner above the workspace. A failed task's error gives way to the next
  * visitor setup change, load or task start; a refused load's outlives the
@@ -585,6 +596,7 @@ export function App() {
   const signature = JSON.stringify([setup, prior, current, source]);
   const fresh = run && run.signature === signature ? run : null;
   const calculating = tasks.has("calc");
+  const exporting = tasks.has("export");
   const busy = tasks.size > 0 || phase.kind === "reading" || phase.kind === "autoRun";
   const problem: FileProblem = setup
     ? fileProblem({
@@ -772,7 +784,7 @@ export function App() {
       excelFileName(job.config),
       async () => {
         let bytes: BlobPart | null = null;
-        const built = await task("export", "Building Excel file…", async () => {
+        const built = await task("export", EXPORTING, async () => {
           bytes = await workbookBytes(await query(), job.config, job.result, job.check, job.tieOut, job.description);
         });
         return built ? bytes : null;
@@ -815,7 +827,10 @@ export function App() {
 
   const Results = useResultsView(resultsChunk);
   const shown = mainView(phase, engineState);
-  const status = phase.kind === "reading" ? phase.label : ([...tasks.values()].at(-1)?.label ?? "");
+  const status = statusLine(
+    phase.kind === "reading" ? phase.label : null,
+    [...tasks.values()].map((running) => running.label),
+  );
   // Every load, a refused file or paste included, and every task clears announced, and a setup
   // change makes the run stale, so either way this line derives to "".
   const spoken = status || (fresh && fresh.id === announced ? "Bridge calculated." : "");
@@ -847,7 +862,9 @@ export function App() {
         <span className="visually-hidden" aria-live="polite">{spoken}</span>
         <nav>
           {filePicker}
-          <button disabled={!fresh || busy} onClick={exportWorkbook} aria-label="Export Excel">Export<span className="wide-only"> Excel</span></button>
+          <button disabled={!fresh || busy} onClick={exportWorkbook} aria-label="Export Excel">
+            {exporting ? SAVING : <>Export<span className="wide-only"> Excel</span></>}
+          </button>
           {setup && (
             <button
               title="Remove the loaded data from this tab"

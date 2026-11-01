@@ -3,10 +3,11 @@ import { readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { test } from "node:test";
 import { transformSync } from "esbuild";
-import { compact, signedCompact } from "../src/app/format.ts";
+import { signedWhole } from "../src/app/format.ts";
 import type { Step } from "../src/app/small-bridges.ts";
 import { steps } from "../src/app/small-bridges.ts";
 import type { LabelPlan } from "../src/app/Waterfall.tsx";
+import { roundEffects } from "../src/summary.ts";
 
 // The label plan and the chart option live in Waterfall.tsx, which this runner
 // cannot load by itself, so a load hook transforms it the way
@@ -23,7 +24,7 @@ registerHooks({
   },
 });
 
-const { bridgeOption, labelPlan } = await import("../src/app/Waterfall.tsx");
+const { bridgeOption, labelPlan, valueText } = await import("../src/app/Waterfall.tsx");
 
 const LABELS = [
   "2025",
@@ -51,8 +52,6 @@ function bridge(labels: string[], prior: number, amounts: number[]): Step[] {
 function tenSteps(): Step[] {
   return bridge(LABELS, PRIOR, [4_812_000, 1_093_000, 823_700, 2_215_000, -93_700, 1_004_000, 3_540_000, -961_600]);
 }
-
-const valueText = (bar: Step) => (bar.kind === "total" ? compact(bar.value) : signedCompact(bar.value));
 
 const THEME = {
   font: "Sans",
@@ -238,4 +237,24 @@ test("a long bridge on a phone grows a row per step and turns no label", () => {
   if (plan.layout !== "rows") return;
   assert.equal(plan.height, 25 * 28 + 40);
   assert.deepEqual(rotations(draw(bars, plan, 343)), []);
+});
+
+test("a chart label prints the table's reconciled amount, and the bars keep their exact amounts", () => {
+  const effects = [
+    { key: "volume", label: "Volume", value: 0.4 },
+    { key: "price", label: "Price (like-for-like)", value: 0.4 },
+  ];
+  const result = { priorSales: 100, currentSales: 100 + 0.4 + 0.4, effects, coverage: [], cellsTable: "" };
+  const shown = roundEffects(result.priorSales, result.currentSales, effects);
+  assert.deepEqual(shown.values, [1, 0], "the table no longer shows +1 and 0");
+  const bars = steps(result, "2025", "2026", shown);
+  const plan = labelPlan(bars.map((bar) => bar.label), bars.map(valueText), 659);
+  const labels = (drawn: Record<string, any>) => bars.map((_, dataIndex) => drawn.series[1].label.formatter({ dataIndex }));
+
+  assert.deepEqual(labels(draw(bars, plan, 659)), ["100", "+1", "0", "101"]);
+  assert.deepEqual(labels(draw(bars, plan, 659, true)), ["100", "+1", "0", "101"]);
+  assert.deepEqual(labels(draw(bars, plan, 659)).slice(1, -1), shown.values.map(signedWhole));
+  // The bar geometry keeps the exact amounts, so a bar still covers the change it drew before.
+  assert.deepEqual(bars.map((bar) => bar.value), [100, 0.4, 0.4, result.currentSales]);
+  assert.deepEqual(bars.map((bar) => [bar.low, bar.high]), [[0, 100], [100, 100.4], [100.4, result.currentSales], [0, result.currentSales]]);
 });

@@ -1,6 +1,7 @@
 import type { BridgeBy, BridgePanel, BridgeResult, PanelStatus, Query } from "../engine.ts";
 import type { LoadedPeriods, PeriodView } from "./fileProblems.ts";
 import { compact, signedWhole } from "./format.ts";
+import type { RoundedBridge } from "../summary.ts";
 
 /**
  * The small-bridge rules and the page's read rules, in one place and free of
@@ -126,15 +127,25 @@ export interface Step {
   low: number;
   high: number;
   value: number;
+  /** The amount the label prints. Never geometry. */
+  shown: number;
   kind: "total" | "up" | "down";
 }
 
-export function steps(result: BridgeResult, priorLabel: string, currentLabel: string): Step[] {
+export function steps(result: BridgeResult, priorLabel: string, currentLabel: string, rounded?: RoundedBridge): Step[] {
   const out: Step[] = [
-    { key: null, label: priorLabel, low: 0, high: result.priorSales, value: result.priorSales, kind: "total" },
+    {
+      key: null,
+      label: priorLabel,
+      low: 0,
+      high: result.priorSales,
+      value: result.priorSales,
+      shown: rounded?.prior ?? result.priorSales,
+      kind: "total",
+    },
   ];
   let running = result.priorSales;
-  for (const effect of result.effects) {
+  for (const [i, effect] of result.effects.entries()) {
     const next = running + effect.value;
     out.push({
       key: effect.key,
@@ -142,11 +153,20 @@ export function steps(result: BridgeResult, priorLabel: string, currentLabel: st
       low: Math.min(running, next),
       high: Math.max(running, next),
       value: effect.value,
+      shown: rounded?.values[i] ?? effect.value,
       kind: effect.value >= 0 ? "up" : "down",
     });
     running = next;
   }
-  out.push({ key: null, label: currentLabel, low: 0, high: result.currentSales, value: result.currentSales, kind: "total" });
+  out.push({
+    key: null,
+    label: currentLabel,
+    low: 0,
+    high: result.currentSales,
+    value: result.currentSales,
+    shown: rounded?.current ?? result.currentSales,
+    kind: "total",
+  });
   return out;
 }
 
