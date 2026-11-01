@@ -58,15 +58,29 @@ test("a bar label keeps whole units below a thousand and a short unit above", ()
 });
 
 test("the results page explains its terms, its chart labels and the price counts", async () => {
-  const { RESULT_TERMS, CHART_TERMS } = await import("../src/app/Results.tsx");
+  const { resultTerms, CHART_TERMS } = await import("../src/app/Results.tsx");
+  const { terms } = await import("../src/app/report.ts");
   const { priceNote } = await import("../src/app/results/PriceChanges.tsx");
-  assert.ok(RESULT_TERMS.includes("Volume: The change in units at the overall prior average price."), RESULT_TERMS);
+  const config = {
+    table: "t",
+    periodColumn: "period",
+    prior: "2025",
+    current: "2026",
+    unitsColumn: "units",
+    salesColumn: "sales",
+    levels: [],
+  };
+  const sales = resultTerms(terms(config));
+  assert.ok(sales.includes("Volume: The change in units at the overall prior average price."), sales);
   assert.ok(
-    RESULT_TERMS.includes(
+    sales.includes(
       "Mix: The change in units valued at how much more expensive or cheaper the group is than the group above it.",
     ),
-    RESULT_TERMS,
+    sales,
   );
+  const margin = resultTerms(terms({ ...config, costColumn: "cost" }));
+  assert.ok(margin.includes("Volume: The change in units at the overall prior average unit margin."), margin);
+  assert.ok(margin.includes("how much higher or lower the group's unit margin is"), margin);
   assert.ok(CHART_TERMS.includes("K, M and B"), CHART_TERMS);
   assert.ok(CHART_TERMS.includes("Discont. configs"), CHART_TERMS);
   const note = priceNote("sales");

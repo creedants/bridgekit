@@ -37,6 +37,8 @@ const SALES = {
   ofCompared: "of sales compared",
   lowMatch: (share: number) =>
     `Only ${percent(share)} of current sales matched an exact prior configuration. Consider fewer attributes, or check the Unmatched tab.`,
+  volumeNote: "Volume: The change in units at the overall prior average price.",
+  mixNote: "Mix: The change in units valued at how much more expensive or cheaper the group is than the group above it.",
 } as const;
 const MARGIN = {
   bridgeTitle: "Margin bridge",
@@ -64,8 +66,10 @@ const MARGIN = {
   ofCompared: "of margin compared",
   lowMatch: (share: number) =>
     `Only ${percent(share)} of current margin matched an exact prior configuration. Consider fewer attributes, or check the Unmatched tab.`,
+  volumeNote: "Volume: The change in units at the overall prior average unit margin.",
+  mixNote: "Mix: The change in units valued at how much higher or lower the group's unit margin is than the group above it.",
 } as const;
-interface Terms {
+export interface Terms {
   bridgeTitle: string;
   ofPrior: string;
   prior: string;
@@ -90,6 +94,8 @@ interface Terms {
   compared: string;
   ofCompared: string;
   lowMatch: (share: number) => string;
+  volumeNote: string;
+  mixNote: string;
 }
 const TERMS = { SALES, MARGIN } satisfies Record<string, Terms>;
 

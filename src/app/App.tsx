@@ -101,17 +101,6 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Resolves after the browser has drawn the current state, so an export's label shows before the workbook takes the main thread. The timer covers a hidden tab, where frames stop. */
-function nextPaint(): Promise<void> {
-  return new Promise((resolve) => {
-    const fallback = window.setTimeout(resolve, 100);
-    requestAnimationFrame(() => {
-      window.clearTimeout(fallback);
-      window.setTimeout(resolve, 0);
-    });
-  });
-}
-
 /** The export task's label while the workbook is built. */
 export const EXPORTING = "Preparing Excel file…";
 
@@ -793,7 +782,6 @@ export function App() {
       async () => {
         let bytes: BlobPart | null = null;
         const built = await task("export", EXPORTING, async () => {
-          await nextPaint();
           bytes = await workbookBytes(await query(), job.config, job.result, job.check, job.tieOut, job.description);
         });
         return built ? bytes : null;

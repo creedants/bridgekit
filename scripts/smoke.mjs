@@ -1238,14 +1238,17 @@ async function drive(browser, origin, rows) {
     await browser.evalJs(`(async () => {
       let blob = null; const original = URL.createObjectURL;
       URL.createObjectURL = (b) => { blob = b; return original(b); };
-      const t = performance.now(); T.btn('Export Excel').click();
+      const button = T.btn('Export Excel');
+      const t = performance.now(); button.click();
+      const busy = button.textContent.trim();
       for (let i = 0; i < 400 && !blob; i++) await new Promise(r => setTimeout(r, 200));
       URL.createObjectURL = original;
-      return JSON.stringify({ bytes: blob?.size ?? 0, ms: Math.round(performance.now() - t), error: T.err() });
+      return JSON.stringify({ bytes: blob?.size ?? 0, ms: Math.round(performance.now() - t), error: T.err(), busy });
     })()`),
   );
   if (exported.error || exported.bytes < 10_000) fail(`Excel export: ${exported.error ?? "no file"}`);
-  console.log(`ok  Excel export (${exported.bytes} bytes in ${exported.ms} ms)`);
+  if (exported.busy !== "Preparing…") fail(`Excel export: the button reads ${JSON.stringify(exported.busy)} while the file is prepared, expected "Preparing…"`);
+  console.log(`ok  Excel export (${exported.bytes} bytes in ${exported.ms} ms, button said ${JSON.stringify(exported.busy)})`);
 
   // The visitor's own file replaces the sample in the address too, so a reload does not bring the sample back.
   await browser.goto(`${origin}/app/?sample`);

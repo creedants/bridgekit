@@ -9,7 +9,7 @@ import {
 } from "../engine.ts";
 import { roundEffects, shownTotal } from "../summary.ts";
 import { matchedPercent, shareOfPrior, signedPercent, signedWhole, whole } from "./format.ts";
-import { terms } from "./report.ts";
+import { terms, type Terms } from "./report.ts";
 import type { Setup } from "./setup.ts";
 import { Accounts, accountGuess } from "./results/Accounts.tsx";
 import { Check, checkWarnings, useWholeRowWarning } from "./results/Check.tsx";
@@ -51,12 +51,12 @@ export interface Run {
 type Tab = "bridge" | "movers" | "accounts" | "price" | "gaps" | "trend" | "unmatched" | "setup" | "check";
 
 /** The key terms under the KPI row, so a reader meets each word where it first appears. */
-export const RESULT_TERMS =
-  "Like-for-like price: The price change on configurations sold in both periods. Configuration: One combination of attribute values, such as A-100, Large, Red. Volume: The change in units at the overall prior average price. Mix: The change in units valued at how much more expensive or cheaper the group is than the group above it.";
+export const resultTerms = (t: Terms) =>
+  `Like-for-like price: The price change on configurations sold in both periods. Configuration: One combination of attribute values, such as A-100, Large, Red. ${t.volumeNote} ${t.mixNote}`;
 
-/** What the short words in charts and tables stand for. */
+/** What the short words in charts stand for. */
 export const CHART_TERMS =
-  "K, M and B in charts and tables mean thousand, million and billion. Discont. configs is short for discontinued configurations.";
+  "K, M and B in charts mean thousand, million and billion. Discont. configs is short for discontinued configurations.";
 
 /** WAI-ARIA tabs with automatic activation: the index a key moves to, or null for a key the strip ignores. */
 export function tabAfterKey(key: string, at: number, count: number): number | null {
@@ -145,7 +145,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
         <Kpi label="Like-for-like price" value={signedWhole(shownTotal(shown, result.effects, "price"))} note={signedPercent(shareOfPrior(priceEffect, result.priorSales))} />
         <Kpi label="Matched exactly" value={matchedPercent(exact)} note={t.exactNote} />
       </div>
-      <p className="hint">{RESULT_TERMS}</p>
+      <p className="hint">{resultTerms(t)}</p>
 
       <div className="tabs" role="tablist" aria-label="Result views">
         {tabs.map((entry, i) => (

@@ -13,7 +13,7 @@ export const compact = (n: number) =>
 export const signedCompact = (n: number) => (n > 0 ? "+" : "") + compact(n);
 export const whole = (n: number) => wholeFormat.format(n);
 export const signedWhole = (n: number) => (n > 0 ? "+" : "") + wholeFormat.format(n);
-/** A short figure that keeps whole units below a thousand, so a bar label and its table row round the same way. */
+/** A short figure that prints whole units below a thousand, as the table does. */
 export const roundedCompact = (n: number) => (Math.abs(n) < 1000 ? whole(n) : compact(n));
 export const signedRoundedCompact = (n: number) => (n > 0 ? "+" : "") + roundedCompact(n);
 export const price = (n: number) => (Number.isFinite(n) ? priceFormat.format(n) : "");
