@@ -89,6 +89,7 @@ export function commentary(
   // keeps the exact sign.
   const priceSign = shownPrice !== 0 ? Math.sign(shownPrice) : Math.sign(priceEffect);
   const exact = result.coverage.find((c) => c.level === config.levels.length)?.share ?? 0;
+  const complete = result.coverage.length > 0 && result.coverage.every((c) => c.level === config.levels.length);
   const list = result.effects.find((e) => e.key === "price_list");
   const discount = result.effects.find((e) => e.key === "price_discount");
   paragraphs.push(
@@ -96,7 +97,7 @@ export function commentary(
       (list && discount
         ? `Of that, list price changes were ${signedWhole(amount(list))} and discount changes were ${signedWhole(amount(discount))}. `
         : "") +
-      `It is measured on the ${matchedPercent(exact)} of current ${measure} with units that matched an exact prior configuration.`,
+      `It is measured on the ${matchedPercent(exact, complete)} of current ${measure} with units that matched an exact prior configuration.`,
   );
 
   const mixes = result.effects.filter((e) => e.key.startsWith("mix_"));

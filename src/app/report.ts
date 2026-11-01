@@ -36,7 +36,7 @@ const SALES = {
   compared: "Sales compared",
   ofCompared: "of sales compared",
   lowMatch: (share: number) =>
-    `Only ${percent(share)} of current sales matched an exact prior configuration. Consider fewer attributes, or check the Unmatched tab.`,
+    `Only ${matchedPercent(share)} of current sales matched an exact prior configuration. Consider fewer attributes, or check the Unmatched tab.`,
   volumeNote: "Volume: The change in units at the overall prior average price.",
   mixNote: "Mix: The change in units valued at how much more expensive or cheaper the group is than the group above it.",
 } as const;
@@ -65,7 +65,7 @@ const MARGIN = {
   compared: "Margin compared",
   ofCompared: "of margin compared",
   lowMatch: (share: number) =>
-    `Only ${percent(share)} of current margin matched an exact prior configuration. Consider fewer attributes, or check the Unmatched tab.`,
+    `Only ${matchedPercent(share)} of current margin matched an exact prior configuration. Consider fewer attributes, or check the Unmatched tab.`,
   volumeNote: "Volume: The change in units at the overall prior average unit margin.",
   mixNote: "Mix: The change in units valued at how much higher or lower the group's unit margin is than the group above it.",
 } as const;
@@ -232,6 +232,8 @@ export function buildReport(input: {
   const { config, result } = input;
   const omit = input.omitNames === true;
   const t = terms(config);
+  // Every coverage row sits at the full configuration, so the share is complete whatever its last bits say.
+  const complete = result.coverage.length > 0 && result.coverage.every((c) => c.level === config.levels.length);
   const safeLevels = config.levels.map((level, i) => ({ ...level, name: safeAttributeName(level, i) }));
   const safeConfig: BridgeConfig = { ...config, levels: safeLevels };
   const safeEffects = result.effects.map((e) => {
@@ -325,7 +327,7 @@ ${omit ? "" : input.chartUrl ? `<img alt="Waterfall chart of the bridge" src="${
 <table>${row(["", "Amount", t.ofPrior], "th")}${bridge.join("")}</table>
 <h2>${markup(t.matchedHeading)}</h2>
 <table class="plain">${row(["Compared against", "Share", "Configurations"], "th")}${viewCoverage
-    .map((c) => row([cell(c.label), matchedPercent(c.share), whole(c.cells)]))
+    .map((c) => row([cell(c.label), matchedPercent(c.share, complete), whole(c.cells)]))
     .join("")}</table>
 <h2>Largest movers by ${markup(viewMoversLabel)}</h2>
 <table class="plain">${row([cell(viewMoversLabel), ...moverLabels], "th")}${movers.join("")}</table>

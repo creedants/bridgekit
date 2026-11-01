@@ -1,6 +1,6 @@
 import { sensitivity, type Query } from "../../engine.ts";
 import { shorten } from "../files.ts";
-import { percent, signedWhole, whole } from "../format.ts";
+import { matchedPercent, signedWhole, whole } from "../format.ts";
 import type { Run } from "../Results.tsx";
 import { QueryFailed, useLoad } from "./shared.tsx";
 
@@ -51,7 +51,7 @@ export function SetupCheck(props: { run: Run; query: (() => Promise<Query>) | nu
               <td className="num">{i === 0 ? "" : signedWhole(row.price - rows[0].price)}</td>
               <td className="num">{signedWhole(row.mix)}</td>
               <td className="num">{signedWhole(row.newAndDiscontinued)}</td>
-              <td className="num">{percent(row.exactShare)}</td>
+              <td className="num">{matchedPercent(row.exactShare)}</td>
               <td className="num">{whole(row.cells)}</td>
             </tr>
           ))}

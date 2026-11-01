@@ -31,15 +31,17 @@ export const signedPercent = (n: number) => {
 };
 
 /**
- * A matched share. Two sums of the same sales can differ in their last bits, so a value within a
- * billionth of one prints 100.0%; any other share that would round up to 100.0% while still below
- * one prints 99.9%, because it did not cover everything.
+ * A matched share. A complete result prints 100.0%, because the engine reported every current row
+ * matched at the full configuration, whatever the last bits of the computed share. Otherwise a
+ * share below one that would round up to 100.0% prints 99.9%, because it did not cover everything,
+ * and any other share prints as computed.
  */
-export const matchedPercent = (n: number) => {
+export const matchedPercent = (n: number, complete = false) => {
+  if (complete && Number.isFinite(n) && n > 0) return "100.0%";
   if (!Number.isFinite(n) || n <= 0) return percent(n);
-  if (Math.abs(n - 1) <= 1e-9) return percent(1);
+  if (n >= 1) return percent(n);
   const text = percent(n);
-  return n < 1 && text === "100.0%" ? "99.9%" : text;
+  return text === "100.0%" ? "99.9%" : text;
 };
 
 /** A value as a share of the prior total. Dividing by the absolute prior keeps the value's sign when the prior total is negative, and a zero prior gives a number the formatters print as blank. */

@@ -104,6 +104,9 @@ function describeError(error: unknown): string {
 /** The export task's label while the workbook is built. */
 export const EXPORTING = "Preparing Excel file…";
 
+/** The export button's own label while the file is made, short enough for a phone. */
+export const SAVING = "Saving…";
+
 /** The top bar's status: a reading load's label, else the last task's, else nothing. */
 export function statusLine(reading: string | null, labels: readonly string[]): string {
   return reading ?? labels.at(-1) ?? "";
@@ -860,7 +863,7 @@ export function App() {
         <nav>
           {filePicker}
           <button disabled={!fresh || busy} onClick={exportWorkbook} aria-label="Export Excel">
-            {exporting ? "Preparing…" : <>Export<span className="wide-only"> Excel</span></>}
+            {exporting ? SAVING : <>Export<span className="wide-only"> Excel</span></>}
           </button>
           {setup && (
             <button

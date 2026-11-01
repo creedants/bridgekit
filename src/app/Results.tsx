@@ -7,7 +7,7 @@ import {
   type Query,
   type TieOut,
 } from "../engine.ts";
-import { roundEffects, shownTotal } from "../summary.ts";
+import { roundEffects, shownTotal, type RoundedBridge } from "../summary.ts";
 import { matchedPercent, shareOfPrior, signedPercent, signedWhole, whole } from "./format.ts";
 import { terms, type Terms } from "./report.ts";
 import type { Setup } from "./setup.ts";
@@ -51,8 +51,12 @@ export interface Run {
 type Tab = "bridge" | "movers" | "accounts" | "price" | "gaps" | "trend" | "unmatched" | "setup" | "check";
 
 /** The key terms under the KPI row, so a reader meets each word where it first appears. */
-export const resultTerms = (t: Terms) =>
-  `Like-for-like price: The price change on configurations sold in both periods. Configuration: One combination of attribute values, such as A-100, Large, Red. ${t.volumeNote} ${t.mixNote}`;
+export const resultTerms = (t: Terms, config: BridgeConfig) =>
+  `Like-for-like price: The price change on configurations sold in both periods. Configuration: One combination of attribute values, such as A-100, Large, Red. ${t.volumeNote} ${t.mixNote}${
+    config.newAndDiscontinued === "full"
+      ? " With Full sales selected, Volume and Mix cover continuing configurations only, using prior averages from those configurations."
+      : ""
+  }`;
 
 /** What the short words in charts stand for. */
 export const CHART_TERMS =
@@ -102,6 +106,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
     effects: run.result.effects.filter((e) => e.key !== "no_units" || e.value !== 0),
   };
   const shown = roundEffects(result.priorSales, result.currentSales, result.effects);
+  const combined = withCombinedMix(result, shown);
   // The tabs that re-query the mutable view read it only while the run and its
   // views are current; a temp table fixed at calculation time needs no such guard.
   const viewQuery = props.fresh === false || props.viewsCurrent === false ? null : props.query;
@@ -120,6 +125,9 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
   const change = result.currentSales - result.priorSales;
   const priceEffect = result.effects.filter((e) => e.key.startsWith("price")).reduce((sum, e) => sum + e.value, 0);
   const exact = result.coverage.find((c) => c.level === config.levels.length)?.share ?? 0;
+  // The engine reported every current row matched at the full configuration, and no configuration
+  // is left at another level, so the matched share is complete whatever the last bits say.
+  const complete = result.coverage.length > 0 && result.coverage.every((c) => c.level === config.levels.length);
   const fileWarnings = useWholeRowWarning(run, props.query);
   const warnings = checkWarnings(run, fileWarnings.warnings);
 
@@ -143,9 +151,9 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
         <Kpi label={`${measureName(config)} ${config.current}`} value={whole(shown.current)} />
         <Kpi label="Change" value={signedWhole(shown.current - shown.prior)} note={signedPercent(shareOfPrior(change, result.priorSales))} />
         <Kpi label="Like-for-like price" value={signedWhole(shownTotal(shown, result.effects, "price"))} note={signedPercent(shareOfPrior(priceEffect, result.priorSales))} />
-        <Kpi label="Matched exactly" value={matchedPercent(exact)} note={t.exactNote} />
+        <Kpi label="Matched exactly" value={matchedPercent(exact, complete)} note={t.exactNote} />
       </div>
-      <p className="hint">{resultTerms(t)}</p>
+      <p className="hint">{resultTerms(t, config)}</p>
 
       <div className="tabs" role="tablist" aria-label="Result views">
         {tabs.map((entry, i) => (
@@ -181,7 +189,8 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
           <>
             <div className="bridge">
               <Waterfall
-                result={combineMix ? withCombinedMix(result) : result}
+                result={combineMix ? combined.result : result}
+                shown={combineMix ? combined.shown : shown}
                 controls={
                   mixCount > 1 && (
                     <>
@@ -232,7 +241,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
                     {result.coverage.map((c) => (
                       <tr key={c.level}>
                         <td>{matchLabel(config, c.level)}</td>
-                        <td className="num">{matchedPercent(c.share)}</td>
+                        <td className="num">{matchedPercent(c.share, complete)}</td>
                         <td className="num">{whole(c.cells)}</td>
                       </tr>
                     ))}
@@ -274,15 +283,38 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
   );
 }
 
-/** The same bridge with the per-attribute mix lines added into one. */
-function withCombinedMix(result: Run["result"]): Run["result"] {
+/**
+ * The same bridge with the per-attribute mix lines added into one, and the amounts its chart labels
+ * print beside it. `shown` holds the table's rounded values, so every label quotes the table.
+ */
+export function withCombinedMix(
+  result: Run["result"],
+  shown: RoundedBridge,
+): { result: Run["result"]; shown: RoundedBridge } {
   const mixes = result.effects.filter((e) => e.key.startsWith("mix_"));
-  if (mixes.length < 2) return result;
+  if (mixes.length < 2) return { result, shown };
   const combined = { key: "mix_all", label: "Mix", value: mixes.reduce((sum, e) => sum + e.value, 0) };
   const first = result.effects.indexOf(mixes[0]);
+  const effects = [
+    ...result.effects.slice(0, first),
+    combined,
+    ...result.effects.slice(first).filter((e) => !e.key.startsWith("mix_")),
+  ];
+  // The Mix bar prints the sum of the table's rounded mix lines. Re-rounding the combined effect list
+  // would move a unit, so the other steps keep the table's values and only this bar is summed.
+  const mixShown = shownTotal(shown, result.effects, "mix_");
+  const at = new Map(result.effects.map((e, i) => [e.key, i]));
   return {
-    ...result,
-    effects: [...result.effects.slice(0, first), combined, ...result.effects.slice(first).filter((e) => !e.key.startsWith("mix_"))],
+    result: { ...result, effects },
+    shown: {
+      prior: shown.prior,
+      current: shown.current,
+      values: effects.map((e) => {
+        if (e.key === "mix_all") return mixShown;
+        const index = at.get(e.key);
+        return index === undefined ? e.value : (shown.values[index] ?? e.value);
+      }),
+    },
   };
 }
 
