@@ -135,10 +135,10 @@ test("a margin workbook names margin on every sheet that shows the measure", asy
 
   const bands = workbook.getWorksheet("Price bands")!;
   assert.deepEqual(headerRow(bands), [
-    "Change in average price",
+    "Change in average unit margin",
     "Share",
     "Current margin",
-    "Price effect",
+    "Price and unit cost",
     "Configurations",
   ]);
 
@@ -275,7 +275,7 @@ test("a margin bridge's coverage hint names margin", () => {
 
 test("a margin bridge's price increase KPI names margin", () => {
   assert.deepEqual(resultsLabel("priceUp"), {
-    margin: "Margin with a price increase",
+    margin: "Margin with a unit margin increase",
     sales: "Sales with a price increase",
     used: true,
   });
@@ -291,7 +291,7 @@ test("a margin bridge's no-change KPI names margin", () => {
 
 test("a margin bridge's price decrease KPI names margin", () => {
   assert.deepEqual(resultsLabel("priceDown"), {
-    margin: "Margin with a price decrease",
+    margin: "Margin with a unit margin decrease",
     sales: "Sales with a price decrease",
     used: true,
   });

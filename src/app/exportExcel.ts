@@ -218,7 +218,7 @@ export async function workbookBytes(
   const bands = await priceDistribution(query, config);
   const bandSheet = workbook.addWorksheet("Price bands");
   bandSheet.columns = [{ width: 30 }, { width: 12 }, { width: 18 }, { width: 16 }, { width: 16 }];
-  bandSheet.addRow(["Change in average price", "Share", t.current, "Price effect", "Configurations"]).font = bold;
+  bandSheet.addRow([t.bandsChange, "Share", t.current, t.priceEffectHead, "Configurations"]).font = bold;
   for (const b of bands.buckets) bandSheet.addRow([b.label, b.share, b.sales, b.priceEffect, b.cells]);
   bandSheet.addRow([]);
   bandSheet.addRow(["Average change, matched configurations", bands.averageChange]);

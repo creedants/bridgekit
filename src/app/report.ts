@@ -22,6 +22,12 @@ const SALES = {
   priorPrice: "Prior price",
   currentPrice: "Current price",
   priceChange: "Price change",
+  priceEffectHead: "Price effect",
+  averageChange: "Average price change",
+  bandsChange: "Change in average price",
+  bandsHeading: "How widely price moved",
+  bandsNote: "This shows how widely a price change landed, which the single price number in the bridge cannot.",
+  realizedNote: "Realized change is the like-for-like price effect over what this period’s volume would have cost at prior prices.",
   hintUnits: "Prices exclude sales with no units.",
   hintChange: "Price change is the change in average price and includes mix inside the row.",
   exactNote: "of current sales with units",
@@ -51,13 +57,19 @@ const MARGIN = {
   priorPrice: "Prior unit margin",
   currentPrice: "Current unit margin",
   priceChange: "Unit margin change",
+  priceEffectHead: "Price and unit cost",
+  averageChange: "Average unit margin change",
+  bandsChange: "Change in average unit margin",
+  bandsHeading: "How widely unit margin moved",
+  bandsNote: "This shows how widely a unit margin change landed, which the combined Price and Unit cost steps in the bridge cannot.",
+  realizedNote: "Realized change is the like-for-like unit margin effect over what this period's volume would have earned at prior unit margins.",
   hintUnits: "Unit margins exclude sales with no units.",
   hintChange: "Unit margin change is the change in average unit margin and includes mix inside the row.",
   exactNote: "of current margin with units",
   sharesNote: "Shares are of current margin on rows with units.",
-  priceUp: "Margin with a price increase",
+  priceUp: "Margin with a unit margin increase",
   priceFlat: "Margin with no change",
-  priceDown: "Margin with a price decrease",
+  priceDown: "Margin with a unit margin decrease",
   matched: "Matched margin",
   againstPlan: "Against plan is the margin above or below what the planned increase would have delivered.",
   largestGroups: "Largest 200 groups by matched margin.",
@@ -80,6 +92,12 @@ export interface Terms {
   priorPrice: string;
   currentPrice: string;
   priceChange: string;
+  priceEffectHead: string;
+  averageChange: string;
+  bandsChange: string;
+  bandsHeading: string;
+  bandsNote: string;
+  realizedNote: string;
   hintUnits: string;
   hintChange: string;
   exactNote: string;
@@ -331,8 +349,8 @@ ${omit ? "" : input.chartUrl ? `<img alt="Waterfall chart of the bridge" src="${
     .join("")}</table>
 <h2>Largest movers by ${markup(viewMoversLabel)}</h2>
 <table class="plain">${row([cell(viewMoversLabel), ...moverLabels], "th")}${movers.join("")}</table>
-<h2>How widely price moved</h2>
-<table class="plain">${row(["Change in average price", t.matchedShare, "Price effect"], "th")}${input.priceBands
+<h2>${markup(t.bandsHeading)}</h2>
+<table class="plain">${row([t.bandsChange, t.matchedShare, t.priceEffectHead], "th")}${input.priceBands
     .map((b) => row([cell(b.label), percent(b.share), signedWhole(b.priceEffect)]))
     .join("")}</table>
 ${
