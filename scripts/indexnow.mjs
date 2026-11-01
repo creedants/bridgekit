@@ -1,6 +1,6 @@
 // Tells IndexNow that the site's URLs changed. The coordinator runs it from the
-// deploy machine after a deploy. Nothing else calls it, so no page, app or
-// Worker ever contacts another host.
+// deploy machine after a deploy. Pages, the app and the Worker do not call
+// this script.
 import { readdirSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
