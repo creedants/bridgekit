@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { commentary } from "../../commentary.ts";
 import { accountBridge, drill, priceDistribution, type Query } from "../../engine.ts";
 import { summarize, type BridgeSummary, type RoundedBridge } from "../../summary.ts";
+import { requestCommentary } from "../account.ts";
 import { saveOnce } from "../files.ts";
 import { buildReport } from "../report.ts";
 import type { Freshness, NamesChoice, Run } from "../Results.tsx";
@@ -136,21 +137,15 @@ function AiOffer(props: { summary: BridgeSummary }) {
  * "hint" shows the explanation with no button, for a signed-in person without
  * Pro; "button" shows today's panel.
  */
-function AiCommentary(props: { summary: BridgeSummary; offer: "hint" | "button" }) {
+export function AiCommentary(props: { summary: BridgeSummary; offer: "hint" | "button" }) {
   const [state, setState] = useState<
     { status: "idle" } | { status: "busy" } | { status: "done"; paragraphs: string[] } | { status: "error"; message: string }
   >({ status: "idle" });
   const write = async () => {
     setState({ status: "busy" });
     try {
-      const response = await fetch("/api/commentary", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ summary: props.summary }),
-      });
-      const body = (await response.json().catch(() => ({}))) as { paragraphs?: string[]; error?: string };
-      if (!response.ok || !body.paragraphs) throw new Error(body.error ?? `The server returned ${response.status}.`);
-      setState({ status: "done", paragraphs: body.paragraphs });
+      const paragraphs = await requestCommentary(props.summary);
+      setState({ status: "done", paragraphs });
     } catch (e) {
       setState({ status: "error", message: e instanceof Error ? e.message : String(e) });
     }

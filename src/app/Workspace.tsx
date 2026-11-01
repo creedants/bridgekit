@@ -59,15 +59,27 @@ export default function WorkspacePanel(props: {
     enabled: user !== null && user !== undefined && active !== "",
   });
 
-  useEffect(() => {
-    act(async () => {
+  // The startup reads. Try again runs them once more over the same mount, so
+  // the analysis on screen is untouched. The guard keeps a second press from
+  // starting a second run, and the message stays until a run succeeds. Startup
+  // sets busy before its reads and clears it when they settle.
+  const starting = useRef(false);
+  const start = async () => {
+    if (starting.current) return;
+    starting.current = true;
+    setBusy(true);
+    try {
       const found = await api.getConfig();
       setConfig(found);
       if (!accountsOpen(found)) return;
       const signedIn = await api.getUser();
       setUser(signedIn);
+      // Both startup reads answered, so the failure sentence no longer applies.
+      setError("");
       if (!signedIn) return;
       // An invitation link is /app/?invitation=ID; accept it once signed in.
+      // The link is taken out of the address as soon as it is accepted, so a
+      // retry after a later read failed does not send the write again.
       const invitation = new URLSearchParams(location.search).get("invitation");
       if (invitation) {
         await api.acceptInvitation(invitation);
@@ -78,7 +90,16 @@ export default function WorkspacePanel(props: {
       await loadWorkspaces(returning ?? undefined);
       if (new URLSearchParams(location.search).has("subscribed")) history.replaceState(null, "", location.pathname);
       if (invitation) setMessage("You have joined the workspace.");
-    });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      starting.current = false;
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    void start();
   }, []);
 
   const columnsKey = props.columns.join("|");
@@ -94,10 +115,10 @@ export default function WorkspacePanel(props: {
   }, [active, columnsKey]);
 
   // Nothing is known until the config and the session answer, so nothing
-  // renders; a read that really failed keeps its message.
-  if (config === null) return error === "" ? null : loadingShell(error);
+  // renders; a read that really failed keeps its message and its retry.
+  if (config === null) return error === "" ? null : loadingShell(error, start);
   if (!accountsOpen(config)) return null;
-  if (user === undefined) return error === "" ? null : loadingShell(error);
+  if (user === undefined) return error === "" ? null : loadingShell(error, start);
   if (user === null) return <SignIn config={config} busy={busy} error={error} message={message} act={act} />;
 
   const plan = plans[active] ?? null;
@@ -240,8 +261,14 @@ function accountsOpen(config: api.Config): boolean {
   return config.email === true || config.providers.length > 0;
 }
 
-function loadingShell(error: string) {
-  return <fieldset className="team"><legend>Workspace</legend>{error && <p className="error">{error}</p>}</fieldset>;
+function loadingShell(error: string, onRetry: () => void) {
+  return (
+    <fieldset className="team">
+      <legend>Workspace</legend>
+      {error && <p className="error">{error}</p>}
+      <button onClick={onRetry}>Try again</button>
+    </fieldset>
+  );
 }
 
 function SignIn(props: { config: api.Config; busy: boolean; error: string; message: string; act: Act }) {

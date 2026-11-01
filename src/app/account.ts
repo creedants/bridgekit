@@ -14,12 +14,14 @@ import {
 } from "./useConfig.ts";
 
 /**
- * Calls to the site's own server for Pro workspaces (server/worker.ts). Only
- * used in builds with VITE_WORKSPACES=1. The panel mounts with the page and
- * again when the first file opens, and each mount reads the config, then the
- * session when sign-in is offered, then the workspace list when signed in. The
- * rest follow a sign-in, a change of workspace or column names, a checkout
- * return or a click. Everything goes to the same origin.
+ * Calls to the site's own server for Pro workspaces (server/worker.ts), and the
+ * opt-in AI commentary request. The workspace calls are only used in builds with
+ * VITE_WORKSPACES=1, the commentary request only in builds with
+ * VITE_AI_COMMENTARY=1. The panel mounts with the page and again when the first
+ * file opens, and each mount reads the config, then the session when sign-in is
+ * offered, then the workspace list when signed in. The rest follow a sign-in, a
+ * change of workspace or column names, a checkout return or a click. Everything
+ * goes to the same origin.
  */
 
 export interface Config {
@@ -70,8 +72,19 @@ export interface SavedBridge {
   createdAt: string;
 }
 
+/** The sentence a request that never reached the server shows. */
+export const UNREACHABLE_SENTENCE = "Could not reach the server. Check your connection and try again.";
+
+async function reach(path: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(path, init);
+  } catch {
+    throw new Error(UNREACHABLE_SENTENCE);
+  }
+}
+
 async function call<T>(path: string, init?: { method?: string; body?: unknown }): Promise<T> {
-  const response = await fetch(path, {
+  const response = await reach(path, {
     method: init?.method ?? (init?.body === undefined ? "GET" : "POST"),
     headers: init?.body === undefined ? undefined : { "content-type": "application/json" },
     body: init?.body === undefined ? undefined : JSON.stringify(init.body),
@@ -80,6 +93,18 @@ async function call<T>(path: string, init?: { method?: string; body?: unknown })
   const body = (await response.json().catch(() => null)) as (T & { error?: string; message?: string }) | null;
   if (!response.ok) throw new Error(body?.error ?? body?.message ?? `The server returned ${response.status}.`);
   return body as T;
+}
+
+/** Sends the summary shown in the panel and returns the commentary paragraphs. */
+export async function requestCommentary(summary: BridgeSummary): Promise<string[]> {
+  const response = await reach("/api/commentary", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ summary }),
+  });
+  const body = (await response.json().catch(() => ({}))) as { paragraphs?: string[]; error?: string };
+  if (!response.ok || !body.paragraphs) throw new Error(body.error ?? `The server returned ${response.status}.`);
+  return body.paragraphs;
 }
 
 // Anything read from the deployment or the session is written to the shared
