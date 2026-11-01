@@ -1240,6 +1240,8 @@ async function drive(browser, origin, rows) {
       URL.createObjectURL = (b) => { blob = b; return original(b); };
       const button = T.btn('Export Excel');
       const t = performance.now(); button.click();
+      // React commits the click's state update in a microtask, so read the label after a task turn.
+      await new Promise(r => setTimeout(r, 0));
       const busy = button.textContent.trim();
       for (let i = 0; i < 400 && !blob; i++) await new Promise(r => setTimeout(r, 200));
       URL.createObjectURL = original;
