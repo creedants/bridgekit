@@ -31,9 +31,9 @@ export const signedPercent = (n: number) => {
 };
 
 /**
- * A matched share of exactly one sales figure. Two sums of the same sales can differ in their last bits,
- * so a value within a billionth of one prints 100.0%; any other share that would round up to 100.0% while
- * still below one prints 99.9%, because it did not cover everything.
+ * A matched share. Two sums of the same sales can differ in their last bits, so a value within a
+ * billionth of one prints 100.0%; any other share that would round up to 100.0% while still below
+ * one prints 99.9%, because it did not cover everything.
  */
 export const matchedPercent = (n: number) => {
   if (!Number.isFinite(n) || n <= 0) return percent(n);
