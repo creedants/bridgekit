@@ -1,0 +1,1 @@
+- The deploy machine can now tell IndexNow, which Bing and Yandex read, that the site's addresses changed, by running `node scripts/indexnow.mjs` after a deploy. The script reads the key and the URLs from `public/` and prints what it would send with `--dry-run`.
