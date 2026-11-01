@@ -6,6 +6,9 @@ import { terms } from "../report.ts";
 import type { Run } from "../Results.tsx";
 import { Kpi, QueryFailed, TableActions, TextCell, display, useLoad } from "./shared.tsx";
 
+export const priceNote = (measure: string) =>
+  `Counts only configurations with positive units in both periods and positive prior ${measure}, so netted returns and credit lines that the Bridge price step includes are left out.`;
+
 export function PriceChanges(props: { run: Run; query: () => Promise<Query> }) {
   const { loaded, failed } = useLoad(
     props.run,
@@ -60,7 +63,8 @@ export function PriceChanges(props: { run: Run; query: () => Promise<Query> }) {
       </table>
       <p className="hint">
         Each exactly matched configuration is placed by how much its average price moved between the two periods.
-        This shows how widely a price change landed, which the single price number in the bridge cannot.
+        This shows how widely a price change landed, which the single price number in the bridge cannot.{" "}
+        {priceNote(t.measure.toLowerCase())}
       </p>
       <RealizationTable run={props.run} query={props.query} overall={data.averageChange} />
     </div>

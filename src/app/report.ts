@@ -2,7 +2,7 @@ import { commentary } from "../commentary.ts";
 import { coverageLabel, effectColumns, measureName, tieRank, type AccountGroup, type BridgeConfig, type BridgeResult, type PriceBucket } from "../engine.ts";
 import { roundBridge, roundEffects } from "../summary.ts";
 import type { Setup } from "./setup.ts";
-import { percent, shareOfPrior, signedPercent, signedWhole, whole } from "./format.ts";
+import { matchedPercent, percent, shareOfPrior, signedPercent, signedWhole, whole } from "./format.ts";
 
 const markup = (value: unknown) =>
   String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
@@ -319,7 +319,7 @@ ${omit ? "" : input.chartUrl ? `<img alt="Waterfall chart of the bridge" src="${
 <table>${row(["", "Amount", t.ofPrior], "th")}${bridge.join("")}</table>
 <h2>${markup(t.matchedHeading)}</h2>
 <table class="plain">${row(["Compared against", "Share", "Configurations"], "th")}${viewCoverage
-    .map((c) => row([cell(c.label), percent(c.share), whole(c.cells)]))
+    .map((c) => row([cell(c.label), matchedPercent(c.share), whole(c.cells)]))
     .join("")}</table>
 <h2>Largest movers by ${markup(viewMoversLabel)}</h2>
 <table class="plain">${row([cell(viewMoversLabel), ...moverLabels], "th")}${movers.join("")}</table>

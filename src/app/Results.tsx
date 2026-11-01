@@ -8,10 +8,10 @@ import {
   type TieOut,
 } from "../engine.ts";
 import { roundEffects, shownTotal } from "../summary.ts";
-import { percent, shareOfPrior, signedPercent, signedWhole, whole } from "./format.ts";
+import { matchedPercent, shareOfPrior, signedPercent, signedWhole, whole } from "./format.ts";
 import { terms } from "./report.ts";
 import type { Setup } from "./setup.ts";
-import { Accounts } from "./results/Accounts.tsx";
+import { Accounts, accountGuess } from "./results/Accounts.tsx";
 import { Check, checkWarnings, useWholeRowWarning } from "./results/Check.tsx";
 import { Movers } from "./results/Movers.tsx";
 import { PriceChanges } from "./results/PriceChanges.tsx";
@@ -49,6 +49,14 @@ export interface Run {
 }
 
 type Tab = "bridge" | "movers" | "accounts" | "price" | "gaps" | "trend" | "unmatched" | "setup" | "check";
+
+/** The key terms under the KPI row, so a reader meets each word where it first appears. */
+export const RESULT_TERMS =
+  "Like-for-like price: The price change on configurations sold in both periods. Configuration: One combination of attribute values, such as A-100, Large, Red. Volume: The change in units at the overall prior average price. Mix: The change in units valued at how much more expensive or cheaper the group is than the group above it.";
+
+/** What the short words in charts and tables stand for. */
+export const CHART_TERMS =
+  "K, M and B in charts and tables mean thousand, million and billion. Discont. configs is short for discontinued configurations.";
 
 /** WAI-ARIA tabs with automatic activation: the index a key moves to, or null for a key the strip ignores. */
 export function tabAfterKey(key: string, at: number, count: number): number | null {
@@ -99,6 +107,8 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
   const viewQuery = props.fresh === false || props.viewsCurrent === false ? null : props.query;
   const [tab, setTab] = useState<Tab>("bridge");
   const [sortBy, setSortBy] = useState("change");
+  // The account column outlives a tab change, so a reader who comes back finds the column they picked.
+  const [accountColumn, setAccountColumn] = useState(() => accountGuess(run.textColumns));
   const ids = useId();
   const panelId = `${ids}panel`;
   const tabId = (entry: Tab) => `${ids}tab-${entry}`;
@@ -133,12 +143,9 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
         <Kpi label={`${measureName(config)} ${config.current}`} value={whole(shown.current)} />
         <Kpi label="Change" value={signedWhole(shown.current - shown.prior)} note={signedPercent(shareOfPrior(change, result.priorSales))} />
         <Kpi label="Like-for-like price" value={signedWhole(shownTotal(shown, result.effects, "price"))} note={signedPercent(shareOfPrior(priceEffect, result.priorSales))} />
-        <Kpi label="Matched exactly" value={percent(exact)} note={t.exactNote} />
+        <Kpi label="Matched exactly" value={matchedPercent(exact)} note={t.exactNote} />
       </div>
-      <p className="hint">
-        Like-for-like price: The price change on configurations sold in both periods. Configuration: One combination of
-        attribute values, such as A-100, Large, Red.
-      </p>
+      <p className="hint">{RESULT_TERMS}</p>
 
       <div className="tabs" role="tablist" aria-label="Result views">
         {tabs.map((entry, i) => (
@@ -225,7 +232,7 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
                     {result.coverage.map((c) => (
                       <tr key={c.level}>
                         <td>{matchLabel(config, c.level)}</td>
-                        <td className="num">{percent(c.share)}</td>
+                        <td className="num">{matchedPercent(c.share)}</td>
                         <td className="num">{whole(c.cells)}</td>
                       </tr>
                     ))}
@@ -238,12 +245,15 @@ export function Results(props: { run: Run; query: () => Promise<Query> } & Names
                   New configurations sold in the current period but not the prior one. Discontinued configurations sold in
                   the prior period but not the current one.
                 </p>
+                <p className="hint">{CHART_TERMS}</p>
               </div>
             </div>
             <SmallBridges run={run} query={props.query} fresh={props.fresh !== false && props.viewsCurrent !== false} />
           </>
         )}
-        {tab === "accounts" && <Accounts run={run} query={viewQuery} />}
+        {tab === "accounts" && (
+          <Accounts run={run} query={viewQuery} column={accountColumn} onColumn={setAccountColumn} />
+        )}
         {tab === "gaps" && <PriceGaps run={run} query={props.query} />}
         {tab === "trend" && <Trend run={run} query={viewQuery} />}
         {tab === "setup" && <SetupCheck run={run} query={viewQuery} />}

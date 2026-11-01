@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import type React from "react";
 import type { BridgeResult } from "../engine.ts";
 import { saveOnce } from "./files.ts";
-import { compact, signedCompact } from "./format.ts";
+import { compact, roundedCompact, signedRoundedCompact } from "./format.ts";
 import { axisCaption, axisFloor, chartStack, steps, type Step, type ValueScale } from "./small-bridges.ts";
 
 echarts.use([BarChart, GridComponent, TooltipComponent, LegacyGridContainLabel, CanvasRenderer]);
@@ -164,7 +164,7 @@ export function chartPng(chart: echarts.ECharts | null): Uint8Array<ArrayBuffer>
   return url ? Uint8Array.from(atob(url.slice(url.indexOf(",") + 1)), (c) => c.charCodeAt(0)) : null;
 }
 
-const valueText = (bar: Step) => (bar.kind === "total" ? compact(bar.value) : signedCompact(bar.value));
+const valueText = (bar: Step) => (bar.kind === "total" ? roundedCompact(bar.value) : signedRoundedCompact(bar.value));
 
 /**
  * The whole chart for one label plan. `touch` and `selectable` are asked again each time a tooltip opens,
