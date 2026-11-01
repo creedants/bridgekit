@@ -137,7 +137,7 @@ function AiOffer(props: { summary: BridgeSummary }) {
  * "hint" shows the explanation with no button, for a signed-in person without
  * Pro; "button" shows today's panel.
  */
-function AiCommentary(props: { summary: BridgeSummary; offer: "hint" | "button" }) {
+export function AiCommentary(props: { summary: BridgeSummary; offer: "hint" | "button" }) {
   const [state, setState] = useState<
     { status: "idle" } | { status: "busy" } | { status: "done"; paragraphs: string[] } | { status: "error"; message: string }
   >({ status: "idle" });

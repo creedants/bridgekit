@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { registerHooks } from "node:module";
 import { test } from "node:test";
+import { transformSync } from "esbuild";
 import * as account from "../src/app/account.ts";
 
 /**
@@ -73,10 +75,19 @@ test("the commentary request shows the sentence, through the code the panel uses
     assert.notEqual(failure.message, "Failed to fetch");
     assert.deepEqual(asked, ["/api/commentary"]);
   });
+});
 
-  const panel = readFileSync(new URL("../src/app/results/Summary.tsx", import.meta.url), "utf8");
-  assert.ok(panel.includes("requestCommentary("), "the commentary panel does not call requestCommentary");
-  assert.doesNotMatch(panel, /fetch\(/, "the commentary panel holds a fetch of its own");
+test("the commentary panel shows the sentence and keeps its button working", async () => {
+  const panel = await mountCommentary();
+  await panel.press("Send totals and write commentary");
+  assert.ok(panel.shows(SENTENCE), `the panel showed ${JSON.stringify(panel.text())}`);
+  assert.deepEqual(panel.buttons(), ["Send totals and write commentary"], "the panel lost its button after a failed request");
+  assert.equal(panel.disabled("Send totals and write commentary"), false, "the button stayed disabled after a failed request");
+
+  panel.reply(async () => json({ paragraphs: ["Written once.", "Written twice."] }));
+  await panel.press("Send totals and write commentary");
+  assert.ok(panel.shows("Written once."), `the panel showed ${JSON.stringify(panel.text())}`);
+  assert.ok(!panel.shows(SENTENCE), "the sentence outlived a working request");
 });
 
 test("a response the server sent keeps its own message", async () => {
@@ -137,3 +148,306 @@ test("a later retry works once the connection returns", async () => {
     },
   );
 });
+
+// The commentary panel is rendered here, not read as source text, so the check
+// covers the sentence a person sees and the button they press again. The panel
+// lives in a .tsx file, which this runner cannot load by itself, so a load hook
+// transforms it with the esbuild copy the build already installs.
+
+registerHooks({
+  load(url, context, nextLoad) {
+    if (url.endsWith(".tsx")) {
+      const source = readFileSync(new URL(url), "utf8");
+      const { code } = transformSync(source, {
+        loader: "tsx",
+        format: "esm",
+        jsx: "automatic",
+        define: { "import.meta.env": "{}" },
+      });
+      return { format: "module", source: code, shortCircuit: true };
+    }
+    return nextLoad(url, context);
+  },
+});
+
+class ShimNode {
+  nodeType: number;
+  nodeName: string;
+  childNodes: ShimNode[] = [];
+  parentNode: ShimNode | null = null;
+  private listeners = new Map<string, Set<(event: { type: string; target?: unknown; bubbles?: boolean }) => void>>();
+
+  constructor(nodeType: number, nodeName: string) {
+    this.nodeType = nodeType;
+    this.nodeName = nodeName;
+  }
+
+  get firstChild(): ShimNode | null {
+    return this.childNodes[0] ?? null;
+  }
+
+  get lastChild(): ShimNode | null {
+    return this.childNodes[this.childNodes.length - 1] ?? null;
+  }
+
+  get nextSibling(): ShimNode | null {
+    if (!this.parentNode) return null;
+    const at = this.parentNode.childNodes.indexOf(this);
+    return this.parentNode.childNodes[at + 1] ?? null;
+  }
+
+  get previousSibling(): ShimNode | null {
+    if (!this.parentNode) return null;
+    const at = this.parentNode.childNodes.indexOf(this);
+    return at > 0 ? this.parentNode.childNodes[at - 1] : null;
+  }
+
+  appendChild(child: ShimNode): ShimNode {
+    return this.insertBefore(child, null);
+  }
+
+  insertBefore(child: ShimNode, before: ShimNode | null): ShimNode {
+    if (child.parentNode) child.parentNode.removeChild(child);
+    const at = before === null ? -1 : this.childNodes.indexOf(before);
+    this.childNodes.splice(at === -1 ? this.childNodes.length : at, 0, child);
+    child.parentNode = this;
+    return child;
+  }
+
+  removeChild(child: ShimNode): ShimNode {
+    const at = this.childNodes.indexOf(child);
+    if (at >= 0) {
+      this.childNodes.splice(at, 1);
+      child.parentNode = null;
+    }
+    return child;
+  }
+
+  addEventListener(type: string, listener: (event: { type: string; target?: unknown; bubbles?: boolean }) => void): void {
+    const set = this.listeners.get(type) ?? new Set();
+    set.add(listener);
+    this.listeners.set(type, set);
+  }
+
+  removeEventListener(type: string, listener: (event: { type: string; target?: unknown; bubbles?: boolean }) => void): void {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  dispatchEvent(event: { type: string; target?: unknown; bubbles?: boolean }): boolean {
+    event.target = event.target ?? this;
+    for (const listener of this.listeners.get(event.type) ?? []) listener.call(this, event);
+    if (event.bubbles && this.parentNode) this.parentNode.dispatchEvent(event);
+    return true;
+  }
+}
+
+class ShimText extends ShimNode {
+  data: string;
+
+  constructor(data: string) {
+    super(3, "#text");
+    this.data = String(data);
+  }
+
+  get nodeValue(): string {
+    return this.data;
+  }
+
+  set nodeValue(value: string) {
+    this.data = String(value);
+  }
+
+  get textContent(): string {
+    return this.data;
+  }
+}
+
+class ShimElement extends ShimNode {
+  tagName: string;
+  localName: string;
+  attributes = new Map<string, string>();
+  style: Record<string, unknown> = { setProperty() {} };
+
+  constructor(tagName: string) {
+    super(1, String(tagName).toUpperCase());
+    this.tagName = this.nodeName;
+    this.localName = String(tagName).toLowerCase();
+  }
+
+  get namespaceURI(): string {
+    return "http://www.w3.org/1999/xhtml";
+  }
+
+  get ownerDocument(): ShimElement {
+    return document as unknown as ShimElement;
+  }
+
+  setAttribute(name: string, value: string): void {
+    this.attributes.set(String(name), String(value));
+  }
+
+  setAttributeNS(_namespace: string, name: string, value: string): void {
+    this.setAttribute(name, value);
+  }
+
+  getAttribute(name: string): string | null {
+    return this.attributes.get(String(name)) ?? null;
+  }
+
+  hasAttribute(name: string): boolean {
+    return this.attributes.has(String(name));
+  }
+
+  removeAttribute(name: string): void {
+    this.attributes.delete(String(name));
+  }
+
+  get options(): ShimElement[] {
+    return this.childNodes.filter((child) => child.nodeName === "OPTION") as ShimElement[];
+  }
+
+  get selectedOptions(): ShimElement[] {
+    return this.options.filter((option) => (option as unknown as { selected?: boolean }).selected);
+  }
+
+  get textContent(): string {
+    return this.childNodes.map((child) => (child as ShimElement).textContent ?? "").join("");
+  }
+
+  set textContent(value: string) {
+    this.childNodes = [];
+    if (value !== "" && value != null) this.appendChild(new ShimText(value));
+  }
+}
+
+type ShimDocument = ShimElement & {
+  createElement(tag: string): ShimElement;
+  createElementNS(namespace: string, tag: string): ShimElement;
+  createTextNode(text: string): ShimText;
+  createComment(text: string): ShimText;
+  documentElement: ShimElement;
+  body: ShimElement;
+  head: ShimElement;
+  HTMLIFrameElement: unknown;
+};
+
+/** Installs the fake document once, before React DOM is imported. */
+function installDom(): ShimDocument {
+  const existing = (globalThis as unknown as { document?: ShimDocument }).document;
+  if (existing) return existing;
+  const doc = new ShimElement("#document") as unknown as ShimDocument;
+  (doc as unknown as { nodeType: number }).nodeType = 9;
+  doc.createElement = (tag: string) => new ShimElement(tag);
+  doc.createElementNS = (_namespace: string, tag: string) => new ShimElement(tag);
+  doc.createTextNode = (text: string) => new ShimText(text);
+  doc.createComment = (text: string) => new ShimText(text);
+  doc.documentElement = new ShimElement("html");
+  doc.head = new ShimElement("head");
+  doc.body = new ShimElement("body");
+  doc.HTMLIFrameElement = class extends ShimElement {};
+  doc.documentElement.appendChild(doc.head);
+  doc.documentElement.appendChild(doc.body);
+  (doc as unknown as ShimNode).appendChild(doc.documentElement);
+  const view = {
+    document: doc,
+    location: { href: "http://127.0.0.1:8790/app/", pathname: "/app/", search: "" },
+    navigator: { userAgent: "node" },
+    Event: class {
+      type: string;
+      constructor(type: string, init: Record<string, unknown> = {}) {
+        this.type = type;
+        Object.assign(this, init);
+      }
+    },
+    Node: ShimNode,
+    Element: ShimElement,
+    HTMLElement: ShimElement,
+    HTMLIFrameElement: doc.HTMLIFrameElement,
+    MutationObserver: class {
+      observe() {}
+      disconnect() {}
+      takeRecords() {
+        return [];
+      }
+    },
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const globals = globalThis as unknown as Record<string, unknown>;
+  globals.window = view;
+  globals.document = doc;
+  globals.Node = ShimNode;
+  globals.Element = ShimElement;
+  globals.HTMLElement = ShimElement;
+  globals.HTMLIFrameElement = doc.HTMLIFrameElement;
+  globals.Event = view.Event;
+  globals.MutationObserver = view.MutationObserver;
+  globals.IS_REACT_ACT_ENVIRONMENT = true;
+  return doc;
+}
+
+
+function collect(node: ShimNode | null, out: ShimElement[] = []): ShimElement[] {
+  if (!node) return out;
+  if (node instanceof ShimElement) out.push(node);
+  for (const child of node.childNodes) collect(child, out);
+  return out;
+}
+
+/** Mounts the real commentary panel over a fake fetch and returns what is on screen. */
+async function mountCommentary() {
+  const doc = installDom();
+  const React = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { AiCommentary } = await import("../src/app/results/Summary.tsx");
+  const globals = globalThis as unknown as Record<string, unknown>;
+  const panel = {
+    reply: () => Promise.reject(new TypeError("Failed to fetch")) as Promise<Response>,
+  };
+  globals.fetch = ((path: string) => panel.reply()) as unknown as typeof fetch;
+
+  const container = doc.createElement("div");
+  doc.body.appendChild(container as unknown as ShimNode);
+  const root = createRoot(container as unknown as Element);
+  const act = async (work: () => void | Promise<void>) => {
+    await React.act(async () => {
+      await work();
+    });
+  };
+  await act(async () => {
+    root.render(React.createElement(AiCommentary, { summary: SUMMARY, offer: "button" }));
+  });
+  const flush = async () => {
+    await act(async () => {});
+    await act(async () => {});
+    await act(async () => {});
+  };
+  const elements = () => {
+    const found: ShimElement[] = [];
+    for (const child of (container as unknown as ShimElement).childNodes) collect(child, found);
+    return found;
+  };
+  const buttons = () => elements().filter((element) => element.nodeName === "BUTTON");
+  const find = (label: string) => buttons().find((element) => element.textContent === label);
+  return {
+    reply: (next: () => Promise<Response>) => {
+      panel.reply = next;
+    },
+    text: () => (container as unknown as ShimElement).textContent,
+    shows: (sentence: string) => (container as unknown as ShimElement).textContent.includes(sentence),
+    buttons: () => buttons().map((element) => element.textContent),
+    disabled: (label: string) => {
+      const button = find(label) as unknown as { disabled?: boolean } | undefined;
+      assert.ok(button, `the panel offers a button named ${label}`);
+      return button.disabled === true || (button as unknown as ShimElement).hasAttribute("disabled");
+    },
+    async press(label: string) {
+      const button = find(label);
+      assert.ok(button, `the panel offers a button named ${label}`);
+      await act(async () => {
+        button.dispatchEvent({ type: "click", bubbles: true, target: button });
+      });
+      await flush();
+    },
+  };
+}
