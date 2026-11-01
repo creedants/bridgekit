@@ -18,6 +18,17 @@ const EXCLUDED = new Map([
   ["pay/index.html", "Part 2 build only"],
 ]);
 
+// A page's date changes when its content does, and must match the date line the page shows.
+const LASTMOD = new Map([
+  ["index.html", "2026-10-31"],
+  ["method.html", "2026-10-31"],
+  ["guide.html", "2026-10-31"],
+  ["price-volume-mix-analysis.html", "2026-10-31"],
+  ["grouping-level.html", "2026-10-31"],
+  ["privacy.html", "2026-10-28"],
+  ["terms.html", "2026-10-28"],
+]);
+
 /** The one place the naming rule lives. */
 function addressOf(file) {
   if (file === "index.html") return `${ORIGIN}/`;
@@ -59,11 +70,26 @@ function pagesInConfig() {
 }
 
 function sitemap() {
-  const addresses = pagesInConfig()
+  const pages = pagesInConfig()
     .filter((file) => !EXCLUDED.has(file))
-    .map(addressOf)
-    .sort();
-  const urls = addresses.map((address) => `  <url><loc>${address}</loc></url>\n`).join("");
+    .map((file) => ({ file, address: addressOf(file) }))
+    .sort((left, right) => (left.address < right.address ? -1 : 1));
+  for (const { file } of pages) {
+    const date = LASTMOD.get(file);
+    if (date === undefined) {
+      throw new Error(`${file} has no last-modified date: add ["${file}", "YYYY-MM-DD"] to LASTMOD in scripts/sitemap.mjs, the day its content last changed`);
+    }
+    const parsed = new Date(`${date}T00:00:00Z`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) {
+      throw new Error(`${file} has last-modified date ${date}, which is not a real YYYY-MM-DD calendar date: fix its entry in LASTMOD in scripts/sitemap.mjs`);
+    }
+  }
+  for (const file of LASTMOD.keys()) {
+    if (pages.some((page) => page.file === file)) continue;
+    throw new Error(`${file} has a last-modified date but the sitemap does not include it: remove its entry from LASTMOD in scripts/sitemap.mjs, or add the page to the vite.config.ts input`);
+  }
+  const addresses = pages.map((page) => page.address);
+  const urls = pages.map(({ file, address }) => `  <url><loc>${address}</loc><lastmod>${LASTMOD.get(file)}</lastmod></url>\n`).join("");
   return {
     addresses,
     xml: `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}</urlset>\n`,
