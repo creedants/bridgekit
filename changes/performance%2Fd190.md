@@ -1,0 +1,1 @@
+- Going offline after the page has loaded no longer shows the browser's raw "Failed to fetch" beside the bridge. The account calls and the optional AI commentary request now show "Could not reach the server. Check your connection and try again." instead, while a message the server itself sent stays as it is.
