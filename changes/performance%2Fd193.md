@@ -1,0 +1,1 @@
+- The guide now states that on a margin bridge the Price changes tab bands configurations by how much average unit margin moved.
